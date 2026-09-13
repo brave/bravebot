@@ -934,8 +934,7 @@ fn a_session_that_changes_directory_is_recorded_where_it_moved_to() {
     let mut moved_map = TrustStore::new();
     moved_map.trust(".");
 
-    handle.move_to(&elsewhere);
-    handle.save("start here", standing(&moved_map));
+    handle.move_to(&elsewhere, standing(&moved_map));
 
     let there = sessions::list(&elsewhere);
     assert_eq!(
@@ -963,6 +962,131 @@ fn a_session_that_changes_directory_is_recorded_where_it_moved_to() {
             .is_trusted("."),
         "the new directory's answer was left in the old directory's list"
     );
+}
+
+/// A session that moves before anything is written is recorded where it moved to when a turn comes.
+///
+/// The move is not repeated, so a destination that stayed behind stays behind for the life of the
+/// session: every turn taken in the new directory would be listed and resumable only from the old
+/// one, and the record written there would carry the map the new directory answered for, which is a
+/// yes for a directory nobody resuming in the old one was asked about.
+#[test]
+fn a_session_that_moves_before_anything_is_written_is_recorded_where_it_moved_to() {
+    let scratch = Scratch::new("moved-before-a-turn");
+    let elsewhere = scratch.project.parent().expect("a root").join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("create elsewhere");
+
+    let conversation = a_conversation();
+    let snapshot = conversation.snapshot();
+    let spend = BTreeMap::new();
+    let timing = BTreeMap::new();
+    let todos = BTreeMap::new();
+    let programs = TrustedPrograms::new();
+    // The map as it is once the working directory has moved: about the new directory.
+    let mut moved_map = TrustStore::new();
+    moved_map.trust(".");
+    let standing = |turns| Standing {
+        conversation: &snapshot,
+        turns,
+        tokens: 0,
+        spend: &spend,
+        timing: &timing,
+        model: None,
+        todos: &todos,
+        asides: &[],
+        trust: &moved_map,
+        programs: &programs,
+        directories: &[],
+        manifest: None,
+    };
+
+    let mut handle = Handle::begin(&scratch.project);
+    handle.move_to(&elsewhere, standing(0));
+
+    assert!(
+        sessions::list(&elsewhere).is_empty(),
+        "a session with nothing written yet left a record where it moved"
+    );
+    assert!(
+        sessions::list(&scratch.project).is_empty(),
+        "a session with nothing written yet left a record where it began"
+    );
+
+    // The first turn, taken in the directory the session moved to.
+    handle.save("start here", standing(1));
+
+    assert!(
+        sessions::list(&scratch.project).is_empty(),
+        "the turn was recorded under the directory the session left"
+    );
+    assert_eq!(
+        sessions::list(&elsewhere).len(),
+        1,
+        "the turn was not recorded where the session ran"
+    );
+    let record = sessions::load(&elsewhere, handle.id()).expect("the record loads");
+    assert_eq!(record.directory, elsewhere.display().to_string());
+    assert!(
+        record
+            .trust_map()
+            .expect("the map was written")
+            .is_trusted("."),
+        "the map about the new directory was filed somewhere else"
+    );
+}
+
+/// A session that has written a record without having had a turn is written where it moves to.
+///
+/// A shell command and a compaction both write a record before the first turn, and what makes the
+/// session resumable in its new home is a record being there. Moving without writing one would
+/// leave the session offering no id to resume by, and its only record under a directory it is no
+/// longer working in.
+#[test]
+fn a_record_written_before_the_first_turn_follows_the_session_when_it_moves() {
+    let scratch = Scratch::new("moved-after-a-command");
+    let elsewhere = scratch.project.parent().expect("a root").join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("create elsewhere");
+
+    let conversation = a_conversation();
+    let snapshot = conversation.snapshot();
+    let spend = BTreeMap::new();
+    let timing = BTreeMap::new();
+    let todos = BTreeMap::new();
+    let programs = TrustedPrograms::new();
+    let trust = TrustStore::new();
+    let standing = || Standing {
+        conversation: &snapshot,
+        turns: 0,
+        tokens: 0,
+        spend: &spend,
+        timing: &timing,
+        model: None,
+        todos: &todos,
+        asides: &[],
+        trust: &trust,
+        programs: &programs,
+        directories: &[],
+        manifest: None,
+    };
+
+    let mut handle = Handle::begin(&scratch.project);
+    // What `!ls` writes: the command is in the conversation, so there is something to resume.
+    handle.save("!ls", standing());
+
+    handle.move_to(&elsewhere, standing());
+
+    assert_eq!(
+        sessions::list(&elsewhere).len(),
+        1,
+        "the record did not follow the session to the directory it moved to"
+    );
+    assert_eq!(
+        handle.resumable(),
+        Some(handle.id()),
+        "the session offered no id to resume by after it moved"
+    );
+    let record = sessions::load(&elsewhere, handle.id()).expect("the record loads");
+    assert_eq!(record.directory, elsewhere.display().to_string());
 }
 
 /// Session records, temporary files, and audit trails must be private to the current user (mode 0600),

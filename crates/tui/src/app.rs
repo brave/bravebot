@@ -2074,18 +2074,9 @@ fn event_loop(
                 // The record moves with the working directory, so the snapshot describes a
                 // session that is no longer written where it was.
                 session.close_rewind_window();
-                if change_directory(&mut session, &mut workspace, &mut trust, &directory)
-                    && session.turns > 0
-                {
-                    // Written now rather than after the next turn, because the record has just
-                    // moved: until it is saved in its new home there is nothing there to resume,
-                    // and a session that moved and then slept would be findable only from the
-                    // directory it has left. Nothing yet if no turn has been had, since a session
-                    // that was opened and abandoned should not leave a record anywhere.
-                    stored.move_to(workspace.root());
-                    let title = stored.title().to_string();
-                    stored.save(
-                        &title,
+                if change_directory(&mut session, &mut workspace, &mut trust, &directory) {
+                    stored.move_to(
+                        workspace.root(),
                         crate::sessions::Standing {
                             conversation: &conversation.snapshot(),
                             turns: session.turns,

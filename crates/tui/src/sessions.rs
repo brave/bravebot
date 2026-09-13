@@ -513,14 +513,28 @@ impl Handle {
     /// there would inherit a yes that was given for somewhere else. Moving the record keeps the
     /// two together, which is the whole of what makes an inherited map safe to inherit.
     ///
-    /// Nothing is written yet, and nothing already written is moved or removed: what happened
-    /// before the move happened in the old directory and is still worth resuming there. The
-    /// session becomes resumable in its new home once it is saved there, which is why the caller
-    /// saves straight after moving.
-    pub fn move_to(&mut self, project: &Path) {
+    /// Nothing already written is moved or removed: what happened before the move happened in the
+    /// old directory and is still worth resuming there. The session becomes resumable in its new
+    /// home only once it is written there, so it is written here rather than at the end of the next
+    /// turn: a session that moved and then slept would otherwise be findable only from the
+    /// directory it has left.
+    ///
+    /// A session with nothing written yet writes nothing, since one that was opened and abandoned
+    /// should leave no record anywhere. Its destination moves all the same: the move is not
+    /// repeated, so a session that stayed where it was until something was worth writing would
+    /// write it under the directory it left, and that record would carry a map spelled against the
+    /// directory it is now in.
+    pub fn move_to(&mut self, project: &Path, standing: Standing<'_>) {
+        let written = self.wrote;
         self.project = project.to_path_buf();
         self.branch = branch_of(project);
         self.wrote = false;
+
+        if !written && standing.turns == 0 {
+            return;
+        }
+        let title = self.title.clone();
+        self.save(&title, standing);
     }
 
     pub fn id(&self) -> &str {
