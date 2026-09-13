@@ -51,6 +51,23 @@ pub enum Capability {
 }
 
 impl Capability {
+    /// Every variant, in declaration order.
+    ///
+    /// Nothing in Rust enumerates an enum, so this is written out, and it is one list to keep in
+    /// step rather than one per test that needs the whole set. What forces a new variant to be
+    /// accounted for is the exhaustive match a test walking this makes against it, which stops
+    /// compiling until somebody says what the new capability observes.
+    pub const ALL: [Self; 8] = [
+        Self::FileRead,
+        Self::FileWrite,
+        Self::ShellExec,
+        Self::GitRead,
+        Self::GitWrite,
+        Self::WebFetch,
+        Self::McpCall,
+        Self::LanguageServer,
+    ];
+
     /// The label data produced by this capability arrives with.
     ///
     /// `None` for pure effects, which produce no observation to label.
@@ -178,15 +195,10 @@ mod tests {
 
     #[test]
     fn observations_are_untrusted() {
-        for c in [
-            Capability::FileRead,
-            Capability::GitRead,
-            Capability::WebFetch,
-            Capability::McpCall,
-            Capability::ShellExec,
-            Capability::LanguageServer,
-        ] {
-            let label = c.output_label().expect("observation must have a label");
+        for c in Capability::ALL {
+            let Some(label) = c.output_label() else {
+                continue;
+            };
             assert!(!label.is_trusted(), "{c} output must not be trusted");
         }
     }
@@ -195,16 +207,7 @@ mod tests {
     /// trusted input, so if any capability yielded `(T,pub)` the asymmetry would leak.
     #[test]
     fn no_capability_produces_routing_safe_output() {
-        for c in [
-            Capability::FileRead,
-            Capability::FileWrite,
-            Capability::ShellExec,
-            Capability::GitRead,
-            Capability::GitWrite,
-            Capability::WebFetch,
-            Capability::McpCall,
-            Capability::LanguageServer,
-        ] {
+        for c in Capability::ALL {
             if let Some(label) = c.output_label() {
                 assert_ne!(
                     label,

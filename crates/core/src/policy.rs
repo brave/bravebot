@@ -4709,6 +4709,11 @@ mod tests {
         assert!(policy.before_network("https://example.com").is_err());
     }
 
+    /// Every capability, because a carrier whose label nothing asserts is a carrier whose label can
+    /// be wrong: the code that assigns one is an exhaustive match, so a variant cannot go
+    /// unlabelled, but a variant labelled wrongly compiles. A capability's label is what decides
+    /// whether what it read may choose a destination or leave the machine, so a wrong one is not a
+    /// wrong constant.
     #[test]
     fn observation_labels_come_from_the_capability() {
         let mut sink = RecordingSink::new();
@@ -4719,14 +4724,39 @@ mod tests {
             &mut sink,
         )
         .unwrap();
-        assert_eq!(
-            policy.observe(Capability::WebFetch).unwrap(),
-            Label::untrusted_public()
-        );
-        assert_eq!(
-            policy.observe(Capability::FileRead).unwrap(),
-            Label::untrusted_private()
-        );
+        for capability in Capability::ALL {
+            // Written out rather than read from the capability: a match that asked the code under
+            // test what to expect would assert nothing.
+            let expected = match capability {
+                Capability::FileRead => Some(Label::untrusted_private()),
+                Capability::GitRead => Some(Label::untrusted_private()),
+                Capability::ShellExec => Some(Label::untrusted_private()),
+                Capability::LanguageServer => Some(Label::untrusted_private()),
+                Capability::WebFetch => Some(Label::untrusted_public()),
+                Capability::McpCall => Some(Label::untrusted_public()),
+                Capability::FileWrite => None,
+                Capability::GitWrite => None,
+            };
+            match expected {
+                Some(label) => {
+                    assert_eq!(policy.observe(capability).ok(), Some(label), "{capability}");
+                }
+                // An effect observes nothing, so there is no label to hand back. The refusal has to
+                // say that, since a refusal for any other reason would leave this passing while the
+                // question went unanswered.
+                None => {
+                    let denial = policy
+                        .observe(capability)
+                        .expect_err("an effect has no observation to label");
+                    assert_eq!(denial.principle, Principle::Capability, "{capability}");
+                    assert!(
+                        denial.message.contains("produces no observation to label"),
+                        "{capability}: {}",
+                        denial.message
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -6824,6 +6854,33 @@ mod tests {
         assert_eq!(policy.context_integrity(), Integrity::Trusted);
     }
 
+    /// A listing or a search is a function of every path it visited, so one file nobody vouched for
+    /// taints the whole answer. Trusting the result because most of it was vouched for would let an
+    /// attacker who owns one file in a directory launder their filename into routing.
+    #[test]
+    fn a_read_over_several_paths_is_trusted_only_where_every_path_is() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &["vouched"]);
+
+        let all_vouched = policy
+            .observe_paths(Capability::FileRead, ["vouched/a.rs", "vouched/b.rs"])
+            .expect("observes");
+        assert_eq!(all_vouched, Label::trusted_private());
+
+        let one_of_them_is_not = policy
+            .observe_paths(Capability::FileRead, ["vouched/a.rs", "elsewhere/b.rs"])
+            .expect("observes");
+        assert_eq!(one_of_them_is_not, Label::untrusted_private());
+
+        // An answer covering nothing visited no file, so there is no path for the meet to consult
+        // and the result is the driver's own empty answer. Reading it as untrusted instead would
+        // quarantine a listing that found nothing, which is not workspace content at all.
+        let nothing_at_all = policy
+            .observe_paths(Capability::FileRead, Vec::<&str>::new())
+            .expect("observes");
+        assert_eq!(nothing_at_all, Label::trusted_private());
+    }
+
     /// LSP-3, the half that makes the tool useful. A language server's answer about a file nobody
     /// vouched for is labelled untrusted like any other observation of it, and that label is what
     /// governs the *text*. The location is structure and is reported anyway, which is the clause's
@@ -7132,6 +7189,42 @@ mod tests {
         let mut policy = policy_trusting(&mut sink, &[]);
 
         policy.admit_pasted_image("image/png", 4096);
+
+        assert_eq!(policy.context_integrity(), Integrity::Trusted);
+    }
+
+    /// A line typed mid-turn changes what a turn does, so a session read back without it is a turn
+    /// that appears to have changed course of its own accord. It is the input a transcript is least
+    /// able to account for on its own, since the words arrive with no prompt of their own around
+    /// them.
+    #[test]
+    fn an_interjection_is_recorded_in_the_audit_trail() {
+        let mut sink = RecordingSink::new();
+        {
+            let mut policy = policy_trusting(&mut sink, &[]);
+            policy.admit_interjection(31);
+        }
+
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "provenance", detail }
+                    if detail.contains("31 characters") && detail.contains("typed by the user")
+            )),
+            "the provenance decision left no trace: {:?}",
+            sink.events()
+        );
+    }
+
+    /// An interjection is the user's own words, so it says nothing about content the planner has
+    /// met. Reading a keystroke as something the context observed would mark everything the planner
+    /// said after it untrusted, and it would then be quarantined from its own output.
+    #[test]
+    fn an_interjection_does_not_lower_what_the_context_has_met() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &[]);
+
+        policy.admit_interjection(31);
 
         assert_eq!(policy.context_integrity(), Integrity::Trusted);
     }

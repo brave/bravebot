@@ -229,10 +229,9 @@ design is wrong, not the label.
 ### LABEL-8: a first label comes from provenance, and is not an upgrade
 
 Model output is a function of the model's context and nothing else, so when the context holds only
-trusted input, what it produced is labelled accordingly. The same road labels a program's output, a
-line the user ran themselves, the user's own configuration and a pasted picture. Each is the
-**first** label such a value ever receives, assigned from provenance the
-policy layer tracked.
+trusted input, what it produced is labelled accordingly. The same road labels every other carrier in
+the table below. Each is the **first** label such a value ever receives, assigned from provenance
+the policy layer tracked.
 
 If you find yourself relabelling a value that already has a label, stop: that is LABEL-7.
 
@@ -241,9 +240,41 @@ carries no provenance and a transport can know nothing else. Taking it out of th
 giving it the context's label is one step in the policy layer, not two in a driver: a driver doing
 it itself holds model output unlabelled in between, with nothing recording that it did.
 
-`verified-by: bravebot_core::policy::model_output_from_a_clean_context_is_trusted`
-`verified-by: bravebot_core::policy::observation_labels_come_from_the_capability`
-`verified-by: bravebot_core::policy::adopting_model_output_takes_the_context_s_label_not_the_transport_s`
+**These are the roads in, all of them.** Every carrier a provenance decision is taken about is a
+row, including the two where the decision is that there is no label to give, so opening a new road
+means adding a row here, where a reviewer sees it. No row reads what it labels: provenance decides,
+and the content has no say in it.
+
+| What enters | The label it gets | Pinned by |
+|---|---|---|
+| what a capability observed | the capability's own, one per capability, and an effect has none to give | `verified-by: bravebot_core::policy::observation_labels_come_from_the_capability` |
+| a file read from the workspace | private, and trusted only where somebody vouched for the path | `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted` |
+| a listing or a search across several paths | private, and trusted only where every path it visited is | `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is` |
+| a file the user named in a prompt or dropped on the window | trusted, because naming a file is vouching for it | `verified-by: bravebot_core::policy::a_file_the_user_named_is_read_as_trusted_though_nothing_else_is` |
+| what a program printed | untrusted and private, since what it did is unknown | `verified-by: bravebot_core::policy::an_opaque_program_always_yields_untrusted_private_output` |
+| what a program that can only transform its input printed | its input's label, carried through unchanged | `verified-by: bravebot_core::policy::a_filter_passes_an_untrusted_label_through_unchanged` |
+| what such a program printed with no input at all | trusted and public, because it is a function of nothing an attacker influenced | `verified-by: bravebot_core::policy::a_filter_with_no_input_yields_trusted_output` |
+| what a line whose every step is accounted for printed | trusted and private, because the steps were vouched for and the output is a function of what went in | `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_comes_back_trusted` |
+| a line the user ran themselves | trusted and private, because nobody steers a keystroke | `verified-by: bravebot_core::policy::what_a_command_the_user_typed_printed_is_trusted_and_private` |
+| input piped into the process | untrusted and private, because a pipe has no path anyone could vouch for | `verified-by: bravebot_core::policy::piped_input_is_labelled_untrusted_and_private` |
+| the user's own configuration, and a skill kept beside it | trusted and public, because putting a file there is the grant | `verified-by: bravebot_core::policy::configuration_the_user_placed_is_trusted_from_where_it_came_from` |
+| what the planner wrote | public, at the integrity of the context it was written in | `verified-by: bravebot_core::policy::model_output_from_a_clean_context_is_trusted` |
+| a reply taken out of a transport's envelope | the context's, never the network's | `verified-by: bravebot_core::policy::adopting_model_output_takes_the_context_s_label_not_the_transport_s` |
+| an answer a person typed to a question | trusted and public, because a person wrote it | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` |
+| what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
+| a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
+| a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |
+
+Where a path is known, integrity is the trust map's answer about that path rather than the
+capability's, which is what the three rows for reads say and why the first row is the label a read
+starts from. Which paths a person vouched for is in [trust-map.md](trust-map.md).
+
+Three carriers a reader may go looking for are absent, none of which takes a first label. A
+delegate's reply is model output, labelled in the delegate's own run by the row for what the planner
+wrote. Content restored from a resumed session keeps the labels it was given when it first arrived,
+and what resuming does to the integrity of the context is LABEL-9. The user's own message is not
+labelled at all, which is why the two carriers that join it take no label either.
+
 `verified-by: bravebot_core::policy::adopting_model_output_from_a_fallen_context_stays_untrusted`
 `verified-by: bravebot_core::policy::only_a_value_a_transport_labelled_can_be_adopted_as_model_output`
 
