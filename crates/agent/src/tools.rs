@@ -492,11 +492,13 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
             "run",
             "Run a command line. Write it the way you would type it: `grep -rn thing src/ | \
              head -30`. Pipes, &&, ||, ;, ( ), quoting, redirection (>, >>, <, 2>, 2>&1, &>), \
-             globs and {a,b} all work. There is no shell: the line is compiled here into the \
-             programs and arguments it names, and anything that cannot be worked out from the \
-             line itself is refused rather than guessed at. $(...), backticks, $VAR and ${...} \
-             are refused for that reason: write the value out. Quoting settles all of them, so \
-             '$HOME' is six characters and reaches the program as one argument. The user \
+             globs and {a,b} all work in the operands. There is no shell: the line is compiled \
+             here into the programs and arguments it names, and anything that cannot be worked \
+             out from the line itself is refused rather than guessed at. $(...), backticks, $VAR \
+             and ${...} are refused for that reason: write the value out. Name the program \
+             outright for the same reason, since a pattern there stands for whichever file it \
+             matches today: `./scr*.sh` is refused where `./script.sh` runs. Quoting settles all \
+             of them, so '$HOME' is six characters and reaches the program as one argument. The user \
              approves the compiled plan before anything runs, so say what you are running and \
              why first. \
              \
@@ -3045,17 +3047,9 @@ fn run<S: Sink, C: Confirmer>(
             // line somewhere nobody chose.
             *tools.run_directory = plan.directory.clone();
 
-            // stdout and stderr together, because a program that failed usually explains itself
-            // on stderr and a result that dropped the explanation would be the least useful thing
-            // to hand back. Both carry the same label: the kernel fixed it before anything ran and
+            // Both streams carry the same label: the kernel fixed it before anything ran and
             // nothing about what was printed changes it.
-            let mut text = ran.stdout.clone();
-            if !ran.stderr.is_empty() {
-                if !text.is_empty() && !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                text.push_str(&ran.stderr);
-            }
+            let text = crate::exec::both_streams(&ran.stdout, &ran.stderr);
 
             // Capped only where the planner may read it. Output it may not read is quarantined
             // whole, so nothing of it enters the conversation and there is nothing to bound.

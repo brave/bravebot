@@ -210,7 +210,7 @@ pub enum Reason {
     TooDeep { cap: usize },
     /// A `~` where this user has no home directory.
     NoHome,
-    /// A program word standing for more or less than one thing.
+    /// A program word standing for more or less than one thing, or for whatever a pattern matches.
     NotOneProgram,
     /// A program name nothing on `$PATH` matches.
     NotFound,
@@ -280,9 +280,9 @@ impl fmt::Display for Reason {
                 "would read more than {cap} directories to work out what it matches. Name a narrower pattern"
             ),
             Self::NoHome => f.write_str("this user has no home directory to stand for"),
-            Self::NotOneProgram => {
-                f.write_str("a step's program has to be one thing, so that the plan can name it")
-            }
+            Self::NotOneProgram => f.write_str(
+                "a step's program has to be one named thing, so that the plan can say what will run. A program worked out from what is on disk is a program that changes when the tree does",
+            ),
             Self::NotFound => f.write_str(
                 "is not a program that could be found. `$PATH` decides what a bare name means, and nothing on it matches",
             ),
@@ -1296,10 +1296,14 @@ pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<
 
 /// Whether a piece stands for something that has to be looked up on disk.
 fn is_pattern(piece: &Piece) -> bool {
-    matches!(
-        piece,
-        Piece::Any | Piece::One | Piece::Tree | Piece::Class(_)
-    )
+    match piece {
+        Piece::Any | Piece::One | Piece::Tree | Piece::Class(_) => true,
+        // A pattern nested in braces is still a pattern, and `{a*,b}` carries none at the top
+        // level. Answering no here would leave the rules that turn on this held by the arity
+        // check further down instead of by the rule that means to hold them.
+        Piece::Alternatives(branches) => branches.iter().flatten().any(is_pattern),
+        Piece::Text(_) | Piece::Range { .. } | Piece::Home => false,
+    }
 }
 
 /// A word's pieces as the pattern they were written as.
@@ -1765,13 +1769,20 @@ impl Compiler<'_> {
 
     fn step(&mut self, command: &Command) -> Result<Step, Refused> {
         let word = command.program();
+        let one_program = || Refused {
+            span: word.span,
+            text: render(&word.pieces),
+            reason: Reason::NotOneProgram,
+        };
+        // A pattern is refused even where it matches a single executable today, exactly as a
+        // redirection target is: a program worked out from what is on disk is a program that
+        // changes when the tree does.
+        if word.pieces.iter().any(is_pattern) {
+            return Err(one_program());
+        }
         let expanded = expand(word, self.directory, self.home)?;
         let [program] = expanded.as_slice() else {
-            return Err(Refused {
-                span: word.span,
-                text: render(&word.pieces),
-                reason: Reason::NotOneProgram,
-            });
+            return Err(one_program());
         };
 
         // Before the name is looked up, so that the answer does not depend on whether the editor
@@ -1792,8 +1803,21 @@ impl Compiler<'_> {
             })?;
 
         let mut args = Vec::new();
-        for word in &command.words[1..] {
-            args.extend(expand(word, self.directory, self.home)?);
+        for operand in &command.words[1..] {
+            for expanded in expand(operand, self.directory, self.home)? {
+                // An operand naming the terminal device, judged after expansion so that a pattern
+                // or a `~` working out to the device is caught as the plain spelling is. The
+                // operand is quoted back rather than the program, since the program is usually an
+                // ordinary one and the device is the word that has to change.
+                if names_a_terminal(Path::new(&expanded)) {
+                    return Err(Refused {
+                        span: operand.span,
+                        text: expanded,
+                        reason: Reason::Interactive(TERMINAL_DEVICE),
+                    });
+                }
+                args.push(expanded);
+            }
         }
 
         let mut routes = Vec::new();
@@ -1864,11 +1888,22 @@ impl Compiler<'_> {
             return Err(refused());
         };
         let path = Path::new(one);
-        Ok(if path.is_absolute() {
+        let path = if path.is_absolute() {
             path.to_path_buf()
         } else {
             self.directory.join(path)
-        })
+        };
+        // A redirection is the other way a line reaches the terminal: reading from it takes the
+        // person's keystrokes exactly as naming it as an operand would, and writing to it draws
+        // over what they are reading.
+        if names_a_terminal(&path) {
+            return Err(Refused {
+                span: word.span,
+                text: render(&word.pieces),
+                reason: Reason::Interactive(TERMINAL_DEVICE),
+            });
+        }
+        Ok(path)
     }
 }
 
@@ -1917,6 +1952,28 @@ fn git_wants_a_terminal(args: &[String]) -> Option<&'static str> {
         }
         _ => None,
     }
+}
+
+/// What to do instead, for a line that names the terminal device itself.
+///
+/// Said for both directions, since one word covers both: a line reads the device or it writes to
+/// it, and the same spelling is refused either way.
+const TERMINAL_DEVICE: &str = "names the terminal, and a person is reading it. Standard input is empty here so that a program reading it gets nothing rather than their keystrokes, and writing to the terminal draws over what they are reading: pass what the program needs on the command line, and read what it printed in the result";
+
+/// Whether a path names a terminal device rather than a file.
+///
+/// Matched on the path as the line spells it, so a device reached under another name is not caught:
+/// a symlink to it, `/dev/../dev/tty`, or the same name in another case on a filesystem that
+/// ignores case. A `..` is left as written rather than resolved because resolving one lexically
+/// would be a guess, which is the reason the trust keys give for leaving one alone as well. This is
+/// the same bound [`wants_a_terminal`] has, and CMDLINE-15 asks of both a convenience rather than a
+/// guarantee: what makes a program reading standard input get nothing is that it is empty.
+fn names_a_terminal(path: &Path) -> bool {
+    let Ok(device) = path.strip_prefix("/dev") else {
+        return false;
+    };
+    let device = device.to_string_lossy();
+    device.starts_with("tty") || device.starts_with("pts/") || device == "console"
 }
 
 /// Whether a `git commit` was given its message rather than left to ask for one.
@@ -2396,6 +2453,22 @@ mod tests {
             std::fs::write(&path, b"x").expect("a scratch file");
             self
         }
+
+        /// A file this user could run, which is what a program word has to resolve to before a
+        /// step exists at all.
+        fn executable(&self, relative: &str) -> &Self {
+            self.file(relative);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(
+                    self.root.join(relative),
+                    std::fs::Permissions::from_mode(0o755),
+                )
+                .expect("a runnable scratch file");
+            }
+            self
+        }
     }
 
     impl Drop for Tree {
@@ -2684,6 +2757,27 @@ mod tests {
         );
     }
 
+    /// A program worked out from what is on disk is a program that changes when the tree does, so
+    /// the same line names a different binary once a file appears beside the one it matched. The
+    /// refusal has to hold where the pattern matches exactly one executable, which is the case
+    /// that otherwise looks like an ordinary command.
+    #[test]
+    fn a_pattern_in_program_position_is_refused() {
+        let tree = Tree::new("pattern-program");
+        tree.executable("script.sh");
+        assert_eq!(
+            compile_refused("./scr*.sh --flag", &tree.root).reason,
+            Reason::NotOneProgram
+        );
+        // Nested in braces as well, where the word carries no pattern at the top level. This one
+        // is refused by the rule rather than by whatever the expansion of the branches happened to
+        // say, which for a branch matching nothing would be that the pattern found no file.
+        assert_eq!(
+            compile_refused("./{scr*.sh,other*.sh} --flag", &tree.root).reason,
+            Reason::NotOneProgram
+        );
+    }
+
     #[test]
     fn a_program_that_cannot_be_found_is_refused() {
         let tree = Tree::new("missing");
@@ -2711,6 +2805,54 @@ mod tests {
                     Reason::Interactive(_)
                 ),
                 "`{line}` was not refused as interactive"
+            );
+        }
+    }
+
+    /// Standard input is empty so that a program reading it gets nothing rather than the terminal,
+    /// and a line that names the terminal device outright would undo that: the program then
+    /// competes with the interface for the person's keystrokes until the deadline ends it.
+    #[test]
+    fn a_line_that_names_the_terminal_device_is_refused() {
+        let tree = Tree::new("terminal-device");
+        for line in [
+            "cat < /dev/tty",
+            "cat /dev/tty",
+            "echo drawn > /dev/tty",
+            "cat < /dev/console",
+        ] {
+            let refusal = compile_refused(line, &tree.root);
+            assert!(
+                matches!(refusal.reason, Reason::Interactive(_)),
+                "`{line}` was not refused as interactive"
+            );
+            // The device is the word that has to change, so it is the one quoted back rather than
+            // the program, which is usually an ordinary one.
+            assert!(
+                refusal.text.starts_with("/dev/"),
+                "`{line}` was refused without naming the device: {refusal}"
+            );
+            // One message for a line that reads the device and a line that writes to it, since
+            // both spellings are refused and neither remedy is the other's.
+            let Reason::Interactive(said) = refusal.reason else {
+                unreachable!("refused as interactive above");
+            };
+            assert!(
+                said.contains("command line") && said.contains("draws over"),
+                "`{line}` was refused without saying what to do instead: {said}"
+            );
+        }
+
+        // A pattern is judged by what it worked out to, so an operand reaching the device that way
+        // is refused as the plain spelling is. Guarded on the device, because the pattern is matched
+        // against this machine's `/dev` and a build container need not have one.
+        if Path::new("/dev/tty").exists() {
+            assert!(
+                matches!(
+                    compile_refused("cat /dev/tt?", &tree.root).reason,
+                    Reason::Interactive(_)
+                ),
+                "a pattern working out to the device was not refused"
             );
         }
     }

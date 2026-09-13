@@ -229,13 +229,9 @@ pub fn record<S: Sink>(
     conversation: &mut Conversation,
     sink: &mut S,
 ) -> Result<Recorded, ShellError> {
-    let mut text = ran.stdout.clone();
-    if !ran.stderr.is_empty() {
-        if !text.is_empty() && !text.ends_with('\n') {
-            text.push('\n');
-        }
-        text.push_str(&ran.stderr);
-    }
+    // Under the same label a run's output carries, since the planner reads this the same way and a
+    // diagnostic run together with the output reads as something the command produced.
+    let text = crate::exec::both_streams(&ran.stdout, &ran.stderr);
 
     // A policy for the labelling alone. This is not a turn: nothing is read from the workspace, no
     // model is called, and the routing is the command the user typed, which anchors it to the one

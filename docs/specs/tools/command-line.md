@@ -142,6 +142,7 @@ Refused, as a compile error with the offending span named:
 | `eval`, `source`, `.`, `exec`, `trap` | reintroduce interpretation by name |
 | `if`, `while`, `for`, `case`, `function` | control flow is a program |
 | `!` | history expansion is text the user typed reaching a line the planner wrote |
+| a glob in program position | a program worked out from what is on disk is a program that changes when the tree does |
 
 **A refusal returns an error and runs nothing.** There is no degraded mode, no "fall back to
 `sh -c`", no "run the prefix that did compile". A compiler that can be made to give up and hand the
@@ -174,6 +175,7 @@ is the same thing as the planner having written them.
 `verified-by: bravebot_agent::cmdline::a_program_that_reintroduces_interpretation_is_refused`
 `verified-by: bravebot_agent::cmdline::a_word_that_opens_control_flow_is_refused`
 `verified-by: bravebot_agent::cmdline::an_unquoted_exclamation_mark_is_refused`
+`verified-by: bravebot_agent::cmdline::a_pattern_in_program_position_is_refused`
 `verified-by: bravebot_agent::cmdline::quoting_makes_a_refused_construct_ordinary_text`
 `verified-by: bravebot_agent::cmdline::a_line_that_half_compiles_yields_nothing`
 
@@ -475,7 +477,10 @@ hundred and fifty seconds. A tool that costs two of those to answer `which files
 symbol` is a tool nobody can afford to use, which is why the harness's own guidance had steered the
 planner away from it.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_vouched_commands_output_reaches_the_planner`
+`verified-by: bravebot_agent::turn::a_quarantined_run_says_what_would_make_it_visible`
+`verified-by: bravebot_agent::exec::standard_error_comes_back_labelled_beside_standard_output`
+`verified-by: bravebot_agent::exec::a_background_run_labels_standard_error_as_a_waited_for_one_does`
 
 <a id="CMDLINE-11"></a>
 ### CMDLINE-11: output is bounded, and what was dropped is said
@@ -579,6 +584,7 @@ The list is a convenience rather than a guarantee. Something interactive that is
 deadline and returns what it printed, which is the same outcome by a slower road.
 
 `verified-by: bravebot_agent::cmdline::a_program_that_wants_a_terminal_is_refused_before_it_starts`
+`verified-by: bravebot_agent::cmdline::a_line_that_names_the_terminal_device_is_refused`
 `verified-by: bravebot_agent::cmdline::the_same_program_without_the_interactive_part_is_not_refused`
 `verified-by: bravebot_agent::exec::a_stage_that_reads_stdin_is_given_nothing_rather_than_the_terminal`
 

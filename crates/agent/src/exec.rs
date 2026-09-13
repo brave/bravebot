@@ -154,6 +154,33 @@ impl Ran {
     }
 }
 
+/// What a run printed, as the one text a reader gets.
+///
+/// Standard error comes back rather than being dropped, because a stage that failed usually explains
+/// itself there and a result without the explanation is the least useful thing to hand back. It comes
+/// back under a line naming it, because run together the two are one listing: a reader taking
+/// `ls: nosuch: No such file or directory` for something the listing printed concludes that the
+/// command worked.
+///
+/// The label is a line of the text rather than a second field, which is what [CMDLINE-10] asks for
+/// and what every reader of this already handles. It marks the boundary, and does not prove it: what
+/// a program prints on either stream can spell the same line. Nothing here turns on the boundary, and
+/// the block a planner reads is already labelled untrusted as a whole, so a forged line moves nothing
+/// from one side of the trust boundary to the other.
+///
+/// [CMDLINE-10]: ../../../docs/specs/tools/command-line.md
+pub fn both_streams(stdout: &str, stderr: &str) -> String {
+    let mut text = stdout.to_string();
+    if !stderr.is_empty() {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str("standard error:\n");
+        text.push_str(stderr);
+    }
+    text
+}
+
 #[derive(Debug)]
 pub enum ExecError {
     /// The program could not be started: usually not installed, or not executable.
@@ -698,23 +725,28 @@ impl Background {
         self.stdout.finished() && self.stderr.iter().all(Drain::finished)
     }
 
-    /// What it has printed so far, standard output then standard error.
+    /// What it has printed so far, standard output then standard error under the label
+    /// [`both_streams`] gives it.
     ///
     /// A snapshot rather than a stream: the drains keep everything read since the pipeline
     /// started, so two reads of a growing log both begin at the beginning. Whoever reads this is
     /// told how much of it they have seen.
     pub fn printed(&self) -> String {
-        let mut text = self.stdout.text();
+        let mut errored = String::new();
         for drain in &self.stderr {
-            let errored = drain.text();
-            if !errored.is_empty() {
-                if !text.is_empty() && !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                text.push_str(&errored);
+            let text = drain.text();
+            if text.is_empty() {
+                continue;
             }
+            if !errored.is_empty() && !errored.ends_with('\n') {
+                errored.push('\n');
+            }
+            errored.push_str(&text);
         }
-        text
+        // Labelled here as it is for a run waited for, because backgrounding changes when the
+        // planner is told and never what it is told (CMDLINE-14). One label for every stage, since
+        // it names the stream rather than the stage.
+        both_streams(&self.stdout.text(), &errored)
     }
 
     /// How long it has been running.
