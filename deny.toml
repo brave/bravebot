@@ -1,0 +1,78 @@
+# What a dependency is allowed to be: whether an advisory is out against it, what it is
+# licensed under, how many versions of it the build compiles, and where it came from.
+#
+# `make check-deps` runs this, and CI runs that same target on every pull request, on main,
+# and once a day. The schedule is there for the advisories half, which has a cost that
+# accrues without a commit: an advisory against a version that is already pinned lands on a
+# day nobody touched this repository, and a check that only runs on a pull request never
+# sees it.
+#
+# What a new crate buys, and what writing it by hand would cost, is a judgement a person
+# makes: DEP-001 in docs/best-practices/dependencies.md. This file is the half of that rule
+# a tool can decide.
+
+[graph]
+# The feature set clippy is run under here, and the widest one anything ships with. A
+# dependency that only arrives with a feature enabled is one this has to see.
+all-features = true
+
+[advisories]
+# Empty, and worth keeping empty: an entry is a published advisory this binary ships with
+# anyway. Each takes an id and a reason, and the reason is what a reviewer agrees to.
+ignore = []
+# A yanked version is one the people who published it withdrew, which says something about it
+# whether or not an advisory follows. This defaults to a warning, and a warning in a CI log is
+# read by nobody, which is the state this file exists to replace.
+yanked = "deny"
+
+[licenses]
+# The binary ships under MPL-2.0 and everything linked into it has to be permissive. Nothing
+# copyleft is listed, which is the point: a GPL or LGPL crate arriving as a Renovate bump
+# fails here instead of reaching a release. Dev-dependencies are held to the same list, which
+# costs nothing today because no crate here declares one, and is the right default anyway: a
+# test-only crate still runs on every machine that builds this.
+#
+# Every entry is a licence some crate in the graph offers no permissive alternative to.
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",         # curve25519-dalek, subtle
+    "CDLA-Permissive-2.0",  # webpki-roots
+    "ISC",                  # untrusted and rustls-webpki, plus ring, which is Apache-2.0 AND ISC
+    "MIT",
+    "MPL-2.0",              # this workspace, and challenge-bypass-ristretto
+    "Unicode-3.0",          # unicode-ident, which is (MIT OR Apache-2.0) AND Unicode-3.0
+    "Zlib",                 # foldhash
+]
+
+[bans]
+# Two versions of a crate are two copies of its code in the binary and two sets of its bugs,
+# and a type from one is not the type from the other. Not automatically wrong, which is why
+# every one of them is recorded below rather than left to be counted by hand.
+multiple-versions = "deny"
+# `wildcards` is left at its default. It reads every intra-workspace path dependency here as
+# a `*` requirement, and `allow-wildcard-paths` does not apply to them because no crate in
+# the workspace declares `publish = false`, so enabling it means declaring that across the
+# workspace first, before it can say anything about a real `*`.
+
+# Every duplicate the build compiles, and why it cannot be unified here. Cargo.lock lists
+# nine crates at more than one version; the five not here are reachable only through
+# dev-dependencies of dependencies, so no build of this workspace resolves them at any
+# feature set or target.
+#
+# An entry that no longer matches anything is a reason left behind to be believed, so the
+# command in `make check-deps` raises that from a warning to an error. Each version is
+# written with a `:`, which is a requirement rather than the exact pin `@` means: every
+# reason below is about which minor versions sit side by side, and a patch bump that leaves
+# that unchanged should not have to be signed off again.
+skip = [
+    { crate = "base64:0.22", reason = "the version challenge-bypass-ristretto 2.1 pins, and the workspace pins it to match; ureq 3.4 is on 0.23 internally" },
+    { crate = "hashbrown:0.16", reason = "kasuari 0.4 pins it while the rest of ratatui 0.30 is on 0.17; neither is a dependency of this workspace" },
+    { crate = "syn:2", reason = "proc macros only, so nothing of either version is in the binary; ratatui's macro crates are on 2 and serde_derive is on 3" },
+    { crate = "windows-sys:0.52", reason = "compiled for the Windows targets only; ring 0.17 pins it while rustix and mio are on 0.61" },
+]
+
+[sources]
+# crates.io and nothing else. A git dependency is the one supply-chain route no version pin
+# covers, and both of these default to a warning, which nothing reads.
+unknown-registry = "deny"
+unknown-git = "deny"
