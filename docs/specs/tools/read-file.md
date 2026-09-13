@@ -106,3 +106,34 @@ either way the extension is what was decided from, and it is part of a path a pe
 `verified-by: bravebot_agent::turn::a_processor_is_given_a_picture_as_a_picture`
 `verified-by: bravebot_agent::workspace::the_media_type_comes_from_the_extension`
 `verified-by: bravebot_agent::workspace::a_file_that_names_no_picture_is_not_one`
+
+<a id="READ-6"></a>
+### READ-6: the tool's own description says that a read settles no question about change
+
+`read_file`'s description must say that a read is a sample of one moment, carrying no modification
+time and no hash, so no pair of reads settles whether a file changed: two of them cannot tell a file
+nobody touched from one changed twice and changed back, and neither says when anything happened.
+Where that is the question, the description must send the planner to watching the file rather than
+reading it, and must say what watching is, in both of its lengths. Inside this turn it is a watcher
+started in the background and then one bounded wait covering a window, which is
+[run.md](run.md). Past the end of the turn there is nothing the planner can start, so the description
+must have it say so instead of answering from a read: only a loop outlives a turn, and a loop is a
+person's to start, by typing `/loop`, which is [loop.md](../loop.md). Either way it must say to report
+a sample as a sample: which window was watched, and where nothing is watching the file, that too.
+
+**And it must not offer a comparison the planner cannot make.** Nothing in the description may have
+the planner read a modification time or a hash in order to compare it with a later one. Neither of
+those programs is among the audited few whose output may be read, so what they print comes back as a
+reference the planner never sees, and a description recommending that comparison describes work that
+cannot be done. The failure it invites is the one this clause exists to stop: a turn that reports a
+comparison it never made.
+
+**Why a clause about wording.** A tool's description is the only instruction the planner reliably
+reads, so wording that decides what a turn does is behaviour and belongs in a spec;
+[command-line.md](command-line.md) states that generally. The case here is that a read looks like an
+answer. Asked when a file last changed, a session read it, described what it held, and left nothing
+watching; asked again, it read again and said nothing had changed. Every step of that is a correct use
+of this tool, which is why the correction has to be in the sentence the planner reads before it picks
+the tool.
+
+`verified-by: bravebot_agent::tools::read_file_says_one_read_cannot_answer_whether_something_changed`

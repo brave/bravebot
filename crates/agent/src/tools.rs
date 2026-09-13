@@ -58,16 +58,16 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
              offset to continue from. Name the file with path, or with path_ref where a listing \
              gave you a reference instead of a name. \
              \
-             One read is a sample of one moment, and it carries no modification time, no size and \
-             no hash. Two of them cannot tell a file nobody touched from one changed twice and \
-             changed back, and neither says when anything happened. Where the question is whether \
-             something changed, ask run for those three and compare them: stat -f '%m %z' on \
-             macOS, stat -c '%Y %s' on Linux, and shasum -a 256 for the contents. All three, \
-             because each alone lies: a touch moves the time and changes nothing, a same-length \
-             edit leaves the size equal, and a matching hash cannot rule out an edit that was \
-             undone. Report a sample as a sample. Say when you looked, and where nothing is \
-             watching the file, say that too, or no change reads as a promise to report the next \
-             one. \
+             One read is a sample of one moment, and it carries no modification time and no hash. \
+             Two of them cannot tell a file nobody touched from one changed twice and changed \
+             back, and neither says when anything happened, so no pair of reads settles whether \
+             something changed. Where that is the question, watch the file rather than reading it: \
+             run a watcher with background: true and call job_output with wait_seconds to cover a \
+             window inside this turn. Where the question outlives this turn, say so rather than \
+             answering it from a read: only a loop outlives a turn, and a person starts one by \
+             typing /loop with an interval. Either way, report a sample as a sample: say which \
+             window you watched, and where nothing is watching the file, say that too, or no \
+             change reads as a promise to report the next one. \
              \
              A picture or a PDF (.png, .jpg, .gif, .webp, .pdf) comes back as a reference rather \
              than as anything you can look at, whoever vouched for the directory it is in. Give \
@@ -4866,11 +4866,14 @@ mod tests {
         );
     }
 
-    /// A change is decided from three signals and a read exposes none of them, so two reads of a
-    /// file that was changed and changed back are identical and neither carries a time to date an
-    /// answer from. A planner not told that answers a question about change from a snapshot, which
-    /// is what the description has to head off: what the tool cannot settle, and where the three
-    /// signals come from instead.
+    /// Two reads of a file that was changed and changed back are identical, and neither carries a
+    /// time to date an answer from. A planner not told that answers a question about change from a
+    /// snapshot, which is what the description has to head off: what the tool cannot settle, and
+    /// what to reach for instead.
+    ///
+    /// What it must not send the planner to is a program that reports a time or a hash. Those are
+    /// not in the read-proven table, so their output comes back quarantined, and a planner told to
+    /// compare three values it is handed as references cannot compare anything.
     #[test]
     fn read_file_says_one_read_cannot_answer_whether_something_changed() {
         let tool = available(false)
@@ -4880,15 +4883,22 @@ mod tests {
         let description = &tool.function.description;
 
         for stated in [
-            "no modification time, no size and no hash",
-            "stat -f '%m %z'",
-            "stat -c '%Y %s'",
-            "shasum",
+            "no modification time and no hash",
+            "no pair of reads settles whether something changed",
+            "job_output with wait_seconds",
+            "/loop",
             "where nothing is watching",
         ] {
             assert!(
                 description.contains(stated),
                 "read_file's description no longer says '{stated}'"
+            );
+        }
+        for absent in ["stat -f", "stat -c", "shasum"] {
+            assert!(
+                !description.contains(absent),
+                "read_file's description sends the planner to '{absent}', whose output is \
+                 quarantined and so cannot be compared"
             );
         }
     }
