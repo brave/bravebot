@@ -1,0 +1,90 @@
+name: Test determinism
+
+# Measuring determinism takes many runs of one unchanged tree, which is an hour of work nobody wants
+# in front of a review, so the measurement runs against the default branch on a clock. What it finds
+# becomes an issue per test rather than a gate on anybody's review. The pull request trigger below
+# runs only the parser's selftest, which takes seconds and is the thing most likely to break
+# silently.
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: How many times to run the suite
+        default: "30"
+  pull_request:
+    paths:
+      - contrib/measure-flakes.py
+      - .github/workflows/test-determinism.yml
+
+permissions:
+  contents: read
+
+env:
+  BRAVEBOT_ALLOW_UNCONFIGURED_BUILD: "1"
+
+jobs:
+  # A parser that matches nothing reports a clean suite forever, which is indistinguishable from
+  # having no measurement at all. This compiles nothing and needs no toolchain.
+  parser:
+    name: Parser
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check the parser
+        run: contrib/measure-flakes.py --selftest
+
+  # Both thread counts are named rather than left to cargo, because a hosted runner has four cores
+  # and cargo's default there is already the cap `make check-linux` sets. The wide leg is what
+  # `make check` runs as on the machines people actually run it on, and the difference between the
+  # two is the answer to whether that cap belongs in more than one target.
+  measure:
+    name: ${{ matrix.threads }} threads
+    needs: parser
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      # A flake nobody filed is a flake nobody works on, so the job that finds one opens the issue.
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Only the wide leg files. Both legs measure the same tests, so both filing would race to
+          # open two issues for one flake.
+          - threads: 4
+            issues: ""
+          - threads: 16
+            issues: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        # Pinned to a full commit SHA; see the note in ci.yml's `check` job.
+        # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # Every flaky test that has no issue gets one, and one that already has an issue gets nothing:
+      # a job that files the same thing every Monday is a job whose issues are closed unread. The
+      # rates go to the job summary either way, and no rate fails this job, since going red over a
+      # known two percent flake is the state this exists to replace. Raising the run count means
+      # checking it still fits the timeout above: every run is a full suite.
+      - name: Measure
+        env:
+          RUNS: ${{ inputs.runs || '30' }}
+          THREADS: ${{ matrix.threads }}
+          ISSUES: ${{ matrix.issues }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          contrib/measure-flakes.py --runs "$RUNS" --test-threads "$THREADS" \
+            --file-issues "$ISSUES" --summary "$GITHUB_STEP_SUMMARY"
