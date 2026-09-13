@@ -4711,10 +4711,14 @@ impl Session {
     /// of a model, and a handle standing for a different name is the indirection working rather than a
     /// substitution, so comparing them would put a warning on every turn. Whether they are comparable
     /// is recorded by whoever knew which backend answered, rather than guessed at from the spelling.
+    ///
+    /// `None` for the automatic entry as well. That name asks the server to choose a model per
+    /// request, so a concrete one coming back is the entry doing its job rather than something
+    /// served in place of what was asked for.
     pub fn substituted_model(&self) -> Option<&str> {
         let (requested, served) = self.served.as_ref()?;
         let requested = requested.as_deref()?;
-        if !self.served_names_are_comparable {
+        if !self.served_names_are_comparable || requested == bravebot_config::DEFAULT_MODEL {
             return None;
         }
         (requested != served).then_some(requested)
@@ -5998,6 +6002,23 @@ mod tests {
             "claude-sonnet-5",
             false,
             false,
+        );
+        assert_eq!(session.substituted_model(), None);
+    }
+
+    /// The automatic entry asks the server to choose per request, so a concrete name coming back is
+    /// that entry working. Called a substitution, it puts a warning about nothing on every session
+    /// that picked it from the picker, and says the opposite of what the panel says about the same
+    /// turn.
+    #[test]
+    fn picking_automatic_and_being_answered_by_a_model_is_not_a_substitution() {
+        let mut session = Session::new("none");
+        session.choose_model(bravebot_config::DEFAULT_MODEL.to_string());
+        session.served(
+            Some(bravebot_config::DEFAULT_MODEL.to_string()),
+            "claude-3-haiku",
+            false,
+            true,
         );
         assert_eq!(session.substituted_model(), None);
     }
