@@ -274,8 +274,9 @@ harness's own overhead.
 
 `/cd` moves the record with the working directory, and the session is written there straight away
 rather than at the end of the next turn. What was already written stays where it was written: those
-turns happened in that directory and are still worth resuming there. A session that has had no turn
-yet writes nothing, as it does anywhere else.
+turns happened in that directory and are still worth resuming there. A session with nothing written
+yet writes nothing, as it does anywhere else, and its destination moves all the same: whatever it
+writes later is written where it is working by then.
 
 The trail stays with the turns rather than following the session, since it is appended a turn at a
 time beside whichever record was current. A move therefore splits it, and a resume replays the
@@ -289,6 +290,8 @@ a yes for a directory nobody was ever asked about. Writing it immediately is wha
 resumable in its new home at all: until it is saved there, there is nothing there to find.
 
 `verified-by: bravebot_tui::sessions::a_session_that_changes_directory_is_recorded_where_it_moved_to`
+`verified-by: bravebot_tui::sessions::a_session_that_moves_before_anything_is_written_is_recorded_where_it_moved_to`
+`verified-by: bravebot_tui::sessions::a_record_written_before_the_first_turn_follows_the_session_when_it_moves`
 
 <a id="SESSION-14"></a>
 ### SESSION-14: the session someone was just in can be picked up without naming it
