@@ -989,10 +989,12 @@ struct Job {
     /// to disagree: what a person vouched for can change during a turn, and a pipeline started
     /// before that must not have its output relabelled because of it.
     label: bravebot_core::label::Label,
-    /// How many bytes have already been handed over, so a later look reports what is new.
+    /// How much of each pipe has already been handed over, so a later look reports what is new.
     ///
-    /// A count of bytes, never a comparison of them: nothing here reads what was printed.
-    read: usize,
+    /// Counts of bytes, never a comparison of them: nothing here reads what was printed. Per pipe
+    /// rather than one offset into the composed text, because output arriving on one stream moves
+    /// where the other sits in that composition.
+    seen: crate::exec::Seen,
 }
 
 impl Jobs {
@@ -1024,7 +1026,7 @@ impl Jobs {
                 running,
                 line,
                 label,
-                read: 0,
+                seen: crate::exec::Seen::default(),
             },
         );
         name
@@ -3310,26 +3312,24 @@ fn job_output<S: Sink>(
         ));
     };
 
-    // Timed, so the answer can say which window it watched. A wait that ends early because the job
-    // printed or exited is otherwise indistinguishable from one that sat out its whole bound, and
-    // the difference is the whole of what a caller learns from silence.
-    let waited = wait.map(|bound| {
-        let began = std::time::Instant::now();
-        // Waited only where there is nothing unseen: a caller with output already waiting for it
-        // asked to be told about output, and it is here. Whether there is any is two counts the
-        // driver kept of how much has been handed over, never a comparison of what was printed.
-        if job.running.printed().len() <= job.read {
+    // None where there was nothing to wait for: a caller with unseen output already waiting for it
+    // asked to be told about output, and it is here. Whether there is any is byte counts the driver
+    // kept per pipe, never a comparison of what was printed.
+    let waited = wait
+        .filter(|_| !job.running.has_more(&job.seen))
+        .map(|bound| {
+            // Timed, so the answer can say which window it watched. A wait that ends early because the
+            // job printed or exited is otherwise indistinguishable from one that sat out its whole
+            // bound, and the difference is the whole of what a caller learns from silence.
+            let began = std::time::Instant::now();
             job.running.wait_for_more(bound, tools.cancel);
-        }
-        began.elapsed()
-    });
+            began.elapsed()
+        });
 
     let ended = job.running.ended();
-    let printed = job.running.printed();
-    // Bytes, so a partial line is not counted as read. The count is the driver's own bookkeeping
-    // and nothing here compares what was printed.
-    let fresh = printed.get(job.read..).unwrap_or_default().to_string();
-    job.read = printed.len();
+    // Per pipe, so output arriving on one stream cannot shift where the other sits in the composed
+    // text and hand back bytes this caller was already shown.
+    let fresh = job.running.since(&mut job.seen);
 
     let ran_for = job.running.ran_for();
     let line = job.line.clone();

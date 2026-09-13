@@ -627,6 +627,44 @@ impl Drain {
     fn bytes_read(&self) -> usize {
         self.read.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
+
+    /// What this pipe has delivered past `seen`, advancing `seen` by the bytes taken.
+    ///
+    /// A byte offset into this one pipe's buffer, which is the only offset that means anything:
+    /// see [`Seen`] for why an offset into the composed text does not.
+    ///
+    /// A final character the pipe has not finished delivering is held back rather than taken
+    /// lossily. Decoding a half-arrived character now would hand back U+FFFD and move the offset
+    /// past it, so the character that is on its way would never be handed to anybody. Bytes that
+    /// are not the start of a character are not waited for: they are not going to become valid.
+    fn since(&self, seen: &mut usize) -> String {
+        let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
+        let rest = &read[(*seen).min(read.len())..];
+        let take = match std::str::from_utf8(rest) {
+            Ok(_) => rest.len(),
+            Err(error) if error.error_len().is_none() => error.valid_up_to(),
+            Err(_) => rest.len(),
+        };
+        *seen = read.len() - rest.len() + take;
+        String::from_utf8_lossy(&rest[..take]).into_owned()
+    }
+}
+
+/// How much of each of a job's pipes a caller has already been handed.
+///
+/// One offset per pipe, never a single offset into what [`Background::printed`] composes. That
+/// composition puts standard output first, so a line arriving on standard output after standard
+/// error has printed moves every byte of the error text further along it: a lone offset into it then
+/// names a place in the middle of text the caller was already shown, and the bytes it was waiting
+/// for sit before that place and are never handed over at all.
+///
+/// Byte counts and nothing else. Comparing two of these says whether more has arrived; it never says
+/// what arrived, and nothing here reads a byte of it.
+#[derive(Debug, Default)]
+pub struct Seen {
+    stdout: usize,
+    /// One per standard-error pipe, grown to match when a pipeline's stages are first looked at.
+    stderr: Vec<usize>,
 }
 
 /// Kill every stage and reap it, so nothing is left behind.
@@ -734,6 +772,40 @@ impl Background {
             }
         }
         text
+    }
+
+    /// What it has printed past `seen`, composed the way [`Background::printed`] composes it, and
+    /// advancing `seen` by what is taken.
+    ///
+    /// Per pipe rather than an offset into the composition, which is the whole point of [`Seen`].
+    pub fn since(&self, seen: &mut Seen) -> String {
+        seen.stderr.resize(self.stderr.len(), 0);
+        let mut text = self.stdout.since(&mut seen.stdout);
+        for (drain, seen) in self.stderr.iter().zip(seen.stderr.iter_mut()) {
+            let errored = drain.since(seen);
+            if !errored.is_empty() {
+                if !text.is_empty() && !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                text.push_str(&errored);
+            }
+        }
+        text
+    }
+
+    /// Whether any pipe has delivered anything past `seen`.
+    ///
+    /// Byte counts per pipe, so asking costs nothing however much a job has printed. Composing the
+    /// text to measure its length would copy the whole log every time somebody wanted to know
+    /// whether there was anything in it.
+    pub fn has_more(&self, seen: &Seen) -> bool {
+        if self.stdout.bytes_read() > seen.stdout {
+            return true;
+        }
+        self.stderr
+            .iter()
+            .enumerate()
+            .any(|(at, drain)| drain.bytes_read() > seen.stderr.get(at).copied().unwrap_or(0))
     }
 
     /// How long it has been running.

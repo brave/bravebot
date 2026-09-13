@@ -447,6 +447,16 @@ itself. A program does therefore decide when a wait returns by choosing when to 
 exactly what a caller asking to be told about new output asked for, and the bytes themselves still
 reach anybody only under the label the plan was given.
 
+**What is new is counted per pipe.** A pipeline has one pipe for its standard output and one for each
+stage's standard error, and what a look hands back composes them with the output first. A single
+offset into that composition is therefore wrong the moment a line arrives on standard output after
+something has printed on standard error: every byte of the error text moves further along, the offset
+names a place in the middle of text the caller was already shown, and the bytes it was waiting for sit
+before that place and are never handed over at all. One offset per pipe, and each pipe compared
+against itself. A character the pipe has only half delivered is held back until the rest of it
+arrives, rather than handed over as a replacement character that the real one would then never
+replace.
+
 **The token is checked every pass, and no pass blocks.** A bound running to ten minutes and a person
 who has changed their mind are the whole reason: cancelling should not mean sitting through the rest
 of somebody else's `tail -f`. Checking often is only worth as much as the longest pass, so nothing
@@ -467,6 +477,8 @@ the window.
 `verified-by: bravebot_agent::exec::waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_further`
 `verified-by: bravebot_agent::exec::waiting_for_more_returns_when_the_job_ends_without_printing`
 `verified-by: bravebot_agent::exec::a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound`
+`verified-by: bravebot_agent::exec::what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other`
+`verified-by: bravebot_agent::exec::a_character_split_across_two_pipe_reads_is_handed_over_whole`
 `verified-by: bravebot_agent::tools::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`
 `verified-by: bravebot_agent::tools::job_output_offers_a_bounded_wait_rather_than_only_a_snapshot`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made`
