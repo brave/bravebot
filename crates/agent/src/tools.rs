@@ -2990,16 +2990,22 @@ fn run<S: Sink, C: Confirmer>(
         // One pipeline, because that is the whole of what a long-lived program is. A line with
         // joins waits on its own parts to decide where to go next, and nothing waits here; a
         // redirection is a destination the background has no reader for.
+        //
+        // Read off the steps rather than the plan's write and read sets, because a redirection
+        // that opens no file is in neither of those: `2>&1` renames a descriptor and names nothing
+        // for anybody to endorse. What has to be refused is what start_steps cannot honour, and it
+        // honours no route at all.
         let steps = match &plan.steps {
             bravebot_core::command::Steps::Pipeline(steps)
-                if plan.writes.is_empty() && plan.reads.is_empty() =>
+                if steps.iter().all(|step| step.routes.is_empty()) =>
             {
                 steps
             }
             _ => {
                 return problem(
-                    "error: a background command must be one pipeline with no redirection. \
-                     Run the parts separately, or run this one in the foreground.",
+                    "error: a background command must be one pipeline with no redirection, \
+                     including one that names no file. Run the parts separately, or run this one \
+                     in the foreground.",
                 );
             }
         };

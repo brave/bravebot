@@ -360,7 +360,8 @@ Being left running is not a reason to ask for less.
 
 **One pipeline, and no redirection.** A line with `&&` or `||` decides where to go next by waiting
 on the part before it, and nothing waits here; a redirection names a destination the background has
-no reader for. Both are refused rather than half-honoured.
+no reader for. Both are refused rather than half-honoured, and so is a redirection that opens no
+file: what a background run cannot honour is a route, whether or not it names one.
 
 **The turn owns it.** Dropping the handle kills the pipeline, so a job cannot outlive the turn that
 started one. A background program still running after its turn ended would be an effect nobody is
@@ -388,6 +389,7 @@ that started a server could never talk to it.
 `verified-by: bravebot_agent::exec::a_background_pipeline_with_missing_resolutions_does_not_start`
 `verified-by: bravebot_agent::turn::a_background_server_is_still_running_when_the_next_call_is_made`
 `verified-by: bravebot_agent::turn::a_background_command_must_be_one_pipeline`
+`verified-by: bravebot_agent::turn::a_background_line_is_refused_for_any_redirection_it_carries`
 `verified-by: bravebot_agent::turn::a_refused_background_run_starts_nothing`
 `verified-by: bravebot_agent::turn::asking_about_a_job_that_does_not_exist_says_so`
 
