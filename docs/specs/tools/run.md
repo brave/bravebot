@@ -423,6 +423,14 @@ that was shortened comes back with silence, and silence carries no length: a cal
 ten minutes and was quietly given one reads the same nothing either way and reports it as ten
 minutes of nothing.
 
+**The bound is the wait's own, not the deadline's.** The two numbers happen to match today and are
+still separate, because they answer separate questions. A deadline bounds how long a pipeline may
+run; a wait bounds how long one look may sit watching one. Deciding that a build may take longer is
+not deciding that a single look may sit there longer, and a wait bounded by whatever the deadline
+bounds today would move whenever that decision was made. Both of the wait's numbers are quoted to the
+planner, in the tool's description and in the refusal, so they are pinned to what a caller is told
+rather than to each other.
+
 **The window is named, to the planner and not only on a screen.** A wait that ends early because
 output arrived is otherwise indistinguishable from one that sat out its bound, so the answer says how
 many seconds were spent, and says that nothing is watching now. Without it, nothing new is read as a

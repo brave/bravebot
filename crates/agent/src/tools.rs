@@ -1705,7 +1705,8 @@ fn deadline_from(arguments: &Value) -> Result<std::time::Duration, &'static str>
 /// that took, so the caller can see what it got. A wait cut short hands back the silence of a
 /// window nobody asked about, and silence is read as an answer.
 fn wait_from(arguments: &Value) -> Result<Option<std::time::Duration>, &'static str> {
-    let bounds = crate::exec::FLOOR.as_secs() as i64..=crate::exec::CEILING.as_secs() as i64;
+    let bounds =
+        crate::exec::WAIT_FLOOR.as_secs() as i64..=crate::exec::WAIT_CEILING.as_secs() as i64;
     match arguments.get("wait_seconds") {
         Some(value) if !value.is_null() => match value.as_i64() {
             Some(seconds) if bounds.contains(&seconds) => {
@@ -4694,14 +4695,17 @@ mod tests {
             wait_from(&json!({"wait_seconds": 30})).unwrap(),
             Some(Duration::from_secs(30))
         );
-        // Both ends are inside, so the bounds a refusal names are the bounds it holds to.
+        // Both ends are inside, and written out as seconds rather than as the constants they come
+        // from: the numbers here are the ones the description and the refusal quote to the planner,
+        // so a test that reads them from the same constants would agree with itself while every
+        // sentence the planner sees had gone wrong.
         assert_eq!(
             wait_from(&json!({"wait_seconds": 1})).unwrap(),
-            Some(crate::exec::FLOOR)
+            Some(Duration::from_secs(1))
         );
         assert_eq!(
             wait_from(&json!({"wait_seconds": 600})).unwrap(),
-            Some(crate::exec::CEILING)
+            Some(Duration::from_secs(600))
         );
 
         for outside in [0, -1, 601, 86_400] {
@@ -4733,12 +4737,28 @@ mod tests {
         let wait = &tool.function.parameters["properties"]["wait_seconds"];
         assert_eq!(wait["type"], "integer", "wait_seconds is not offered");
         let said = wait["description"].as_str().expect("it is described");
-        for stated in ["Between 1 and 600", "refused rather than adjusted"] {
+        // Built from the constants rather than written out, so raising either bound fails here
+        // instead of leaving the planner told a number that is no longer the one enforced.
+        let bounds = format!(
+            "Between {} and {}",
+            crate::exec::WAIT_FLOOR.as_secs(),
+            crate::exec::WAIT_CEILING.as_secs()
+        );
+        for stated in [bounds.as_str(), "refused rather than adjusted"] {
             assert!(
                 said.contains(stated),
                 "wait_seconds no longer says '{stated}': {said}"
             );
         }
+        let refusal = wait_from(&json!({"wait_seconds": 0})).expect_err("zero is refused");
+        assert!(
+            refusal.contains(&format!(
+                "between {} and {}",
+                crate::exec::WAIT_FLOOR.as_secs(),
+                crate::exec::WAIT_CEILING.as_secs()
+            )),
+            "the refusal quotes bounds that are not the ones enforced: {refusal}"
+        );
         assert!(
             said.contains("as soon as"),
             "wait_seconds does not say a long wait is free when the thing happens early: {said}"

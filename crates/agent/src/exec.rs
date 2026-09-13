@@ -83,6 +83,16 @@ pub const FLOOR: Duration = Duration::from_secs(1);
 /// the turn spends waiting on one command, which is a budget decision.
 pub const CEILING: Duration = Duration::from_secs(600);
 
+/// The shortest and the longest one look at a background job may wait for it.
+///
+/// Their own pair rather than [`FLOOR`] and [`CEILING`]. Those bound a deadline, which is how long a
+/// pipeline is allowed to run, and raising what a program may take is not a decision about how long
+/// a single look may sit watching one. Both numbers are quoted to the planner in the tool's
+/// description and in its refusal, so a test pins those words to these values.
+pub const WAIT_FLOOR: Duration = Duration::from_secs(1);
+/// See [`WAIT_FLOOR`].
+pub const WAIT_CEILING: Duration = Duration::from_secs(600);
+
 /// How often the wait loop looks up to see whether it should stop.
 const TICK: Duration = Duration::from_millis(50);
 
