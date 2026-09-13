@@ -2,7 +2,9 @@
 #
 # docs/specs is normative: a clause change is a behaviour change, whatever the code does.
 # Manifests are here because "no new dependencies without a reason that survives scrutiny"
-# is a rule nothing else enforces.
+# is a rule nothing else enforces. deny.toml is here because it is where that rule's
+# mechanical half is granted an exception: an ignored advisory, an allowed licence, a
+# duplicate version nobody has to account for again.
 #
 # Last matching pattern wins, so keep the more specific rules below the general ones.
 
@@ -13,3 +15,4 @@
 /Cargo.toml @bbondy
 /crates/*/Cargo.toml @bbondy
 /package.json @bbondy
+/deny.toml @bbondy

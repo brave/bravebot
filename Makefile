@@ -31,6 +31,7 @@ help:
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
 	@echo "  make check-npm             Install from the lockfile and lint it, as CI does"
+	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-all             Every check any CI enforces, including the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
@@ -150,6 +151,26 @@ check-npm:
 	npm ci --ignore-scripts
 	npm run lint:lockfile
 
+# The dependency policy in deny.toml. CI runs this target rather than cargo-deny's action,
+# so the version below is the only one anywhere and a pass here means what it means there.
+#
+# Installed under the cache rather than into ~/.cargo/bin, so running this never changes what
+# `cargo deny` means anywhere else.
+#
+# unmatched-skip is a warning by default: raised here because a skip entry that no longer
+# matches is a recorded reason for a duplicate that is no longer there. --locked for the same
+# reason every other cargo command here takes it: the answer is about the versions Cargo.lock
+# pins, not the ones a resolve on the spot would pick.
+CARGO_DENY_VERSION = 0.20.2
+CARGO_DENY_ROOT = $(HOME)/.cache/bravebot-deny
+.PHONY: check-deps
+check-deps:
+	@"$(CARGO_DENY_ROOT)/bin/cargo-deny" --version 2>/dev/null | grep -qx "cargo-deny $(CARGO_DENY_VERSION)" || { \
+		echo "building cargo-deny $(CARGO_DENY_VERSION) into $(CARGO_DENY_ROOT), which takes a few minutes"; \
+		cargo install --quiet --locked cargo-deny@$(CARGO_DENY_VERSION) --root "$(CARGO_DENY_ROOT)"; \
+	}
+	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --locked check --deny unmatched-skip
+
 # The minimum-toolchain job. Built in a container pinned to the declared MSRV, because
 # rustup is not a given here and a Homebrew or distro Rust cannot switch toolchains.
 # Catches a feature that only compiles on a newer toolchain than the release build has.
@@ -165,7 +186,7 @@ check-msrv:
 # container builds and a scan -- so `check` stays the inner loop and this is the
 # before-you-push pass.
 .PHONY: check-all
-check-all: check check-spec check-npm check-msrv check-reviewdog
+check-all: check check-spec check-npm check-deps check-msrv check-reviewdog
 
 .PHONY: locales
 locales:

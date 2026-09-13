@@ -1,0 +1,44 @@
+name: Dependencies
+
+# The dependency policy in deny.toml, which that file states and this workflow only runs.
+#
+# On a schedule as well as on a pull request, which is what the advisories half needs. An
+# advisory against a version that is already pinned lands on a day nobody touched this
+# repository, so a check that only runs on a pull request never sees it. A schedule fires on
+# the default branch only, which is the branch a release is cut from.
+#
+# Its own workflow rather than a job in ci.yml because a schedule triggers a whole workflow,
+# and ci.yml is eleven jobs, six of them cross-builds.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "37 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    name: Dependency policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        # Pinned to a full commit SHA; see the note in ci.yml's `check` job.
+        # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+
+      # The make target a developer runs, not EmbarkStudios/cargo-deny-action. The action
+      # would be faster, since it ships a cargo-deny rather than building one, but the version
+      # it ships is a second pin: Renovate moves the action on its own, and a diagnostic the
+      # newer cargo-deny adds then fails a pull request that passed locally. This target names
+      # the version once, so there is nothing to drift.
+      - name: Check the dependency policy
+        run: make check-deps

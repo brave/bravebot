@@ -5,8 +5,9 @@ decide.
 
 Nothing here restates a rule a tool already enforces or could: formatting, lints, clause numbering,
 the lockfiles, an em-dash, an attribution marker, a `declassify` outside the gates. Those belong in
-`make check`, `make check-spec`, `make check-npm` and the security scan, and a rule that can be
-written as one of those checks is a bug against this directory rather than an entry in it.
+`make check`, `make check-spec`, `make check-npm`, `make check-deps` and the security scan, and a
+rule that can be written as one of those checks is a bug against this directory rather than an
+entry in it.
 
 | Read | For |
 |---|---|

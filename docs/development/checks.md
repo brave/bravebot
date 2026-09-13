@@ -22,8 +22,11 @@ takes a minute and one that takes twenty, and the reviewer is the person waiting
 names, the paths it governs, the call sites a guarded symbol pins, and the table in
 [../specs/README.md](../specs/README.md). CI runs it too, so a new use of a guarded symbol fails a
 pull request rather than waiting for somebody to notice it.
-`make check-npm` installs from the lockfile and lints it, as CI does. `make check-reviewdog` is the
-[security scan](security-scan.md).
+`make check-npm` installs from the lockfile and lints it, as CI does. `make check-deps` decides
+`deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
+build compiles at two versions without a recorded reason, and a dependency from anywhere but
+crates.io. CI runs this same target on every pull request, on main, and once a day, since an
+advisory arrives without a commit. `make check-reviewdog` is the [security scan](security-scan.md).
 
 `make check-linux` runs fmt, clippy and the tests on Linux under the current stable toolchain.
 Worth doing before pushing platform-specific code, since a macOS host never compiles the Linux
