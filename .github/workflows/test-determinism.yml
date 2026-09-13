@@ -12,7 +12,7 @@ on:
     inputs:
       runs:
         description: How many times to run the suite
-        default: "30"
+        default: "100"
   pull_request:
     paths:
       - contrib/measure-flakes.py
@@ -79,11 +79,18 @@ jobs:
       # Every flaky test that has no issue gets one, and one that already has an issue gets nothing:
       # a job that files the same thing every Monday is a job whose issues are closed unread. The
       # rates go to the job summary either way, and no rate fails this job, since going red over a
-      # known two percent flake is the state this exists to replace. Raising the run count means
-      # checking it still fits the timeout above: every run is a full suite.
+      # known two percent flake is the state this exists to replace.
+      #
+      # A hundred runs rather than thirty. Thirty accounts for a test that loses about a tenth of
+      # its runs and nothing rarer, and a tenth is where the flakes found in this suite were
+      # measured, over ten runs each. A rate that rough puts them on either side of that line, so
+      # thirty could clear a test it should have named. A ten run dispatch took four minutes a leg,
+      # nearly all of it the suite rather than the build, which puts a hundred at half an hour
+      # against the timeout above. Raising it further means redoing that arithmetic: every run is a
+      # full suite.
       - name: Measure
         env:
-          RUNS: ${{ inputs.runs || '30' }}
+          RUNS: ${{ inputs.runs || '100' }}
           THREADS: ${{ matrix.threads }}
           ISSUES: ${{ matrix.issues }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

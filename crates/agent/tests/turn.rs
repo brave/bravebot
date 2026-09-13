@@ -43,48 +43,7 @@ impl Drop for Scratch {
 
 /// Serve one canned reply, returning the base URL and the request body received.
 fn serve(reply: &str) -> (String, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let port = listener.local_addr().expect("addr").port();
-    let (sender, receiver) = mpsc::channel();
-    let reply = reply.to_string();
-
-    thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept");
-        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-
-        let mut line = String::new();
-        reader.read_line(&mut line).expect("request line");
-
-        let mut content_length = 0usize;
-        loop {
-            let mut header = String::new();
-            if reader.read_line(&mut header).unwrap_or(0) == 0 {
-                break;
-            }
-            if header == "\r\n" || header == "\n" {
-                break;
-            }
-            if let Some((name, value)) = header.split_once(':')
-                && name.trim().eq_ignore_ascii_case("content-length")
-            {
-                content_length = value.trim().parse().unwrap_or(0);
-            }
-        }
-
-        let mut body = vec![0u8; content_length];
-        reader.read_exact(&mut body).expect("body");
-        let _ = sender.send(String::from_utf8_lossy(&body).to_string());
-
-        let frames = as_sse(&reply);
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
-            frames.len()
-        );
-        let _ = stream.write_all(response.as_bytes());
-        let _ = stream.flush();
-    });
-
-    (format!("http://127.0.0.1:{port}"), receiver)
+    serve_sequence(vec![reply.to_string()])
 }
 
 /// Re-express a whole chat response as the SSE stream that would have delivered it.
@@ -515,10 +474,13 @@ fn serve_sequence_losing_the_first(
         .collect();
 
     thread::spawn(move || {
-        for reply in attempts {
-            let Ok((mut stream, _)) = listener.accept() else {
-                break;
-            };
+        let mut attempts = attempts.into_iter();
+        // The listener outlives the script rather than going away with the last reply in it. The
+        // chat client resends a request whose reply it could not finish reading, and a port with
+        // nothing behind it answers that retry with `Connection refused`, which the egress layer
+        // calls permanent: the turn then fails naming neither the first failure nor its cause.
+        let mut answered: Option<(String, String)> = None;
+        while let Ok((mut stream, _)) = listener.accept() {
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
 
             let mut line = String::new();
@@ -541,7 +503,36 @@ fn serve_sequence_losing_the_first(
             }
             let mut body = vec![0u8; content_length];
             let _ = reader.read_exact(&mut body);
-            let _ = sender.send(String::from_utf8_lossy(&body).to_string());
+            let body = String::from_utf8_lossy(&body).to_string();
+            let _ = sender.send(body.clone());
+
+            // The same request gets the same answer. Only a resend can arrive with a body already
+            // seen, since every round of a turn carries the rounds before it, so this is what keeps
+            // a retry from being handed the reply the next round was going to get.
+            let resent = answered
+                .as_ref()
+                .filter(|(asked, _)| *asked == body)
+                .map(|(_, reply)| reply.clone());
+
+            let reply = if resent.is_some() {
+                resent
+            } else {
+                match attempts.next() {
+                    // An attempt this was asked to lose. Not remembered, so the resend that follows
+                    // gets the reply after it, which is the whole point of losing one.
+                    Some(None) => None,
+                    Some(Some(reply)) => {
+                        answered = Some((body, reply.clone()));
+                        Some(reply)
+                    }
+                    None => {
+                        let answer = out_of_script();
+                        let _ = stream.write_all(answer.as_bytes());
+                        let _ = stream.flush();
+                        continue;
+                    }
+                }
+            };
 
             let Some(reply) = reply else {
                 drop(stream);
@@ -559,6 +550,83 @@ fn serve_sequence_losing_the_first(
     });
 
     (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// What a request the script has no reply for is told.
+///
+/// Said in a status rather than by hanging up or by having nothing to connect to. 400 is not a
+/// status the client retries, so the test fails at once, and it fails on the mock having run out of
+/// script rather than on something that reads like the machine the test ran on.
+fn out_of_script() -> String {
+    let body = "the mock server ran out of scripted replies\n";
+    format!(
+        "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// Ask the mock server directly, so that what it does with a second request is the subject rather
+/// than something a turn has to be talked into needing.
+fn ask_directly(endpoint: &str, body: &str) -> String {
+    let address = endpoint.trim_start_matches("http://");
+    let mut stream = std::net::TcpStream::connect(address).expect("connect");
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: {address}\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).expect("send");
+    stream.flush().expect("flush");
+
+    let mut answer = String::new();
+    let _ = stream.read_to_string(&mut answer);
+    answer
+}
+
+/// The harness must not be the thing that fails the test.
+///
+/// The chat client resends a request whose reply stopped early, by design: half a reply cannot be
+/// continued, so the whole request goes again. A mock that stopped listening once it had served its
+/// script answers that retry with a closed port instead, and `Connection refused` is reported as
+/// permanent, so the turn fails on a socket rather than on whatever cut the first reply short. Six
+/// tests in this file were losing runs that way on a loaded machine, all of them reading as the same
+/// unhelpful error.
+#[test]
+fn a_resent_request_is_answered_again_rather_than_refused() {
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let asking = r#"{"messages":[{"role":"user","content":"once"}]}"#;
+
+    let first = ask_directly(&endpoint, asking);
+    let again = ask_directly(&endpoint, asking);
+
+    // The reply is asserted whole rather than by its text, since `as_sse` splits content across
+    // frames on purpose and no frame holds the sentence.
+    assert!(
+        first.starts_with("HTTP/1.1 200 OK") && first.contains("test-model"),
+        "the first request was not answered with the reply: {first}"
+    );
+    assert_eq!(first, again, "the resent request was answered differently");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert_eq!(bodies.len(), 2, "the server did not report both requests");
+}
+
+/// A request the script cannot answer is a test asking for something it never described, which is
+/// worth saying as itself rather than as a connection that went wrong.
+#[test]
+fn a_request_the_script_cannot_answer_is_told_so() {
+    let (endpoint, _received) = serve(&reply_with("the only answer"));
+
+    let _answered = ask_directly(&endpoint, r#"{"messages":[{"content":"one"}]}"#);
+    let beyond = ask_directly(&endpoint, r#"{"messages":[{"content":"two"}]}"#);
+
+    assert!(
+        beyond.starts_with("HTTP/1.1 400"),
+        "an unscripted request was not answered with a status: {beyond}"
+    );
+    assert!(
+        beyond.contains("ran out of scripted replies"),
+        "the answer did not say what was wrong with it: {beyond}"
+    );
 }
 
 /// A model that answers on what it was asked rather than on the order it was asked in.
@@ -11948,18 +12016,20 @@ fn the_middle_of_a_capped_output_stays_reachable() {
     );
 }
 
-/// A page server, for the fetch tests. Answers every connection with the same reply and reports
-/// the request lines it was sent, so a test can tell what actually went out.
+/// A page server, for the fetch tests. Answers each request with the next reply it was given and
+/// reports the request lines it was sent, so a test can tell what actually went out.
+///
+/// Keeps listening past the end of its replies for the reason the chat server does: a fetch that is
+/// retried should meet the page again rather than a closed port.
 fn serve_pages(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
 
     thread::spawn(move || {
-        for reply in replies {
-            let Ok((mut stream, _)) = listener.accept() else {
-                break;
-            };
+        let mut replies = replies.into_iter();
+        let mut answered: Option<(String, String)> = None;
+        while let Ok((mut stream, _)) = listener.accept() {
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
             let mut request = String::new();
             let _ = reader.read_line(&mut request);
@@ -11972,7 +12042,26 @@ fn serve_pages(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
                     break;
                 }
             }
-            let _ = sender.send(request);
+            let _ = sender.send(request.clone());
+
+            // The same page asked for twice is the same page, so a retry does not spend the reply
+            // meant for whatever the test fetches next.
+            let resent = answered
+                .as_ref()
+                .filter(|(asked, _)| *asked == request)
+                .map(|(_, reply)| reply.clone());
+            let reply = if let Some(reply) = resent {
+                reply
+            } else {
+                match replies.next() {
+                    Some(reply) => {
+                        answered = Some((request, reply.clone()));
+                        reply
+                    }
+                    None => out_of_script(),
+                }
+            };
+
             let _ = stream.write_all(reply.as_bytes());
             let _ = stream.flush();
         }
@@ -12123,7 +12212,8 @@ fn a_fetched_body_that_is_not_text_is_carried_anyway() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     thread::spawn(move || {
-        if let Ok((mut stream, _)) = listener.accept() {
+        // Answers for as long as it is asked, so a retried fetch is not a refused connection.
+        while let Ok((mut stream, _)) = listener.accept() {
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
             let mut line = String::new();
             let _ = reader.read_line(&mut line);
