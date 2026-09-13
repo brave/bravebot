@@ -270,18 +270,24 @@ all-platforms: darwin-arm64 darwin-amd64 linux-amd64 linux-arm64 windows-amd64 w
 # rust-objcopy is LLVM-based and handles Mach-O, ELF, and PE alike, so one tool covers
 # every target; the per-target GNU strip binaries are not all present in the image.
 #
+# The container is asked where its own toolchain is rather than being told: the image is
+# published for two architectures and each variant names that directory after its own triple,
+# so a written-out path resolves on one release host and not the other, and states the Rust
+# version besides. That directory is also LD_LIBRARY_PATH, because rust-objcopy loads the
+# libLLVM beside it.
+#
 # Run by the publish job after `all-platforms`, and by nothing in this repository, so the
 # release carries stripped binaries while a local cross-build keeps its symbols.
-RUST_LIB_DIR = /usr/local/rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib
-STRIP_TOOL = $(RUST_LIB_DIR)/rustlib/x86_64-unknown-linux-gnu/bin/rust-objcopy
 .PHONY: strip
 strip:
 	@for f in dist/$(BINARY)-*; do \
 		case "$$f" in *.sha256|*SHA256SUMS) continue;; esac; \
-		docker run --rm -v "$(PWD)/dist:/dist" \
-			-e LD_LIBRARY_PATH=$(RUST_LIB_DIR) \
-			ghcr.io/rust-cross/cargo-zigbuild:0.23.0 \
-			$(STRIP_TOOL) --strip-all "/dist/$$(basename $$f)"; \
+		docker run --rm -v "$(PWD)/dist:/dist" -e ASSET="/dist/$$(basename $$f)" \
+			ghcr.io/rust-cross/cargo-zigbuild:0.23.0 sh -c '\
+			lib=$$(rustc --print sysroot)/lib && \
+			host=$$(rustc -vV | sed -n "s/^host: //p") && \
+			LD_LIBRARY_PATH=$$lib \
+			"$$lib/rustlib/$$host/bin/rust-objcopy" --strip-all "$$ASSET"'; \
 	done
 	@echo "stripped:"
 	@ls -lh dist/ | awk 'NR>1 {print "  " $$9, $$5}'
