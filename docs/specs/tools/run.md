@@ -407,6 +407,56 @@ what was printed: nothing here reads a byte of it.
 `verified-by: bravebot_agent::turn::what_a_background_job_printed_is_quarantined_like_any_other_output`
 `verified-by: bravebot_agent::exec::a_background_pipeline_does_not_see_this_agents_credentials`
 
+<a id="RUN-17"></a>
+### RUN-17: a look at a job may wait for it, inside the turn that owns it
+
+`job_output` takes `wait_seconds`, and a call that gives it comes back at the first of four things:
+output arriving that the caller has not been handed, the job ending, the wait running out, or the
+turn being cancelled. Which of the four it was is not reported separately, because the answer already
+says it: how many new lines there are, whether the job has ended, and how long the wait actually
+lasted.
+
+**Between one second and ten minutes, and a value outside that is refused.** [RUN-11](#RUN-11)'s
+deadline is clamped instead, and the difference is what a caller can tell afterwards. A run whose
+deadline was shortened still ends, and the answer says how long it took, so nothing is hidden. A wait
+that was shortened comes back with silence, and silence carries no length: a caller that asked about
+ten minutes and was quietly given one reads the same nothing either way and reports it as ten
+minutes of nothing.
+
+**The window is named.** A wait that ends early because output arrived is otherwise indistinguishable
+from one that sat out its bound, so the answer says how many seconds were spent. Without it, nothing
+new is read as a standing account of the job rather than as an account of some seconds of it.
+
+**This still cannot outlive the turn.** [RUN-15](#RUN-15) is unchanged: the handle is dropped at the
+end of the turn and the pipeline dies with it. A wait is a way to spend part of one turn watching,
+not a way to be told about something later, and the tool says so where it offers it. Watching that
+has to survive a turn is [loop.md](../loop.md) and nothing here.
+
+**Nothing of the output is read.** Both things the wait watches are counts this driver kept about a
+pipeline it started: how many bytes have arrived, and which steps have exited. That is the
+bookkeeping [RUN-16](#RUN-16) already provides for, and the byte count is only ever compared against
+itself. A program does therefore decide when a wait returns by choosing when to print, which is
+exactly what a caller asking to be told about new output asked for, and the bytes themselves still
+reach anybody only under the label the plan was given.
+
+**The token is checked every pass, not once at the end.** A bound running to ten minutes and a person
+who has changed their mind are the whole reason: cancelling should not mean sitting through the rest
+of somebody else's `tail -f`.
+
+**Why.** Without a wait, watching a job costs a whole turn per look. The planner calls `job_output`,
+is told nothing has happened, has to answer, and is asked the same question again, so a program that
+prints once a minute costs a round trip a minute and the user reads a running commentary of nothing.
+It is also what a bounded "tell me when this changes" needs in order to be answerable at all: one
+call that covers a window, rather than a snapshot the planner is tempted to report as an answer about
+the window.
+
+`verified-by: bravebot_agent::exec::waiting_for_more_returns_when_the_job_prints_rather_than_at_the_bound`
+`verified-by: bravebot_agent::exec::waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_further`
+`verified-by: bravebot_agent::exec::waiting_for_more_returns_when_the_job_ends_without_printing`
+`verified-by: bravebot_agent::exec::a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound`
+`verified-by: bravebot_agent::tools::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`
+`verified-by: bravebot_agent::tools::job_output_offers_a_bounded_wait_rather_than_only_a_snapshot`
+
 ## Open questions
 
 - Whether to confine children is issue #4. Whether output can ever be trusted by proof rather than

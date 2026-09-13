@@ -618,6 +618,15 @@ impl Drain {
         let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
         String::from_utf8_lossy(&read).into_owned()
     }
+
+    /// How many bytes the pipe has delivered so far.
+    ///
+    /// The buffer's length, which is not the length of what [`Drain::text`] returns: that is taken
+    /// lossily, so one byte the pipe delivered can become three characters a caller sees. Only ever
+    /// compared against itself, to say whether more has arrived.
+    fn bytes_read(&self) -> usize {
+        self.read.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
 }
 
 /// Kill every stage and reap it, so nothing is left behind.
@@ -730,6 +739,50 @@ impl Background {
     /// Kill every step, and keep what it printed.
     pub fn kill(&mut self) {
         stop(&mut self.children);
+    }
+
+    /// How many bytes every pipe has delivered between them.
+    ///
+    /// Not the length of what [`Background::printed`] composes: that joins the streams and is taken
+    /// lossily. This is the raw total, and the one thing it answers is whether more has arrived
+    /// since it was last asked.
+    fn arrived(&self) -> usize {
+        self.stdout.bytes_read() + self.stderr.iter().map(Drain::bytes_read).sum::<usize>()
+    }
+
+    /// Wait for something to happen, and return at the first of four things.
+    ///
+    /// More arriving than had arrived when the wait started, every step having exited, `bound`
+    /// running out, and `cancel` being set. Which of the four it was is not reported, because the
+    /// caller then takes the account [`Background::ended`] and [`Background::printed`] give and that
+    /// account says it.
+    ///
+    /// **Nothing of the output is read.** Both conditions are counts this struct kept about a
+    /// pipeline it started: how many bytes have arrived, and which steps have exited. A program
+    /// that decides its own output therefore decides when this returns, which is exactly what a
+    /// caller waiting to be told about new output asked for, and the bytes themselves still reach
+    /// anybody only under the label the plan was given.
+    ///
+    /// `cancel` is checked on every pass rather than once at the end. The bound runs to ten
+    /// minutes, and a person who has changed their mind should not have to sit through the rest of
+    /// somebody else's `tail -f`.
+    pub fn wait_for_more(&mut self, bound: Duration, cancel: &Cancel) {
+        let arrived = self.arrived();
+        let until = Instant::now() + bound;
+        loop {
+            if cancel.is_cancelled() || self.arrived() > arrived {
+                return;
+            }
+            if Instant::now() >= until {
+                return;
+            }
+            // Last of the three, so a job that ends inside the bound is reported with a complete
+            // account: this is the call that pays DRAIN_GRACE for the pipes.
+            if self.ended() {
+                return;
+            }
+            std::thread::sleep(TICK);
+        }
     }
 }
 

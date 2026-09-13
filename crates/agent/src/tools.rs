@@ -579,7 +579,13 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
              again after doing something else shows what happened in between rather than \
              repeating what you have seen. Output is quarantined exactly as a run's is: it comes \
              back as text where the user vouched for every command in the line, and otherwise as \
-             a reference to pass to read_output, spawn_processor or write_file.",
+             a reference to pass to read_output, spawn_processor or write_file. \
+             \
+             Use wait_seconds to wait for the job rather than asking it again and again. Without \
+             it a wait costs a whole turn per look: you call, are told nothing has happened, and \
+             answer only to be asked the same question. It is still a wait inside this turn, so it \
+             cannot tell you about anything that happens after the turn ends, and the job is \
+             killed then as it always was.",
             json!({
                 "type": "object",
                 "properties": {
@@ -592,6 +598,17 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
                         "description": "Stop the job after reading what it printed. Use it once \
                                         you are done with a server you started. Defaults to \
                                         false, which leaves it running."
+                    },
+                    "wait_seconds": {
+                        "type": "integer",
+                        "description": "Wait up to this many seconds instead of answering at \
+                                        once. Returns as soon as the job prints something you \
+                                        have not been shown or the job ends, and at the bound if \
+                                        it stays silent, so a long wait costs nothing when the \
+                                        thing you are waiting for happens early. Between 1 and \
+                                        600. A value outside that is refused rather than \
+                                        adjusted, so the wait you get is the wait you asked for. \
+                                        Omit it to look and answer straight away."
                     }
                 },
                 "required": ["job"]
@@ -1666,6 +1683,30 @@ fn deadline_from(arguments: &Value) -> Result<std::time::Duration, &'static str>
             None => Err("error: 'deadline_seconds' must be a whole number of seconds"),
         },
         _ => Ok(crate::exec::LIMIT),
+    }
+}
+
+/// How long a `job_output` call asked to wait, or `None` where it asked for none.
+///
+/// Refused rather than clamped, which is the opposite of what [`deadline_from`] does with a
+/// deadline. A deadline cut short still ends the run it was given for and the answer says how long
+/// that took, so the caller can see what it got. A wait cut short hands back the silence of a
+/// window nobody asked about, and silence is read as an answer.
+fn wait_from(arguments: &Value) -> Result<Option<std::time::Duration>, &'static str> {
+    let bounds = crate::exec::FLOOR.as_secs() as i64..=crate::exec::CEILING.as_secs() as i64;
+    match arguments.get("wait_seconds") {
+        Some(value) if !value.is_null() => match value.as_i64() {
+            Some(seconds) if bounds.contains(&seconds) => {
+                Ok(Some(std::time::Duration::from_secs(seconds as u64)))
+            }
+            Some(_) => Err(
+                "error: 'wait_seconds' must be between 1 and 600, and a value outside \
+                            that is refused rather than adjusted: a wait quietly shortened hands \
+                            back silence about a window nobody watched.",
+            ),
+            None => Err("error: 'wait_seconds' must be a whole number of seconds"),
+        },
+        _ => Ok(None),
     }
 }
 
@@ -3247,12 +3288,31 @@ fn job_output<S: Sink>(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
+    let wait = match wait_from(arguments) {
+        Ok(wait) => wait,
+        Err(refusal) => return problem(refusal),
+    };
+
     let Some(job) = tools.jobs.running.get_mut(&name) else {
         return problem(format!(
             "error: there is no background job called '{name}'. Only a job name run handed back \
              in this turn can be read, and they do not outlive the turn."
         ));
     };
+
+    // Timed, so the answer can say which window it watched. A wait that ends early because the job
+    // printed or exited is otherwise indistinguishable from one that sat out its whole bound, and
+    // the difference is the whole of what a caller learns from silence.
+    let waited = wait.map(|bound| {
+        let began = std::time::Instant::now();
+        // Waited only where there is nothing unseen: a caller with output already waiting for it
+        // asked to be told about output, and it is here. Whether there is any is two counts the
+        // driver kept of how much has been handed over, never a comparison of what was printed.
+        if job.running.printed().len() <= job.read {
+            job.running.wait_for_more(bound, tools.cancel);
+        }
+        began.elapsed()
+    });
 
     let ended = job.running.ended();
     let printed = job.running.printed();
@@ -3294,10 +3354,16 @@ fn job_output<S: Sink>(
         format!("still running after {} seconds", ran_for.as_secs())
     };
 
-    let note = format!(
-        "{outcome}, {}",
-        tally(fresh.lines().count(), "new line", "new lines")
-    );
+    let lines = tally(fresh.lines().count(), "new line", "new lines");
+    let note = match waited {
+        // The window, so nothing new is read as nothing new in these seconds rather than as a
+        // standing account of the job.
+        Some(waited) => format!(
+            "{outcome}, {lines} after waiting {}",
+            tally(waited.as_secs() as usize, "second", "seconds")
+        ),
+        None => format!("{outcome}, {lines}"),
+    };
 
     // Capped only where the planner may read it, exactly as a foreground run is: output it may not
     // read is quarantined whole, and there is nothing of it in the conversation to bound.
@@ -4596,6 +4662,78 @@ mod tests {
         assert!(deadline_from(&json!({"deadline_seconds": 12.5})).is_err());
         assert!(deadline_from(&json!({"deadline_seconds": true})).is_err());
         assert!(deadline_from(&json!({"deadline_seconds": [300]})).is_err());
+    }
+
+    /// A wait is refused rather than clamped, which is where it parts company with a deadline. A
+    /// deadline cut short still ends the run it was given for and the answer says how long that
+    /// took. A wait cut short comes back with the silence of a shorter window, and a planner that
+    /// asked about ten minutes and was quietly given one reads that silence as ten minutes of it.
+    #[test]
+    fn a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened() {
+        use std::time::Duration;
+
+        // Nothing asked for is no wait, which is what every call before this one did.
+        assert_eq!(wait_from(&json!({})).unwrap(), None);
+        assert_eq!(wait_from(&json!({"wait_seconds": null})).unwrap(), None);
+
+        assert_eq!(
+            wait_from(&json!({"wait_seconds": 30})).unwrap(),
+            Some(Duration::from_secs(30))
+        );
+        // Both ends are inside, so the bounds a refusal names are the bounds it holds to.
+        assert_eq!(
+            wait_from(&json!({"wait_seconds": 1})).unwrap(),
+            Some(crate::exec::FLOOR)
+        );
+        assert_eq!(
+            wait_from(&json!({"wait_seconds": 600})).unwrap(),
+            Some(crate::exec::CEILING)
+        );
+
+        for outside in [0, -1, 601, 86_400] {
+            let refusal = wait_from(&json!({"wait_seconds": outside}))
+                .expect_err("a wait outside the bounds is refused");
+            assert!(
+                refusal.contains("between 1 and 600"),
+                "the refusal does not say what is allowed: {refusal}"
+            );
+        }
+
+        assert!(wait_from(&json!({"wait_seconds": "a while"})).is_err());
+        assert!(wait_from(&json!({"wait_seconds": 12.5})).is_err());
+        assert!(wait_from(&json!({"wait_seconds": true})).is_err());
+        assert!(wait_from(&json!({"wait_seconds": [30]})).is_err());
+    }
+
+    /// Without a way to wait, watching a job costs one whole turn per look: the planner calls, is
+    /// told nothing has happened, answers, and is asked the same question again. The argument is
+    /// what makes one call able to cover a window, so it has to be in the schema the planner reads
+    /// and the description has to say the wait ends when something arrives.
+    #[test]
+    fn job_output_offers_a_bounded_wait_rather_than_only_a_snapshot() {
+        let tool = available(false)
+            .into_iter()
+            .find(|t| t.function.name == "job_output")
+            .expect("job_output is offered");
+
+        let wait = &tool.function.parameters["properties"]["wait_seconds"];
+        assert_eq!(wait["type"], "integer", "wait_seconds is not offered");
+        let said = wait["description"].as_str().expect("it is described");
+        for stated in ["Between 1 and 600", "refused rather than adjusted"] {
+            assert!(
+                said.contains(stated),
+                "wait_seconds no longer says '{stated}': {said}"
+            );
+        }
+        assert!(
+            said.contains("as soon as"),
+            "wait_seconds does not say a long wait is free when the thing happens early: {said}"
+        );
+        assert!(
+            tool.function.description.contains("wait_seconds"),
+            "job_output's description never names the argument: {}",
+            tool.function.description
+        );
     }
 
     /// A tool's description is the only instruction the planner reliably reads, so wording that

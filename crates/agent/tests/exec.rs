@@ -1072,3 +1072,121 @@ fn a_background_pipeline_reported_as_ended_has_all_of_its_output() {
         "a job reported as ended was missing what it printed: {printed:?}"
     );
 }
+
+/// Waits for the job's output to arrive, so the caller can watch a running program.
+///
+/// A caller with only a snapshot has to ask again to learn anything, and every ask is another whole
+/// round trip. Returning as soon as something arrives is what makes one call able to answer a
+/// question about a program that has not printed yet.
+#[test]
+fn waiting_for_more_returns_when_the_job_prints_rather_than_at_the_bound() {
+    let scratch = Scratch::new("wait-for-output");
+    let resolved = script(
+        &scratch.path,
+        "chatty",
+        "#!/bin/sh\necho first\nsleep 1\necho second\nsleep 30\n",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("chatty", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    for _ in 0..100 {
+        if job.printed().contains("first") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let began = std::time::Instant::now();
+    job.wait_for_more(std::time::Duration::from_secs(30), &Cancel::new());
+    let waited = began.elapsed();
+
+    assert!(
+        waited < std::time::Duration::from_secs(15),
+        "a wait sat out its bound though the job printed after a second: {waited:?}"
+    );
+    let printed = job.printed();
+    assert!(
+        printed.contains("second"),
+        "the wait returned without the output it was waiting for: {printed:?}"
+    );
+}
+
+/// Output the caller has already been handed is not something new, so it does not end a wait. A
+/// wait that returned on it would report the same lines twice and answer a question about the
+/// window nobody watched.
+#[test]
+fn waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_further() {
+    let scratch = Scratch::new("wait-out-the-bound");
+    let resolved = script(
+        &scratch.path,
+        "quiet",
+        "#!/bin/sh\necho listening\nsleep 30\n",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    for _ in 0..100 {
+        if job.printed().contains("listening") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let bound = std::time::Duration::from_secs(2);
+    let began = std::time::Instant::now();
+    job.wait_for_more(bound, &Cancel::new());
+    let waited = began.elapsed();
+
+    assert!(
+        waited >= bound,
+        "a wait came back early on output the caller already had: {waited:?}"
+    );
+    assert!(
+        !job.ended(),
+        "a program sleeping for 30s was reported ended"
+    );
+}
+
+/// A job that has exited will never print again, so waiting on for the rest of the bound would buy
+/// nothing and spend the turn the caller has.
+#[test]
+fn waiting_for_more_returns_when_the_job_ends_without_printing() {
+    let scratch = Scratch::new("wait-until-ended");
+    let resolved = script(&scratch.path, "silent", "#!/bin/sh\nsleep 1\nexit 0\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("silent", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let began = std::time::Instant::now();
+    job.wait_for_more(std::time::Duration::from_secs(60), &Cancel::new());
+    let waited = began.elapsed();
+
+    assert!(
+        waited < std::time::Duration::from_secs(30),
+        "a wait on a job that had exited ran to its bound: {waited:?}"
+    );
+    assert!(job.ended(), "the wait returned before the job had ended");
+}
+
+/// The bound runs to ten minutes, and somebody who has changed their mind should not have to sit
+/// through the rest of a wait they asked to stop. The token is checked every pass for that reason
+/// rather than once at the end.
+#[test]
+fn a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound() {
+    let scratch = Scratch::new("wait-cancelled");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let cancel = Cancel::new();
+    cancel.cancel();
+    let began = std::time::Instant::now();
+    job.wait_for_more(std::time::Duration::from_secs(600), &cancel);
+    let waited = began.elapsed();
+
+    assert!(
+        waited < std::time::Duration::from_secs(5),
+        "a cancelled wait went on waiting: {waited:?}"
+    );
+}
