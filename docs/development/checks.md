@@ -53,5 +53,14 @@ bisect it, do not build a baseline worktree for it, and do not re-run the suite 
 here spawn real processes against a wall clock, so they fail on a loaded machine and pass on the
 next run; that is a flake, not a signal, and chasing one costs more than the failure does.
 
+**Which tests those are is measured rather than assumed.** The weekly
+[Test determinism](../../.github/workflows/test-determinism.yml) workflow runs the suite thirty
+times against one build, at four threads and at sixteen, and names every test whose outcome changed,
+with the rate and the panic it produced. Each one gets an issue titled `Flaky test: <name>`, and a
+test that already has one gets nothing further, so the list of open flakes is the search rather than
+a job summary somebody has to remember to read. Search the issues before treating a failure as a
+known flake, and run `contrib/measure-flakes.py --runs 30` to ask the same of this machine. Neither
+fails a build over a rate.
+
 If a check cannot pass for a reason outside the change, say so in the commit message rather than
 leaving it to be discovered.

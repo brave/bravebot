@@ -1,7 +1,8 @@
 # contrib
 
-Tools that are useful for working on bravebot but are not part of it. Nothing here is built, shipped,
-or run by CI, and nothing in `crates/` depends on any of it.
+Tools that are useful for working on bravebot but are not part of it. Nothing here is built or
+shipped, and nothing in `crates/` depends on any of it. One is run by CI: `measure-flakes.py`, on a
+weekly schedule, since what it measures takes many runs of an unchanged tree.
 
 ## check-toolchain.py
 
@@ -24,6 +25,50 @@ passes. It compiles nothing. `--warn` prints the same thing and exits zero, and
 
 `make check-linux` is the way to run CI's fmt, clippy and tests on current stable regardless of
 what the host has.
+
+## measure-flakes.py
+
+Names every test that does not agree with itself, and how often.
+
+[checks.md](../docs/development/checks.md) says a failure that does not reproduce is a flake and to
+carry on rather than chase it, which is sound only if somebody knows which tests actually do that.
+Nothing measured it, so the answer was a shrug. Some tests here stand up a real server on an
+ephemeral port, and some spawn a program they have just written, and those are the ones that lose a
+run.
+
+One build, that build run N times, and a table of the tests whose outcome changed, worst rate first,
+each with the panic it produced so that one cause across five tests reads as one thing.
+
+```sh
+contrib/measure-flakes.py --runs 30
+contrib/measure-flakes.py --runs 30 --test-threads 4   # what make check-linux caps the suite to
+```
+
+Nothing fails over a rate. A job that goes red for a known two percent flake is a job people learn
+to ignore, which is the problem this exists for, so a rate is reported and never gated on.
+
+`--file-issues OWNER/REPO` opens one issue per flaky test, titled `Flaky test: <name>`, saying the
+rate, the parallelism it was measured at and what the failure said. A test that already has an issue
+under that title gets nothing, whoever opened it, so a weekly run adds only what is new instead of
+filing the same test every Monday. `--dry-run` prints what it would send and sends nothing;
+`--issue-limit` bounds how many one run may open, since the first measurement of a suite nobody has
+measured could otherwise arrive as twenty issues at once. The exit code is still not a verdict on
+the tests: it is nonzero when the measurement did not happen, or when an issue that was meant to be
+filed was not, because a filer that has quietly stopped working looks exactly like a suite that
+stopped being flaky.
+
+`--summary FILE` appends the same report to a file, which is how the weekly
+[Test determinism](../.github/workflows/test-determinism.yml) workflow puts it in a job summary.
+That workflow names both thread counts rather than leaving either to cargo, since a hosted runner
+has four cores and cargo's default there is already the cap: four threads and sixteen, which is what
+`make check` runs as on the machines people run it on. The difference between the two is the answer
+to whether that cap belongs in more than one target. Only the wider leg files issues, since both
+legs measure the same tests and both filing would race to open two issues for one flake.
+
+`--selftest` checks the parsing against output whose answer is known and runs no tests. It is a job
+of its own in that workflow, which is also what a pull request touching this file runs, and the
+thing to run after touching a regular expression here: a parser that matches nothing reports a clean
+suite forever.
 
 ## drive_tui.py
 
