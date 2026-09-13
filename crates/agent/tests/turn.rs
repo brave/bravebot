@@ -12649,6 +12649,75 @@ fn the_middle_of_a_capped_job_output_stays_reachable() {
     );
 }
 
+/// The whole of what the argument is for, through the whole path rather than at the unit that
+/// parses it. One call, made before the job had printed anything, comes back holding what the job
+/// printed two seconds later. Without the wait that same call is answered from an empty snapshot
+/// and learning anything costs another round trip, another reply, and another question.
+#[test]
+fn one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made() {
+    let scratch = Scratch::new("background-waited");
+
+    // Silent for long enough that a snapshot taken when the call is made holds nothing, then
+    // printing, then staying up so the job is still running when it is asked about.
+    let script = scratch.path.join("late");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nsleep 2\necho LATE-MARKER-QUUX\nsleep 30\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./late","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":30}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Vouched for, so what the job printed comes back as text: a reference would say nothing about
+    // whether the wait had waited for it.
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and tell me when it prints"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let after = bodies
+        .last()
+        .expect("the planner was asked nothing after the wait");
+    assert!(
+        after.contains("LATE-MARKER-QUUX"),
+        "one call with a wait was answered from a snapshot taken before the job printed: {after}"
+    );
+    assert!(
+        after.contains("This look waited"),
+        "the answer does not say which window it watched: {after}"
+    );
+    // Nothing was stopped, and a planner told a job it is waiting on was stopped stops asking.
+    assert!(
+        !after.contains("was stopped"),
+        "a job that is still running was reported to the planner as stopped: {after}"
+    );
+}
+
 /// A job name nobody handed out is an error rather than an empty result, for the reason a search
 /// that ran no pattern is: nothing found reads as a fact about the job.
 #[test]

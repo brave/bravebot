@@ -423,9 +423,17 @@ that was shortened comes back with silence, and silence carries no length: a cal
 ten minutes and was quietly given one reads the same nothing either way and reports it as ten
 minutes of nothing.
 
-**The window is named.** A wait that ends early because output arrived is otherwise indistinguishable
-from one that sat out its bound, so the answer says how many seconds were spent. Without it, nothing
-new is read as a standing account of the job rather than as an account of some seconds of it.
+**The window is named, to the planner and not only on a screen.** A wait that ends early because
+output arrived is otherwise indistinguishable from one that sat out its bound, so the answer says how
+many seconds were spent, and says that nothing is watching now. Without it, nothing new is read as a
+standing account of the job rather than as an account of some seconds of it. It is said as structure
+on the result, beside the exit codes and the clock, because the words a person watching reads reach a
+screen and stop there.
+
+**A job still running is reported as running and not as stopped.** [RUN-11](#RUN-11)'s stop is
+something that happened to a pipeline; a look is not. Reporting a look at a live job the way a
+deadline is reported tells the planner the job is over, which is exactly the wrong thing to tell one
+that is waiting for the job to print again.
 
 **This still cannot outlive the turn.** [RUN-15](#RUN-15) is unchanged: the handle is dropped at the
 end of the turn and the pipeline dies with it. A wait is a way to spend part of one turn watching,
@@ -456,6 +464,7 @@ the window.
 `verified-by: bravebot_agent::exec::a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound`
 `verified-by: bravebot_agent::tools::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`
 `verified-by: bravebot_agent::tools::job_output_offers_a_bounded_wait_rather_than_only_a_snapshot`
+`verified-by: bravebot_agent::turn::one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made`
 
 ## Open questions
 

@@ -1287,7 +1287,7 @@ fn mark_for(outcome: &bravebot_agent::report::Outcome) -> (&'static str, ratatui
     match outcome {
         Outcome::Succeeded => ("✓", theme::ok()),
         Outcome::Failed(_) => ("✗", theme::fail()),
-        Outcome::Stopped(_) => ("●", theme::running()),
+        Outcome::Stopped(_) | Outcome::Running { .. } => ("●", theme::running()),
     }
 }
 

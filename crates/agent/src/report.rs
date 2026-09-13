@@ -226,10 +226,10 @@ pub struct Shown {
 /// Structure rather than content: nothing here was read out of a byte the program printed, so it
 /// may be drawn on a row and told to the planner alike.
 ///
-/// Three cases and not a boolean, because a run stopped at the wall-clock limit is neither of the
-/// other two. A server told to serve a page serves it, prints as it goes and never exits, and
-/// reporting that as a failure would be wrong. See [tools/run.md](../../../docs/specs/tools/run.md)
-/// RUN-11.
+/// Not a boolean, because a run stopped at the wall-clock limit is neither of the first two, and a
+/// background job looked at while it goes on running is none of the three. A server told to serve a
+/// page serves it, prints as it goes and never exits, and reporting that as a failure would be
+/// wrong. See [tools/run.md](../../../docs/specs/tools/run.md) RUN-11 and RUN-17.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     /// Every stage exited zero, or a line with branches did what it was told.
@@ -238,6 +238,20 @@ pub enum Outcome {
     Failed(String),
     /// It outstayed the limit and was stopped, with what it had run for by then.
     Stopped(std::time::Duration),
+    /// It was still going when it was looked at, and was left going.
+    ///
+    /// Separate from [`Outcome::Stopped`] because nothing stopped it: a look at a background job is
+    /// not the end of the job, and a caller told it was stopped stops asking about a program that
+    /// is still printing.
+    Running {
+        /// How long it has been going, which is not how long the look waited.
+        ran_for: std::time::Duration,
+        /// How long this look waited for it, where it waited at all.
+        ///
+        /// The window the answer accounts for. Without it, nothing new reads as a standing account
+        /// of the job rather than as an account of some seconds of it.
+        waited: Option<std::time::Duration>,
+    },
 }
 
 impl Outcome {
@@ -256,6 +270,24 @@ impl Outcome {
                  printed by then and not the whole of what it would print.",
                 after.as_secs()
             ),
+            Self::Running {
+                ran_for,
+                waited: None,
+            } => format!(
+                "It is still running after {} seconds and was left running, so this is what it had \
+                 printed by the moment you looked and not the whole of what it will print.",
+                ran_for.as_secs()
+            ),
+            Self::Running {
+                ran_for,
+                waited: Some(waited),
+            } => format!(
+                "It is still running after {} seconds and was left running. This look waited {} \
+                 seconds for it, so nothing here means nothing in those seconds rather than \
+                 nothing at all, and nothing is watching it now.",
+                ran_for.as_secs(),
+                waited.as_secs()
+            ),
         }
     }
 
@@ -267,6 +299,18 @@ impl Outcome {
             Self::Stopped(after) => format!(
                 "still running after {} seconds, so it was stopped; what it printed first is here",
                 after.as_secs()
+            ),
+            Self::Running {
+                ran_for,
+                waited: None,
+            } => format!("still running after {} seconds", ran_for.as_secs()),
+            Self::Running {
+                ran_for,
+                waited: Some(waited),
+            } => format!(
+                "still running after {} seconds; waited {} for it",
+                ran_for.as_secs(),
+                crate::tools::tally(waited.as_secs() as usize, "second", "seconds")
             ),
             Self::Succeeded => "succeeded".to_string(),
             Self::Failed(detail) => detail.clone(),

@@ -3392,7 +3392,11 @@ fn job_output<S: Sink>(
         outcome: if ended || kill {
             crate::report::Outcome::Succeeded
         } else {
-            crate::report::Outcome::Stopped(ran_for)
+            // Running rather than Stopped: nothing stopped it, and a planner told a job it is
+            // waiting on was stopped stops asking about a program that is still printing. This is
+            // also where the window a wait watched is said to the planner, which the note above is
+            // not: that one goes to a screen.
+            crate::report::Outcome::Running { ran_for, waited }
         },
     });
     produced
