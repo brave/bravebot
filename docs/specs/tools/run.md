@@ -507,13 +507,23 @@ the window.
 decision about how long for, and must name both branches. Bounded and inside the turn is
 `background: true` and then `job_output` with `wait_seconds`, per [RUN-17](#RUN-17). Past the end of
 the turn is a loop, and the description must say that the planner cannot start one, because a
-background job is killed when the turn ends: the person starts a loop by typing `/loop`, per
-[LOOP-1](../loop.md#LOOP-1) and [LOOP-2](../loop.md#LOOP-2). It must also say that a single read is
-neither, and that where nothing is watching, the answer says so.
+background job is killed when the turn ends: a loop is a person's to start, by typing `/loop`, which
+is [loop.md](../loop.md). It must also say that a single read is neither, and that where nothing is
+watching, the answer says so.
 
-**Why a clause about wording.** [CMDLINE-16](command-line.md#CMDLINE-16) states the general reason: a
-tool's description is the only instruction the planner reliably reads, so wording that changes
-behaviour is behaviour. This one has its own case. Asked to say when a file changed, a session read
+**A turn already inside a loop is the third case, and gets a sentence of its own.** There the next
+look is the next tick, so the description has such a turn report what this tick saw and leave the rest
+to the next one. Without that sentence the loop branch reads as an instruction to ask for a loop, which
+in a tick is asking for something the person has already given.
+
+**The window, never a time of day.** The description must have the answer name the window it watched
+rather than date it, and must say why: the planner has no clock. It is told today's date and told not
+to ask a program for the time, so an instruction to say when it looked is an invitation to invent an
+hour, which is worse than the sample it was reporting.
+
+**Why a clause about wording.** A tool's description is the only instruction the planner reliably
+reads, so wording that changes behaviour is behaviour; [command-line.md](command-line.md) states that
+generally. This one has its own case. Asked to say when a file changed, a session read
 the file once, reported what it held, and left nothing watching; asked again, it read again and said
 there was no change. Both techniques already existed, and the sentence carrying the bounded one was
 about servers, so nothing joined a request to watch to either of them.

@@ -530,13 +530,16 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
              \
              Asked to watch something, or to say when it changes, decide first how long for, \
              because it is one of two things and never a single read. Up to some bound, inside \
-             this turn: start a watcher with background: true and then call job_output with \
-             wait_seconds, which is one call covering a window rather than a look per turn. Past \
-             the end of this turn: you cannot start that, since a background job is killed when \
-             the turn ends, and a loop is the only thing that outlives one. Say so, and say that \
-             the person starts a loop by typing /loop with an interval, because a watch you cannot \
-             start is not one to report as started. Whichever you did, say as of when you looked, \
-             and where nothing is watching now, say that too.",
+             this turn: start a watcher with background: true, such as tail -f on a file that is \
+             appended to, and then call job_output with wait_seconds, which is one call covering \
+             a window rather than a look per turn. Past the end of this turn: you cannot start \
+             that, because a background job is killed when the turn ends and only a loop outlives \
+             one. Inside a loop the next tick is the next look, so report what this tick saw and \
+             leave the rest to the next one. Outside a loop, say that the watch cannot be started \
+             and that the person starts a loop by typing /loop with an interval, because a watch \
+             you cannot start is not one to report as started. Whichever you did, say which window \
+             you watched rather than a time of day, which you have no clock for, and where nothing \
+             is watching now, say that too.",
             json!({
                 "type": "object",
                 "properties": {
@@ -4809,6 +4812,18 @@ mod tests {
         assert!(
             described.contains("nothing is watching now"),
             "the description does not say to report that nothing is watching: {described}"
+        );
+        // A tick of a loop already has its next look coming, so telling a planner in one to ask the
+        // person to start a loop would have it answer a request the person has already made.
+        assert!(
+            described.contains("Inside a loop the next tick is the next look"),
+            "the description sends a planner inside a loop to ask for a loop: {described}"
+        );
+        // Said, because the planner has no clock: the preamble gives it today's date and tells it
+        // not to run `date`, so an instruction to date a sample invites it to invent a time.
+        assert!(
+            described.contains("no clock for"),
+            "the description asks the planner for a time of day it cannot know: {described}"
         );
     }
 
