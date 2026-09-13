@@ -526,7 +526,17 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
              A program meant to keep running, such as a server or a watcher, needs \
              background: true. Without it the line is waited on and stopped at its deadline \
              (300 seconds by default; set deadline_seconds to allow up to 600), so there is \
-             no moment at which it is up and you can do anything with it.",
+             no moment at which it is up and you can do anything with it. \
+             \
+             Asked to watch something, or to say when it changes, decide first how long for, \
+             because it is one of two things and never a single read. Up to some bound, inside \
+             this turn: start a watcher with background: true and then call job_output with \
+             wait_seconds, which is one call covering a window rather than a look per turn. Past \
+             the end of this turn: you cannot start that, since a background job is killed when \
+             the turn ends, and a loop is the only thing that outlives one. Say so, and say that \
+             the person starts a loop by typing /loop with an interval, because a watch you cannot \
+             start is not one to report as started. Whichever you did, say as of when you looked, \
+             and where nothing is watching now, say that too.",
             json!({
                 "type": "object",
                 "properties": {
@@ -4755,6 +4765,35 @@ mod tests {
         assert!(
             described.contains("returns less"),
             "the description does not say to prefer whichever returns less: {described}"
+        );
+    }
+
+    /// A session asked to watch a file read it once, said what it held, and left nothing watching.
+    /// Both techniques already existed and nothing joined a watch request to either, so the
+    /// description has to: which one a bound picks, which one outlives a turn, and that an
+    /// open-ended watch is the person's to start rather than something to report as started.
+    #[test]
+    fn the_run_description_routes_a_watch_request_to_one_of_the_two_techniques() {
+        let described = run_description();
+        for stated in [
+            "watch something",
+            "background: true",
+            "wait_seconds",
+            "killed when the turn ends",
+            "/loop",
+        ] {
+            assert!(
+                described.contains(stated),
+                "the description does not say '{stated}': {described}"
+            );
+        }
+        assert!(
+            described.contains("never a single read"),
+            "the description leaves one read as an answer about change: {described}"
+        );
+        assert!(
+            described.contains("nothing is watching now"),
+            "the description does not say to report that nothing is watching: {described}"
         );
     }
 

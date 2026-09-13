@@ -466,6 +466,31 @@ the window.
 `verified-by: bravebot_agent::tools::job_output_offers_a_bounded_wait_rather_than_only_a_snapshot`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made`
 
+<a id="RUN-18"></a>
+### RUN-18: the tool's own description routes a request to watch something to one of two techniques
+
+`run`'s description must say that a request to watch something, or to be told when it changes, is a
+decision about how long for, and must name both branches. Bounded and inside the turn is
+`background: true` and then `job_output` with `wait_seconds`, per [RUN-17](#RUN-17). Past the end of
+the turn is a loop, and the description must say that the planner cannot start one, because a
+background job is killed when the turn ends: the person starts a loop by typing `/loop`, per
+[LOOP-1](../loop.md#LOOP-1) and [LOOP-2](../loop.md#LOOP-2). It must also say that a single read is
+neither, and that where nothing is watching, the answer says so.
+
+**Why a clause about wording.** [CMDLINE-16](command-line.md#CMDLINE-16) states the general reason: a
+tool's description is the only instruction the planner reliably reads, so wording that changes
+behaviour is behaviour. This one has its own case. Asked to say when a file changed, a session read
+the file once, reported what it held, and left nothing watching; asked again, it read again and said
+there was no change. Both techniques already existed, and the sentence carrying the bounded one was
+about servers, so nothing joined a request to watch to either of them.
+
+**And why the loop branch says who starts it.** A description that told the planner to use a loop
+would be describing something it has no way to do, and the failure it invites is worse than doing
+nothing: a turn that reports a watch it never started. What the planner can do is say that, and say
+what the person would type.
+
+`verified-by: bravebot_agent::tools::the_run_description_routes_a_watch_request_to_one_of_the_two_techniques`
+
 ## Open questions
 
 - Whether to confine children is issue #4. Whether output can ever be trusted by proof rather than
