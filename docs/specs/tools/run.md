@@ -443,6 +443,12 @@ something that happened to a pipeline; a look is not. Reporting a look at a live
 deadline is reported tells the planner the job is over, which is exactly the wrong thing to tell one
 that is waiting for the job to print again.
 
+**A job that has ended is reported by the codes its steps exited with.** Not as having succeeded, and
+not as whatever the look then did to it. A caller that waited for a build to finish and was told it
+exited zero reports a red build as green, and where the output is quarantined that one sentence is the
+whole account of the build the planner ever gets. The codes are structure this driver kept about a
+pipeline it started, so saying them reads nothing of what was printed.
+
 **This still cannot outlive the turn.** [RUN-15](#RUN-15) is unchanged: the handle is dropped at the
 end of the turn and the pipeline dies with it. A wait is a way to spend part of one turn watching,
 not a way to be told about something later, and the tool says so where it offers it. Watching that
@@ -490,6 +496,7 @@ the window.
 `verified-by: bravebot_agent::tools::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`
 `verified-by: bravebot_agent::tools::job_output_offers_a_bounded_wait_rather_than_only_a_snapshot`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made`
+`verified-by: bravebot_agent::turn::a_job_output_call_reports_the_code_a_finished_job_exited_with`
 
 <a id="RUN-18"></a>
 ### RUN-18: the tool's own description routes a request to watch something to one of two techniques

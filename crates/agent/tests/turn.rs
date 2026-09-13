@@ -12718,6 +12718,63 @@ fn one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made() 
     );
 }
 
+/// The one sentence the planner gets about a job it waited for has to be about what the job did. A
+/// planner told a build exited 0 reports a red build as green, and where the output is quarantined
+/// there is nothing else for it to go on.
+#[test]
+fn a_job_output_call_reports_the_code_a_finished_job_exited_with() {
+    let scratch = Scratch::new("background-failed");
+
+    // Silent and then failing, so the wait returns on the job ending rather than on a line
+    // arriving: a job that printed and then exited races the print against the exit.
+    let script = scratch.path.join("failing");
+    std::fs::write(&script, "#!/bin/sh\nsleep 1\nexit 3\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./failing","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":30}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and wait for it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let after = bodies
+        .last()
+        .expect("the planner was asked nothing after the wait");
+    assert!(
+        after.contains("step 1 exited 3"),
+        "the code the job exited with never reached the planner: {after}"
+    );
+    assert!(
+        !after.contains("It exited 0"),
+        "a job that failed was reported to the planner as having exited 0: {after}"
+    );
+}
+
 /// A job name nobody handed out is an error rather than an empty result, for the reason a search
 /// that ran no pattern is: nothing found reads as a fact about the job.
 #[test]

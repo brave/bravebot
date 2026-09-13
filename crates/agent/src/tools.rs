@@ -3336,15 +3336,10 @@ fn job_output<S: Sink>(
     let line = job.line.clone();
     let label = job.label;
 
-    if kill {
-        job.running.kill();
-    }
-
     // Said from the clock and the exit codes, which are structure: nothing here reads a byte of
-    // what the pipeline printed.
-    let outcome = if kill {
-        "killed".to_string()
-    } else if ended {
+    // what the pipeline printed. Worked out before the kill below, so a job that had already ended
+    // is reported as what it did rather than as what the kill would have done to it.
+    let outcome = if ended {
         let failed: Vec<String> = job
             .running
             .codes()
@@ -3356,25 +3351,34 @@ fn job_output<S: Sink>(
                 None => format!("step {} was killed", at + 1),
             })
             .collect();
+        // Failed rather than Succeeded where a step did not exit zero. A planner that waited for a
+        // build to finish and was told it exited 0 reports a red build as green, and where the
+        // output is quarantined that sentence is the only account of it the planner ever gets.
         if failed.is_empty() {
-            "ended, every step succeeded".to_string()
+            crate::report::Outcome::Succeeded
         } else {
-            format!("ended: {}", failed.join(", "))
+            crate::report::Outcome::Failed(failed.join(", "))
         }
+    } else if kill {
+        crate::report::Outcome::Stopped(ran_for)
     } else {
-        format!("still running after {} seconds", ran_for.as_secs())
+        // Running rather than Stopped: nothing stopped it, and a planner told a job it is waiting on
+        // was stopped stops asking about a program that is still printing.
+        crate::report::Outcome::Running { ran_for, waited }
     };
 
-    let lines = tally(fresh.lines().count(), "new line", "new lines");
-    let note = match waited {
-        // The window, so nothing new is read as nothing new in these seconds rather than as a
-        // standing account of the job.
-        Some(waited) => format!(
-            "{outcome}, {lines} after waiting {}",
-            tally(waited.as_secs() as usize, "second", "seconds")
-        ),
-        None => format!("{outcome}, {lines}"),
-    };
+    if kill {
+        job.running.kill();
+    }
+
+    // Composed from the outcome the planner is given rather than written out again here, so the
+    // screen and the planner cannot come to disagree about the same job. The window a wait watched
+    // is part of that outcome, which is why nothing adds it separately.
+    let note = format!(
+        "{}, {}",
+        outcome.summary(),
+        tally(fresh.lines().count(), "new line", "new lines")
+    );
 
     // Capped only where the planner may read it, exactly as a foreground run is: output it may not
     // read is quarantined whole, and there is nothing of it in the conversation to bound.
@@ -3397,19 +3401,10 @@ fn job_output<S: Sink>(
     .capped(whole.is_some());
     produced.whole = whole;
     produced.untrusted = !label.is_trusted();
-    // So a person can be asked to read it later, and can see which command they are reading.
-    produced.printed_by = Some(crate::report::Command {
-        line,
-        outcome: if ended || kill {
-            crate::report::Outcome::Succeeded
-        } else {
-            // Running rather than Stopped: nothing stopped it, and a planner told a job it is
-            // waiting on was stopped stops asking about a program that is still printing. This is
-            // also where the window a wait watched is said to the planner, which the note above is
-            // not: that one goes to a screen.
-            crate::report::Outcome::Running { ran_for, waited }
-        },
-    });
+    // So a person can be asked to read it later, and can see which command they are reading. This is
+    // also the one place the window a wait watched is said to the planner, which the note above is
+    // not: that one goes to a screen.
+    produced.printed_by = Some(crate::report::Command { line, outcome });
     produced
 }
 
