@@ -581,6 +581,7 @@ The list is a convenience rather than a guarantee. Something interactive that is
 deadline and returns what it printed, which is the same outcome by a slower road.
 
 `verified-by: bravebot_agent::cmdline::a_program_that_wants_a_terminal_is_refused_before_it_starts`
+`verified-by: bravebot_agent::cmdline::a_line_that_names_the_terminal_device_is_refused`
 `verified-by: bravebot_agent::cmdline::the_same_program_without_the_interactive_part_is_not_refused`
 `verified-by: bravebot_agent::exec::a_stage_that_reads_stdin_is_given_nothing_rather_than_the_terminal`
 
