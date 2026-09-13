@@ -306,11 +306,15 @@ struct BuiltIn {
 }
 
 /// The skills every session has, whatever is on the disk.
+///
+/// A description says when to load the skill, and the loop instructions apply where something else
+/// is already supplying the repetition. Naming a watch request here would advertise them to a
+/// session that is not a loop, where the account of a tick reads as an instruction to look once and
+/// say what changed, and where the tool it offers for pacing the next tick is not in the table.
 const BUILT_IN: [BuiltIn; 1] = [BuiltIn {
     name: "loop",
     description: "How a repeating turn works: what one tick is, what to do in it, and how to \
-                  say when the next is due. Load it when this turn is a tick of a loop, and when \
-                  the user asks for something to be watched or repeated.",
+                  say when the next is due. Load it when this turn is a tick of a loop.",
     body: LOOP,
 }];
 
