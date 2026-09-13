@@ -254,6 +254,13 @@ pub enum Outcome {
     },
 }
 
+/// A whole number of seconds with its unit, pluralised.
+///
+/// Every duration these sentences quote goes through here, so none of them can say "1 seconds".
+fn seconds(duration: std::time::Duration) -> String {
+    crate::tools::tally(duration.as_secs() as usize, "second", "seconds")
+}
+
 impl Outcome {
     /// How the caller is told it ended.
     ///
@@ -274,19 +281,24 @@ impl Outcome {
                 ran_for,
                 waited: None,
             } => format!(
-                "It is still running after {} seconds and was left running, so this is what it had \
+                "It is still running after {} and was left running, so this is what it had \
                  printed by the moment you looked and not the whole of what it will print.",
-                ran_for.as_secs()
+                seconds(*ran_for)
             ),
+            // The window as well as the warning. Both, because each answers a different wrong
+            // reading: without the warning a truncated log looks like the whole of one, and without
+            // the window a look that came back with nothing looks like an account of the whole job
+            // rather than of the seconds it watched.
             Self::Running {
                 ran_for,
                 waited: Some(waited),
             } => format!(
-                "It is still running after {} seconds and was left running. This look waited {} \
-                 seconds for it, so nothing here means nothing in those seconds rather than \
-                 nothing at all, and nothing is watching it now.",
-                ran_for.as_secs(),
-                waited.as_secs()
+                "It is still running after {} and was left running. This look waited {} for it, so \
+                 this is what it had printed by the end of that wait and not the whole of what it \
+                 will print, and where nothing is here nothing arrived in those seconds rather \
+                 than nothing at all. Nothing is watching it now.",
+                seconds(*ran_for),
+                seconds(*waited)
             ),
         }
     }
@@ -303,14 +315,14 @@ impl Outcome {
             Self::Running {
                 ran_for,
                 waited: None,
-            } => format!("still running after {} seconds", ran_for.as_secs()),
+            } => format!("still running after {}", seconds(*ran_for)),
             Self::Running {
                 ran_for,
                 waited: Some(waited),
             } => format!(
-                "still running after {} seconds; waited {} for it",
-                ran_for.as_secs(),
-                crate::tools::tally(waited.as_secs() as usize, "second", "seconds")
+                "still running after {}; waited {} for it",
+                seconds(*ran_for),
+                seconds(*waited)
             ),
             Self::Succeeded => "succeeded".to_string(),
             Self::Failed(detail) => detail.clone(),
@@ -767,6 +779,48 @@ mod tests {
         let refused = Activity::running("Update", "a.rs").failed("refused: not approved");
         assert!(refused.failed);
         assert!(!Activity::running("Update", "a.rs").done("+1 -0").failed);
+    }
+
+    /// Two wrong readings, so two sentences. Without the warning a log that stops in the middle
+    /// reads as the whole of one; without the window a look that came back with nothing reads as an
+    /// account of the whole job rather than of the seconds it watched.
+    #[test]
+    fn a_look_that_waited_is_described_with_both_the_window_and_the_warning() {
+        let said = Outcome::Running {
+            ran_for: std::time::Duration::from_secs(90),
+            waited: Some(std::time::Duration::from_secs(30)),
+        }
+        .describe();
+
+        assert!(
+            said.contains("waited 30 seconds"),
+            "the window the look watched is not in what the caller is told: {said}"
+        );
+        assert!(
+            said.contains("not the whole of what it will print"),
+            "a partial log is described as the whole of one: {said}"
+        );
+    }
+
+    /// Every duration in these sentences is a number the planner reads, and "1 seconds" in one of
+    /// them is a driver that cannot count reporting on a program.
+    #[test]
+    fn one_second_is_described_in_the_singular() {
+        let said = Outcome::Running {
+            ran_for: std::time::Duration::from_secs(1),
+            waited: Some(std::time::Duration::from_secs(1)),
+        }
+        .describe();
+
+        assert!(
+            !said.contains("1 seconds"),
+            "a one-second duration is described in the plural: {said}"
+        );
+        assert_eq!(
+            said.matches("1 second").count(),
+            2,
+            "both of the durations should read as one second: {said}"
+        );
     }
 
     /// The first wait is the one that needs explaining: the model has the task and nothing
