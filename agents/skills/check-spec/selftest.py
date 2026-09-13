@@ -6,6 +6,9 @@ somebody trusts it. Each case here builds a small fixture repository, breaks exa
 thing, and asserts that exactly that check reports it. The first case breaks nothing, so a
 check that fires on anything at all is caught too.
 
+The cases after those cover the generated list of clauses nothing pins: the line a clause gets,
+what stays out of it, and which runs may write the file.
+
     python3 agents/skills/check-spec/selftest.py
 """
 
@@ -83,6 +86,8 @@ def build_fixture(root):
     (root / "docs" / "specs").mkdir(parents=True)
     (root / "docs" / "specs" / "demo.md").write_text(CLEAN_SPEC, encoding="utf-8")
     (root / "docs" / "specs" / "README.md").write_text(CLEAN_README, encoding="utf-8")
+    # No clause here is verified by nothing, so the list the fixture starts with is empty.
+    (root / check.UNVERIFIED_FILE).write_text(check.render_unverified([]), encoding="utf-8")
     (root / "crates" / "demo" / "src").mkdir(parents=True)
     (root / "crates" / "demo" / "Cargo.toml").write_text(
         '[package]\nname = "bravebot-demo"\n', encoding="utf-8"
@@ -107,6 +112,7 @@ def run_checks():
         findings.extend(check.check_isolation(one, prefixes))
         findings.extend(check.check_prose(one))
     findings.extend(check.check_readme(specs))
+    findings.extend(check.check_unverified_file(specs, index, crates))
     return findings
 
 
@@ -160,6 +166,10 @@ def mention_the_gate_in_comments(root):
         + "}\n",
         encoding="utf-8",
     )
+
+
+def list_says(root, lines):
+    (root / check.UNVERIFIED_FILE).write_text(check.render_unverified(lines), encoding="utf-8")
 
 
 def cite_another_spec(root):
@@ -344,43 +354,102 @@ CASES = [
         ),
         "readme-phantom",
     ),
+    (
+        "a clause nothing pins that the committed list does not name",
+        lambda root: edit_spec(root, "bravebot_demo::lib::the_gate_opens_only_once`", "none`"),
+        "unverified-list-stale",
+    ),
+    (
+        # The direction a hand-kept file drifts in on its own: the clause was given a test and
+        # nobody went back to the list.
+        "a committed list naming a clause a test pins",
+        lambda root: list_says(root, ["docs/specs/demo.md:DEMO-1: the gate opens only once"]),
+        "unverified-list-stale",
+    ),
 ]
 
 
-def main():
-    original = Path.cwd()
-    failures = []
-    for name, break_it, expected in CASES:
-        root = Path(tempfile.mkdtemp(prefix="check-spec-selftest-"))
-        try:
-            build_fixture(root)
-            os.chdir(root)
-            if break_it is not None:
-                break_it(root)
-            kinds = sorted({f["kind"] for f in run_checks()})
-            if expected is None:
-                ok = not kinds
-                detail = f"reported {kinds}"
-            elif isinstance(expected, set):
-                ok = set(kinds) == expected
-                detail = f"reported {kinds}, wanted exactly {sorted(expected)}"
-            else:
-                ok = expected in kinds
-                detail = f"reported {kinds}, wanted {expected}"
-            print(f"{'ok  ' if ok else 'FAIL'}  {name}")
-            if not ok:
-                failures.append(f"{name}: {detail}")
-        finally:
-            os.chdir(original)
-            shutil.rmtree(root, ignore_errors=True)
+def withdraw_the_second_clause(root):
+    """A withdrawn clause carries no `verified-by` line, which a generator reading the front
+    matter for itself would report as a clause verified by nothing."""
+    edit_spec(
+        root, "### DEMO-2: nothing else can open it", "### DEMO-2: withdrawn, replaced by DEMO-1"
+    )
+    edit_spec(root, "`verified-by: by-construction (the field is private)`\n", "")
 
+
+UNVERIFIED_CASES = [
+    ("a clean spec tree lists no clause", None, []),
+    (
+        "a clause verified by nothing is listed with its heading",
+        lambda root: edit_spec(root, "bravebot_demo::lib::the_gate_opens_only_once`", "none`"),
+        ["docs/specs/demo.md:DEMO-1: the gate opens only once"],
+    ),
+    ("a withdrawn clause is not listed", withdraw_the_second_clause, []),
+]
+
+# Which runs may write the file. A run given a filter read part of the tree, and the list is
+# about all of it.
+SELECTIONS = [
+    ("a full run may write the list", [], None, False),
+    ("a named spec may not write the list", ["demo"], None, True),
+    ("a changed-only run may not write the list", [], "main", True),
+]
+
+
+def in_fixture(break_it, ask):
+    """`ask` run against a fresh fixture repository, broken as the case says."""
+    original = Path.cwd()
+    root = Path(tempfile.mkdtemp(prefix="check-spec-selftest-"))
+    try:
+        build_fixture(root)
+        os.chdir(root)
+        if break_it is not None:
+            break_it(root)
+        return ask()
+    finally:
+        os.chdir(original)
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def generated_list():
+    return check.unverified_clauses(load_specs(), TestIndex(), crate_directories())
+
+
+def main():
+    failures = []
+
+    def note(name, ok, detail):
+        print(f"{'ok  ' if ok else 'FAIL'}  {name}")
+        if not ok:
+            failures.append(f"{name}: {detail}")
+
+    for name, break_it, expected in CASES:
+        kinds = in_fixture(break_it, lambda: sorted({f["kind"] for f in run_checks()}))
+        if expected is None:
+            note(name, not kinds, f"reported {kinds}")
+        elif isinstance(expected, set):
+            wanted = sorted(expected)
+            note(name, set(kinds) == expected, f"reported {kinds}, wanted exactly {wanted}")
+        else:
+            note(name, expected in kinds, f"reported {kinds}, wanted {expected}")
+
+    for name, break_it, expected in UNVERIFIED_CASES:
+        lines = in_fixture(break_it, generated_list)
+        note(name, lines == expected, f"generated {lines}, wanted {expected}")
+
+    for name, selectors, changed_base, refused in SELECTIONS:
+        answer = check.partial_selection(selectors, changed_base)
+        note(name, answer == refused, f"answered {answer}, wanted {refused}")
+
+    total = len(CASES) + len(UNVERIFIED_CASES) + len(SELECTIONS)
     print()
     if failures:
         for failure in failures:
             print(f"  {failure}")
-        print(f"{len(failures)} of {len(CASES)} cases failed")
+        print(f"{len(failures)} of {total} cases failed")
         return 1
-    print(f"{len(CASES)} cases pass")
+    print(f"{total} cases pass")
     return 0
 
 

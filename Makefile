@@ -28,6 +28,7 @@ help:
 	@echo "  make test                  Run all tests"
 	@echo "  make check                 Format check, clippy, tests, and toolchain age"
 	@echo "  make check-spec            Check docs/specs against the implementation"
+	@echo "  make write-unverified      Write unverified-clauses.txt, which check-spec holds it to"
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
 	@echo "  make check-npm             Install from the lockfile and lint it, as CI does"
@@ -119,6 +120,13 @@ check-toolchain:
 check-spec:
 	python3 agents/skills/check-spec/selftest.py
 	python3 agents/skills/check-spec/check-spec.py --mechanical-only
+
+# unverified-clauses.txt, written from the specs. It is the list of clauses nothing pins, and
+# check-spec fails while it and the specs disagree, so this is what to run after giving a clause
+# a test, or setting one to none.
+.PHONY: write-unverified
+write-unverified:
+	python3 agents/skills/check-spec/check-spec.py --write-unverified
 
 # What each catalog has of the reference, and what it is missing. The build says so too, in a
 # warning, but a warning is only printed when the build script actually runs, so a translator
