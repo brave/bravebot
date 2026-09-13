@@ -21,7 +21,11 @@ takes a minute and one that takes twenty, and the reviewer is the person waiting
 `make check-spec` checks the mechanical half of the specs: clause numbering, the tests each clause
 names, the paths it governs, the call sites a guarded symbol pins, and the table in
 [../specs/README.md](../specs/README.md). CI runs it too, so a new use of a guarded symbol fails a
-pull request rather than waiting for somebody to notice it.
+pull request rather than waiting for somebody to notice it. It also holds
+[../../unverified-clauses.txt](../../unverified-clauses.txt) to the clauses that are
+`verified-by: none`, so giving a clause a test, or setting one to `none`, is a line in a diff
+rather than a warning nobody has to read. `make write-unverified` writes the file; commit what it
+writes.
 `make check-npm` installs from the lockfile and lints it, as CI does. `make check-deps` decides
 `deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
 build compiles at two versions without a recorded reason, and a dependency from anywhere but
