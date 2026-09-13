@@ -60,10 +60,16 @@ stopped being flaky.
 `--summary FILE` appends the same report to a file, which is how the weekly
 [Test determinism](../.github/workflows/test-determinism.yml) workflow puts it in a job summary.
 That workflow names both thread counts rather than leaving either to cargo, since a hosted runner
-has four cores and cargo's default there is already the cap: four threads and sixteen, which is what
-`make check` runs as on the machines people run it on. The difference between the two is the answer
-to whether that cap belongs in more than one target. Only the wider leg files issues, since both
+has four cores and cargo's default there is already the cap: four threads and sixteen. Sixteen on a
+four core runner is those cores oversubscribed rather than a stand-in for a sixteen core machine, so
+what the legs differ by is the cost of oversubscription. Only the wider leg files issues, since both
 legs measure the same tests and both filing would race to open two issues for one flake.
+
+Every report says how many CPUs the machine had and which failure rate that many runs could actually
+have seen, because neither is recoverable afterwards and both decide what the numbers mean. Thirty
+runs cannot account for a test that loses one run in twenty, and a quiet runner will not reproduce a
+race that needs a machine with something else on it, so a report naming nothing bounds the flakiness
+rather than ruling it out.
 
 `--selftest` checks the parsing against output whose answer is known and runs no tests. It is a job
 of its own in that workflow, which is also what a pull request touching this file runs, and the

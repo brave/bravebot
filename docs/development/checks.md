@@ -69,5 +69,12 @@ a job summary somebody has to remember to read. Search the issues before treatin
 known flake, and run `contrib/measure-flakes.py --runs 30` to ask the same of this machine. Neither
 fails a build over a rate.
 
+**A test missing from that list is not thereby clean.** Thirty runs can only account for a test that
+loses more than about a tenth of them, and the job measures a quiet four core runner, while the mock
+server races that `make check-linux` caps threads for want a machine with something else on it. So
+the workflow reporting nothing means less than the local command reporting nothing on the machine
+that actually failed: every report states the rate it was able to see, and that bound is what to
+read before concluding a test is deterministic.
+
 If a check cannot pass for a reason outside the change, say so in the commit message rather than
 leaving it to be discovered.

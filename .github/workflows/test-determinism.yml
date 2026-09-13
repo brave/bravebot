@@ -38,9 +38,11 @@ jobs:
         run: contrib/measure-flakes.py --selftest
 
   # Both thread counts are named rather than left to cargo, because a hosted runner has four cores
-  # and cargo's default there is already the cap `make check-linux` sets. The wide leg is what
-  # `make check` runs as on the machines people actually run it on, and the difference between the
-  # two is the answer to whether that cap belongs in more than one target.
+  # and cargo's default there is already the cap `make check-linux` sets. The wide leg
+  # oversubscribes those four cores; it does not stand in for a sixteen core machine, so what the
+  # legs differ by is the cost of oversubscription rather than what a developer's machine does. The
+  # mock server races `make check-linux` documents want a busier machine than a hosted runner, so a
+  # clean sweep here is a bound, not an all-clear, and the report says the rate it could have seen.
   measure:
     name: ${{ matrix.threads }} threads
     needs: parser

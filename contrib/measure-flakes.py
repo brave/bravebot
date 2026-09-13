@@ -173,6 +173,28 @@ def plural(count, one, many):
     return f"{count} {one if count == 1 else many}"
 
 
+def unseen_floor(runs):
+    """The failure rate this many runs can account for, as a percentage.
+
+    A test that loses runs at rate p survives N of them with probability (1 - p) ** N. Below the
+    rate this returns, that probability is worse than one in twenty, which is where a clean sweep
+    stops being evidence. Reporting it is what keeps "every test agreed with itself" from being
+    read as "there are no flaky tests here": ten runs cannot say that, and said it anyway.
+    """
+    return 100 * (1 - 0.05 ** (1 / runs))
+
+
+def machine():
+    """What the machine reports, since a rate without it invites the wrong conclusion.
+
+    The same `--test-threads` on a wider or busier machine is not the same measurement. A hosted
+    runner and a container on a developer's laptop can pass the identical flag and put a different
+    number of tests in flight, and the rate is a property of that, not only of the test.
+    """
+    count = os.cpu_count()
+    return f"{count} CPUs" if count else "an unknown number of CPUs"
+
+
 def describe(runs, threads, counts, lost=0):
     """The report, as markdown, because where it is read is a job summary rather than a terminal."""
     parallelism = (
@@ -182,8 +204,13 @@ def describe(runs, threads, counts, lost=0):
     lines = [
         "## Test determinism",
         "",
-        f"{runs} runs of `{' '.join(SUITE)}` against one build, at {parallelism}. "
-        f"{len(counts)} tests reported.",
+        f"{runs} runs of `{' '.join(SUITE)}` against one build, at {parallelism}, on a machine "
+        f"reporting {machine()}. {len(counts)} tests reported.",
+        "",
+        f"A test that loses more than {unseen_floor(runs):.0f}% of its runs was unlikely to get "
+        f"through {runs} of them unseen. One that loses fewer than that had better than a one in "
+        "twenty chance of passing every run here, so whatever is not named below is bounded rather "
+        "than ruled out.",
         "",
     ]
     if lost:
@@ -295,7 +322,7 @@ def issue_body(test, failed, reported, threads, url, sample):
     binary = test.split("::", 1)[0] if "::" in test else None
     lines = [
         f"`{bare(test)}` failed {failed} of {reported} runs ({rate}) of one build, "
-        f"at {parallelism}.",
+        f"at {parallelism}, on a machine reporting {machine()}.",
         "",
         "Nothing in the tree changed between those runs, so the difference is the test rather than "
         "the code under it." + (f" The binary that ran it is `{binary}`." if binary else ""),
@@ -304,11 +331,17 @@ def issue_body(test, failed, reported, threads, url, sample):
     if sample:
         wall = fence(sample)
         lines += [wall, sample, wall, ""]
+    # Only the workflow may claim to be the workflow. A rate measured on somebody's laptop and
+    # filed under a job's name is a reader trusting an environment that never ran it.
+    filer = (
+        "Filed by the Test determinism workflow"
+        if url
+        else "Filed by `contrib/measure-flakes.py`, run by hand rather than by the workflow"
+    )
     lines += [
-        "Filed by the Test determinism workflow rather than by a person, so nothing here is "
-        "triaged. It opens one issue per test and files nothing for a test that already has one, "
-        "so this will not arrive again every week. `contrib/measure-flakes.py --runs 30` asks the "
-        "same question of a local machine.",
+        f"{filer} rather than by a person, so nothing here is triaged. It opens one issue per test "
+        "and files nothing for a test that already has one, so this will not arrive again every "
+        "week. `contrib/measure-flakes.py --runs 30` asks the same question of a local machine.",
         "",
     ]
     if url:
@@ -810,6 +843,21 @@ def selftest():
             "agreed with itself" not in describe(2, None, counts),
         )
     )
+    # That sentence read as proof once, which is how a ten run sweep came to be treated as evidence
+    # that six tests failing one run in ten were not there. It arrives with its own bound now.
+    checks.append(
+        (
+            "a clean report states the rate it could have seen rather than implying none exists",
+            "bounded rather than ruled out" in clean
+            and f"{unseen_floor(2):.0f}%" in clean,
+        )
+    )
+    checks.append(
+        (
+            "more runs claim a tighter bound than fewer",
+            unseen_floor(30) < unseen_floor(10) < unseen_floor(2),
+        )
+    )
 
     # Filing is the half that writes to a repository everybody shares, and the failure that costs
     # most is a second issue for a test that already has one.
@@ -834,6 +882,14 @@ def selftest():
                 "50%" in body and "--test-threads=16" in body for _, body in opened
             )
             and any("the reply was drawn twice" in body for _, body in opened),
+        )
+    )
+    # The same flag on a wider or busier machine is a different measurement, and a rate quoted
+    # without one invites the reader to assume it was theirs.
+    checks.append(
+        (
+            "a rate arrives with the machine that produced it",
+            machine() in clean and all(machine() in body for _, body in opened),
         )
     )
 
@@ -886,6 +942,21 @@ def selftest():
         (
             "a failure containing a code fence is still quoted whole",
             "the panic" in quoted and quoted.count("\n````\n") == 2,
+        )
+    )
+
+    # Crediting the workflow for a laptop's measurement asks the reader to trust an environment that
+    # never ran the test, and the rate is the part they would trust.
+    by_hand = issue_body("exec::a_frame_is_drawn_once_per_reply", 1, 2, 4, None, "")
+    by_job = issue_body(
+        "exec::a_frame_is_drawn_once_per_reply", 1, 2, 4, "https://example/runs/1", ""
+    )
+    checks.append(
+        (
+            "only a run that was a job claims the workflow filed it",
+            "Test determinism workflow" in by_job
+            and "Test determinism workflow" not in by_hand
+            and "run by hand" in by_hand,
         )
     )
 
