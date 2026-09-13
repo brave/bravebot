@@ -268,6 +268,48 @@ fn a_failing_stage_reports_its_code_and_its_message() {
     );
 }
 
+/// A run that failed put its explanation on standard error, and a reader who cannot tell that
+/// explanation from the result concludes that the command worked. Run together, `ls: nosuch: No such
+/// file or directory` reads as a line the listing printed.
+#[test]
+fn standard_error_comes_back_labelled_beside_standard_output() {
+    assert_eq!(exec::both_streams("a.txt\n", ""), "a.txt\n");
+    assert_eq!(
+        exec::both_streams("a.txt\n", "ls: nosuch: No such file or directory\n"),
+        "a.txt\nstandard error:\nls: nosuch: No such file or directory\n"
+    );
+    // A command that printed nothing else is still told which stream it is reading.
+    assert_eq!(exec::both_streams("", "boom\n"), "standard error:\nboom\n");
+    // A last line with no newline of its own must not run into the label.
+    assert_eq!(
+        exec::both_streams("a.txt", "boom\n"),
+        "a.txt\nstandard error:\nboom\n"
+    );
+}
+
+/// Backgrounding changes when the planner is told, never what it is told, so the label a waited-for
+/// run puts on standard error is on a background run's output too.
+#[test]
+fn a_background_run_labels_standard_error_as_a_waited_for_one_does() {
+    let scratch = Scratch::new("background-stderr");
+    let resolved = script(
+        &scratch.path,
+        "both",
+        "#!/bin/sh\necho listing\necho boom >&2\n",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("both", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    for _ in 0..100 {
+        if job.ended() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    assert_eq!(job.printed(), "listing\nstandard error:\nboom\n");
+}
+
 /// A shell reports only the last stage, which hides the case that matters: an early stage failing
 /// while a later one cheerfully processes the nothing it was handed.
 #[test]

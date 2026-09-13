@@ -3047,17 +3047,9 @@ fn run<S: Sink, C: Confirmer>(
             // line somewhere nobody chose.
             *tools.run_directory = plan.directory.clone();
 
-            // stdout and stderr together, because a program that failed usually explains itself
-            // on stderr and a result that dropped the explanation would be the least useful thing
-            // to hand back. Both carry the same label: the kernel fixed it before anything ran and
+            // Both streams carry the same label: the kernel fixed it before anything ran and
             // nothing about what was printed changes it.
-            let mut text = ran.stdout.clone();
-            if !ran.stderr.is_empty() {
-                if !text.is_empty() && !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                text.push_str(&ran.stderr);
-            }
+            let text = crate::exec::both_streams(&ran.stdout, &ran.stderr);
 
             // Capped only where the planner may read it. Output it may not read is quarantined
             // whole, so nothing of it enters the conversation and there is nothing to bound.

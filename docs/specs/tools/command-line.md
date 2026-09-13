@@ -477,7 +477,10 @@ hundred and fifty seconds. A tool that costs two of those to answer `which files
 symbol` is a tool nobody can afford to use, which is why the harness's own guidance had steered the
 planner away from it.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_vouched_commands_output_reaches_the_planner`
+`verified-by: bravebot_agent::turn::a_quarantined_run_says_what_would_make_it_visible`
+`verified-by: bravebot_agent::exec::standard_error_comes_back_labelled_beside_standard_output`
+`verified-by: bravebot_agent::exec::a_background_run_labels_standard_error_as_a_waited_for_one_does`
 
 <a id="CMDLINE-11"></a>
 ### CMDLINE-11: output is bounded, and what was dropped is said
