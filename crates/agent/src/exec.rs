@@ -677,6 +677,24 @@ impl Background {
     /// step's own child is still holding costs it once and does not leave a pipeline whose steps
     /// have all exited reported as running forever.
     pub fn ended(&mut self) -> bool {
+        if !self.steps_exited() {
+            return false;
+        }
+
+        let exited = *self.exited.get_or_insert_with(Instant::now);
+        while exited.elapsed() < DRAIN_GRACE && !self.drained() {
+            std::thread::sleep(TICK);
+        }
+        true
+    }
+
+    /// Whether every step has exited, without waiting for the pipes to catch up.
+    ///
+    /// [`Background::ended`] pays [`DRAIN_GRACE`] on top of this so that the account it gives is
+    /// complete. Anything waiting to a bound has to ask this instead: the grace would carry the wait
+    /// past the bound it was given, and it does not look at the cancellation token, so a person who
+    /// changed their mind would still sit through it.
+    fn steps_exited(&mut self) -> bool {
         for (index, child) in self.children.iter_mut().enumerate() {
             if self.finished[index] {
                 continue;
@@ -691,15 +709,7 @@ impl Background {
                 Err(_) => self.finished[index] = true,
             }
         }
-        if !self.finished.iter().all(|done| *done) {
-            return false;
-        }
-
-        let exited = *self.exited.get_or_insert_with(Instant::now);
-        while exited.elapsed() < DRAIN_GRACE && !self.drained() {
-            std::thread::sleep(TICK);
-        }
-        true
+        self.finished.iter().all(|done| *done)
     }
 
     /// Whether every pipe has reached its end, so nothing more of the output is to come.
@@ -763,22 +773,20 @@ impl Background {
     /// caller waiting to be told about new output asked for, and the bytes themselves still reach
     /// anybody only under the label the plan was given.
     ///
-    /// `cancel` is checked on every pass rather than once at the end. The bound runs to ten
-    /// minutes, and a person who has changed their mind should not have to sit through the rest of
-    /// somebody else's `tail -f`.
+    /// `cancel` is checked on every pass rather than once at the end, and nothing inside a pass
+    /// blocks. The bound runs to ten minutes, and a person who has changed their mind should not have
+    /// to sit through the rest of somebody else's `tail -f`. This is also why the steps are asked
+    /// about with [`Background::steps_exited`] and not with [`Background::ended`]: the latter waits
+    /// out [`DRAIN_GRACE`] for the pipes, which would carry the wait past `bound` and would not look
+    /// at `cancel` while it did.
     pub fn wait_for_more(&mut self, bound: Duration, cancel: &Cancel) {
         let arrived = self.arrived();
         let until = Instant::now() + bound;
         loop {
-            if cancel.is_cancelled() || self.arrived() > arrived {
+            if cancel.is_cancelled() || self.arrived() > arrived || self.steps_exited() {
                 return;
             }
             if Instant::now() >= until {
-                return;
-            }
-            // Last of the three, so a job that ends inside the bound is reported with a complete
-            // account: this is the call that pays DRAIN_GRACE for the pipes.
-            if self.ended() {
                 return;
             }
             std::thread::sleep(TICK);

@@ -447,9 +447,14 @@ itself. A program does therefore decide when a wait returns by choosing when to 
 exactly what a caller asking to be told about new output asked for, and the bytes themselves still
 reach anybody only under the label the plan was given.
 
-**The token is checked every pass, not once at the end.** A bound running to ten minutes and a person
+**The token is checked every pass, and no pass blocks.** A bound running to ten minutes and a person
 who has changed their mind are the whole reason: cancelling should not mean sitting through the rest
-of somebody else's `tail -f`.
+of somebody else's `tail -f`. Checking often is only worth as much as the longest pass, so nothing
+inside a pass waits on anything. In particular a wait asks only whether the steps have exited, and
+does not also give the pipes their moment to catch up with them: that moment belongs to the look that
+settles the final account, is spent after the wait has returned, and is outside the bound. Spending it
+inside would carry a wait past the seconds it was given and would sit there without looking at the
+token.
 
 **Why.** Without a wait, watching a job costs a whole turn per look. The planner calls `job_output`,
 is told nothing has happened, has to answer, and is asked the same question again, so a program that

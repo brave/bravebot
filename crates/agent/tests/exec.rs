@@ -1095,6 +1095,13 @@ fn waiting_for_more_returns_when_the_job_prints_rather_than_at_the_bound() {
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    // Asserted rather than assumed: where the first line has not arrived, the wait below returns on
+    // it and every assertion after this reports a fault in the wait instead of a slow warm-up.
+    assert!(
+        job.printed().contains("first"),
+        "the job had not printed its first line within five seconds, so nothing below is a test \
+         of the wait"
+    );
 
     let began = std::time::Instant::now();
     job.wait_for_more(std::time::Duration::from_secs(30), &Cancel::new());
@@ -1131,6 +1138,12 @@ fn waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_fu
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    // Asserted rather than assumed: where the line has not arrived, the wait below returns on it and
+    // the assertion that it lasted its bound reports a fault in the wait instead of a slow warm-up.
+    assert!(
+        job.printed().contains("listening"),
+        "the job had not printed within five seconds, so nothing below is a test of the wait"
+    );
 
     let bound = std::time::Duration::from_secs(2);
     let began = std::time::Instant::now();
@@ -1170,7 +1183,7 @@ fn waiting_for_more_returns_when_the_job_ends_without_printing() {
 
 /// The bound runs to ten minutes, and somebody who has changed their mind should not have to sit
 /// through the rest of a wait they asked to stop. The token is checked every pass for that reason
-/// rather than once at the end.
+/// rather than once at the end, and nothing inside a pass blocks.
 #[test]
 fn a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound() {
     let scratch = Scratch::new("wait-cancelled");
