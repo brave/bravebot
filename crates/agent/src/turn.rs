@@ -624,8 +624,9 @@ pub struct PastedImage {
     ///
     /// From a fixed set the driver owns, never from a filename or anything else read: it lands in
     /// the data URL, where it is routing, and a media type taken from content would be one an
-    /// attacker chose.
-    pub media_type: String,
+    /// attacker chose. Static, so the set stays the clipboard reader's own literals from where it
+    /// is read to where it is sent, and a type derived from content does not compile.
+    pub media_type: &'static str,
     pub bytes: Vec<u8>,
 }
 
@@ -1685,7 +1686,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         // encoding happens here and not in the interface because a data URI is the wire's
         // business, and holding raw bytes until this point keeps the size that is reported honest.
         for image in &task.images {
-            policy.admit_pasted_image(&image.media_type, image.bytes.len());
+            policy.admit_pasted_image(image.media_type, image.bytes.len());
 
             let encoded = base64::engine::general_purpose::STANDARD.encode(&image.bytes);
             parts.push(Part::ImageUrl {

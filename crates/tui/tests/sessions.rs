@@ -1330,6 +1330,74 @@ fn a_question_asked_beside_the_work_survives_a_resume() {
     );
 }
 
+/// A picture is part of the message the user sent, and a resume that brought the words back without
+/// it would leave the planner answering about something it can no longer see. The record is the only
+/// place the bytes outlive the process that pasted them: the clipboard has moved on.
+#[test]
+fn a_pasted_picture_is_kept_with_the_session_and_comes_back_on_a_resume() {
+    use bravebot_aichat::protocol::{Content, ImageUrl, Part, Role};
+
+    let scratch = Scratch::new("pasted-picture");
+
+    let mut conversation = Conversation::new();
+    conversation.push(Message::user_parts(vec![
+        Part::Text {
+            text: "what is [Image #1]?".to_string(),
+        },
+        Part::ImageUrl {
+            image_url: ImageUrl {
+                url: "data:image/png;base64,cGl4ZWxz".to_string(),
+            },
+        },
+    ]));
+    conversation.push(Message::assistant("a cat"));
+
+    let mut handle = Handle::begin(&scratch.project);
+    handle.save(
+        "what is [Image #1]?",
+        Standing {
+            conversation: &conversation.snapshot(),
+            turns: 1,
+            tokens: 1_200,
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &a_plan(),
+            asides: &[],
+            trust: &a_trust_map(),
+            programs: &a_program_list(),
+            directories: &[],
+            manifest: None,
+        },
+    );
+
+    let record = sessions::load(&scratch.project, handle.id()).expect("the record loads");
+    let restored = Conversation::restored(record.conversation.clone());
+    let parts = restored
+        .messages()
+        .iter()
+        .find_map(|message| match (&message.role, &message.content) {
+            (Role::User, Content::Parts(parts)) => Some(parts.clone()),
+            _ => None,
+        })
+        .expect("the prompt came back carrying parts");
+
+    assert!(
+        parts.iter().any(|part| matches!(
+            part,
+            Part::ImageUrl { image_url } if image_url.url == "data:image/png;base64,cGl4ZWxz"
+        )),
+        "the picture did not survive the record: {parts:?}"
+    );
+    assert!(
+        parts.iter().any(|part| matches!(
+            part,
+            Part::Text { text } if text == "what is [Image #1]?"
+        )),
+        "the words the picture arrived with were lost: {parts:?}"
+    );
+}
+
 /// An answer the planner could not have held is not written down, because a record is read back.
 /// The question still is: that it was asked is worth keeping even where what came back is not.
 #[test]
