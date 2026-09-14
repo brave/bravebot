@@ -32,9 +32,9 @@ fetch. CMD-7 says why the two surfaces stay apart.
 <a id="CMD-1"></a>
 ### CMD-1: only a line a person typed into the box
 
-A command is dispatched from a key press in the input box and from nowhere else. Never a line the
-planner produced, never text read out of a file, never anything a processor returned, never a line
-reconstructed from a transcript. A model that writes `/clear` has written four characters, and
+A command is dispatched from a line a person typed into the input box and from nowhere else. Never a
+line the planner produced, never text read out of a file, never anything a processor returned, never
+a line reconstructed from a transcript. A model that writes `/clear` has written four characters, and
 they reach a person's screen as four characters.
 
 **Why.** Every command here decides something a turn is not allowed to decide on its own: which
@@ -42,7 +42,11 @@ directories are reachable, what the conversation consists of, which model thinks
 is the keystroke, so the keystroke is the only thing that may produce one. Recalling an earlier
 prompt is still a person's own line, so a recalled `/status` is a command again.
 
-`verified-by: by-construction (dispatch is a branch of the input box's key handler, reached only from a key press, and no path carries model output, file content or processor output into it)`
+**A command that waited for a turn to end is carried out with no press behind it** (CMD-8), and it is
+still this rule: what waited is the line the box held when somebody pressed Enter on it, and nothing
+but that press puts anything in the queue.
+
+`verified-by: by-construction (both dispatch sites read a line that came off the input box: the box's own key handler, and the queue that handler put the line in for when the turn ends. No path carries model output, file content or processor output into either)`
 
 
 <a id="CMD-2"></a>
@@ -89,13 +93,15 @@ stay a question. Prefix matching would have made `/add-dirs are useful` open a d
 ### CMD-3: in shell mode the line is a command line, not a command
 
 With the `!` mode armed, `/status` is a program somebody may have and is run as one. Nothing is
-offered for completion there either, since `/usr/bin/env` is a path.
+offered for completion there either, since `/usr/bin/env` is a path. A turn running changes none of
+that: the line is still a command line, so nothing about it is answered as a command.
 
 **Why.** The mode is how a person says which of the two they meant, and it is the more specific
 statement of the two. Completing in it would rewrite the line under somebody typing a path.
 
 `verified-by: bravebot_tui::app::a_slash_command_in_shell_mode_is_a_command_line`
 `verified-by: bravebot_tui::app::shell_mode_offers_no_completions`
+`verified-by: bravebot_tui::app::a_shell_line_is_not_taken_for_a_command_while_a_turn_runs`
 
 ## What a command does to the line
 
@@ -125,6 +131,7 @@ the conversation with a question on the end of it, which [watching.md](watching.
 `verified-by: bravebot_tui::app::the_loop_command_sends_what_is_left_after_the_interval`
 `verified-by: bravebot_tui::app::the_cd_command_carries_its_directory`
 `verified-by: bravebot_tui::app::the_btw_command_carries_its_question`
+`verified-by: bravebot_tui::app::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
 
 
 <a id="CMD-5"></a>
@@ -150,9 +157,9 @@ exactly those characters have to arrive.
 ### CMD-6: the set is written down once
 
 One table names every command, its argument and its one-line description, and each name is a
-single constant the key handler matches on. The completion list, Tab and the arrows all read the
-table, so typing `/` lists every command with what it does and narrowing works on the same set
-that dispatches.
+single constant the one place that dispatches matches on. The completion list, Tab and the arrows
+all read the table, and so does the arm that queues a command typed mid-turn (CMD-8), so typing `/`
+lists every command with what it does and narrowing, queueing and dispatching all work on one set.
 
 **Why.** A word written down in more than one place is a word that is renamed in one of them,
 leaving the rest advertising something that no longer works, which a person discovers by typing
@@ -160,6 +167,7 @@ it.
 
 `verified-by: bravebot_tui::app::compacting_is_offered_while_a_command_is_being_typed`
 `verified-by: bravebot_tui::app::the_config_command_is_offered_like_every_other`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
 `verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
 
 
@@ -186,3 +194,39 @@ whatever it is called, and installing one called `loop` shadows the built-in bod
 touching this table.
 
 `verified-by: by-construction (the table is an array of string literals fixed at compile time, and no directory listing, configuration value or turn output reaches it)`
+
+
+<a id="CMD-8"></a>
+### CMD-8: while a turn runs the word waits, and is carried out when the queue reaches it
+
+A command typed while a turn is in flight is taken off the box and joins the lines waiting for the
+turn to end, exactly as a prompt does: the box clears, the history remembers it, and it is drawn
+under the box marked as waiting. What it waits for is different. It is never offered to the turn in
+flight, so nothing about it reaches the planner, and when the queue reaches it, it is carried out
+rather than sent. The queue is drained in the order the lines were typed, so a command behind a
+prompt waits for that prompt's turn. Which lines are commands there is CMD-2's rule and nothing
+narrower, so a sentence mentioning a command is a prompt mid-turn as it is at rest, and a word the
+table gives no argument is a prompt with anything after it.
+
+**Why.** Enter mid-turn already means the line waits, and that is what a person pressing it expects
+of every line they type. What the queue must not do is send a command: a line waiting there used to
+be a prompt like any other, and the running turn takes those at its next round boundary, so a queued
+`/clear` asked the planner what to clear. Carrying it out as it is typed is no better, because every
+command acts on the conversation, the terminal or the network and the turn holds all three, so it
+would change what the turn is running under. Waiting costs a person nothing and asks nothing of
+them: they typed the command once, and it happens.
+
+**Nothing enters the transcript while it waits**, and taking back what is waiting gives the command
+back to the box like any other line. What a keystroke wrote into the transcript would count as the
+turn having done something, which is what decides whether a stopped prompt comes back to be edited,
+so a command recorded there would cost a person the prompt they stopped.
+
+`verified-by: bravebot_tui::app::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::no_command_is_sent_as_a_prompt_while_a_turn_runs`
+`verified-by: bravebot_tui::app::a_command_with_an_argument_is_not_sent_as_a_prompt_while_a_turn_runs`
+`verified-by: bravebot_tui::app::a_command_that_takes_no_argument_is_only_the_bare_word_mid_turn`
+`verified-by: bravebot_tui::app::a_prompt_mentioning_a_command_is_queued_while_a_turn_runs`
+`verified-by: bravebot_tui::app::the_command_queued_while_a_turn_ran_is_carried_out_when_the_turn_ends`
+`verified-by: bravebot_tui::app::a_prompt_queued_behind_a_command_is_sent_once_the_command_has_run`
+`verified-by: bravebot_tui::app::a_queued_command_is_not_what_the_turn_took`
+`verified-by: bravebot_tui::app::a_queued_command_comes_back_to_the_box`

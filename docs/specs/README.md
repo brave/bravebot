@@ -30,7 +30,7 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [cli.md](cli.md) | `CLI` | 11 | running without the interactive interface: one-shot tasks, piped input, and `doctor` |
 | [manifest.md](manifest.md) | `MANIFEST` | 10 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 31 | what the user types into: the box, the keys, and where a terminal's own limits show through |
-| [commands.md](commands.md) | `CMD` | 7 | a line beginning with `/`: where one may come from, when a line is one, and what it does to the line |
+| [commands.md](commands.md) | `CMD` | 8 | a line beginning with `/`: where one may come from, when a line is one, and what it does to the line |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 19 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
 | [watching.md](watching.md) | `WATCH` | 20 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, and the mode Ctrl-L opens over them |
 | [scroller.md](scroller.md) | `SCROLL` | 9 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
