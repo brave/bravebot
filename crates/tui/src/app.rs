@@ -492,10 +492,6 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             // typed into a mode that is going away goes with it. Neither is a character, so
             // neither is read as typing, and leaving both to do nothing left a mode whose only
             // way out was Escape.
-            // The two chords that close the mode close it from in here too, and a needle half
-            // typed into a mode that is going away goes with it. Neither is a character, so
-            // neither is read as typing, and leaving both to do nothing left a mode whose only
-            // way out was Escape.
             KeyCode::Char('c') if ctrl => {
                 session.close_scroller();
                 Action::Redraw
@@ -653,22 +649,25 @@ fn walk_the_matches(session: &mut Session, forwards: bool) {
 fn history_search_key(session: &mut Session, key: KeyEvent) -> Action {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
+    // The two chords first, and read off the bindings rather than off the keyboard. Every character
+    // narrows the list, so one moved onto a letter would otherwise be typed into the needle here
+    // while it opened the search from the box.
+    //
+    // Every prompt, or the ones sent from this workspace. It is the chord that put the line away
+    // out there, which is the same key INPUT-31 opens this search with.
+    if session.bindings().is_stash(&key) {
+        session.scope_history_search();
+        return Action::Redraw;
+    }
+    // The chord that opened it closes it, and so does Ctrl-C: the nearest thing there is to stop is
+    // the search, and the turn behind it goes on running, so the press that reaches it is the next
+    // one.
+    if session.bindings().is_history(&key) || (ctrl && key.code == KeyCode::Char('c')) {
+        session.close_history_search();
+        return Action::Redraw;
+    }
     if ctrl {
-        return match key.code {
-            // Every prompt, or the ones sent from this workspace. The chord Claude Code uses for
-            // it, since somebody arriving from there reaches for that one.
-            KeyCode::Char('s') => {
-                session.scope_history_search();
-                Action::Redraw
-            }
-            // The nearest thing there is to stop is the search, and the turn behind it goes on
-            // running: the press that reaches it is the next one.
-            KeyCode::Char('c') | KeyCode::Char('r') => {
-                session.close_history_search();
-                Action::Redraw
-            }
-            _ => Action::None,
-        };
+        return Action::None;
     }
 
     match key.code {
@@ -722,7 +721,15 @@ fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
         // Out of the mode entirely, from wherever they are. Ctrl-C does nothing else here: the
         // view is the nearest thing there is to stop, and somebody who went to look at what a
         // delegate was doing is not asking for the turn to end when they come back out.
-        KeyCode::Char('l') | KeyCode::Char('c') if ctrl => {
+        //
+        // The chord that opened the view is read off the bindings, and before every other arm: the
+        // keys that walk the list are bare letters matched whatever is held with them, so one moved
+        // onto `j` would walk the list instead of leaving.
+        _ if session.bindings().is_watch(&key) => {
+            session.stop_watching();
+            Action::Redraw
+        }
+        KeyCode::Char('c') if ctrl => {
             session.stop_watching();
             Action::Redraw
         }
@@ -4967,6 +4974,37 @@ mod tests {
             assert!(session.watching().is_none());
         }
 
+        /// The chord that opened the view leaves it, wherever it has been moved to. Bound onto `j`
+        /// on purpose: the keys that walk the list are bare letters matched whatever is held with
+        /// them, so a chord read after them would walk the list instead of leaving.
+        #[test]
+        fn a_moved_chord_leaves_the_view_it_opened() {
+            let mut session = Session::new("kernel-enforced");
+            let mut moved = std::collections::BTreeMap::new();
+            moved.insert("watch".to_string(), "alt-j".to_string());
+            session.adopt_keybindings(&moved);
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+
+            let alt_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::ALT);
+            handle_key(&mut session, alt_j);
+            assert!(session.watching().is_some(), "the chord did not open it");
+
+            session.open_watched();
+            handle_key(&mut session, alt_j);
+            assert!(
+                session.watching().is_none(),
+                "the chord walked the list instead of leaving"
+            );
+
+            // And the chord it was moved off of does neither.
+            handle_key(&mut session, ctrl('l'));
+            assert!(
+                session.watching().is_none(),
+                "the old chord still opened it"
+            );
+        }
+
         /// The way out is read against the nearest level. Somebody who opened a delegate from the
         /// list is going back to the list, and only then out.
         #[test]
@@ -6487,6 +6525,52 @@ mod tests {
             Action::Redraw
         );
         assert!(session.scrolling());
+    }
+
+    /// Inside the prompt search every character narrows the list, so a moved chord has to be read
+    /// before the arm that types: bound onto a letter it would otherwise open the search from the
+    /// box and then be typed into it.
+    #[test]
+    fn a_moved_chord_is_read_inside_the_search_it_opened() {
+        let alt = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("history".to_string(), "alt-r".to_string());
+        moved.insert("stash".to_string(), "alt-s".to_string());
+        session.adopt_keybindings(&moved);
+
+        type_line(&mut session, "run the tests");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.complete("ok", Vec::new(), 0);
+
+        handle_key(&mut session, alt('r'));
+        assert!(session.searching_history(), "the chord did not open it");
+
+        handle_key(&mut session, alt('s'));
+        let search = session.history_search().expect("the search closed");
+        assert!(search.here(), "the chord did not narrow the scope");
+        assert_eq!(search.needle(), "", "the chord was typed into the needle");
+
+        handle_key(&mut session, alt('s'));
+        let search = session.history_search().expect("the search closed");
+        assert!(!search.here(), "one more press did not widen it again");
+
+        // The chords they were moved off of do nothing in here, rather than narrowing the list to
+        // prompts holding an `s` or an `r`.
+        for old in [ctrl('s'), ctrl('r')] {
+            handle_key(&mut session, old);
+        }
+        let search = session
+            .history_search()
+            .expect("an old chord closed the search");
+        assert_eq!(
+            search.needle(),
+            "",
+            "an old chord was typed into the needle"
+        );
+
+        handle_key(&mut session, alt('r'));
+        assert!(!session.searching_history(), "the chord did not close it");
     }
 
     /// Escape means "stop this" before it means anything else, so a turn in flight is cancelled

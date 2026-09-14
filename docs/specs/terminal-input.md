@@ -1305,6 +1305,15 @@ first, so the other cannot be reached at all, and the list `?` puts up names the
 while one of the two lines is a lie. Which action wins would come down to the order the code reads
 them in, which is nothing a person could predict from what they wrote, so neither wins.
 
+**A mode reads the chord that opened it.** Inside the search over prompts, the chord that puts a line
+away narrows the scope and the one that opened the search closes it (INPUT-19, INPUT-31); inside the
+view of what a delegate is doing, the chord that opened the view leaves it. Ctrl-C keeps its own
+meaning in both, and the chord an action was moved off of does nothing.
+
+**Why.** Every character narrows the prompt search and bare letters walk the delegate list, so a
+chord these modes did not ask the bindings about is not merely unanswered: it is read as the letter
+it carries, and the search a person moved a chord to open narrows itself to prompts holding an `s`.
+
 **The screen names the chord that answers.** `?` lists the keys from the one place they are written
 down (INPUT-13), and the seven rows above are asked of the chord in force rather than spelled out
 there. So is every other line that names one: the row saying what brings a stashed line back
@@ -1343,5 +1352,7 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::history_search::the_keys_under_the_search_name_the_chord_that_narrows_it`
 `verified-by: bravebot_tui::render::the_row_that_says_what_the_turn_is_doing_leaves_the_key_to_the_hint_line`
 `verified-by: bravebot_tui::render::a_picture_on_the_clipboard_says_which_key_carries_it`
+`verified-by: bravebot_tui::app::a_moved_chord_is_read_inside_the_search_it_opened`
+`verified-by: bravebot_tui::app::a_moved_chord_leaves_the_view_it_opened`
 `verified-by: bravebot_tui::app::custom_keybindings_route_actions_and_old_chords_are_ignored`
 `verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`
