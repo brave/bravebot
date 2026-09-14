@@ -938,6 +938,7 @@ INSERT mode still arms it, which is where somebody who wanted a command is.
 `verified-by: bravebot_tui::state::opening_a_line_leaves_the_caret_on_the_new_one`
 `verified-by: bravebot_tui::state::the_shell_marker_is_not_armed_from_normal_mode`
 `verified-by: bravebot_tui::state::the_key_list_is_not_opened_from_normal_mode`
+`verified-by: bravebot_tui::state::leaving_insert_mode_puts_the_caret_on_a_character`
 
 <a id="INPUT-26"></a>
 ### INPUT-26: the motions move the caret and nothing else, and never rest inside a marker
@@ -987,6 +988,7 @@ names a character a marker is spelled with, and it did exactly that before it wa
 `verified-by: bravebot_tui::state::the_repeat_keys_do_the_last_jump_again_and_then_the_other_way`
 `verified-by: bravebot_tui::state::a_repeat_with_nothing_to_repeat_does_nothing`
 `verified-by: bravebot_tui::state::a_motion_crosses_a_marker_whole`
+`verified-by: bravebot_tui::state::no_motion_comes_to_rest_past_the_end_of_its_line`
 `verified-by: bravebot_tui::state::a_pair_that_means_nothing_ends_the_wait_rather_than_holding_it`
 
 <a id="INPUT-27"></a>
