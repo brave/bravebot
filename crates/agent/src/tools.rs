@@ -3996,12 +3996,25 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         .unwrap_or(1)
         .max(1) as usize;
 
-    // `workspaceSymbol` ranges over the tree instead of starting from a position, so it is the one
-    // operation with no path to promote.
-    let query = arguments
-        .get("query")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    // `workspaceSymbol` ranges over the tree instead of starting from a position, so it has no path
+    // and the query stands where the path stands: it is the whole of what the server is asked to
+    // look for. That makes it routing, and it takes the same road the operation took, so the trail
+    // says the planner chose it. Read only for the operation that sends one, since a promotion
+    // recorded for a call that carries no query is a choice the planner never made.
+    let query = if operation.needs_position() {
+        None
+    } else {
+        match argument(arguments, "query") {
+            Some(proposed) => match policy.promote_confined_read("lsp", "query", &proposed) {
+                Ok(promoted) => match promoted.into_trusted() {
+                    Ok(query) => Some(query),
+                    Err(_) => return problem("refused: the query was not trusted"),
+                },
+                Err(denial) => return problem(format!("refused: {denial}")),
+            },
+            None => None,
+        }
+    };
 
     let relative = if operation.needs_position() {
         let Some(proposed) = argument(arguments, "path") else {
@@ -4158,9 +4171,9 @@ fn search<S: Sink>(
         None => None,
     };
 
-    // Case sensitivity is a property of the call, not of anything read, so it is taken from
-    // the arguments directly. Absent means sensitive: a search that quietly widened itself
-    // would report matches the caller cannot see the reason for.
+    // Routing, like the pattern beside it, but a literal rather than a name: there is nothing in a
+    // flag to promote, so it is taken from the arguments directly. Absent means sensitive: a search
+    // that quietly widened itself would report matches the caller cannot see the reason for.
     let case_sensitive = arguments
         .get("case_sensitive")
         .and_then(Value::as_bool)
