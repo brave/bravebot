@@ -1186,6 +1186,10 @@ fn doctor() -> ExitCode {
     // configuration wrong.
     let settings = bravebot_config::Settings::load();
 
+    // Resolved once for the two sections that need it, since two answers to where the state
+    // directory is would be two answers to which rules a run reads.
+    let home = bravebot_agent::home::directory();
+
     match Config::from_env_and_settings(&settings) {
         Ok(config) => {
             println!("{}", t!(doctor_configuration_ok));
@@ -1227,10 +1231,8 @@ fn doctor() -> ExitCode {
             // nothing they cannot read in the file. What is worth saying is which of them this
             // build could not act on, because those are the ones that look like protection and
             // are not.
-            let (permissions, rejected) = bravebot_agent::permissions::from_settings(
-                &settings,
-                bravebot_agent::home::directory().as_deref(),
-            );
+            let (permissions, rejected) =
+                bravebot_agent::permissions::from_settings(&settings, home.as_deref());
             fact(
                 t!(doctor_permissions),
                 match permissions.is_empty() {
@@ -1275,6 +1277,14 @@ fn doctor() -> ExitCode {
             eprintln!("{}", t!(cli_configuration_problem, problem = err));
             ok = false;
         }
+    }
+
+    println!();
+    // Outside the block above, which a configuration error stops before it prints anything: where
+    // the state is kept is a fact about the machine either way, and a machine with nowhere to keep
+    // it is one of the reasons the configuration above it can be wrong.
+    for line in state_directory(home.as_deref()) {
+        println!("{line}");
     }
 
     println!();
@@ -1420,6 +1430,44 @@ fn report_subscription() {
             ),
         );
     }
+}
+
+/// The state directory section of `doctor`: where it is, or that there is none and what that costs.
+///
+/// Built rather than printed, so what the section says is a value a test can hold.
+///
+/// An absent directory is reported rather than failed on: STATE-2 makes no `HOME` a state this
+/// program supports, and a container that has none of it wanted none of it. Saying so is still
+/// owed, because every subsystem treats the absence as absence and none of them says a word. The
+/// `settings` line above says at most that no file was found, which reads as a file nobody has
+/// written rather than a directory there is nowhere to put.
+///
+/// Both halves are named because the absence is partial. A checkout's `.bravebot/settings.json`,
+/// its skills and its `AGENTS.md` are read with no home at all, so a report that said only
+/// "settings are not kept" would have somebody looking for why the file in front of them is being
+/// ignored when it is in force.
+fn state_directory(found: Option<&Path>) -> Vec<String> {
+    let Some(path) = found else {
+        return vec![
+            t!(doctor_state_directory_absent).to_string(),
+            aligned(
+                t!(doctor_state_directory_not_kept),
+                t!(doctor_state_directory_forgotten),
+                DETAIL,
+            ),
+            aligned(
+                t!(doctor_state_directory_not_read),
+                t!(doctor_state_directory_your_own),
+                DETAIL,
+            ),
+            aligned(
+                t!(doctor_state_directory_remedy),
+                t!(doctor_state_directory_set_home),
+                DETAIL,
+            ),
+        ];
+    };
+    vec![t!(doctor_state_directory, path = path.display().to_string()).to_string()]
 }
 
 /// What `doctor` says about confinement: the lines, and whether there was any.
@@ -1633,6 +1681,62 @@ mod tests {
                 .iter()
                 .any(|line| line.contains(&missing().to_string())),
             "the refusal does not say what was missing: {lines:?}"
+        );
+    }
+
+    /// Which directory this is depends on the `HOME` of whoever started the process, so a person
+    /// under `sudo`, or running the same binary from a service manager, has a different one from
+    /// the session they are looking for. Naming it is what settles which of them is in force.
+    #[test]
+    fn doctor_names_the_state_directory_it_resolved() {
+        let lines = state_directory(Some(Path::new("/home/someone/.bravebot")));
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("/home/someone/.bravebot")),
+            "the state directory in use is not in the section that reports it: {lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains(&t!(doctor_state_directory_forgotten).to_string())),
+            "a machine with a state directory was told what it is not keeping: {lines:?}"
+        );
+    }
+
+    /// The loss this reports is silent: the session records behind `--resume`, the prompt history
+    /// and the recorded model are neither read nor written, every subsystem treats that as absence
+    /// by design, and somebody whose `/model` choice does not survive the session has nothing else
+    /// in the report to explain it. On Windows, where `HOME` is not the variable the platform sets,
+    /// that is every user.
+    ///
+    /// What is still read has to be said in the same breath, because the absence is partial: a
+    /// checkout's own settings, skills and `AGENTS.md` load with no home at all, and a report that
+    /// left that out would send somebody looking for why a file that is in force is ignored.
+    #[test]
+    fn a_missing_state_directory_is_reported_with_what_it_costs() {
+        let lines = state_directory(None);
+        let section = lines.join("\n");
+
+        assert!(
+            section.contains("HOME"),
+            "the section does not say why there is no state directory: {section}"
+        );
+        for lost in ["sessions", "--resume", "prompt history", "model"] {
+            assert!(
+                section.contains(lost),
+                "the section does not say that {lost} is not kept: {section}"
+            );
+        }
+        assert!(
+            section.contains("checkout"),
+            "the section does not say that a checkout's own files are still read: {section}"
+        );
+        assert_ne!(
+            lines,
+            state_directory(Some(Path::new("/home/someone/.bravebot"))),
+            "a machine with no state directory reads the same as one with a state directory"
         );
     }
 

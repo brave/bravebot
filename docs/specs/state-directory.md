@@ -101,7 +101,9 @@ the same mode, because what it holds is what the record holds.
 ### STATE-2: a machine with no `HOME` has no state directory rather than a guessed one
 
 The directory is `HOME` and one fixed name, and an absent or empty `HOME` yields no directory at
-all. Nothing is read and nothing is written in that case, and each caller does without. The crates
+all. Nothing is read and nothing is written in that case, and each caller does without. Every one of
+them doing without is silent, so `doctor` is where the absence is said out loud, along with what is
+not kept without a directory to keep it in ([CLI-7](cli.md#CLI-7)). The crates
 that sit below the one holding the answer resolve the path themselves, since
 [layering.md](layering.md) forbids them the dependency, and each spells the same name and offers the
 same absence of a fallback.
