@@ -1383,6 +1383,9 @@ impl Session {
         self.tokens = 0;
         self.spend.clear();
         self.timing.clear();
+        // Goes with the spend rather than staying like the chosen model: it describes the prompt the
+        // cleared conversation sent, and the panel prints it beside a cost that is now zero.
+        self.cached = None;
         self.occupancy = Occupancy::Unmeasured;
         self.written = 0;
         self.todos.clear();
@@ -7550,6 +7553,22 @@ mod tests {
             "the previous turn survived clear"
         );
         assert!(s.last_turn_backups.is_empty(), "the backups survived clear");
+    }
+
+    /// A cache figure describes the exchange that clearing throws away, and the panel prints it
+    /// beside a spend that clearing sets back to zero. Keeping it would report a cache hit for a
+    /// conversation nobody can read, next to a cost of nothing.
+    #[test]
+    fn clearing_forgets_what_the_last_turn_read_out_of_the_cache() {
+        let mut s = session();
+        s.served_from_cache(bravebot_aichat::protocol::Cached {
+            read_tokens: 900,
+            written_tokens: 100,
+        });
+        assert!(s.cached().is_some(), "the figure was never recorded");
+
+        s.clear();
+        assert_eq!(s.cached(), None, "the cache figure survived clear");
     }
 
     /// What belongs to the user rather than to the session survives, since none of it is a

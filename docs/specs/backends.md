@@ -7,6 +7,7 @@ governs:
   - crates/bedrock/src/credentials.rs
   - crates/tui/src/app.rs
   - crates/tui/src/status.rs
+  - crates/tui/src/state.rs
   - crates/config/src/bedrock.rs
   - crates/config/src/lib.rs
   - crates/aichat/src/lib.rs
@@ -892,7 +893,8 @@ read nothing back reports the write and says nothing about the read.
 than a total over the session, because caching is a property of a request: a session that compacted
 part way through has turns whose prefix survived and turns whose prefix was rewritten, and a total
 averages away the thing the figures are for. Nothing about a cache is kept in a session record, so a
-resumed session reports nothing until a turn has run.
+resumed session reports nothing until a turn has run. Clearing goes with what the conversation spent
+rather than with the model the user chose, the figures describing a prompt that has been thrown away.
 
 **Presented as two figures and never as their sum.** They are priced in opposite directions, a read
 at a fraction of a fresh token and a write above one, so a turn that saved almost the whole prompt
@@ -910,6 +912,7 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_tui::status::the_panel_says_how_much_of_the_prompt_came_out_of_the_cache`
 `verified-by: bravebot_tui::status::a_backend_that_reports_nothing_about_a_cache_gets_no_cache_lines`
 `verified-by: bravebot_tui::status::a_turn_that_only_wrote_to_the_cache_does_not_report_a_read_of_zero`
+`verified-by: bravebot_tui::state::clearing_forgets_what_the_last_turn_read_out_of_the_cache`
 
 ## Known costs
 
