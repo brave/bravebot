@@ -1242,6 +1242,9 @@ fn run_step<S: Sink, C: Confirmer>(
                     // A manifest step names one pattern and means it literally, spelling and
                     // all: it was written ahead of the run rather than guessed at mid-turn.
                     true,
+                    // A step is planned before anything is read, so there is no earlier page for
+                    // one to continue from: every manifest search starts at the first match.
+                    1,
                 )
                 .map_err(|e| e.to_string())?;
             let rendered = policy.render_in_place("search", &hits, |hits| {

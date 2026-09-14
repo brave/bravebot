@@ -1,6 +1,6 @@
 //! Tests for the label-aware file tools, exercised against a real temporary directory.
 
-use bravebot_agent::workspace::{Workspace, WorkspaceError};
+use bravebot_agent::workspace::{Paging, Workspace, WorkspaceError};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, RecordingSink};
 use bravebot_core::label::{Integrity, Label};
@@ -653,6 +653,7 @@ fn grep_finds_matches_with_line_numbers() {
             &Labelled::trusted(".".to_string()),
             None,
             true,
+            1,
         )
         .expect("grep succeeds");
 
@@ -685,6 +686,7 @@ fn grep_refuses_an_untrusted_pattern() {
             &Labelled::trusted(".".to_string()),
             None,
             true,
+            1,
         )
         .expect_err("an untrusted pattern must be refused");
     assert!(error.to_string().contains("injection blocked"));
@@ -711,6 +713,7 @@ fn grep_refuses_a_directory_outside_the_workspace() {
             &Labelled::trusted("..".to_string()),
             None,
             true,
+            1,
         )
         .expect_err("traversal must be refused");
     assert!(matches!(error, WorkspaceError::Escapes { .. }));
@@ -740,6 +743,7 @@ fn grep_skips_unreadable_files() {
             &Labelled::trusted(".".to_string()),
             None,
             true,
+            1,
         )
         .expect("grep succeeds despite the binary file");
     assert_eq!(found.label(), Label::untrusted_private());
@@ -766,6 +770,7 @@ fn grep_refuses_an_empty_pattern() {
             &Labelled::trusted(".".to_string()),
             None,
             true,
+            1,
         )
         .expect_err("an empty pattern is refused");
     assert!(matches!(error, WorkspaceError::Invalid { .. }));
@@ -958,6 +963,7 @@ fn a_search_that_could_not_reach_every_file_says_so() {
             &Labelled::trusted(".".to_string()),
             None,
             true,
+            1,
         )
         .expect("grep succeeds");
     let proof = policy.authorise_content_release("test", "matches");
@@ -998,6 +1004,7 @@ fn a_search_that_reached_every_file_makes_no_claim() {
             &Labelled::trusted(".".to_string()),
             None,
             true,
+            1,
         )
         .expect("grep succeeds");
     let proof = policy.authorise_content_release("test", "matches");
@@ -1063,6 +1070,7 @@ fn a_search_past_the_cap_reports_truncation() {
             &Labelled::trusted(".".to_string()),
             None,
             true,
+            1,
         )
         .expect("grep succeeds");
     let proof = policy.authorise_content_release("test", "matches");
@@ -1094,6 +1102,7 @@ fn a_search_within_the_cap_reports_no_truncation() {
             &Labelled::trusted(".".to_string()),
             None,
             true,
+            1,
         )
         .expect("grep succeeds");
     let proof = policy.authorise_content_release("test", "matches");
@@ -1131,6 +1140,7 @@ fn a_long_match_line_is_truncated_without_panicking() {
             &Labelled::trusted(".".to_string()),
             None,
             true,
+            1,
         )
         .expect("grep must not panic on multi-byte text");
     let proof = policy.authorise_content_release("test", "matches");
@@ -1532,6 +1542,7 @@ fn a_search_can_be_limited_to_matching_files() {
             &Labelled::trusted(".".to_string()),
             Some(&Labelled::trusted("*.rs".to_string())),
             true,
+            1,
         )
         .expect("grep succeeds");
     let proof = policy.authorise_content_release("test", "matches");
@@ -1564,6 +1575,7 @@ fn an_untrusted_include_pattern_is_refused() {
             &Labelled::trusted(".".to_string()),
             Some(&injected),
             true,
+            1,
         )
         .expect_err("an untrusted include must be refused");
     assert!(matches!(error, WorkspaceError::Denied(_)));
@@ -2706,6 +2718,7 @@ fn search_in(
     patterns: &[&str],
     include: Option<&str>,
     case_sensitive: bool,
+    offset: usize,
 ) -> bravebot_agent::workspace::Matches {
     let workspace = Workspace::new(root).expect("workspace");
     let mut sink = RecordingSink::new();
@@ -2728,6 +2741,7 @@ fn search_in(
             &Labelled::trusted(".".to_string()),
             include.map(|g| Labelled::trusted(g.to_string())).as_ref(),
             case_sensitive,
+            offset,
         )
         .expect("grep succeeds");
     let proof = policy.authorise_content_release("test", "matches");
@@ -2743,7 +2757,7 @@ fn a_search_says_when_its_include_selected_no_files() {
     let scratch = Scratch::new("grep-include-empty");
     std::fs::write(scratch.path.join("a.rs"), "needle in rust\n").unwrap();
 
-    let found = search_in(&scratch.path, &["needle"], Some("*.py"), true);
+    let found = search_in(&scratch.path, &["needle"], Some("*.py"), true, 1);
     assert!(found.matches.is_empty());
     assert_eq!(
         found.considered, 0,
@@ -2753,7 +2767,7 @@ fn a_search_says_when_its_include_selected_no_files() {
 
     // The other empty: files were read and the needle was not in them. Same rendering before
     // this change, and it must not be now.
-    let found = search_in(&scratch.path, &["haystack"], Some("*.rs"), true);
+    let found = search_in(&scratch.path, &["haystack"], Some("*.rs"), true, 1);
     assert!(found.matches.is_empty());
     assert_eq!(
         found.considered, 1,
@@ -2771,7 +2785,7 @@ fn an_include_may_use_a_brace_group() {
     std::fs::write(scratch.path.join("b.h"), "needle\n").unwrap();
     std::fs::write(scratch.path.join("c.py"), "needle\n").unwrap();
 
-    let found = search_in(&scratch.path, &["needle"], Some("*.{cc,h}"), true);
+    let found = search_in(&scratch.path, &["needle"], Some("*.{cc,h}"), true, 1);
     assert_eq!(
         found.matches.len(),
         2,
@@ -2787,14 +2801,14 @@ fn a_search_takes_more_than_one_pattern() {
     let scratch = Scratch::new("grep-alternation");
     std::fs::write(scratch.path.join("a.rs"), "alpha\nbeta\ngamma\ndelta\n").unwrap();
 
-    let found = search_in(&scratch.path, &["alpha", "gamma"], None, true);
+    let found = search_in(&scratch.path, &["alpha", "gamma"], None, true, 1);
     assert_eq!(found.matches.len(), 2);
     assert_eq!(found.matches[0].text, "alpha");
     assert_eq!(found.matches[1].text, "gamma");
 
     // A line holding two of them is one match, not two: the line is what is reported.
     std::fs::write(scratch.path.join("b.rs"), "alpha and gamma\n").unwrap();
-    let found = search_in(&scratch.path, &["alpha", "gamma"], Some("b.rs"), true);
+    let found = search_in(&scratch.path, &["alpha", "gamma"], Some("b.rs"), true, 1);
     assert_eq!(found.matches.len(), 1);
 }
 
@@ -2806,12 +2820,12 @@ fn a_search_can_ignore_case() {
     std::fs::write(scratch.path.join("a.rs"), "EmailAliasesEnabled\n").unwrap();
 
     assert!(
-        search_in(&scratch.path, &["emailaliases"], None, true)
+        search_in(&scratch.path, &["emailaliases"], None, true, 1)
             .matches
             .is_empty()
     );
 
-    let found = search_in(&scratch.path, &["emailaliases"], None, false);
+    let found = search_in(&scratch.path, &["emailaliases"], None, false, 1);
     assert_eq!(found.matches.len(), 1);
     // The line is reported as it is written, not as it was folded to match.
     assert_eq!(found.matches[0].text, "EmailAliasesEnabled");
@@ -2830,7 +2844,7 @@ fn a_search_skips_vendored_dependencies() {
         std::fs::write(dir.join("theirs.rs"), "needle\n").unwrap();
     }
 
-    let found = search_in(&scratch.path, &["needle"], None, true);
+    let found = search_in(&scratch.path, &["needle"], None, true, 1);
     assert_eq!(
         found.matches.len(),
         1,
@@ -2838,6 +2852,147 @@ fn a_search_skips_vendored_dependencies() {
         found.matches
     );
     assert_eq!(found.matches[0].path, "mine.rs");
+}
+
+/// A cap the caller cannot ask past is a cap that loses whatever is behind it. Saying the answer
+/// is a sample leaves the planner narrowing the pattern and guessing, and a guess that misses
+/// drops the matches it was meant to find.
+#[test]
+fn a_capped_search_says_where_to_continue_from() {
+    let scratch = Scratch::new("grep-continue");
+    // One past the cap, so matches are left behind rather than exactly filling it.
+    let body: String = (0..201).map(|n| format!("needle {n}\n")).collect();
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+
+    let found = search_in(&scratch.path, &["needle"], None, true, 1);
+    assert!(found.truncated);
+    assert_eq!(found.matches.len(), 200);
+    assert_eq!(
+        found.paging(),
+        Some(Paging::Continue(201)),
+        "a capped search named no offset to continue from"
+    );
+    assert_eq!(
+        found.matched, 200,
+        "the match collected to detect the cap was counted as part of the answer"
+    );
+
+    // And a search that reached the end offers no continuation, or the planner pages forever.
+    let found = search_in(&scratch.path, &["needle 200"], None, true, 1);
+    assert!(!found.truncated);
+    assert_eq!(found.paging(), None);
+}
+
+/// The offset only reaches the matches a walk actually visited, so a walk that gave up on the tree
+/// has no later page to offer: every repeat of it stops in the same place. Offered one anyway, the
+/// planner pages to the end of the visited part and reads that as the end of the tree.
+#[test]
+fn a_search_that_could_not_reach_every_file_offers_no_later_page() {
+    let scratch = Scratch::new("grep-continue-unvisited");
+    let body: String = (0..201).map(|n| format!("needle {n}\n")).collect();
+    // More files than the walk may visit, so the cap on matches and the cap on files both bite.
+    for n in 0..12 {
+        std::fs::write(scratch.path.join(format!("f{n:05}.txt")), &body).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_limit(10);
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let found = workspace
+        .grep(
+            &mut policy,
+            std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+            &Labelled::trusted(".".to_string()),
+            None,
+            true,
+            1,
+        )
+        .expect("grep succeeds");
+    let proof = policy.authorise_content_release("test", "matches");
+    let found = found.declassify(&proof);
+
+    assert!(found.truncated, "the cap on matches must have been reached");
+    assert!(found.unvisited, "the walk must have stopped short");
+    assert_eq!(
+        found.paging(),
+        None,
+        "a walk that never reached the whole tree offered a page past its own cap"
+    );
+}
+
+/// The offset is only worth reporting if it answers with the matches the cap left behind. One
+/// that returned the same page again, or skipped a match at the boundary, would read as the
+/// tree having changed between two calls.
+#[test]
+fn the_reported_offset_returns_the_following_matches() {
+    let scratch = Scratch::new("grep-continue-returns");
+    let body: String = (0..300).map(|n| format!("needle {n}\n")).collect();
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+
+    let first = search_in(&scratch.path, &["needle"], None, true, 1);
+    let Some(Paging::Continue(next)) = first.paging() else {
+        panic!("a capped search named no offset to continue from");
+    };
+
+    let second = search_in(&scratch.path, &["needle"], None, true, next);
+    assert_eq!(second.first_match, 201);
+    assert_eq!(second.matches.len(), 100);
+    // The match after the last one the first page carried, so nothing falls between them.
+    assert_eq!(first.matches[199].text, "needle 199");
+    assert_eq!(second.matches[0].text, "needle 200");
+    assert_eq!(second.matches[99].text, "needle 299");
+    assert!(!second.truncated, "the tail claimed to be capped");
+}
+
+/// An offset past the end returns nothing, and nothing is the sentence a search that read the
+/// whole tree and found no match prints. Reported as that, a page past the end reads as the
+/// pattern having gone away since the page before it.
+#[test]
+fn an_offset_past_the_last_match_says_how_many_there_were() {
+    let scratch = Scratch::new("grep-past-the-end");
+    std::fs::write(scratch.path.join("a.txt"), "needle\nneedle\nneedle\n").unwrap();
+
+    let found = search_in(&scratch.path, &["needle"], None, true, 500);
+    assert!(found.matches.is_empty());
+    assert_eq!(found.first_match, 500);
+    assert_eq!(
+        found.paging(),
+        Some(Paging::PastTheEnd { found: 3 }),
+        "a page past the end did not say how many matches there were"
+    );
+
+    // The count includes the matches an offset passed over, or a second page understates the
+    // tree by however much the first page held.
+    let found = search_in(&scratch.path, &["needle"], None, true, 3);
+    assert_eq!(found.matches.len(), 1);
+    assert_eq!(found.matched, 3);
+}
+
+/// A pattern that is nowhere in the tree is an empty answer whatever offset asked for it, and the
+/// one sentence it must not print is that there were matches before this page: there were none, and
+/// a planner told otherwise looks for a page that never existed.
+#[test]
+fn an_offset_into_a_pattern_that_is_absent_is_not_a_page_past_the_end() {
+    let scratch = Scratch::new("grep-absent-at-an-offset");
+    std::fs::write(scratch.path.join("a.txt"), "haystack\n").unwrap();
+
+    let found = search_in(&scratch.path, &["needle"], None, true, 5);
+    assert!(found.matches.is_empty());
+    assert_eq!(found.matched, 0);
+    assert_eq!(
+        found.paging(),
+        None,
+        "a search that found nothing claimed to have matches behind the offset"
+    );
 }
 
 /// Rules as a settings file would have carried them, with nothing but a deny list. Every rule must
@@ -2881,6 +3036,7 @@ fn a_search_does_not_open_a_file_a_deny_rule_covers() {
             &Labelled::trusted(".".to_string()),
             None,
             true,
+            1,
         )
         .expect("grep succeeds");
     let proof = policy.authorise_content_release("test", "matches");
@@ -2976,6 +3132,7 @@ fn a_search_a_rule_emptied_is_not_reported_as_an_empty_glob() {
                 &Labelled::trusted(".".to_string()),
                 Some(&Labelled::trusted(include.to_string())),
                 true,
+                1,
             )
             .expect("grep succeeds");
         let proof = policy.authorise_content_release("test", "matches");
@@ -3032,6 +3189,7 @@ fn a_denied_file_does_not_spend_a_searchs_budget() {
             &Labelled::trusted(".".to_string()),
             None,
             true,
+            1,
         )
         .expect("grep succeeds");
     let proof = policy.authorise_content_release("test", "matches");
@@ -3079,6 +3237,7 @@ fn a_capped_search_keeps_the_same_files_every_time() {
                 &Labelled::trusted(".".to_string()),
                 None,
                 true,
+                1,
             )
             .expect("grep succeeds");
         let proof = policy.authorise_content_release("test", "matches");
@@ -3126,6 +3285,7 @@ fn a_capped_search_prefers_a_directorys_own_files() {
             &Labelled::trusted(".".to_string()),
             None,
             true,
+            1,
         )
         .expect("grep succeeds");
     let proof = policy.authorise_content_release("test", "matches");

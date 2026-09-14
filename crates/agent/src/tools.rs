@@ -38,7 +38,7 @@ use bravebot_core::value::Labelled;
 use serde_json::{Value, json};
 
 use crate::lsp::LanguageServers;
-use crate::workspace::{Listing, Page, Workspace};
+use crate::workspace::{Listing, Page, Paging, Workspace};
 
 /// The statuses the schema advertises, taken from the kernel so the two cannot drift.
 const TODO_STATUSES: [&str; 3] = Status::NAMES;
@@ -281,6 +281,13 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
                         "type": "boolean",
                         "description": "Whether case matters. Defaults to true. Set false \
                                         rather than shortening the pattern to dodge a capital."
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "1-based match to start from. Defaults to the first. A \
+                                        result that stopped at the match cap gives the offset to \
+                                        continue from: use it rather than guessing a narrower \
+                                        glob, which drops the matches you have not seen yet."
                     }
                 },
                 "required": ["pattern"]
@@ -801,6 +808,9 @@ pub struct Output {
     /// Whether a cap cut the result short, so the turn can say so beside the reference it hands
     /// over. Text inside a quarantined result reaches nobody who could act on it.
     pub incomplete: bool,
+    /// Where a further call resumes, or that this page fell past the end. Beside the reference for
+    /// the same reason as `incomplete`.
+    pub paging: Option<Paging>,
     /// What a run printed, whole, where the cap cut down what the planner is shown.
     ///
     /// Quarantined by the turn loop, which is what mints slots, and the reference goes back beside
@@ -1016,6 +1026,12 @@ struct Produced {
     /// written into `text` reaches the planner only when the planner may read `text` at all,
     /// which by default it may not.
     incomplete: bool,
+    /// Where a further call resumes, or that this page fell past the end of the matches.
+    ///
+    /// Beside `incomplete` and for the same reason: knowing the answer is a sample is no use
+    /// without the one argument that gets the rest of it, and by default the planner reads a
+    /// reference rather than the body the notice is written into.
+    paging: Option<Paging>,
     /// What a run printed, whole, where a cap cut down what the planner is shown.
     ///
     /// The cap is on what enters the conversation, not on what the command printed, so the whole
@@ -1086,6 +1102,7 @@ impl Produced {
             deferred: None,
             entries: None,
             incomplete: false,
+            paging: None,
             whole: None,
             changes: Vec::new(),
             untrusted: false,
@@ -1164,6 +1181,12 @@ impl Produced {
     /// Say the result was cut short by a cap, whoever ends up being allowed to read it.
     fn capped(mut self, incomplete: bool) -> Self {
         self.incomplete = incomplete;
+        self
+    }
+
+    /// Where a further call continues, or that this page fell past the end.
+    fn paging(mut self, paging: Option<Paging>) -> Self {
+        self.paging = paging;
         self
     }
 
@@ -1476,6 +1499,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 deferred: produced.deferred,
                 entries: produced.entries,
                 incomplete: produced.incomplete,
+                paging: produced.paging,
                 whole: produced.whole,
                 answers_for: produced.answers_for,
                 said: produced.said,
@@ -1549,6 +1573,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         deferred: produced.deferred,
         entries: produced.entries,
         incomplete: produced.incomplete,
+        paging: produced.paging,
         whole: produced.whole,
         answers_for: produced.answers_for,
         said: produced.said,
@@ -1576,6 +1601,7 @@ fn problem(text: impl Into<String>) -> Produced {
         deferred: None,
         entries: None,
         incomplete: false,
+        paging: None,
         whole: None,
         changes: Vec::new(),
         untrusted: false,
@@ -4140,12 +4166,22 @@ fn search<S: Sink>(
         .and_then(Value::as_bool)
         .unwrap_or(true);
 
+    // Read as a plain number, like the offset on a read: it names nothing, so there is no
+    // destination for it to decide. A model that omits it gets the first page.
+    let offset = arguments
+        .get("offset")
+        .and_then(Value::as_u64)
+        .unwrap_or(1)
+        .max(1)
+        .min(usize::MAX as u64) as usize;
+
     match workspace.grep(
         policy,
         &patterns,
         &directory,
         include.as_ref(),
         case_sensitive,
+        offset,
     ) {
         Ok(found) => {
             let note = note_for(policy, "search", &found, |found| {
@@ -4158,11 +4194,24 @@ fn search<S: Sink>(
 
             // Either cap leaves the answer partial, and the distinction between them matters to
             // whoever reads the body. To the turn it does not: a sample is a sample.
-            let incomplete = {
+            //
+            // What the turn does need beside it is where to go next, so both come out of one look
+            // at the result. A second one would copy the matches again to read a single number and
+            // would write a second entry in the trail for it.
+            //
+            // Releasing where to continue tells the planner which cap stopped the answer, since
+            // only the cap on matches can be asked past, and that is the point of saying it. The
+            // offset itself is the caller's own argument plus the cap, and the count of matches is
+            // no more than the line count the reference already carries.
+            let (incomplete, paging) = {
                 let shaped = policy.render_in_place("search", &found, |found| {
-                    found.truncated || found.unvisited || found.timed_out
+                    (
+                        found.truncated || found.unvisited || found.timed_out,
+                        found.paging(),
+                    )
                 });
-                let proof = policy.authorise_display_release("whether a search hit a cap");
+                let proof = policy
+                    .authorise_display_release("whether a search hit a cap and where it continues");
                 shaped.declassify(&proof)
             };
             // Asked of the glob alone, and only where the promote gate left it trusted, so this
@@ -4201,6 +4250,16 @@ fn search<S: Sink>(
                             text.push_str(&format!("\n\n({advice})"));
                         }
                         text
+                    } else if let Some(Paging::PastTheEnd { found: total }) = found.paging() {
+                        // A fourth empty answer, and it arrives with a page in hand: asking to
+                        // continue past the last match reads as the pattern having gone away
+                        // between two calls. Saying how many there were says where the end is.
+                        format!(
+                            "(this search found {}, so there is nothing at offset {}; the earlier \
+                             matches are still there)",
+                            tally(total, "match", "matches"),
+                            found.first_match
+                        )
                     } else {
                         "(no matches)".to_string()
                     }
@@ -4235,9 +4294,19 @@ fn search<S: Sink>(
                 if found.truncated {
                     // Without this a model that gets exactly the cap concludes it has
                     // every occurrence, which is how a rename misses call sites.
+                    let rest = match found.paging() {
+                        // The offset is what makes the rest reachable: narrowing the pattern is a
+                        // guess, and a guess that misses drops the matches it was meant to find.
+                        Some(Paging::Continue(next)) => {
+                            format!("ask again with offset {next} for the rest")
+                        }
+                        // A walk that stopped short of the tree cannot be paged past its own cap,
+                        // because every later page stops at the same place. The notice above says
+                        // what to do instead.
+                        _ => "narrow the pattern or search a subdirectory".to_string(),
+                    };
                     body.push_str(&format!(
-                        "\n\n(this search stopped at {} matches and is incomplete; narrow the \
-                         pattern or search a subdirectory)",
+                        "\n\n(this search stopped at {} matches and is incomplete; {rest})",
                         found.matches.len()
                     ));
                 }
@@ -4246,6 +4315,7 @@ fn search<S: Sink>(
             Produced::new(rendered, proposed_where, note)
                 .of_content()
                 .capped(incomplete)
+                .paging(paging)
         }
         Err(e) => problem(format!("error: {e}")),
     }

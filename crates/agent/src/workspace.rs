@@ -1390,6 +1390,54 @@ pub struct Matches {
     /// for: a glob that selected no files is a query to rewrite, and a rule is not. Whether, never
     /// which: the names are what the rule is keeping back.
     pub withheld: bool,
+    /// 1-based position of the first match returned, within all the matches found.
+    ///
+    /// 1 for a search that started at the beginning, and whatever offset was asked for otherwise.
+    pub first_match: usize,
+    /// What was returned plus what an offset passed over.
+    ///
+    /// Where `truncated` is set this is how far the search counted rather than how many matches the
+    /// tree holds. It answers the one question a page cannot: an offset past the last match returns
+    /// nothing, and nothing reads as the pattern being absent unless the count says otherwise.
+    pub matched: usize,
+}
+
+impl Matches {
+    /// Where a further search continues, or that this page fell past the last match.
+    ///
+    /// `None` for an ordinary complete answer, and for one a cap other than the cap on matches
+    /// stopped: a walk that gave up on the tree or ran out of time reached neither the end of the
+    /// matches nor a count of them, so it has no page to offer and nothing to say about the end.
+    /// Narrowing the search is the only advice left there.
+    pub fn paging(&self) -> Option<Paging> {
+        if self.unvisited || self.timed_out {
+            return None;
+        }
+        if self.truncated {
+            return Some(Paging::Continue(self.first_match + self.matches.len()));
+        }
+        (self.first_match > 1 && self.matches.is_empty() && self.matched > 0).then_some(
+            Paging::PastTheEnd {
+                found: self.matched,
+            },
+        )
+    }
+}
+
+/// What a paged result has to say about the matches it did not return.
+///
+/// Either reaches the planner beside the reference rather than only inside the body, for the reason
+/// a truncation notice does: by default the body is quarantined and the planner reads a reference
+/// instead, so a sentence written into it reaches nobody who could act on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Paging {
+    /// The match cap cut the result short, and this offset asks for the rest.
+    Continue(usize),
+    /// The offset asked for is past the last match, and this many were found in all.
+    ///
+    /// Carried so that an empty page cannot be read as the pattern having gone from the tree
+    /// between two calls. The count discloses no more than the body's own line count already does.
+    PastTheEnd { found: usize },
 }
 
 /// What a walk is collecting into.
@@ -1529,6 +1577,13 @@ impl Workspace {
     /// in [`crate::regex`] simulates an NFA rather than backtracking, so the property alternation
     /// was chosen to keep is kept anyway: the work is proportional to the input times the pattern,
     /// and nothing arriving through a turn can make a search expensive.
+    ///
+    /// `offset` is the 1-based match to start from, so a caller can ask for what the match cap
+    /// left behind. The walk is repeated rather than resumed: a search holds no state between
+    /// calls, and the order it visits files in is fixed, so counting to the offset again reaches
+    /// the same place. Reading every file a second time is what that costs, against a cursor that
+    /// would have to survive between turns and still mean something after the tree changed
+    /// underneath it.
     pub fn grep<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -1536,6 +1591,7 @@ impl Workspace {
         directory: &Labelled<String>,
         include: Option<&Labelled<String>>,
         case_sensitive: bool,
+        offset: usize,
     ) -> Result<Labelled<Matches>, WorkspaceError> {
         policy.before_capability(Capability::FileRead)?;
         for pattern in patterns {
@@ -1639,6 +1695,10 @@ impl Workspace {
         let mut matches = Vec::new();
         let mut searched = 0usize;
         let mut timed_out = false;
+        // Counted rather than collected until the offset is reached, so asking for a later page
+        // costs the reading again but never the earlier pages' memory.
+        let skip = offset.saturating_sub(1);
+        let mut matched = 0usize;
         let started = Instant::now();
         for path in paths {
             if matches.len() > MAX_MATCHES {
@@ -1662,6 +1722,10 @@ impl Workspace {
                     break;
                 }
                 if expressions.iter().any(|pattern| pattern.matches(line)) {
+                    matched += 1;
+                    if matched <= skip {
+                        continue;
+                    }
                     let mut text = line.to_string();
                     truncate_on_char_boundary(&mut text, MAX_MATCH_LINE);
                     matches.push(Match {
@@ -1675,6 +1739,12 @@ impl Workspace {
 
         let truncated = matches.len() > MAX_MATCHES;
         matches.truncate(MAX_MATCHES);
+        if truncated {
+            // The match collected one past the cap is what detects the cap rather than part of the
+            // answer, so it is no part of the tally either: what was counted is what was returned
+            // plus what an offset passed over.
+            matched -= 1;
+        }
 
         Ok(Labelled::new(
             Matches {
@@ -1685,6 +1755,8 @@ impl Workspace {
                 considered,
                 searched,
                 withheld,
+                first_match: skip + 1,
+                matched,
             },
             label,
         ))
