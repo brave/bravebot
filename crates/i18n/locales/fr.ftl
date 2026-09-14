@@ -366,6 +366,30 @@ fetch-yes = le récupérer
 fetch-no = ne pas le récupérer
 
 
+## Approuver un plan avant son exécution
+
+plan-title = exécuter ce plan ?
+plan-verb = Exécuter
+plan-steps = { $count ->
+    [one] { $count } étape
+   *[other] { $count } étapes
+    }
+plan-goal = pour { $task }
+plan-explained =
+    le programme entier, décidé avant toute lecture. rien de ce qu'il lit ne peut ajouter
+    une étape, en retirer une, ni envoyer quoi que ce soit ailleurs que là où ce plan le dit
+    déjà.
+plan-not-its-writes =
+    approuver le plan n'approuve pas ses écritures. chacune vous sera encore soumise le
+    moment venu.
+plan-nothing-yet =
+    rien n'a encore été lu ni écrit, donc refuser laisse tout en l'état.
+plan-yes = l'exécuter
+plan-no = ne pas l'exécuter
+plan-answer = l'exécuter ? [o/N]
+plan-answer-yes = o
+
+
 ## Approuver un fichier en quarantaine
 
 vouch-title = laisser le modèle lire ce fichier ?

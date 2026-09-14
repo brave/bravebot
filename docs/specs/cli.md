@@ -46,10 +46,15 @@ do what the flag is named and warned about for.
 `verified-by: bravebot_cli::main::the_flag_is_what_lets_an_allow_rule_decide_again`
 
 <a id="CLI-2"></a>
-### CLI-2: stdin is read only when it is not a terminal
+### CLI-2: unprompted, stdin is read only when it is not a terminal
 
 A terminal's stdin is left alone, so an interactive invocation does not sit waiting for input
 nobody is sending. Piped bytes are read when there are any.
+
+A question this run asked is the exception, and it is not the case this clause is about: the bytes
+are read because somebody was prompted for them a moment earlier, so they are input that is being
+sent. The one such question is the plan in CLI-8, and it is asked only where stdin is a terminal, so
+a pipe is never read for an answer.
 
 `verified-by: bravebot_cli::main::a_terminal_stdin_is_not_read`
 `verified-by: bravebot_cli::main::piped_bytes_are_read_when_stdin_is_not_a_terminal`
@@ -150,8 +155,21 @@ section before it prints anything, and where state is kept is a fact about the m
 
 `turn` observes and decides step by step, which is what an unqualified `bravebot "task"` has
 always been. `manifest` plans the whole run first, then executes it. An unknown name is refused
-rather than guessed. Both modes are unattended, with an empty trust map: where nobody can be
-asked, nothing is approved unless the flag in CLI-1 says otherwise.
+rather than guessed. Both modes carry an empty trust map, and every prompt a step raises is refused
+unless the flag in CLI-1 says otherwise: those are due partway through a run, over a path or a
+program nobody undertook to watch for, and typing a command is no undertaking to still be there.
+
+A plan is the one question a one-shot answers, because it is asked at a moment the others are not:
+once, before the first step, while nothing has been printed but this run's own progress. It is put
+where both stdin and stderr are a terminal, which is where whoever typed the command is still
+whoever is reading the output. Either end piped or redirected is nobody: a plan written into a file
+is a plan nobody read, so it is refused as everything else is, and a scripted `manifest` run stops
+before its first step unless the flag was given ([manifest.md](manifest.md#MANIFEST-10)).
+
+The steps are the plan the run narrates a moment earlier, a line each from the renderer the question
+was built from, so they are on screen while the question is answered and it does not print them
+again. What the question adds is the task in the person's own words, how many steps they are
+answering for, and what a yes does not cover.
 
 This is a different axis from the mode in [permission-modes.md](permission-modes.md), and the two
 compose. `--mode` decides when control flow is settled; the other decides who answers a prompt.
@@ -163,7 +181,12 @@ is all that remains of a document nobody can see. The plan never shares stdout w
 `verified-by: bravebot_cli::main::a_leading_mode_flag_is_a_task_not_an_unknown_option`
 `verified-by: bravebot_cli::main::an_unknown_mode_is_refused_rather_than_guessed`
 `verified-by: bravebot_cli::main::a_failed_plan_is_printed_beside_the_reply`
-`verified-by: bravebot_agent::manifest::an_unattended_manifest_run_does_not_write`
+`verified-by: bravebot_agent::manifest::a_plan_nobody_approved_runs_nothing`
+`verified-by: bravebot_cli::main::a_plan_is_answered_by_whoever_typed_the_command`
+`verified-by: bravebot_cli::main::the_question_does_not_reprint_the_narrated_plan`
+`verified-by: bravebot_cli::main::a_plan_is_refused_where_nobody_can_be_asked`
+`verified-by: bravebot_cli::main::anything_but_yes_declines_a_plan`
+`verified-by: bravebot_cli::main::a_one_shot_answers_the_plan_and_nothing_else`
 
 <a id="CLI-9"></a>
 ### CLI-9: a one-shot run names its own model, or asks for the one a session would

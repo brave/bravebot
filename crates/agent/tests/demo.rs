@@ -369,6 +369,14 @@ impl bravebot_agent::Confirmer for ApprovesRuns {
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
     }
+    /// Refuses. A test double is not a person agreeing to a plan.
+    fn confirm_manifest(
+        &mut self,
+        _r: &bravebot_agent::confirm::ManifestRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
     fn confirm_vouch(
         &mut self,
         _r: &bravebot_agent::confirm::VouchRequest,

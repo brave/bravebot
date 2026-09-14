@@ -79,7 +79,7 @@ use bravebot_core::value::Labelled;
 use bravebot_net::Egress;
 use serde_json::Value;
 
-use crate::confirm::{Confirmer, Decision, Intent, WriteRequest};
+use crate::confirm::{Confirmer, Decision, Intent, ManifestRequest, WriteRequest};
 use crate::conversation::Conversation;
 use crate::processor::Chat;
 use crate::report::{Activity, Phase, Reporter};
@@ -484,14 +484,19 @@ fn map_to_concrete(draft: Draft) -> Result<Draft, PlanError> {
 fn template(plan: &Manifest) -> String {
     let mut lines = String::from("Plan, fixed before anything runs:\n");
     for (index, step) in plan.steps().iter().enumerate() {
-        lines.push_str(&format!(
-            "  {}. [{}] {}\n",
-            index + 1,
-            step.tier(),
-            step.describe()
-        ));
+        lines.push_str(&format!("  {}\n", numbered(index, step)));
     }
     lines
+}
+
+/// One step, numbered, as it reads to a person.
+///
+/// One function because three places show the same step and they have to agree: the summary, the
+/// question that has to be answered before anything runs, and the record left behind. A step
+/// described one way in the question and another in the record leaves nobody able to say afterwards
+/// what was approved.
+fn numbered(index: usize, step: &Step) -> String {
+    format!("{}. [{}] {}", index + 1, step.tier(), step.describe())
 }
 
 /// Run one task as a manifest.
@@ -562,6 +567,7 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
         subscription.as_mut(),
         cancel,
         task.model.as_deref(),
+        &task.prompt,
         &mut attempt,
     ) {
         Ok(mut outcome) => {
@@ -638,12 +644,8 @@ pub struct Attempt {
 impl Attempt {
     /// Record what a step did, or did not do.
     fn stepped(&mut self, index: usize, step: &Step, note: &str) {
-        self.steps.push(format!(
-            "{}. [{}] {}: {note}",
-            index + 1,
-            step.tier(),
-            step.describe()
-        ));
+        self.steps
+            .push(format!("{}: {note}", numbered(index, step)));
     }
 
     /// How the attempt reads to a person, for a failure report.
@@ -887,6 +889,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     subscription: Option<&mut crate::ImportedSubscription>,
     cancel: &Cancel,
     chosen_model: Option<&str>,
+    task: &str,
     attempt: &mut Attempt,
 ) -> Result<Outcome, TurnError> {
     let Planned {
@@ -948,6 +951,36 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     };
     reporter.narration(narration);
 
+    // Then asked, at that same moment and for the same reason. Showing is not asking, and a plan
+    // nobody answered for is a whole run's worth of effects decided by a model: this mode's own
+    // guarantee, that nothing between the plan and the run can reshape it, is what makes the
+    // question worth putting once rather than per step.
+    //
+    // Refusing here costs nothing to undo. Nothing has been read and nothing written, so the
+    // stopped run really did mutate nothing, which is what a person declining a proposal expects
+    // of it.
+    let proposal = ManifestRequest {
+        task: task.to_string(),
+        steps: plan
+            .steps()
+            .iter()
+            .enumerate()
+            .map(|(index, step)| numbered(index, step))
+            .collect(),
+    };
+    // Timed like every other question, and this is the longest wait the mode has: a person reading
+    // a whole program before answering for it. Left uncounted it would be reported as time the run
+    // spent working.
+    let mut waiting = crate::confirm::Timed::new(confirmer);
+    let verdict = waiting.confirm_manifest(&proposal);
+    spent.stalled += waiting.waited();
+    if verdict == Decision::Reject {
+        let _ = policy.finish();
+        return Err(TurnError::Precommit(
+            "the plan was not approved, so nothing ran".to_string(),
+        ));
+    }
+
     let mut slots = SlotStore::new();
     let mut filled = false;
     let mut answer: Option<Labelled<String>> = None;
@@ -976,8 +1009,8 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         reporter.tool_started(activity.clone());
 
         // Wrapped per step for the same reason the turn loop wraps per call: the borrow has to go
-        // back for the next one. A manifest run asks about writes only, but it asks through the
-        // same trait, so the same wrapper counts it.
+        // back for the next one. A step asks about writes only, and the plan was asked about once
+        // before any of them, but both go through the same trait so the same wrapper counts them.
         let mut asking = crate::confirm::Timed::new(confirmer);
         let ran_at = std::time::Instant::now();
         let outcome = fill_before_acting(

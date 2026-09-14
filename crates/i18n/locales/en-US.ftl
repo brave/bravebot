@@ -414,6 +414,31 @@ server-yes = start it
 server-no = don't
 
 
+## Approving a plan before it runs
+
+plan-title = run this plan?
+plan-verb = Run
+plan-steps = { $count ->
+    [one] { $count } step
+   *[other] { $count } steps
+    }
+plan-goal = for { $task }
+plan-explained =
+    the whole program, decided before anything was read. nothing it reads can add a step,
+    drop one, or send anything anywhere this plan does not already name.
+plan-not-its-writes =
+    approving the plan is not approving its writes. each one is still put to you as it
+    comes up.
+plan-nothing-yet =
+    nothing has been read or written yet, so declining leaves everything as it is.
+plan-yes = run it
+plan-no = don't
+# Where the question is a line on a terminal rather than a panel: what to type, and the one answer
+# that runs the plan. Any other line, and end of input, declines.
+plan-answer = run it? [y/N]
+plan-answer-yes = y
+
+
 ## Vouching for a quarantined file
 
 vouch-title = let the model read this file?

@@ -4,9 +4,14 @@
 
 mod progress;
 
+use bravebot_agent::confirm::{
+    Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RunDecision, RunRequest,
+    ServerRequest, VouchRequest, WriteRequest,
+};
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{Mode, Workspace};
 use bravebot_config::Config;
+use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::{Event, RecordingSink, Role};
 use bravebot_core::trust::TrustStore;
@@ -14,7 +19,7 @@ use bravebot_i18n::t;
 use bravebot_sandbox::SandboxError;
 use bravebot_sandbox::policy::Capabilities;
 use bravebot_tui::sessions::Resumable;
-use std::io::{IsTerminal, Read, Write};
+use std::io::{BufRead, IsTerminal, Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -404,14 +409,18 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         task = task.with_piped_input(text);
     }
 
-    // A one-shot run has nobody to ask about a write, so writes are refused rather than
-    // silently applied. Manifest is the same: unattended, empty map, no y/n.
+    // A one-shot run has nobody to ask about a write, so writes are refused rather than silently
+    // applied. The one exception is a plan, which is put before the first step rather than in the
+    // middle of a run, and only where both ends of the conversation are a terminal: a plan written
+    // into a redirected stderr is a plan nobody read, and a pipe means the answer would be read
+    // from whatever fed it.
     //
     // Unless the flag was given, which is the one way a run nobody is watching may write: the
     // person accepted that when they typed it, and this is the only path where the refusal above
     // is what stands between the flag and an effect.
-    let mut unattended = bravebot_agent::Unattended;
-    let mut confirmer = bravebot_agent::Confining::new(&mut unattended, permission_mode);
+    let attended = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    let mut one_shot = OneShot::new(std::io::stdin(), std::io::stderr(), attended);
+    let mut confirmer = bravebot_agent::Confining::new(&mut one_shot, permission_mode);
     // On stderr, beside the progress lines, so a pipe of the reply is unaffected. Said even here,
     // where nobody may be reading: a run that wrote to the tree without asking should leave a record
     // of having been told not to ask.
@@ -679,6 +688,135 @@ fn piped_input(source: impl Read, is_tty: bool) -> Result<Option<String>, String
     // Lossy because the bytes are never decided from: they go into a slot and the planner is shown
     // a reference, so a replacement character changes nothing that matters.
     Ok(Some(String::from_utf8_lossy(&buffer).into_owned()))
+}
+
+/// What a one-shot run answers its questions with: [`bravebot_agent::Unattended`], except that a
+/// plan is put to whoever typed the command.
+///
+/// Every other question is refused, as CLI-1 has it. Those are due in the middle of a run, over a
+/// path or a program nobody undertook to watch for, and there is nothing about typing a command that
+/// says somebody will still be there. A plan is asked at one known moment instead: once, before the
+/// first step, while the command that raised it has printed nothing but its own progress. The person
+/// who typed it is the person reading that, so there is somebody to ask.
+///
+/// Generic over both ends, as [`piped_input`] is over its source, so a test answers without a
+/// terminal.
+struct OneShot<R: Read, W: Write> {
+    /// Where the answer is read from, and only ever after the question was written.
+    ///
+    /// Buffered here rather than taken buffered, because the whole confirmer travels to the thread
+    /// the turn runs on and a held stdin lock cannot.
+    input: std::io::BufReader<R>,
+    /// Where the plan and the question go. stderr in a real run, which is what keeps stdout the
+    /// reply alone (CLI-5).
+    output: W,
+    /// Whether there is anybody to ask.
+    ///
+    /// Both ends being a terminal, not stdin alone. A plan written into a redirected stderr is a
+    /// plan nobody read, and running a program nobody was shown is the one thing this question
+    /// cannot mean.
+    attended: bool,
+    /// Every question but the plan. Delegated rather than restated so there is one account of what
+    /// a one-shot refuses, and adding a question here cannot quietly start approving it.
+    refusing: bravebot_agent::Unattended,
+}
+
+impl<R: Read, W: Write> OneShot<R, W> {
+    fn new(input: R, output: W, attended: bool) -> Self {
+        Self {
+            input: std::io::BufReader::new(input),
+            output,
+            attended,
+            refusing: bravebot_agent::Unattended,
+        }
+    }
+
+    /// Write the question out, then read the answer back.
+    ///
+    /// The steps are not printed here. The run narrates the frozen plan a line per step immediately
+    /// before asking, from the same renderer this request was built with, so on a terminal they are
+    /// the lines directly above the question and are still on screen while it is answered. Printing
+    /// them again would put the same list twice under two different headings, which reads as two
+    /// plans rather than one. The panel a session draws does repeat them, and has to: it covers the
+    /// transcript that showed them.
+    fn put_the_plan(&mut self, request: &ManifestRequest) -> std::io::Result<Decision> {
+        writeln!(self.output, "{}", t!(plan_title))?;
+        writeln!(
+            self.output,
+            "{} {}  {}",
+            t!(plan_verb),
+            t!(plan_steps, count = request.steps.len()),
+            t!(plan_goal, task = &request.task)
+        )?;
+        writeln!(self.output)?;
+        for sentence in [
+            t!(plan_explained),
+            t!(plan_not_its_writes),
+            t!(plan_nothing_yet),
+        ] {
+            writeln!(self.output, "{sentence}")?;
+        }
+        write!(self.output, "{} ", t!(plan_answer))?;
+        self.output.flush()?;
+
+        // A closed stdin reads nothing, which is nobody answering, which is a no. So is any other
+        // line: the affirmative is the only answer that runs a program, and a person who typed
+        // something else did not type that.
+        let mut answer = String::new();
+        self.input.read_line(&mut answer)?;
+        Ok(match answer.trim().to_lowercase() == t!(plan_answer_yes) {
+            true => Decision::Approve,
+            false => Decision::Reject,
+        })
+    }
+}
+
+impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
+    /// The one question this confirmer may answer yes to, and only where somebody is there.
+    fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+        if !self.attended {
+            return self.refusing.confirm_manifest(request);
+        }
+        // A question that could not be written is a plan nobody saw, so it is declined rather than
+        // taken as unanswered and waved through.
+        self.put_the_plan(request).unwrap_or(Decision::Reject)
+    }
+
+    fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
+        self.refusing.confirm_write(request)
+    }
+
+    fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+        self.refusing.confirm_run(request)
+    }
+
+    fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+        self.refusing.confirm_read_output(request)
+    }
+
+    fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
+        self.refusing.confirm_fetch(request)
+    }
+
+    fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
+        self.refusing.confirm_server(request)
+    }
+
+    fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+        self.refusing.confirm_vouch(request)
+    }
+
+    /// Declined rather than answered, as everywhere nobody can be asked: a reply invented here would
+    /// be reported to the planner as the person's own words.
+    fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
+        self.refusing.ask_user(asking)
+    }
+
+    /// Nothing. Nobody is typing between steps: the only line this reads is an answer to a question
+    /// it just asked.
+    fn interjection(&mut self) -> Option<String> {
+        self.refusing.interjection()
+    }
 }
 
 /// What a finished turn has to say, before anything decides where it goes.
@@ -2044,6 +2182,103 @@ mod tests {
         let mut arguments = args(&["-p", "write about incognito mode"]);
         assert!(!take_incognito(&mut arguments));
         assert_eq!(arguments, args(&["-p", "write about incognito mode"]));
+    }
+
+    fn a_plan() -> ManifestRequest {
+        ManifestRequest {
+            task: "summarise the notes".to_string(),
+            steps: vec![
+                "1. [fetch] read notes.md into notes".to_string(),
+                "2. [act] write summary to summary.md".to_string(),
+            ],
+        }
+    }
+
+    /// The question reaches the person and their answer reaches the run. It names the task in their
+    /// own words and how many steps they are answering for, and says what a yes does not cover.
+    #[test]
+    fn a_plan_is_answered_by_whoever_typed_the_command() {
+        let plan = a_plan();
+        let mut shown = Vec::new();
+        let decision = OneShot::new(&b"y\n"[..], &mut shown, true).confirm_manifest(&plan);
+
+        assert_eq!(decision, Decision::Approve);
+        let shown = String::from_utf8(shown).expect("the question is text");
+        assert!(shown.contains(&plan.task), "the task is missing: {shown}");
+        assert!(shown.contains("2 steps"), "the count is missing: {shown}");
+        assert!(
+            shown.contains("not approving its writes"),
+            "what a yes leaves open is missing: {shown}"
+        );
+    }
+
+    /// The steps are the lines the run narrated a moment earlier, from the same renderer, so the
+    /// question does not print them again: the same list twice under two headings reads as two
+    /// plans, and the person would be answering about the second one.
+    #[test]
+    fn the_question_does_not_reprint_the_narrated_plan() {
+        let plan = a_plan();
+        let mut shown = Vec::new();
+        OneShot::new(&b"y\n"[..], &mut shown, true).confirm_manifest(&plan);
+
+        let shown = String::from_utf8(shown).expect("the question is text");
+        for step in &plan.steps {
+            assert!(!shown.contains(step), "step printed twice: {shown}");
+        }
+    }
+
+    /// A pipe or a redirected stderr is nobody, and then a plan is refused like every other
+    /// question. The answer is not read either: bytes arriving on a pipe are whatever fed it rather
+    /// than somebody agreeing, and nothing was written for them to be agreeing to.
+    #[test]
+    fn a_plan_is_refused_where_nobody_can_be_asked() {
+        let mut shown = Vec::new();
+        let decision = OneShot::new(&b"y\n"[..], &mut shown, false).confirm_manifest(&a_plan());
+
+        assert_eq!(decision, Decision::Reject);
+        assert!(shown.is_empty(), "a plan was shown to nobody: {shown:?}");
+    }
+
+    /// The affirmative is the only line that runs a program. End of input is not one, and neither is
+    /// a longer sentence that happens to start with it.
+    #[test]
+    fn anything_but_yes_declines_a_plan() {
+        for typed in ["n\n", "\n", "", "yes please\n", "y or n\n"] {
+            let mut shown = Vec::new();
+            let decision =
+                OneShot::new(typed.as_bytes(), &mut shown, true).confirm_manifest(&a_plan());
+
+            assert_eq!(decision, Decision::Reject, "{typed:?} was taken for a yes");
+        }
+    }
+
+    /// Approving a plan is the whole of what this confirmer can approve. A write, a file nobody
+    /// vouched for and the rest are refused exactly as they were before there was a plan question,
+    /// and nothing is put on screen about them.
+    #[test]
+    fn a_one_shot_answers_the_plan_and_nothing_else() {
+        let mut shown = Vec::new();
+        let mut one_shot = OneShot::new(&b"y\ny\n"[..], &mut shown, true);
+
+        let write = WriteRequest {
+            path: "notes.md".to_string(),
+            contents: "text".to_string(),
+            existing: None,
+            intent: bravebot_agent::Intent::Create,
+            untrusted: false,
+        };
+        let vouch = VouchRequest {
+            path: "notes.md".to_string(),
+            preview: "text".to_string(),
+            truncated: false,
+        };
+
+        assert_eq!(one_shot.confirm_write(&write), Decision::Reject);
+        assert_eq!(one_shot.confirm_vouch(&vouch), Decision::Reject);
+        assert!(one_shot.interjection().is_none());
+        drop(one_shot);
+
+        assert!(shown.is_empty(), "something was asked about: {shown:?}");
     }
 
     /// Absent is the state every run is in unless somebody typed the flag, and it is the only state

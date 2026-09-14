@@ -8,8 +8,8 @@
 //! event all resolve to refusal.
 
 use bravebot_agent::confirm::{
-    Confirmer, Decision, FetchRequest, Intent, OutputRequest, RunDecision, RunRequest,
-    ServerRequest, VouchRequest, WriteRequest,
+    Confirmer, Decision, FetchRequest, Intent, ManifestRequest, OutputRequest, RunDecision,
+    RunRequest, ServerRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_core::ask::{Answer as UserAnswer, Asking};
@@ -62,6 +62,10 @@ impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
 
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
         ask_vouch(self.terminal, request).decision()
+    }
+
+    fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+        ask_manifest(self.terminal, request).decision()
     }
 
     fn ask_user(&mut self, asking: &Asking) -> Vec<UserAnswer> {
@@ -1168,6 +1172,150 @@ fn draw_vouch(frame: &mut ratatui::Frame, request: &VouchRequest, scroll: u16) -
     furthest
 }
 
+/// Put a whole frozen plan to the person, blocking until answered.
+///
+/// The only prompt here about a run rather than about one effect, and the only one raised before
+/// anything has happened at all. A manifest run fixes every destination while the task string is
+/// the only input in existence, so there is no later moment at which any of this could be asked
+/// again and nothing a step reads can add to it: what is on the screen is the whole of what will
+/// happen. MANIFEST-10 is where that is settled.
+pub fn ask_manifest<B: Backend>(terminal: &mut Terminal<B>, request: &ManifestRequest) -> Answer {
+    let mut scroll = 0u16;
+    loop {
+        let mut most = 0u16;
+        // A terminal that cannot be drawn to cannot show the plan, and running a program nobody was
+        // shown is the one thing this question cannot mean.
+        if terminal
+            .draw(|frame| most = draw_manifest(frame, request, scroll))
+            .is_err()
+        {
+            return Answer::Reject;
+        }
+
+        match event::read() {
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
+            Ok(TermEvent::Key(key)) => match answer_for(key) {
+                Some(Response::Answer(answer)) => return answer,
+                // A plan longer than the box is the one most worth reading before answering, since
+                // approving it approves the steps below the fold as well.
+                Some(Response::Scroll(by)) => {
+                    scroll = scroll.saturating_add_signed(by).min(most);
+                }
+                None => continue,
+            },
+            Ok(_) => continue,
+            Err(_) => return Answer::Reject,
+        }
+    }
+}
+
+/// Draw the plan, returning how far its body can be scrolled.
+///
+/// No margin bar down the steps, unlike every other body in this file. The others are somebody
+/// else's bytes; this is the driver's own rendering of a program that came from a context holding
+/// the task string and the driver's words. A bar here would mark the steps as content nobody may
+/// trust, which is the opposite of why they can be shown at all.
+fn draw_manifest(frame: &mut ratatui::Frame, request: &ManifestRequest, scroll: u16) -> u16 {
+    let area = centred(frame.area());
+    let inside = panel(frame, area, theme::brand_primary(), t!(plan_title));
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{} ", t!(plan_verb)),
+                Style::default()
+                    .fg(theme::brand_primary())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                t!(plan_steps, count = request.steps.len()),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", t!(plan_goal, task = &request.task)),
+                Style::default().fg(theme::muted()),
+            ),
+        ]),
+        Line::raw(""),
+    ];
+
+    // Every step, never a count of them and never the first few. A person cannot endorse a step
+    // they were not shown, and the one that walks off the bottom of the box is as binding as the
+    // first: what does not fit is scrolled to.
+    for step in &request.steps {
+        lines.extend(indented(
+            step.clone(),
+            Style::default(),
+            inside.width as usize,
+        ));
+    }
+    lines.push(Line::raw(""));
+
+    // What a yes settles, then the two things it does not. Each write in the plan is still put to
+    // the person as it comes up, and nothing has happened yet, so declining costs nothing.
+    for sentence in [
+        t!(plan_explained),
+        t!(plan_not_its_writes),
+        t!(plan_nothing_yet),
+    ] {
+        lines.extend(indented(
+            sentence,
+            Style::default().fg(theme::muted()),
+            inside.width as usize,
+        ));
+    }
+
+    let keys = Line::from(vec![
+        Span::styled(
+            "  y",
+            Style::default()
+                .fg(theme::ok())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" {}    ", t!(plan_yes))),
+        Span::styled(
+            "n",
+            Style::default()
+                .fg(theme::fail())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" {}    ", t!(plan_no))),
+        Span::styled(
+            "ctrl-c",
+            Style::default()
+                .fg(theme::muted())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {}", t!(stop_the_turn)),
+            Style::default().fg(theme::muted()),
+        ),
+    ]);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inside);
+
+    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let drawn = body.line_count(rows[0].width) as u16;
+    let furthest = drawn.saturating_sub(rows[0].height);
+    let offset = scroll.min(furthest);
+    frame.render_widget(body.scroll((offset, 0)), rows[0]);
+
+    let mut keys = keys;
+    if furthest > 0 {
+        let below = furthest - offset;
+        keys.push_span(Span::styled(
+            scroll_hint(below),
+            Style::default().fg(theme::brand_primary()),
+        ));
+    }
+    frame.render_widget(Paragraph::new(keys), rows[1]);
+
+    furthest
+}
+
 /// Draw the outer box of a prompt, and return the area inside its border.
 ///
 /// The theme's own background as well as its border, because `Clear` empties cells without
@@ -1958,7 +2106,7 @@ mod tests {
     /// authorises anything, and the frame around untrusted content is what they read when they
     /// decide, so it has to be wholly the theme's.
     ///
-    /// All four, because the panel they share is only shared until somebody adds a fifth.
+    /// All five, because the panel they share is only shared until somebody adds a sixth.
     #[test]
     fn every_prompt_paints_the_themes_background_inside_its_border() {
         let write = request("fn main() {}", None);
@@ -1969,6 +2117,7 @@ mod tests {
             preview: "some contents".into(),
             truncated: false,
         };
+        let plan = a_plan(&["1. [fetch] read notes.md into notes"]);
 
         let _held = theme::exclusive();
         let theme = theme::find("nord").expect("nord is built in");
@@ -2004,6 +2153,12 @@ mod tests {
                 "vouch",
                 unpainted_cell(painted, |frame| {
                     draw_vouch(frame, &vouch, 0);
+                }),
+            ),
+            (
+                "plan",
+                unpainted_cell(painted, |frame| {
+                    draw_manifest(frame, &plan, 0);
                 }),
             ),
         ];
@@ -2130,5 +2285,127 @@ mod tests {
         assert!(drawn.contains("padded.txt"), "{drawn}");
         assert!(!drawn.contains("nothing of this file"), "{drawn}");
         assert!(drawn.contains('…'), "{drawn}");
+    }
+
+    fn a_plan(steps: &[&str]) -> ManifestRequest {
+        ManifestRequest {
+            task: "tidy the notes".into(),
+            steps: steps.iter().map(|step| (*step).to_string()).collect(),
+        }
+    }
+
+    fn rendered_manifest(request: &ManifestRequest) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw_manifest(frame, request, 0);
+            })
+            .expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    /// One answer covers the whole run, so the whole run is what the prompt shows: every step, and
+    /// the task they are meant to serve. A count of steps would be a summary of what is at stake
+    /// rather than the thing itself.
+    #[test]
+    fn the_plan_prompt_shows_the_task_and_every_step() {
+        let drawn = rendered_manifest(&a_plan(&[
+            "1. [fetch] read notes.md into notes",
+            "2. [transform] summarise notes into summary",
+            "3. [act] write summary to summary.md",
+        ]));
+
+        assert!(drawn.contains("tidy the notes"), "{drawn}");
+        assert!(drawn.contains("3 steps"), "{drawn}");
+        for step in [
+            "read notes.md",
+            "summarise notes",
+            "write summary to summary.md",
+        ] {
+            assert!(
+                drawn.contains(step),
+                "the plan did not show {step}: {drawn}"
+            );
+        }
+    }
+
+    /// Both halves a reader would otherwise guess at, and they pull in opposite directions: a yes
+    /// here does not carry the writes inside the plan, and a no costs nothing because the run has
+    /// touched nothing yet.
+    #[test]
+    fn the_plan_prompt_says_what_approving_it_does_and_does_not_do() {
+        let drawn = rendered_manifest(&a_plan(&["1. [act] write summary to summary.md"]));
+
+        assert!(drawn.contains("not approving its writes"), "{drawn}");
+        assert!(
+            drawn.contains("nothing has been read or written yet"),
+            "{drawn}"
+        );
+    }
+
+    /// Enter is the key most likely to be pressed out of habit, and at this prompt it would start a
+    /// whole program rather than one effect.
+    ///
+    /// The mapping is the one the write and output prompts read, which is what `ask_manifest` asks.
+    /// The second half is about this prompt in particular: the keys it offers are the two answers,
+    /// and it offers no third one for a reader to reach for without deciding.
+    #[test]
+    fn enter_does_not_approve_a_plan() {
+        assert_eq!(
+            answer_for(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            None
+        );
+
+        let drawn = rendered_manifest(&a_plan(&["1. [act] write summary to summary.md"]));
+        assert!(drawn.contains("run it"), "{drawn}");
+        assert!(drawn.contains("don't"), "{drawn}");
+        assert!(
+            !drawn.to_lowercase().contains("enter"),
+            "the plan prompt offers Enter as an answer: {drawn}"
+        );
+    }
+
+    /// A step below the fold is as binding as the first one, so a plan longer than the box is
+    /// scrolled to rather than cut short, and the question stays on screen while it is.
+    #[test]
+    fn a_long_plan_keeps_the_question_on_screen_and_offers_the_rest() {
+        let request = ManifestRequest {
+            task: "read everything".into(),
+            steps: (0..60)
+                .map(|n| format!("{}. [fetch] read file{n}.md into slot{n}", n + 1))
+                .collect(),
+        };
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        let mut furthest = 0;
+        terminal
+            .draw(|frame| furthest = draw_manifest(frame, &request, 0))
+            .expect("draw");
+        assert!(furthest > 0, "a sixty step plan reported nothing to scroll");
+
+        terminal
+            .draw(|frame| {
+                draw_manifest(frame, &request, furthest);
+            })
+            .expect("draw");
+        let drawn: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+
+        assert!(
+            drawn.contains("read file59.md"),
+            "the last step could not be reached: {drawn}"
+        );
+        assert!(drawn.contains("run it"), "the question scrolled away");
     }
 }

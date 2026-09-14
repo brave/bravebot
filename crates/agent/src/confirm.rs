@@ -295,6 +295,27 @@ pub struct VouchRequest {
     pub truncated: bool,
 }
 
+/// A frozen plan a manifest run is about to walk.
+///
+/// The whole run in one question, which is what makes it different from every other request here:
+/// the others ask about one effect at the moment it is due, and this one is asked once, before any
+/// of them, because in this mode nothing after the plan can change what the plan says. That is why
+/// there is nothing to ask a second time and no answer worth remembering.
+///
+/// The steps are the driver's own rendering of a plan that came from a context holding the task
+/// string and the driver's words, so unlike a write's body they are not somebody else's bytes and
+/// are not drawn behind an untrusted margin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestRequest {
+    /// The task, as the person typed it. Their own words, so it orients the plan below it.
+    pub task: String,
+    /// One line per step, in order, each naming its tier and what it would do.
+    ///
+    /// Rendered rather than structural because every destination in a step is already fixed: what
+    /// a person is being shown is the program, and a line per step is the program written down.
+    pub steps: Vec<String>,
+}
+
 /// What the user decided about a run.
 ///
 /// Two answers rather than one, because "yes" and "yes, and stop asking" are different things and
@@ -403,6 +424,20 @@ pub trait Confirmer {
     /// it.
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision;
 
+    /// Ask whether a frozen plan may run at all. Implementations must default to refusal when they
+    /// cannot ask.
+    ///
+    /// The only question here about a whole run rather than one effect, and the only one asked
+    /// before anything has happened. A manifest run fixes every destination while the task string
+    /// is the only input in existence, so this is the last moment at which what is about to happen
+    /// is still a proposal, and the first at which anybody could have read it.
+    ///
+    /// A yes covers this plan and stops there. There is no standing form of it: a plan is written
+    /// afresh for each run, so remembering an answer would be approving steps nobody has seen. It
+    /// is also not an answer to any other question in this trait, and grants nothing a step will
+    /// later ask about.
+    fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision;
+
     /// Ask whether to vouch for a quarantined file the model wants to read. Implementations must
     /// default to refusal when they cannot ask.
     ///
@@ -456,6 +491,16 @@ impl Confirmer for Unattended {
         Decision::Reject
     }
 
+    /// Refuses, so a manifest run nobody is watching stops before its first step.
+    ///
+    /// The plan is written by a model during the run, so there is no version of this a script could
+    /// have agreed to in advance the way it agrees to a command it typed. What a script may do is
+    /// say that nothing will be asked, with `--dangerously-skip-permissions`, and that is the one
+    /// path where a plan runs unread.
+    fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
         Decision::Reject
     }
@@ -500,6 +545,12 @@ impl Confirmer for ApproveWrites {
         Decision::Reject
     }
 
+    /// Refuses. Approving the writes in a plan is not approving the plan: a test that wants a whole
+    /// run to go ahead unattended says so the way a person does, with a permission mode.
+    fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
         Decision::Approve
     }
@@ -541,6 +592,11 @@ pub struct ChoosesFirst;
 impl Confirmer for ChoosesFirst {
     /// Refuses: this double answers questions and approves nothing.
     fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Refuses: this double answers questions and approves nothing.
+    fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
         Decision::Reject
     }
 
@@ -596,6 +652,11 @@ impl Confirmer for ApproveRuns {
         Decision::Reject
     }
 
+    /// Refuses: approving the effects in a plan is not approving the plan.
+    fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
         Decision::Approve
     }
@@ -642,6 +703,11 @@ impl Confirmer for RemembersRuns {
         Decision::Reject
     }
 
+    /// Refuses: approving the effects in a plan is not approving the plan.
+    fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
         Decision::Reject
     }
@@ -680,6 +746,11 @@ pub struct ReadsOutput;
 impl Confirmer for ReadsOutput {
     /// Refuses: this double approves one run and reading what it printed.
     fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Refuses: this double approves one run and reading what it printed.
+    fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
         Decision::Reject
     }
 
@@ -724,6 +795,11 @@ impl Confirmer for ApproveFetches {
         Decision::Reject
     }
 
+    /// Refuses: this double approves fetches and nothing else.
+    fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
         Decision::Reject
     }
@@ -738,6 +814,53 @@ impl Confirmer for ApproveFetches {
 
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
         Decision::Approve
+    }
+
+    fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
+        Vec::new()
+    }
+
+    /// Nobody is typing.
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// Approves every plan, and nothing in it. Test-only, and named so its use is conspicuous.
+///
+/// The one double that says yes to a whole run, which is what makes it useful: a refusal from a
+/// wrapper around this one is the wrapper's own answer and not an inner confirmer's.
+#[derive(Debug, Default)]
+pub struct ApprovePlans;
+
+impl Confirmer for ApprovePlans {
+    fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+        Decision::Approve
+    }
+
+    /// Refuses: approving a plan is not approving the writes in it.
+    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
+        RunDecision::reject()
+    }
+
+    fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+        Decision::Reject
     }
 
     fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
@@ -814,6 +937,10 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
         self.timing(|inner| inner.confirm_server(request))
+    }
+
+    fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+        self.timing(|inner| inner.confirm_manifest(request))
     }
 
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
@@ -915,6 +1042,11 @@ mod tests {
         }
 
         fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+            std::thread::sleep(self.0);
+            Decision::Reject
+        }
+
+        fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
             std::thread::sleep(self.0);
             Decision::Reject
         }

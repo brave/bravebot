@@ -157,6 +157,21 @@ fn any_shape() -> String {
     shape("1. Read what the task names. 2. Say what it holds.")
 }
 
+/// A run with nobody to ask about the plan and permissions skipped outright, which is what
+/// `--dangerously-skip-permissions` sets and the only supported way a plan runs unread. Every other
+/// confirmer refuses a plan, so a test that wants one walked has to say so the way a person would.
+///
+/// A macro rather than a function because the wrapper borrows what it wraps, and the borrow has to
+/// be a temporary in the caller's own statement.
+macro_rules! skipping_permissions {
+    () => {
+        &mut bravebot_agent::Confining::new(
+            &mut bravebot_agent::confirm::Unattended,
+            bravebot_agent::PermissionMode::Bypass,
+        )
+    };
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run(
     config: &Config,
@@ -169,7 +184,7 @@ fn run(
         &bravebot_net::Egress::new(),
         workspace,
         &Task::new(prompt),
-        &mut bravebot_agent::confirm::ApproveWrites,
+        skipping_permissions!(),
         &mut bravebot_agent::IgnoreReports,
         sink,
         TrustStore::new(),
@@ -193,7 +208,7 @@ fn piped_input_is_refused_rather_than_dropped() {
         &bravebot_net::Egress::new(),
         &workspace,
         &task,
-        &mut bravebot_agent::confirm::ApproveWrites,
+        skipping_permissions!(),
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
         TrustStore::new(),
@@ -309,6 +324,68 @@ fn a_read_transform_answer_plan_runs_end_to_end() {
     assert!(
         processing.contains("bravebot is a coding agent"),
         "the transform should be the one that sees it"
+    );
+}
+
+/// A plan is a proposal until somebody says yes to it, so a run with nobody to ask stops before its
+/// first step rather than walking a plan nobody approved.
+#[test]
+fn a_plan_nobody_approved_runs_nothing() {
+    let scratch = Scratch::new("unapproved");
+    std::fs::write(scratch.path.join("README.md"), "bravebot is a coding agent").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "README.md", "out_slot": "readme"}},
+            {"capability": "ANSWER", "args": {"from_slot": "readme"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut nobody = bravebot_agent::confirm::Unattended;
+
+    let failure = manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("say what the readme holds"),
+        &mut nobody,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("a plan nobody approved must not run");
+
+    // Planning happened, and nothing after it did.
+    let _shaping = received.recv().expect("the shape request");
+    let _fitting = received.recv().expect("the fit request");
+    assert!(
+        received.try_recv().is_err(),
+        "a step ran after the plan was refused"
+    );
+    assert!(
+        !sink
+            .events()
+            .iter()
+            .any(|event| matches!(event, Event::SlotDeferred { .. })),
+        "a step read a file after the plan was refused"
+    );
+
+    // What it stopped at comes back, so somebody can read the plan that was declined.
+    let bravebot_agent::TurnError::Manifest { attempt, detail } = failure else {
+        panic!("a stopped run must come back with its attempt");
+    };
+    assert!(
+        attempt.plan.is_some(),
+        "the plan it asked about was dropped"
+    );
+    assert!(attempt.steps.is_empty(), "a step ran anyway");
+    assert!(
+        detail.contains("not approved"),
+        "the reason should say the plan was not approved, got: {detail}"
     );
 }
 
@@ -630,10 +707,79 @@ fn a_plan_may_write_a_body_it_fixed_in_advance() {
     );
 }
 
-/// The CLI confirmer is Unattended. A test harness that always approves would hide a regression
-/// where a one-shot write lands without anyone seeing it.
+/// Says yes to the plan and no to everything in it.
+struct ApprovesThePlanOnly;
+
+impl bravebot_agent::confirm::Confirmer for ApprovesThePlanOnly {
+    /// Approves, and that is the whole of what this double agrees to.
+    fn confirm_manifest(
+        &mut self,
+        _request: &bravebot_agent::confirm::ManifestRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Approve
+    }
+
+    fn confirm_write(
+        &mut self,
+        _request: &bravebot_agent::confirm::WriteRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_run(
+        &mut self,
+        _request: &bravebot_agent::confirm::RunRequest,
+    ) -> bravebot_agent::confirm::RunDecision {
+        bravebot_agent::confirm::RunDecision::reject()
+    }
+
+    fn confirm_read_output(
+        &mut self,
+        _request: &bravebot_agent::confirm::OutputRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_fetch(
+        &mut self,
+        _request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_server(
+        &mut self,
+        _request: &bravebot_agent::confirm::ServerRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vouch(
+        &mut self,
+        _request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    /// Nobody is there to answer the planner, which is moot in this mode anyway.
+    fn ask_user(
+        &mut self,
+        _asking: &bravebot_core::ask::Asking,
+    ) -> Vec<bravebot_core::ask::Answer> {
+        Vec::new()
+    }
+
+    /// Nobody is typing: no interface, and no queue to type into.
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// The gate before the first step widens the scope of the precommitment; it does not replace the
+/// gates inside it. A test harness that took a yes to the plan for a yes to its writes would hide a
+/// regression where a whole plan's worth of writes lands on one keypress.
 #[test]
-fn an_unattended_manifest_run_does_not_write() {
+fn approving_a_plan_is_not_approving_its_writes() {
     let scratch = Scratch::new("unattended-write");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
@@ -651,7 +797,7 @@ fn an_unattended_manifest_run_does_not_write() {
         &bravebot_net::Egress::new(),
         &workspace,
         &Task::new("start a notes file"),
-        &mut bravebot_agent::Unattended,
+        &mut ApprovesThePlanOnly,
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
         TrustStore::new(),
@@ -882,7 +1028,7 @@ fn a_turn_reports_no_planning_record() {
         &bravebot_net::Egress::new(),
         &workspace,
         &Task::new("what is 2 + 2?"),
-        &mut bravebot_agent::confirm::ApproveWrites,
+        skipping_permissions!(),
         &mut sink,
     )
     .expect("turn runs");
@@ -914,7 +1060,7 @@ fn the_goal_and_the_steps_are_both_reported_before_any_step_runs() {
         &bravebot_net::Egress::new(),
         &workspace,
         &Task::new("what is in a.md"),
-        &mut bravebot_agent::confirm::ApproveWrites,
+        skipping_permissions!(),
         &mut reporter,
         &mut sink,
         TrustStore::new(),
@@ -1190,7 +1336,7 @@ fn a_cancelled_run_is_not_reported_as_a_failed_attempt() {
         &bravebot_net::Egress::new(),
         &workspace,
         &Task::new("do a thing"),
-        &mut bravebot_agent::confirm::ApproveWrites,
+        skipping_permissions!(),
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
         TrustStore::new(),

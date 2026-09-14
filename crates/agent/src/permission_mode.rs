@@ -106,7 +106,7 @@ impl PermissionMode {
 /// Another confirmer, with the questions this mode does not put to a person already answered.
 ///
 /// A wrapper over whatever the caller already had rather than an implementation of its own, because
-/// two of the six questions are not permission questions and must still reach the person: a question
+/// two of the confirmer's questions are not permission questions and must still reach the person: a question
 /// the planner posed asks for information rather than consent, and an interjection is the person
 /// speaking unprompted. Answering either here would put words in the mouth of somebody sitting in
 /// front of the session.
@@ -201,6 +201,28 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    /// Approves a whole plan only where every check is being bypassed, and asks in every other mode
+    /// including plan mode.
+    ///
+    /// Accepting edits does not approve a plan. What that mode grants is the writes in one turn the
+    /// person is watching, and a manifest plan is a whole run's worth of effects fixed before any of
+    /// it happens: a mode meaning "stop showing me diffs" cannot also mean "run programs I have not
+    /// read".
+    ///
+    /// Plan mode asks rather than refusing. It is not this mode's substitute and not its rival: it
+    /// withholds writes for a turn so the planner can research and propose, while this proposes
+    /// first and observes afterwards. Refusing here would take one mode's answer for the other's
+    /// question, and a person in plan mode who wants a run planned before it touches anything is
+    /// asking for exactly what this mode does.
+    fn confirm_manifest(&mut self, request: &crate::confirm::ManifestRequest) -> Decision {
+        match self.mode {
+            PermissionMode::Bypass => Decision::Approve,
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.inner.confirm_manifest(request)
+            }
+        }
+    }
+
     /// Vouches for the file only where every check is being bypassed, which is the part of that mode
     /// that costs the most: the label on those bytes is what keeps a file's contents from being read
     /// as instructions, and this hands it over for every quarantined file the planner asks for.
@@ -229,7 +251,9 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::confirm::{ApproveRuns, ChoosesFirst, Intent, Unattended};
+    use crate::confirm::{
+        ApprovePlans, ApproveRuns, ChoosesFirst, Intent, ManifestRequest, Unattended,
+    };
 
     fn a_write() -> WriteRequest {
         WriteRequest {
@@ -254,6 +278,13 @@ mod tests {
             ),
             bravebot_core::ask::Question::new("Branch", "Which branch?", Vec::new(), false),
         ]))
+    }
+
+    fn a_plan() -> ManifestRequest {
+        ManifestRequest {
+            task: "tidy the notes".to_string(),
+            steps: vec!["1. [act] write summary to summary.md".to_string()],
+        }
     }
 
     fn a_run() -> RunRequest {
@@ -321,6 +352,30 @@ mod tests {
         let run = confining.confirm_run(&a_run());
         assert!(run.approved());
         assert!(!run.remember, "a standing permission outlived the mode");
+        assert_eq!(confining.confirm_manifest(&a_plan()), Decision::Approve);
+    }
+
+    /// Every mode but the one that answers everything puts a plan to a person. Accepting edits
+    /// accepts a write at a time, and a plan is a run's worth of them settled before anything has
+    /// been read; plan mode asks rather than refusing, because planning is what somebody who chose
+    /// that mode came for and refusing here would take one mode's answer for the other's question.
+    ///
+    /// The double approves, so a refusal would be the mode's own rather than the inner confirmer's.
+    #[test]
+    fn a_plan_is_put_to_a_person_in_every_mode_but_bypass() {
+        for asks in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+        ] {
+            let mut approving = ApprovePlans;
+            let mut confining = Confining::new(&mut approving, asks);
+            assert_eq!(
+                confining.confirm_manifest(&a_plan()),
+                Decision::Approve,
+                "{asks:?} answered a plan itself instead of putting it to somebody"
+            );
+        }
     }
 
     /// Only plan mode tells the planner anything. Told that its writes are going through unasked, a
