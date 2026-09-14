@@ -99,8 +99,8 @@ const DRAIN_GRACE: Duration = Duration::from_secs(2);
 ///
 /// The text fields are what the programs printed. They are returned as plain `String`s because
 /// this module has no business labelling anything: the caller wraps them at the label
-/// [`bravebot_core::policy::Policy::before_run`] already decided, which is `(U,priv)` whatever is in
-/// them.
+/// [`bravebot_core::policy::Policy::before_plan`] already decided, which is `(U,priv)` whatever is
+/// in them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ran {
     /// The last stage's standard output.

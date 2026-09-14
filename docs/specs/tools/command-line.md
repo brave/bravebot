@@ -15,7 +15,7 @@ governs:
   - crates/tui/src/confirm.rs
 guards:
   - symbol: cmdline::compile
-  - symbol: Policy::before_run
+  - symbol: Policy::before_plan
   - symbol: Policy::read_output
 ---
 
