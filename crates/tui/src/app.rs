@@ -4031,20 +4031,26 @@ fn run_turn_animated(
             config, chosen,
         ),
     };
-    let (trust, programs) = fold_outcome(
+    let carried = fold_outcome(
         session,
         outcome,
         sink,
-        fallback,
-        fallback_programs,
+        Carried {
+            trust: fallback,
+            programs: fallback_programs,
+        },
         Occupied {
             budget: config.context_budget,
             guessed: config.budget_is_guessed(),
             last_request_tokens: conversation.last_request_tokens(),
         },
         asked,
+        Line {
+            text: prompt,
+            wrote,
+        },
     );
-    Ok((conversation, trust, programs, events))
+    Ok((conversation, carried.trust, carried.programs, events))
 }
 
 /// Hand the worker's messages to `handle`: the one this frame waited for, and then everything
@@ -4119,6 +4125,19 @@ enum Wrote {
     TheDriver,
 }
 
+/// The wait that starts a loop nobody typed `/loop` for, where there is one.
+///
+/// `None` where the turn asked for nothing, and where the line the loop would repeat is not the
+/// person's. A loop repeats a line somebody endorsed, and the sentence this program writes to
+/// carry a goal on is not one: a turn under a goal asking for a later look would otherwise leave
+/// behind a loop sending the driver's own words back every quarter of an hour.
+///
+/// Split out from `fold_outcome` so it can be tested. That function's answer to a finished turn
+/// needs a whole [`turn::Outcome`], and the field holding the released reply is its own crate's.
+fn watch_to_start(wakeup: Option<turn::Wakeup>, wrote: Wrote) -> Option<turn::Wakeup> {
+    wakeup.filter(|_| wrote == Wrote::ThePerson)
+}
+
 /// The files a prompt vouches for by naming them with `@`.
 ///
 /// Out of a line the person wrote, and out of no other. The keystroke is the whole of what vouches
@@ -4157,16 +4176,35 @@ struct Occupied {
     last_request_tokens: u64,
 }
 
+/// The line a turn ran, and whose it was.
+///
+/// One value rather than two because neither says anything alone here: a loop repeats a line, and
+/// whether this one may be repeated is a question about who wrote it rather than about the words.
+#[derive(Clone, Copy)]
+struct Line<'a> {
+    text: &'a str,
+    wrote: Wrote,
+}
+
+/// What a turn hands to the next one: paths the person vouched for, and programs they allowed.
+///
+/// One value rather than two because they travel together in both directions, and a turn that
+/// reported neither hands on exactly what it was given.
+struct Carried {
+    trust: TrustStore,
+    programs: TrustedPrograms,
+}
+
 /// Fold a finished turn into the session.
 fn fold_outcome(
     session: &mut Session,
     outcome: Result<turn::Outcome, turn::TurnError>,
     sink: Trail,
-    fallback: TrustStore,
-    fallback_programs: TrustedPrograms,
+    fallback: Carried,
     occupied: Occupied,
     asked: Asked,
-) -> (TrustStore, TrustedPrograms) {
+    line: Line<'_>,
+) -> Carried {
     match outcome {
         Ok(outcome) => {
             let trail = sink.bare();
@@ -4214,12 +4252,24 @@ fn fold_outcome(
             // driver's own clock, or the wait the turn asked for. Measured from here rather than
             // from when the tick went out, so the gap is between runs and a turn that outlasts
             // its own interval is not immediately due again.
-            session.loop_turn_ended(outcome.wakeup);
+            //
+            // Where no loop is running, a wait the turn asked for starts one, which is how a turn
+            // asked to watch something gets the later look it needs. The line it repeats is this
+            // turn's own, and only where the person wrote it: a loop repeats a line somebody
+            // endorsed, and a sentence this program wrote carrying a goal on is not one.
+            if session.looping().is_some() {
+                session.loop_turn_ended(outcome.wakeup);
+            } else if let Some(wakeup) = watch_to_start(outcome.wakeup, line.wrote) {
+                session.watch_again(line.text, wakeup);
+            }
 
             // Carries forward any rule the turn recorded, so a path that received untrusted
             // data cannot be read back as trusted by the next turn, and any program the user
             // vouched for during it, so they are not asked about it again.
-            (outcome.trust, outcome.programs)
+            Carried {
+                trust: outcome.trust,
+                programs: outcome.programs,
+            }
         }
         Err(error) => {
             // Stopping a turn stops the loop it was part of, and stops one the person was not
@@ -4256,7 +4306,7 @@ fn fold_outcome(
                     occupied.guessed,
                 );
             }
-            (fallback, fallback_programs)
+            fallback
         }
     }
 }
@@ -9494,14 +9544,20 @@ mod tests {
             &mut session,
             Err(turn::TurnError::Precommit("failed".to_string())),
             sink,
-            fallback,
-            fallback_programs,
+            Carried {
+                trust: fallback,
+                programs: fallback_programs,
+            },
             Occupied {
                 budget: 100_000,
                 guessed: false,
                 last_request_tokens: 45_000,
             },
             asked,
+            Line {
+                text: "",
+                wrote: Wrote::ThePerson,
+            },
         );
 
         assert_eq!(
@@ -9513,6 +9569,22 @@ mod tests {
             }
         );
         assert_eq!(session.fullness(), Some(45));
+    }
+
+    /// A loop repeats a line somebody endorsed. The sentence this program writes to carry a goal
+    /// on is not one, so a turn running that sentence and asking for a later look gets no loop:
+    /// otherwise the driver's own words would come back every quarter of an hour, and the person
+    /// would be reading a watch nobody set up over a line nobody typed.
+    #[test]
+    fn only_a_line_the_person_wrote_becomes_a_watch_the_turn_asked_for() {
+        let wakeup = turn::Wakeup::asked(900, false);
+        assert_eq!(
+            watch_to_start(Some(wakeup), Wrote::ThePerson),
+            Some(wakeup),
+            "a turn on the person's own line could not arrange a later look"
+        );
+        assert_eq!(watch_to_start(Some(wakeup), Wrote::TheDriver), None);
+        assert_eq!(watch_to_start(None, Wrote::ThePerson), None);
     }
 
     /// A goal is a condition for a session and not for one turn, so stopping a turn going the
@@ -9532,14 +9604,20 @@ mod tests {
             &mut session,
             Err(turn::TurnError::Cancelled),
             Trail::new(),
-            TrustStore::new(),
-            TrustedPrograms::new(),
+            Carried {
+                trust: TrustStore::new(),
+                programs: TrustedPrograms::new(),
+            },
             Occupied {
                 budget: 100_000,
                 guessed: false,
                 last_request_tokens: 0,
             },
             asked,
+            Line {
+                text: "",
+                wrote: Wrote::ThePerson,
+            },
         );
 
         assert_eq!(
@@ -9568,14 +9646,20 @@ mod tests {
             &mut session,
             Err(turn::TurnError::Precommit("failed".to_string())),
             Trail::new(),
-            TrustStore::new(),
-            TrustedPrograms::new(),
+            Carried {
+                trust: TrustStore::new(),
+                programs: TrustedPrograms::new(),
+            },
             Occupied {
                 budget: 100_000,
                 guessed: false,
                 last_request_tokens: 0,
             },
             asked,
+            Line {
+                text: "",
+                wrote: Wrote::ThePerson,
+            },
         );
 
         assert!(
@@ -9599,14 +9683,20 @@ mod tests {
             &mut session,
             Err(turn::TurnError::Precommit("failed".to_string())),
             sink,
-            fallback,
-            fallback_programs,
+            Carried {
+                trust: fallback,
+                programs: fallback_programs,
+            },
             Occupied {
                 budget: 100_000,
                 guessed: false,
                 last_request_tokens: 0,
             },
             asked,
+            Line {
+                text: "",
+                wrote: Wrote::ThePerson,
+            },
         );
 
         assert_eq!(session.occupancy(), crate::state::Occupancy::Unmeasured);

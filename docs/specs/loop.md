@@ -8,16 +8,18 @@ governs:
   - crates/tui/src/state.rs
 guards:
   - symbol: Session::start_loop
+  - symbol: Session::watch_again
   - symbol: Running::dispatched
 ---
 
 ## Scope
 
 `/loop`: sending one prompt again and again until somebody stops it. What the repeated line is,
-where the interval comes from, when a tick fires, and what ends a loop.
+where the interval comes from, when a tick fires, and what ends a loop. A turn that asks to be asked
+again starts one too ([LOOP-14](#LOOP-14)), and everything here holds for that loop as well.
 
-Not what a tick then does, which is a turn like any other. The tool a self-paced tick uses to say
-when the next one is due is [tools/schedule-next.md](tools/schedule-next.md), and what the planner
+Not what a tick then does, which is a turn like any other. The tool a turn uses to say when it
+should be asked again is [tools/schedule-next.md](tools/schedule-next.md), and what the planner
 is told about being inside a loop is a skill, in [skills.md](skills.md). That a `/` line is a
 command at all, and that only a key press produces one, is [commands.md](commands.md).
 
@@ -85,15 +87,21 @@ taken off.
 ## When a tick fires
 
 <a id="LOOP-4"></a>
-### LOOP-4: the first tick goes immediately
+### LOOP-4: the first tick of a loop somebody typed goes immediately
 
-Starting a loop sends its prompt at once rather than waiting out the first interval.
+`/loop` sends its prompt at once rather than waiting out the first interval.
 
 **Why.** Somebody who has just asked for something every five minutes wants to see it happen
 once, while they are still watching, and decide whether it was the right thing to ask for. A loop
 whose first sign of life is five minutes of nothing is one nobody can tell is running.
 
+A loop a *turn* started is the other way round, for the same reason read the other way: that turn
+has just taken the look it is reporting, so an immediate tick would send the line again before the
+person had read the first answer and come back with the same look twice. See
+[LOOP-14](#LOOP-14).
+
 `verified-by: bravebot_tui::state::the_first_tick_of_a_loop_goes_immediately`
+`verified-by: bravebot_tui::state::a_watch_a_turn_arranged_sends_nothing_until_the_wait_is_up`
 
 <a id="LOOP-5"></a>
 ### LOOP-5: the gap is measured from the end of a tick, not from its start
@@ -234,6 +242,35 @@ read off the transcript.
 `verified-by: bravebot_tui::status::the_report_says_what_is_repeating_and_when_it_is_next_due`
 `verified-by: bravebot_tui::status::a_session_with_no_loop_does_not_mention_one`
 `verified-by: bravebot_tui::loops::quiet_ticks_are_counted_until_one_reports_something`
+
+<a id="LOOP-14"></a>
+### LOOP-14: a turn may start a loop over the person's line, and over no other
+
+A turn that asks to be asked again while nothing is looping starts a loop
+([SCHED-6](tools/schedule-next.md#SCHED-6)). It repeats the line that turn was running, is always
+self-paced, and its first tick is the wait away rather than immediate. Three things it is not:
+
+| Not | Because |
+|---|---|
+| a loop over a line the person did not write | the sentence this program writes to carry a goal on is not a line anybody endorsed, so a turn running one gets no loop |
+| a way past a goal | a session does one thing at a time, and it says so rather than dropping the condition; a person's own `/loop` may replace a goal, since they are there to mean it |
+| approved separately | the person asked to be told when something changed, and a prompt asking whether they meant it is a question they have already answered |
+
+**Why.** A request to be told when something changes cannot be answered inside one turn: the turn
+that reads a file now cannot see it written later. Before this clause the honest answer was one read
+and a suggestion that the person start a loop themselves, and what shipped instead was one read
+reported as a watch. Nothing about LOOP-1 is loosened: the line still belongs to whoever typed it,
+and the turn chooses only when it is sent again.
+
+**Why the wait is self-paced whatever the turn said.** An interval is a number a person gives, and
+there is nowhere for a turn to give one. What it gives is the wait until the next look, and it is
+asked again then, which is exactly what [LOOP-9](#LOOP-9) already bounds.
+
+`verified-by: bravebot_tui::app::only_a_line_the_person_wrote_becomes_a_watch_the_turn_asked_for`
+`verified-by: bravebot_tui::state::a_watch_a_turn_arranged_sends_nothing_until_the_wait_is_up`
+`verified-by: bravebot_tui::state::a_watch_a_turn_arranged_does_not_replace_a_goal`
+`verified-by: bravebot_tui::loops::a_loop_a_turn_asked_for_starts_a_wait_away_rather_than_now`
+`verified-by: bravebot_tui::loops::a_loop_a_turn_asked_for_is_paced_by_the_turns`
 
 ## Known costs
 

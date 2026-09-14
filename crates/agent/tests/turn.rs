@@ -1139,9 +1139,11 @@ fn a_tick_of_a_self_paced_loop_says_when_to_run_again() {
 /// the whole failure a loop is supposed to avoid.
 #[test]
 fn a_tick_is_told_that_it_is_one_and_which_kind_of_loop_it_is_in() {
+    // `delay_seconds` stands for the tool being offered rather than its name, which the read_file
+    // and run descriptions both mention: the field is only in this one's schema.
     for (self_paced, expected, absent) in [
-        (true, "schedule_next", "timing is theirs"),
-        (false, "timing is theirs", "call schedule_next"),
+        (true, "each turn sets the pace", "timing is theirs"),
+        (false, "timing is theirs", "delay_seconds"),
     ] {
         let scratch = Scratch::new(&format!("tick-preamble-{self_paced}"));
         let workspace = Workspace::new(&scratch.path).expect("workspace");
@@ -1244,23 +1246,27 @@ fn a_turn_with_no_goal_is_told_nothing_about_a_condition() {
     );
 }
 
-/// Every other turn is offered no way to schedule one,/// Every other turn is offered no way to schedule one, and a call to it is answered the way any
-/// other name nobody offered is. A tool that quietly worked where it was not offered would let a
-/// turn nobody is looping schedule itself.
+/// A tick of a loop the person gave an interval for decides nothing about timing, so a call is
+/// answered the way any other name nobody offered is. A tool that quietly worked here would take a
+/// wait the interval is going to ignore and report it as arranged, which is a schedule the planner
+/// then describes to somebody and nothing keeps.
 #[test]
-fn a_turn_that_is_not_a_tick_cannot_schedule_one() {
-    let scratch = Scratch::new("schedule-next-unoffered");
+fn a_tick_the_person_timed_cannot_reschedule_itself() {
+    let scratch = Scratch::new("schedule-next-their-interval");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_sequence(vec![
         tool_request("schedule_next", r#"{"delay_seconds": 900, "noop": true}"#),
-        reply_with("there was no loop to pace"),
+        reply_with("the interval is keeping time"),
     ]);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
-    let task = Task::new("do the thing once");
+    let task = Task::new("watch the build").ticking(Some(turn::Tick {
+        number: 2,
+        self_paced: false,
+    }));
     let outcome = turn::run(
         &config,
         &egress,
@@ -1271,15 +1277,62 @@ fn a_turn_that_is_not_a_tick_cannot_schedule_one() {
     )
     .expect("turn runs");
 
-    assert!(outcome.wakeup.is_none(), "an ordinary turn scheduled one");
+    assert!(
+        outcome.wakeup.is_none(),
+        "a tick on the person's interval set a wait of its own"
+    );
 
     let first = received.recv().expect("first request");
     assert!(
-        !first.contains("schedule_next"),
-        "an ordinary turn was offered the tool: {first}"
+        !first.contains("delay_seconds"),
+        "a tick on the person's interval was offered the tool: {first}"
     );
     let second = received.recv().expect("second request");
     assert!(second.contains("no such tool"), "got: {second}");
+}
+
+/// A turn nobody is looping may arrange the next look, and the wait reaches the caller the same
+/// way a tick's does. This is the whole of what a session asked to report a change has: one turn
+/// cannot both read a file now and see it change later, so the turn that read it says when to look
+/// again. What the turn still may not do is say what that later turn asks; the person's line is
+/// what gets sent, and there is no field here for anything else.
+#[test]
+fn a_turn_that_is_not_a_tick_can_arrange_the_next_look() {
+    let scratch = Scratch::new("schedule-next-outside-a-loop");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("schedule_next", r#"{"delay_seconds": 900, "noop": true}"#),
+        reply_with("read it once; looking again in fifteen minutes"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("tell me when a.txt changes");
+    let outcome = turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let wakeup = outcome.wakeup.expect("the turn said when to look again");
+    assert_eq!(wakeup.after, std::time::Duration::from_secs(900));
+
+    let first = received.recv().expect("first request");
+    assert!(
+        first.contains("schedule_next"),
+        "a turn outside a loop was not offered the tool: {first}"
+    );
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("no such tool"),
+        "the call was refused as an unknown name: {second}"
+    );
 }
 
 /// An unknown tool is reported back as text rather than failing the turn.

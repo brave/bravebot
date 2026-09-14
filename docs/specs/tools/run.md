@@ -510,10 +510,10 @@ technique is comparing one look's token with the next's, per
 [read-file.md](read-file.md#READ-7). A program's own output is watched here, with `background: true`
 and then `job_output` with `wait_seconds`, per [RUN-17](#RUN-17). Neither reaches past the turn by
 itself: a background job is killed when the turn ends, and comparing a token needs a later look. So
-the description must say that past the end of the turn there is only a loop, which the planner cannot
-start and a person starts by typing `/loop` with an interval and the request itself on one line, which
-is [loop.md](../loop.md); that outside a loop the first look is taken now regardless; and that where
-nothing is watching, the answer says so.
+the description must say to take the first look now and call `schedule_next` at the end of the turn,
+which has the planner asked again after the wait with the person's line unchanged
+([SCHED-6](schedule-next.md#SCHED-6), [LOOP-14](../loop.md#LOOP-14)); and that where no further look
+has been scheduled, the answer says so.
 
 **Why the file branch names no command.** The recipe this clause first shipped was `tail -f`, and it
 was wrong twice over. It is not in the read-proven table, so every watch of a file cost an approval
@@ -524,8 +524,8 @@ output would come back quarantined.
 
 **A turn already inside a loop is the third case, and gets a sentence of its own.** There the next
 look is the next tick, so the description has such a turn report what this tick saw and leave the rest
-to the next one. Without that sentence the loop branch reads as an instruction to ask for a loop, which
-in a tick is asking for something the person has already given.
+to the next one, and arrange nothing. Without that sentence a tick reads the instruction above and
+schedules a second look on top of the one its loop is already taking.
 
 **The window, never a time of day.** The description must have the answer name the window it watched,
 or the looks it compared, rather than date either, and must say why: the planner has no clock. It is told today's date and told not
@@ -539,20 +539,20 @@ the file once, reported what it held, and left nothing watching; asked again, it
 there was no change. Both techniques already existed, and the sentence carrying the bounded one was
 about servers, so nothing joined a request to watch to either of them.
 
-**And why the loop branch says who starts it, and hands over a line that works.** A description that
-told the planner to use a loop would be describing something it has no way to do, and the failure it
-invites is worse than doing nothing: a turn that reports a watch it never started. What the planner can
-do is say that, and say what the person would type. Which has to be the whole line, interval and
-request together, because a loop repeats the line the person typed and an interval with nothing after
-it is not a line: the command refuses it and starts nothing. Naming only the command and an interval
-is how a session that had taken a correct baseline still left somebody with a watch that could not
-start, and no way to tell from what they were told why it had not.
+**And why the turn arranges the next look rather than the person.** This clause used to have the
+description say that a loop was the person's to start and hand over the line to type, because at the
+time it was. Both attempts at that sentence failed in the same place. The first named the command and
+an interval, and a session that had taken a correct baseline told somebody to type `/loop 10s`, which
+starts nothing: an interval with no request after it is not a line, so the command refused it. The
+second handed over the whole line and was still an answer that ends in homework for whoever asked the
+question. What the planner can do now is arrange the look itself, and a description that told it to ask
+instead would be describing the worse of the two.
 
-**Which is not the same as doing nothing.** Naming the loop is the end of the answer and not the whole
-of it. Wording that offered a bounded branch and a loop branch, with no default for a request that
-named no bound, sent an open-ended one to the branch that requires no work: asked to say when a file
-changed, a session replied that a loop would be needed and made no tool call at all. That is a worse
-answer than the single read this pair of clauses set out to correct, because the person was left
+**Which is not the same as doing nothing.** Scheduling the next look is the end of the answer and not
+the whole of it. Wording that offered a bounded branch and a loop branch, with no default for a request
+that named no bound, sent an open-ended one to the branch that requires no work: asked to say when a
+file changed, a session replied that a loop would be needed and made no tool call at all. That is a
+worse answer than the single read this pair of clauses set out to correct, because the person was left
 without even the file. Hence the first look happens in the turn that was asked.
 
 `verified-by: bravebot_agent::tools::the_run_description_routes_a_watch_request_to_one_of_the_two_techniques`

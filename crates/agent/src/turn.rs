@@ -844,10 +844,13 @@ pub struct Outcome {
     /// premium host used to report itself as premium, so a session whose credentials could not be
     /// read said "premium" while being answered by whatever the free tier serves.
     pub premium: bool,
-    /// When the planner asked for the next tick, where this turn was a tick of a self-paced loop.
+    /// When the planner asked to be asked again, whether or not this turn was a tick of a loop.
     ///
-    /// `None` from every other turn, and from one that was offered the chance and said nothing.
-    /// The caller decides what that silence means; nothing here waits for it.
+    /// A tick is setting the pace of a loop already running. Any other turn is asking to start
+    /// one, which is how a turn told to report a change gets the later look that would catch it.
+    ///
+    /// `None` from a turn that was offered the chance and said nothing. The caller decides what
+    /// that silence means; nothing here waits for it.
     pub wakeup: Option<Wakeup>,
     /// Where the turn's wall clock went.
     ///
@@ -1493,9 +1496,14 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         .with_permissions(task.permissions.clone())
         .resuming(conversation.context());
 
-    // Read once. A tick of a loop nobody gave an interval for is the only turn that may say when
-    // the next one happens.
-    let self_paced = task.tick.is_some_and(|tick| tick.self_paced);
+    // Read once. A turn nobody is looping arranges its own later look, which is what a request to
+    // report a change needs; a tick of a self-paced loop sets the pace of the next one; and a tick
+    // the person gave an interval for decides nothing, because their interval already did.
+    let scheduling = match task.tick {
+        None => tools::Scheduling::ArrangingALook,
+        Some(tick) if tick.self_paced => tools::Scheduling::PacingALoop,
+        Some(_) => tools::Scheduling::TheirInterval,
+    };
 
     // Found once per turn and reused for every round. Per turn rather than per session so a
     // skill written or edited while the session is open takes effect on the next one, including
@@ -1697,15 +1705,15 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // worse answer to an unreadable credential file.
     let mut subscription = discover_subscription(config, &mut reporter);
 
-    // The tool that says when the next tick is due is offered to a tick of a self-paced loop and
-    // to no other turn. Nothing else about the turn changes.
+    // The tool that says when this turn is asked again is offered to every turn except a tick the
+    // person timed, and describes a different job on either side of that. Nothing else changes.
     //
     // A delegate is offered what its capabilities reach, minus the four no delegate ever gets.
     // Derived from the set rather than named per kind, so a tool cannot be offered to a run whose
     // gates would refuse it on every call.
     let offered = match &task.delegate {
         Some(spec) => tools::for_delegate(spec.capabilities()),
-        None => tools::available(self_paced),
+        None => tools::available(scheduling),
     };
 
     let mut steps = 0;
@@ -2075,7 +2083,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                             cancel: Some(cancel),
                         },
                         cancel,
-                        self_paced,
+                        scheduling,
                         home: task.home.as_deref(),
                         // A delegate is offered no way to delegate, and dispatch refuses one anyway.
                         delegated: task.delegate.is_some(),

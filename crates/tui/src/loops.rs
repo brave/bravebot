@@ -254,6 +254,28 @@ impl Running {
         }
     }
 
+    /// Start a loop a turn asked for, with the next look already armed.
+    ///
+    /// The difference from [`Running::begin`] is what happens first. Somebody who has just typed
+    /// `/loop` has not seen the work done once, so the first tick goes immediately. A turn that
+    /// asks for a later look has just taken one and is reporting it, so an immediate tick would
+    /// repeat the look already in the answer. Here the first tick is the wait away.
+    ///
+    /// Always self-paced. An interval is a number a person gives, and there is nowhere for a turn
+    /// to say one: what it gives is the wait until the next look, which it is asked for again then.
+    pub fn armed(prompt: String, wakeup: Wakeup, now: Instant) -> Self {
+        Self {
+            prompt,
+            pacing: Pacing::SelfPaced,
+            began: now,
+            due: now.checked_add(wakeup.after),
+            running: false,
+            keepalive: KEEPALIVE_BUDGET,
+            ticks: 0,
+            quiet: usize::from(wakeup.quiet),
+        }
+    }
+
     pub fn prompt(&self) -> &str {
         &self.prompt
     }
@@ -529,6 +551,39 @@ mod tests {
         running.dispatched();
         assert!(running.ended(Some(Wakeup::asked(900, false)), now,));
         assert_eq!(running.until(now), Some(Duration::from_secs(900)));
+    }
+
+    /// The failure a loop a turn started would otherwise have. A person who types `/loop` has not
+    /// seen the work done once, so the first tick goes immediately; a turn that asked for a later
+    /// look has just taken one and is reporting it, so an immediate tick would send the line again
+    /// before the person has read the first answer and reply with the same look twice.
+    #[test]
+    fn a_loop_a_turn_asked_for_starts_a_wait_away_rather_than_now() {
+        let now = Instant::now();
+        let running = Running::armed(
+            "tell me when a.txt changes".to_string(),
+            Wakeup::asked(900, false),
+            now,
+        );
+        assert_eq!(running.until(now), Some(Duration::from_secs(900)));
+        assert!(
+            !running.due(now),
+            "a loop a turn asked for sent its first tick at once"
+        );
+        assert_eq!(running.prompt(), "tell me when a.txt changes");
+    }
+
+    /// A turn cannot give an interval, only the wait until the next look, and it is asked again
+    /// then. So the loop it starts is self-paced whatever it said, and a loop reported as the
+    /// person's would show their pace in the status bar and lose the tool that keeps it alive.
+    #[test]
+    fn a_loop_a_turn_asked_for_is_paced_by_the_turns() {
+        let running = Running::armed(
+            "tell me when a.txt changes".to_string(),
+            Wakeup::asked(900, false),
+            Instant::now(),
+        );
+        assert_eq!(running.pacing(), Pacing::SelfPaced);
     }
 
     /// The bounds are the tool's, so this is the loop honouring what the tool already held the

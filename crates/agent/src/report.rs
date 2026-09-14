@@ -866,9 +866,11 @@ mod tests {
     /// shows up in the transcript as the fallback, which tells the user nothing.
     #[test]
     fn every_offered_tool_has_its_own_verb() {
-        for tool in crate::tools::available(false)
+        for tool in crate::tools::available(crate::tools::Scheduling::ArrangingALook)
             .into_iter()
-            .chain(crate::tools::available(true))
+            .chain(crate::tools::available(
+                crate::tools::Scheduling::PacingALoop,
+            ))
         {
             let name = &tool.function.name;
             assert_ne!(

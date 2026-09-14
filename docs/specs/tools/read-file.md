@@ -125,22 +125,23 @@ moved says the file was written, not what changed: an identical rewrite moves it
 leaves the modification time alone moves nothing. Both are [READ-7](#READ-7)'s limits, and an answer
 that reports a moved token as a changed file is claiming more than the token said.
 
-**It must say who can look again, and hand over a line that works.** A later look past the end of this
-turn is not the planner's to arrange: only a loop outlives a turn, a loop is a person's to start by
-typing `/loop`, which is [loop.md](../loop.md), and inside a loop the next tick is the next look. The
-description must have the planner give the whole line to type, interval and request together, and must
-say that a command and an interval with nothing after them send nothing: a loop repeats the line the
-person typed, so an interval alone is not a line and the command refuses it. And where nothing is
-watching the file, the description must have it say so, or no change reads as a promise to report the
-next one.
+**It must say that the next look is the planner's own to arrange.** The description must name
+`schedule_next`, say that calling it at the end of the turn has the planner asked again after the wait
+with the person's line sent unchanged, and say that this is how a request to be told when a file
+changes is answered: read it now, and schedule the look that would catch a change. It must say to do
+that rather than to tell somebody to arrange it themselves. Inside a loop the next tick is already the
+next look, and the description must say there is nothing to arrange there. And where a look has been
+taken and no other scheduled, the description must have the planner say so, or no change reads as a
+promise to report the next one.
 
-**Why that last part is not pedantry.** A session took the baseline this clause asks for, compared two
-looks correctly, said plainly that nothing was watching, and then told the person to type `/loop 10s`.
-Every step but the last was right, and the last one made the rest worthless: that line starts nothing,
-so a person who followed the instruction got a refusal from the command and no watch, having been told a
-tick would compare the file each time. A description that routes a question to a technique the planner
-cannot finish has to name the thing that finishes it exactly, or the accurate part of the answer is what
-makes the wrong part credible.
+**Why the planner arranges it rather than the person.** This clause used to have the description hand
+over a `/loop` line for the person to type, on the grounds that only a loop outlives a turn. A session
+did everything else right, took the baseline, compared two looks, said plainly that nothing was
+watching, and then told the person to type `/loop 10s`, which starts nothing: an interval with no
+request after it is not a line, so the command refused it and there was no watch. The line was then
+corrected and the shape stayed wrong. Handing the work back to somebody who has already asked for it is
+an answer nobody wanted, and the tool that fixes it is [SCHED-6](schedule-next.md#SCHED-6): the turn
+that took the first look says when to take the next.
 
 **And it must not offer a comparison the planner cannot make.** Nothing in the description may have
 the planner read a modification time or a hash in order to compare it with a later one. Neither of
