@@ -64,13 +64,15 @@ In that order, and nowhere else.
 | `check the deploy every 20m` | 20 minutes | `check the deploy` |
 | `check the deploy every 20 minutes` | 20 minutes | `check the deploy` |
 | `check every PR` | none, so each turn paces it | `check every PR` |
+| `check everything 20m` | none, so each turn paces it | `check everything 20m` |
 | `5m check the deploy every 20m` | 5 minutes | `check the deploy every 20m` |
 | `5m`, or nothing at all | there is nothing to send | nothing; the command says what it needs |
 
 A leading token counts only when it is a number and one of `s`, `m`, `h` or `d` and nothing
-else. A trailing clause counts only when a time expression is the whole of what follows `every`,
-which is what keeps `check every PR` a sentence rather than a sentence with its last two words
-taken off.
+else. A trailing clause counts only when `every` is a word of its own, with whitespace or the edge
+of the line on each side of it, and a time expression is the whole of what follows it. That is what
+keeps `check every PR` a sentence rather than a sentence with its last two words taken off, and a
+word that only begins with those five letters, such as `everything`, is not the clause at all.
 
 `verified-by: bravebot_tui::loops::an_interval_written_first_is_taken_off_the_front`
 `verified-by: bravebot_tui::loops::every_unit_letter_is_understood_at_the_front`
@@ -80,6 +82,7 @@ taken off.
 `verified-by: bravebot_tui::loops::a_leading_interval_wins_over_a_trailing_one`
 `verified-by: bravebot_tui::loops::a_line_with_no_interval_is_paced_by_the_planner`
 `verified-by: bravebot_tui::loops::a_word_that_is_not_a_time_stays_part_of_the_prompt`
+`verified-by: bravebot_tui::loops::a_word_that_merely_starts_with_every_is_not_an_interval`
 `verified-by: bravebot_tui::loops::a_count_too_large_to_be_a_duration_is_not_an_interval`
 `verified-by: bravebot_tui::loops::an_interval_with_nothing_to_send_is_not_a_request`
 `verified-by: bravebot_tui::app::the_bare_loop_command_is_still_the_command`

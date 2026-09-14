@@ -169,10 +169,12 @@ fn trailing_interval(argument: &str) -> Option<(Duration, &str)> {
     while let Some(found) = lowered[from..].find(EVERY) {
         let found = from + found;
         let opens = found == 0 || lowered[..found].ends_with(char::is_whitespace);
-        if opens {
+        let after = found + EVERY.len();
+        let closes = after == lowered.len() || lowered[after..].starts_with(char::is_whitespace);
+        if opens && closes {
             at = Some(found);
         }
-        from = found + EVERY.len();
+        from = after;
     }
     let at = at?;
 
@@ -463,6 +465,26 @@ mod tests {
             assert_eq!(request.pacing, Pacing::SelfPaced, "{line}");
             assert_eq!(request.prompt, line, "{line}");
         }
+    }
+
+    /// A word that merely begins with every is not an every clause, and the sentence keeps it.
+    #[test]
+    fn a_word_that_merely_starts_with_every_is_not_an_interval() {
+        for line in [
+            "check everything 20m",
+            "notify everyone 30 minutes",
+            "search everywhere 1h",
+            "practice everyday 10s",
+        ] {
+            let request = parse(line).expect("a prompt");
+            assert_eq!(request.pacing, Pacing::SelfPaced, "{line}");
+            assert_eq!(request.prompt, line, "{line}");
+        }
+
+        let with_trailing =
+            parse("check everything 20m every 5m").expect("a prompt and an interval");
+        assert_eq!(every(&with_trailing), Duration::from_secs(300));
+        assert_eq!(with_trailing.prompt, "check everything 20m");
     }
 
     /// The front of the line is read first, so a line with both is paced by the one written as
