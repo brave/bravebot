@@ -15,10 +15,10 @@ comes back. What the returned bytes are labelled, and what may then be done with
 ## Clauses
 
 <a id="NET-1"></a>
-### NET-1: there is one way out, and it is not optional
+### NET-1: this process has one way out, and it is not optional
 
-Every outbound request goes through a single call. The HTTP client is private to that module and
-no other crate depends on it, so there is no second path that could skip the gate.
+Every outbound request this process makes goes through a single call. The HTTP client is private to
+that module and no other crate depends on it, so there is no second path that could skip the gate.
 
 **Why.** This is the whole property, and it is structural rather than a matter of discipline. In
 the design this replaces, using the hardened helper was optional and two of three fetchers
@@ -111,8 +111,21 @@ mean the server is temporarily unable are treated as retryable.
 - **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds its own
   HTTP client for the subscription service. That traffic carries credentials and an order id,
   never workspace content or model output, so no labelled value escapes the gate. NET-1 is about
-  everything carrying labelled content. A second egress that ever carried content would be a
-  violation.
+  everything carrying labelled content. A second egress in this process that ever carried content
+  would be a violation.
+
+- **A program this agent starts makes its own requests, and they do not come through here.** `run`
+  ([tools/run.md](tools/run.md)) executes programs, and a line the user typed in shell mode
+  ([shell-mode.md](shell-mode.md)) goes to a real shell with nothing asked first, so an approved
+  `curl`, `git push` or package install reaches the network without passing this gate. Unlike
+  `bravebot-skus`, this path can carry the user's own data: a program runs with the access their
+  shell would give it, so it can read a private file and send it. Nothing routes or inspects those
+  requests, and the host rules a `fetch_url` call is held to do not reach them. What stands in front
+  of the path is the prompt that asks before a program runs and a `Bash` deny rule
+  ([permissions.md](permissions.md)), both of which refuse a command rather than govern its traffic.
+  Operating-system confinement would govern it, and is applied to the stdio servers it exists for
+  rather than to a program somebody asked for ([sandboxing.md](sandboxing.md)); whether to confine
+  those is issue #4.
 
 - **Two pairs of phases share a bound rather than having one each.** The transport gives a phase
   the earliest of its own deadline and those of the phases before it, so a bound tight enough to
