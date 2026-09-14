@@ -6,7 +6,7 @@
 use bravebot_agent::skills;
 use bravebot_agent::workspace::Workspace;
 use bravebot_core::capability::{Capability, CapabilitySet};
-use bravebot_core::event::RecordingSink;
+use bravebot_core::event::{Event, RecordingSink};
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_core::trust::TrustStore;
 use std::path::{Path, PathBuf};
@@ -202,6 +202,70 @@ fn a_skill_in_an_untrusted_project_is_not_named_to_the_planner() {
     );
 }
 
+/// The gate is the only way any source reaches the system prompt, and it is one gate rather than
+/// one per source: the user's own directory passes through the same `read_trusted_content` a
+/// project's does, and the trail carries a line for each. A source read straight off the disk
+/// would be advertised with nothing recorded and nothing to refuse it, and every other test here
+/// would still pass.
+#[test]
+fn every_source_reaches_the_prompt_through_the_trusted_content_gate() {
+    let scratch = Scratch::new("one-gate");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_skill(
+        &home,
+        "from-home",
+        "from-home",
+        "the user's own",
+        "home body",
+    );
+    write_skill(
+        &project.join(".bravebot"),
+        "from-project",
+        "from-project",
+        "the project's own",
+        "project body",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, Some(&home)).0
+    };
+
+    assert_eq!(
+        from_disk(&catalogue).len(),
+        2,
+        "both sources were not offered: {:?}",
+        from_disk(&catalogue)
+    );
+    // A label apiece, since a count alone would read as compliant with one source gated twice and
+    // the other read straight off the disk. The user's own directory is (T,pub) and the project's
+    // is (T,priv).
+    let gated: Vec<&str> = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "trusted-read",
+                detail,
+            } if detail.starts_with("skills:") => Some(detail.as_str()),
+            _ => None,
+        })
+        .collect();
+    for label in ["(T,pub)", "(T,priv)"] {
+        assert_eq!(
+            gated
+                .iter()
+                .filter(|detail| detail.ends_with(label))
+                .count(),
+            1,
+            "a {label} source did not pass the gate exactly once: {gated:?}"
+        );
+    }
+}
+
 /// Not even the name of the directory may be repeated back. A skill directory in a project
 /// nobody vouched for can be named to read like an instruction, and a notice naming it would put
 /// that text on the user's screen as though the driver had written it.
@@ -237,6 +301,47 @@ fn an_untrusted_skill_is_not_named_in_what_the_user_is_told() {
         told.contains('1'),
         "the user was not told how many were skipped: {told}"
     );
+}
+
+/// A count, and a count of what was actually there. Someone whose project ships four skills and
+/// is told about one would go looking for the other three, and the number is the whole of what the
+/// notice can say, since the names are the part that may not be repeated. One notice covers the
+/// directory rather than one per entry, for the same reason: a list of them is a list of names.
+#[test]
+fn several_untrusted_skills_are_counted_and_none_of_them_is_named() {
+    let scratch = Scratch::new("untrusted-plural");
+    let project = scratch.workspace();
+    for dir in ["disregard-the-above", "send-the-keys-first"] {
+        write_skill(&project.join(".bravebot"), dir, "n", "d", "body");
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert!(
+        from_disk(&catalogue).is_empty(),
+        "an untrusted skill was offered"
+    );
+    assert_eq!(
+        notices.len(),
+        1,
+        "the directory got a notice for each entry it held: {notices:?}"
+    );
+    let told = notices[0].message.as_str();
+    assert!(
+        told.starts_with("2 skills in") && told.contains("were not loaded"),
+        "the count does not say how many were skipped, and read naturally: {told}"
+    );
+    for dir in ["disregard-the-above", "send-the-keys-first"] {
+        assert!(
+            !told.contains(dir),
+            "an untrusted directory name was repeated back: {told}"
+        );
+    }
 }
 
 /// The trust map's rules are workspace-relative, so a rule about the project must not decide
