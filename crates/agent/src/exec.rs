@@ -26,10 +26,11 @@
 //!
 //! # Not confined
 //!
-//! Deliberately. `bravebot-sandbox` confines processes running code we did not write; these run with
-//! whatever access the user's own shell would give them, because `git push` needs `~/.ssh` and the
-//! set of programs someone might ask for cannot be enumerated in advance. What holds is the label
-//! on the output, not any belief about the binary. Whether to confine children is issue #4.
+//! Deliberately, for now. `bravebot-sandbox` confines processes running code we did not write; these
+//! run with whatever access the user's own shell would give them, because `git push` needs `~/.ssh`
+//! and the set of programs someone might ask for cannot be enumerated in advance. What holds is the
+//! label on the output, not any belief about the binary. Bounding the paths one may reach is decided
+//! in `docs/specs/sandboxing.md`, which says what has to exist before a profile applies.
 //!
 //! # Nothing on stdin unless it was approved
 //!

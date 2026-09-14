@@ -18,7 +18,8 @@ guards:
 ## Scope
 
 `run`, its labels, and the two ways a person can change them. Shell mode is [shell-mode.md](../shell-mode.md) and is not an
-instance of this: it is not a tool and the planner cannot reach it.
+instance of this: it is not a tool and the planner cannot reach it. What a program may reach once it
+is running is [../sandboxing.md](../sandboxing.md)'s.
 
 ## Why a program is admissible when a shell is not
 
@@ -560,8 +561,8 @@ without even the file. Hence the first look happens in the turn that was asked.
 
 ## Open questions
 
-- Whether to confine children is issue #4. Whether output can ever be trusted by proof rather than
-  by assertion is issue #3. Neither may be resolved by weakening RUN-4.
+- Whether output can ever be trusted by proof rather than by assertion is issue #3, and it may not
+  be resolved by weakening RUN-4.
 - A separate proof path reaches RUN-4's trusted label by the other road, proving from the program
   and its arguments that a stage can read nothing the label does not account for. It is a proof about a program where
   RUN-7 is a person taking responsibility for one, and the two must not be merged. It remains
