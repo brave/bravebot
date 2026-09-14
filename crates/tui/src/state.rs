@@ -695,6 +695,8 @@ pub struct Session {
     /// A choice about the person rather than about the session, so it is read from `~/.bravebot` at
     /// startup and written back when one is made, the same as the model and the theme.
     editing: crate::vim::Editing,
+    /// Configurable keybindings for navigation and shortcuts.
+    bindings: crate::keybindings::Keybindings,
     /// Which vi mode the box is in, where vi is the style.
     ///
     /// Every session opens in INSERT, where a typed character is a typed character. Opening in NORMAL
@@ -1071,6 +1073,7 @@ impl Session {
             // The box everybody has, until a settings file or a choice says otherwise. A session
             // constructed by a test reads nothing from disk and edits the ordinary way.
             editing: crate::vim::Editing::default(),
+            bindings: crate::keybindings::Keybindings::default(),
             mode: crate::vim::Mode::default(),
             half_typed: None,
             last_find: None,
@@ -2018,6 +2021,16 @@ impl Session {
         self.editing = chosen
             .or_else(|| configured.and_then(crate::vim::Editing::named))
             .unwrap_or_default();
+    }
+
+    /// Adopt configured keybindings from settings.
+    pub fn adopt_keybindings(&mut self, configured: &std::collections::BTreeMap<String, String>) {
+        self.bindings = crate::keybindings::Keybindings::from_map(configured);
+    }
+
+    /// The active keybindings for this session.
+    pub fn bindings(&self) -> &crate::keybindings::Keybindings {
+        &self.bindings
     }
 
     /// Record the style of editing the person chose, keeping it for later sessions.

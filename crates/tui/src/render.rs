@@ -2407,7 +2407,7 @@ fn stashed_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
     };
 
     let lead = "  stashed ";
-    let trail = "  ctrl-s to bring it back";
+    let trail_string = format!("  {} to bring it back", session.bindings().stash_name());
     let after_lead = (width as usize).saturating_sub(lead.chars().count());
     // Nothing of the line itself would fit, so the row would say only that something is stashed
     // without saying what. A terminal this narrow has no room to spare for that.
@@ -2415,11 +2415,11 @@ fn stashed_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
         return Vec::new();
     }
 
-    let with_trail = after_lead.saturating_sub(trail.chars().count());
+    let with_trail = after_lead.saturating_sub(trail_string.chars().count());
     let (room, trail) = if with_trail >= LEGIBLE {
-        (with_trail, trail)
+        (with_trail, trail_string)
     } else {
-        (after_lead, "")
+        (after_lead, String::new())
     };
 
     vec![Line::from(vec![
@@ -2531,7 +2531,9 @@ fn lines_beneath_the_box(
         crate::state::Offered::Nothing => Vec::new(),
         crate::state::Offered::Commands(commands) => command_lines(session, commands),
         crate::state::Offered::Files(entries) => entry_lines(session, entries),
-        crate::state::Offered::Shortcuts => shortcut_lines(session.editing(), width),
+        crate::state::Offered::Shortcuts => {
+            shortcut_lines_with(session.editing(), session.bindings(), width)
+        }
     });
     lines
 }
@@ -2621,14 +2623,58 @@ fn shortcuts(editing: crate::vim::Editing) -> [(&'static str, &'static str); 21]
     ]
 }
 
+/// All shortcuts with dynamic keybindings reflected.
+fn session_shortcuts(
+    editing: crate::vim::Editing,
+    bindings: &crate::keybindings::Keybindings,
+) -> Vec<(String, &'static str)> {
+    let escape = match editing {
+        crate::vim::Editing::Ordinary => "clear the line",
+        crate::vim::Editing::Vi => "take letters as commands",
+    };
+    vec![
+        ("!".to_string(), "run a shell command"),
+        ("/".to_string(), "commands"),
+        ("@".to_string(), "name a file"),
+        ("?".to_string(), "this list"),
+        ("enter".to_string(), "send"),
+        ("shift-enter".to_string(), "new line, or ctrl-j"),
+        ("tab".to_string(), "take what is offered"),
+        ("shift-tab".to_string(), "what to ask before acting"),
+        ("esc".to_string(), escape),
+        ("up / down".to_string(), "earlier prompts"),
+        ("pgup / pgdn".to_string(), "scroll the transcript"),
+        ("ctrl-c".to_string(), "stop, clear, then exit"),
+        ("ctrl-d".to_string(), "exit"),
+        (bindings.editor_name().to_string(), "write prompt in $EDITOR"),
+        (bindings.watch_name().to_string(), "watch a delegate work"),
+        (bindings.scroller_name().to_string(), "open the scroller"),
+        (bindings.history_name().to_string(), "search earlier prompts"),
+        (bindings.stash_name().to_string(), "stash, or bring it back"),
+        (bindings.trail_name().to_string(), "show what a turn did"),
+        (bindings.paste_name().to_string(), "paste, pictures too"),
+        ("drag".to_string(), "select, copy on release"),
+    ]
+}
+
 /// The shortcuts in as many columns as the width will hold.
+fn shortcut_lines(editing: crate::vim::Editing, width: u16) -> Vec<Line<'static>> {
+    let default_bindings = crate::keybindings::Keybindings::default();
+    shortcut_lines_with(editing, &default_bindings, width)
+}
+
+/// The shortcuts in as many columns as the width will hold, with custom keybindings.
 ///
 /// Filled down each column rather than across each row, so the markers stay together at the top of
 /// the first one: read across and `!`, `/` and `@` would be split up by whatever the width happened
 /// to be. One column when nothing else fits, and the meanings are cut to the width there rather
 /// than drawn past the edge, where the terminal would wrap them under the keys and put the list one
 /// row over the height the layout reserved for it.
-fn shortcut_lines(editing: crate::vim::Editing, width: u16) -> Vec<Line<'static>> {
+fn shortcut_lines_with(
+    editing: crate::vim::Editing,
+    bindings: &crate::keybindings::Keybindings,
+    width: u16,
+) -> Vec<Line<'static>> {
     /// Blank columns between one column of the list and the next.
     const GUTTER: usize = 3;
     /// Where the list starts, matching the other rows drawn beneath the box.
@@ -2641,7 +2687,7 @@ fn shortcut_lines(editing: crate::vim::Editing, width: u16) -> Vec<Line<'static>
         return Vec::new();
     }
 
-    let listed = shortcuts(editing);
+    let listed = session_shortcuts(editing, bindings);
     let key_column = listed
         .iter()
         .map(|(key, _)| key.chars().count())
@@ -2775,9 +2821,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // under the box inviting a press that changes nothing on screen, and what a person learns from
     // that press is that the key does not work.
     let trail = match (session.has_trail(), session.show_trail) {
-        (false, _) => "",
-        (true, true) => "ctrl-t hide trail",
-        (true, false) => "ctrl-t show trail",
+        (false, _) => String::new(),
+        (true, true) => format!("{} hide trail", session.bindings().trail_name()),
+        (true, false) => format!("{} show trail", session.bindings().trail_name()),
     };
 
     // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a
@@ -5343,8 +5389,8 @@ mod tests {
         session.type_char('?');
         let output = rendered_at(&session, 120, 40);
 
-        for (key, meaning) in shortcuts(session.editing()) {
-            assert!(output.contains(key), "{key} missing");
+        for (key, meaning) in session_shortcuts(session.editing(), session.bindings()) {
+            assert!(output.contains(&key), "{key} missing");
             assert!(output.contains(meaning), "{key} has no meaning on screen");
         }
     }
@@ -5399,10 +5445,49 @@ mod tests {
         session.type_char('?');
         let output = rendered_at(&session, 120, 40);
 
-        for (key, meaning) in shortcuts(session.editing()) {
-            assert!(output.contains(key), "{key} missing");
+        for (key, meaning) in session_shortcuts(session.editing(), session.bindings()) {
+            assert!(output.contains(&key), "{key} missing");
             assert!(output.contains(meaning), "{key} has no meaning on screen");
         }
+    }
+
+    /// When keybindings are customized, the shortcut list reflects the configured chords rather
+    /// than the defaults.
+    #[test]
+    fn the_shortcut_list_reflects_custom_keybindings() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("scroller".to_string(), "ctrl-u".to_string());
+        custom.insert("stash".to_string(), "ctrl-x".to_string());
+        session.adopt_keybindings(&custom);
+
+        session.type_char('?');
+        let output = rendered_at(&session, 120, 40);
+        assert!(output.contains("ctrl-u"), "custom scroller chord missing: {output}");
+        assert!(output.contains("ctrl-x"), "custom stash chord missing: {output}");
+        assert!(!output.contains("ctrl-o"), "default scroller chord should not be displayed: {output}");
+        assert!(!output.contains("ctrl-s"), "default stash chord should not be displayed: {output}");
+    }
+
+    /// When stash is customized, the stashed line reminder names the customized chord.
+    #[test]
+    fn the_stashed_line_names_the_custom_stash_chord() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("stash".to_string(), "ctrl-x".to_string());
+        session.adopt_keybindings(&custom);
+
+        for c in "hold this for later".chars() {
+            session.type_char(c);
+        }
+        session.stash();
+        assert!(session.stashed().is_some());
+
+        let lines = stashed_lines(&session, 80);
+        assert_eq!(lines.len(), 1);
+        let rendered = lines[0].to_string();
+        assert!(rendered.contains("ctrl-x to bring it back"), "custom stash chord missing from stashed line: {rendered}");
+        assert!(!rendered.contains("ctrl-s"), "default stash chord should not appear in stashed line: {rendered}");
     }
 
     /// The transcript stays behind the search, because a prompt is recognised by what it was asked

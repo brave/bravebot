@@ -496,7 +496,11 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             // typed into a mode that is going away goes with it. Neither is a character, so
             // neither is read as typing, and leaving both to do nothing left a mode whose only
             // way out was Escape.
-            KeyCode::Char('o') | KeyCode::Char('c') if ctrl => {
+            KeyCode::Char('c') if ctrl => {
+                session.close_scroller();
+                Action::Redraw
+            }
+            _ if session.bindings().is_scroller(&key) => {
                 session.close_scroller();
                 Action::Redraw
             }
@@ -525,7 +529,11 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             }
             Action::Redraw
         }
-        KeyCode::Char('o') | KeyCode::Char('c') if ctrl => {
+        KeyCode::Char('c') if ctrl => {
+            session.close_scroller();
+            Action::Redraw
+        }
+        _ if session.bindings().is_scroller(&key) => {
             session.close_scroller();
             Action::Redraw
         }
@@ -869,14 +877,14 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // Reading back through what happened, rather than typing at it. The transcript already
         // scrolls; what needs a mode is everything a person does once they are reading, since the
         // keys for it are letters and the box takes letters.
-        KeyCode::Char('o') if ctrl => {
+        _ if session.bindings().is_scroller(&key) => {
             session.open_scroller();
             Action::Redraw
         }
         // The other way into the history, and the one that scales: Up walks a prompt at a time,
         // which is no way to reach the hundredth. The chord every shell answers with this same
         // question, so the muscle memory is already there.
-        KeyCode::Char('r') if ctrl => {
+        _ if session.bindings().is_history(&key) => {
             session.open_history_search();
             Action::Redraw
         }
@@ -884,11 +892,11 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // pty as text, and therefore drops everything that is not text; this one reads the
         // clipboard directly. Readline's quoted-insert is what the chord costs, and nobody has
         // ever wanted it here.
-        KeyCode::Char('v') if ctrl => Action::Paste,
+        _ if session.bindings().is_paste(&key) => Action::Paste,
         // The box can be moved around in now, but it is still capped at ten rows and has none of
         // what someone reaches for on a long prompt. A paragraph worth thinking about goes
         // somewhere with room instead.
-        KeyCode::Char('g') if ctrl => Action::Edit,
+        _ if session.bindings().is_editor(&key) => Action::Edit,
         // Escape means "stop what is happening" before it means anything else, so a turn in
         // flight is cancelled first. The prompt comes back for editing rather than being lost.
         KeyCode::Esc if session.status == Status::Working => Action::Cancel,
@@ -1116,11 +1124,11 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // there: putting it away stores a second copy of a stored prompt, and the search is what
         // somebody who has walked back at all is looking for. Before the arm below, since that one
         // answers every line.
-        KeyCode::Char('s') if ctrl && session.history.is_browsing() => {
+        _ if session.bindings().is_stash(&key) && session.history.is_browsing() => {
             session.open_history_search_here();
             Action::Redraw
         }
-        KeyCode::Char('s') if ctrl => {
+        _ if session.bindings().is_stash(&key) => {
             session.stash();
             Action::Redraw
         }
@@ -1128,7 +1136,7 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // sets a render flag and sends nothing, and because the trail is *for* watching a turn:
         // refused mid-turn, a person who wanted to see which tools a turn was calling had to wait
         // for it to finish before they were allowed to ask.
-        KeyCode::Char('t') if ctrl => {
+        _ if session.bindings().is_trail(&key) => {
             session.toggle_trail();
             Action::Redraw
         }
@@ -1138,7 +1146,7 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         //
         // Nothing at all where this session has spawned none. A key that does nothing is better
         // than a screen with nothing on it, and the shortcut list is where its meaning lives.
-        KeyCode::Char('l') if ctrl => {
+        _ if session.bindings().is_watch(&key) => {
             if session.watch() {
                 Action::Redraw
             } else {
@@ -1331,20 +1339,20 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
 
     // Before the modifier guard, since a line that can be typed mid-turn can be pasted into
     // mid-turn: what is refused while a turn runs is sending, never writing.
-    if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if session.bindings().is_paste(&key) {
         return Action::Paste;
     }
 
     // Before the modifier guard for the same reason, and mid-turn is when it is wanted most: a
     // person reading back through a turn that is going wrong is reading because it is going wrong.
-    if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if session.bindings().is_scroller(&key) {
         session.open_scroller();
         return Action::Redraw;
     }
 
     // Before the modifier guard for the same reason. Searching the history sends nothing, and the
     // prompt somebody wants back mid-turn is the one the turn they are watching came from.
-    if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if session.bindings().is_history(&key) {
         session.open_history_search();
         return Action::Redraw;
     }
@@ -1378,7 +1386,7 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // the line it hands back would be waiting for a box that has moved on. That is a decision about
     // this key, and a key that does nothing by accident reads the same as one that does nothing on
     // purpose.
-    if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if session.bindings().is_editor(&key) {
         return Action::None;
     }
 
@@ -1941,6 +1949,7 @@ fn event_loop(
     let settings = bravebot_config::Settings::load();
     // Settled before a key can be pressed, since this is what decides whether a letter is a letter.
     session.adopt_editing(settings.editor_mode());
+    session.adopt_keybindings(settings.keybindings());
     let (permissions, rejected) = bravebot_agent::permissions::from_settings(
         &settings,
         bravebot_agent::home::directory().as_deref(),
