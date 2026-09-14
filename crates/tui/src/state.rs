@@ -632,6 +632,11 @@ pub struct TurnSnapshot {
     pub spend: std::collections::BTreeMap<usize, u64>,
     /// Timing by turn before this turn.
     pub timing: std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
+    /// What the turn before this one read out of the cache, or `None` if it was the first.
+    ///
+    /// Kept with the spend it belongs beside: undoing a turn that is no longer in the token count
+    /// must not leave the panel reporting the cache that turn hit.
+    pub cached: Option<bravebot_aichat::protocol::Cached>,
     /// Trust map rules before this turn.
     pub trust: bravebot_core::trust::TrustStore,
     /// Trusted programs before this turn.
@@ -4745,6 +4750,15 @@ impl Session {
         self.cached = Some(cached);
     }
 
+    /// Put back what an earlier turn read, or forget the figure with `None`.
+    ///
+    /// The figure is the last turn's, so anything that changes which turn that is has to say so:
+    /// undoing a turn puts back the one before it, and a turn that failed leaves no measurement to
+    /// report at all.
+    pub fn restore_cache(&mut self, cached: Option<bravebot_aichat::protocol::Cached>) {
+        self.cached = cached;
+    }
+
     /// What the last turn read out of the cache and wrote into it, or `None` before one has run.
     pub fn cached(&self) -> Option<bravebot_aichat::protocol::Cached> {
         self.cached
@@ -7517,6 +7531,7 @@ mod tests {
             tokens: 10,
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
+            cached: None,
             trust: bravebot_core::trust::TrustStore::new(),
             programs: bravebot_core::programs::TrustedPrograms::default(),
             transcript_len: 0,
@@ -7569,6 +7584,37 @@ mod tests {
 
         s.clear();
         assert_eq!(s.cached(), None, "the cache figure survived clear");
+    }
+
+    /// The panel reports the last turn's split, so anything that changes which turn is the last one
+    /// has to move the figure with it. Rewinding a turn puts back what the turn before it read, and
+    /// a turn that measured nothing leaves nothing to report rather than the turn before it.
+    #[test]
+    fn the_cache_figure_follows_which_turn_is_the_last_one() {
+        let mut s = session();
+        let first = bravebot_aichat::protocol::Cached {
+            read_tokens: 400,
+            written_tokens: 50,
+        };
+        s.served_from_cache(first);
+        s.served_from_cache(bravebot_aichat::protocol::Cached {
+            read_tokens: 900,
+            written_tokens: 100,
+        });
+
+        s.restore_cache(Some(first));
+        assert_eq!(
+            s.cached(),
+            Some(first),
+            "rewinding did not put back the earlier turn's figure"
+        );
+
+        s.restore_cache(None);
+        assert_eq!(
+            s.cached(),
+            None,
+            "a turn that measured nothing left the one before it on the panel"
+        );
     }
 
     /// What belongs to the user rather than to the session survives, since none of it is a

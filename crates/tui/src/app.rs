@@ -2016,6 +2016,9 @@ fn event_loop(
                     session.tokens = snapshot.tokens;
                     session.restore_spend(snapshot.tokens, snapshot.spend);
                     session.restore_timing(snapshot.timing);
+                    // With the spend, for the same reason clearing takes it: the figure describes a
+                    // prompt that is no longer part of what this session sent.
+                    session.restore_cache(snapshot.cached);
                     session.written = 0;
                     session.finished = None;
                     trust = snapshot.trust;
@@ -2280,6 +2283,7 @@ fn event_loop(
                         tokens: session.tokens,
                         spend: session.spend_by_turn().clone(),
                         timing: session.timing_by_turn().clone(),
+                        cached: session.cached(),
                         trust: trust.clone(),
                         programs: programs.clone(),
                         transcript_len: session.transcript.len(),
@@ -4302,6 +4306,10 @@ fn fold_outcome(
                 .map(|stamped| crate::audit::as_line(&stamped.event))
                 .collect();
             session.fail(t!(session_error, problem = error));
+            // The panel reports the last turn's cache split, and this turn is now the last one. It
+            // measured nothing, so leaving the turn before it on the panel would report a figure
+            // against an exchange that never finished.
+            session.restore_cache(None);
             if let Some(last) = session.transcript.last_mut() {
                 last.trail = trail;
             }
