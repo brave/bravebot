@@ -20,10 +20,15 @@ confirmation.
 decides which bytes the write carries, and it is a name the driver handed out rather than anything
 derived from content.
 
+Exactly one of the two. Both would leave the driver choosing between text the planner wrote and
+bytes nobody has read, and neither names anything to write, so both shapes are refused before
+anyone is asked to approve a write.
+
 **Why.** The worst a wrong reference can do is put the wrong quarantined bytes into a path that
 still had to be endorsed on its own.
 
 `verified-by: bravebot_agent::turn::a_quarantined_file_is_rewritten_by_a_processor`
+`verified-by: bravebot_agent::turn::a_write_that_names_two_bodies_or_none_is_refused`
 
 <a id="WRITE-2"></a>
 ### WRITE-2: a reference that names no file is not a destination

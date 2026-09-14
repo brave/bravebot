@@ -6623,6 +6623,67 @@ fn a_processors_output_cannot_be_a_destination() {
     );
 }
 
+/// One body, and a call is not the place to leave which one open. Two would have the driver
+/// picking between text the planner wrote and bytes nobody has read, and they say different things
+/// about what lands. Neither names anything to write. Both are refused before the person whose
+/// file it is would be asked to approve anything, and the planner is told which mistake it made,
+/// since a refusal it cannot act on becomes the same call again.
+#[test]
+fn a_write_that_names_two_bodies_or_none_is_refused() {
+    let scratch = Scratch::new("write-body-exclusivity");
+    std::fs::write(scratch.path.join("marker.txt"), "before").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    std::fs::write(scratch.path.join("quarantined.txt"), "bytes nobody read").unwrap();
+    let (endpoint, received) = serve_sequence(vec![
+        // ref:1, so the call that names two bodies has real bytes behind the reference: a
+        // refusal dropped in favour of either argument would land something.
+        tool_request("read_file", r#"{"path":"quarantined.txt"}"#),
+        tool_request(
+            "write_file",
+            r#"{"path":"marker.txt","contents":"after","contents_ref":"ref:1"}"#,
+        ),
+        tool_request("write_file", r#"{"path":"marker.txt"}"#),
+        reply_with("neither call went through"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("rewrite the marker"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("the turn finishes");
+
+    assert_eq!(
+        confirmer.seen.len(),
+        0,
+        "a write with no single body was put to the user to approve"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("marker.txt")).unwrap(),
+        "before",
+        "the file was written anyway"
+    );
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    for told in [
+        "'contents' or 'contents_ref', not both",
+        "one of 'contents' or 'contents_ref' is required",
+    ] {
+        assert!(
+            bodies.iter().any(|body| body.contains(told)),
+            "the planner was not told which mistake it made, on '{told}': {bodies:?}"
+        );
+    }
+}
+
 /// A turn that changed files and ran nothing is asked about it, once, and the person is told.
 ///
 /// The turn this is for edited eighteen files, ran no command at all, and was stopped with none of
