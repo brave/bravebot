@@ -9999,6 +9999,55 @@ fn a_quarantined_read_offers_the_user_the_chance_to_vouch() {
     );
 }
 
+/// Vouching answers about a file, not about a spelling of one. The offer is made because the map
+/// says nothing about the path, so the rule it records has to be the one the next read looks up:
+/// under the absolute name it would be in the other namespace (TRUST-3), leaving the same file
+/// quarantined every other time it is named and the user asked again for what they just allowed.
+#[test]
+fn vouching_for_a_project_file_named_absolutely_records_its_relative_rule() {
+    let scratch = Scratch::new("vouch-absolute");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("game.js"), "const SPEED = 100;\n").unwrap();
+
+    // The added directory is what lets an absolute path into the project resolve at all.
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace
+        .add_directory(scratch.path.to_str().expect("utf-8 path"))
+        .expect("a directory the project sits inside is added");
+    let named = workspace.root().join("game.js").display().to_string();
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", &json!({ "path": named }).to_string()),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("fix the speed bug"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut VouchesForFiles::new(true),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let rules: Vec<(&str, bravebot_core::label::Integrity)> = outcome.trust.rules().collect();
+    assert_eq!(
+        rules,
+        vec![("game.js", bravebot_core::label::Integrity::Trusted)],
+        "the file the user vouched for is not trusted under the name the map is asked about"
+    );
+}
+
 /// Declining leaves everything as it was: the file stays quarantined and nothing is recorded.
 #[test]
 fn declining_to_vouch_leaves_the_file_quarantined() {

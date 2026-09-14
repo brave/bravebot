@@ -132,6 +132,57 @@ fn a_second_spelling_of_a_distrusted_file_is_read_as_untrusted() {
     assert!(policy.finish());
 }
 
+/// The other half of that rule, at the spelling the two namespaces meet on. A relative rule and an
+/// absolute rule are separate (TRUST-3), and `/add-dir` will accept a directory the project sits
+/// inside, so from then on a project file has an absolute name that resolves. If the map is asked
+/// about that name as written it finds nothing, and the answer the user gave at startup about the
+/// whole workspace (TRUST-7) covers only half of what it named.
+#[test]
+fn a_project_file_named_absolutely_is_read_under_its_relative_rule() {
+    let scratch = Scratch::new("absolute-inside-the-project");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/main.rs"), "fn main() {}").unwrap();
+
+    // What makes the absolute spelling reach the file at all: confinement refuses one otherwise.
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace
+        .add_directory(scratch.path.to_str().expect("utf-8 path"))
+        .expect("a directory the project sits inside is added");
+
+    // The startup answer: the workspace is the user's own.
+    let mut trust = TrustStore::new();
+    trust.trust(".");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let relative = workspace
+        .read(&mut policy, &Labelled::trusted("src/main.rs".to_string()))
+        .expect("the relative spelling reads");
+
+    // Built from the canonical root, which is where an absolute path the planner writes comes
+    // from: a listing, or the path a tool handed back.
+    let named = workspace.root().join("src/main.rs").display().to_string();
+    let absolute = workspace
+        .read(&mut policy, &Labelled::trusted(named))
+        .expect("the absolute spelling reads");
+
+    assert_eq!(
+        absolute.label().integrity,
+        relative.label().integrity,
+        "one file answered two ways, so the startup answer covers only its relative name"
+    );
+    assert_eq!(relative.label().integrity, Integrity::Trusted);
+}
+
 #[test]
 fn a_trusted_path_and_trusted_contents_can_be_written() {
     let scratch = Scratch::new("write");

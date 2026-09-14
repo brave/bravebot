@@ -1595,7 +1595,10 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
 
     for index in 0..task.files.len() {
         let path = routing_path(&policy, &format!("file_{index}"));
-        policy.vouch_for_named_path(&path);
+        // The rule goes under the name the map keys on: `@` takes the word the user typed, so a
+        // file in the project can arrive spelled absolutely, and a rule under that spelling would
+        // leave the read below asking about the relative one and finding nothing.
+        policy.vouch_for_named_path(&workspace.trust_key(&path));
         let contents = workspace.read(&mut policy, &Labelled::trusted(path.clone()))?;
         admit_context_file(&mut policy, conversation, &path, &contents)?;
     }

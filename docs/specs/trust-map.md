@@ -70,6 +70,11 @@ one map of full paths, which would remove this clause.
 A rule under the working directory decides nothing about a directory opened by absolute path, and
 the reverse. `/` is never treated as the empty prefix.
 
+An absolute path naming something inside the working directory is not in the absolute namespace at
+all: the workspace reduces it to its relative name before the map is asked about it or a rule is
+written under it, so a file in the project has one rule whichever way it was spelled. The reduction
+is by spelling, and a path with a `..` component keeps the name it was given.
+
 **Why.** The working directory's own rule is the **empty** prefix, since every path in the project
 is named relative to it. Match absolute paths against that same map and the empty prefix covers
 every one of them, so answering yes at startup would silently vouch for every directory opened
@@ -80,6 +85,16 @@ reaching where it was never given.
 The same relative path also exists in both places and names different files, so even without the
 prefix problem one map could not tell them apart.
 
+The reduction is what keeps that separation from splitting a file the project already holds. Only a
+directory the project sits inside makes such a path reachable at all (TRUST-9, TRUST-10), and after
+that the same file has a name in each namespace: the startup answer covering the workspace
+(TRUST-7) would cover only half of what it named, and a write reconciling under one name would say
+nothing about the other. Reducing by spelling rather than by where the path lands is what makes the
+two answers the same answer, since resolving the tail would follow a symlink and return the rule
+for a different name, which is a laundering step the relative spelling does not have. A file with
+two names of its own still has two rules, which is a cost of keying on the name and is written
+down below.
+
 `verified-by: bravebot_core::trust::an_absolute_rule_does_not_decide_a_relative_path`
 `verified-by: bravebot_core::trust::trusting_the_workspace_says_nothing_about_an_added_directory`
 `verified-by: bravebot_core::trust::trusting_the_filesystem_root_does_not_trust_the_workspace`
@@ -87,6 +102,8 @@ prefix problem one map could not tell them apart.
 `verified-by: bravebot_core::trust::the_deepest_absolute_rule_wins`
 `verified-by: bravebot_core::trust::equivalent_absolute_spellings_are_the_same_rule`
 `verified-by: bravebot_core::trust::every_equivalent_absolute_spelling_reaches_the_same_rule`
+`verified-by: bravebot_agent::workspace::a_project_file_named_absolutely_is_read_under_its_relative_rule`
+`verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
 
 ## What a write does
 
