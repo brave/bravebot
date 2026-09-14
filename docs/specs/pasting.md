@@ -87,7 +87,7 @@ that is the TUI's Ctrl-V and nothing else.
 It ends up in the data URL, where it is routing, so it comes from a fixed set
 the clipboard reader owns, and never from a filename or from what a tool printed.
 
-`verified-by: none`
+`verified-by: by-construction (the type is a static string from the clipboard reader's literals to the data URL it is formatted into, so a media type read from a filename or from what a tool printed does not compile)`
 
 
 <a id="PASTE-4"></a>

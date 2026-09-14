@@ -202,7 +202,7 @@ fn a_pasted_image_reaches_the_model_with_the_prompt() {
     let mut sink = RecordingSink::new();
 
     let task = Task::new("what is [Image #1]?").with_image(PastedImage {
-        media_type: "image/png".to_string(),
+        media_type: "image/png",
         bytes: b"pixels".to_vec(),
     });
     turn::run(
@@ -235,7 +235,7 @@ fn a_pasted_image_is_named_in_the_audit_trail() {
     let mut sink = RecordingSink::new();
 
     let task = Task::new("what is this?").with_image(PastedImage {
-        media_type: "image/png".to_string(),
+        media_type: "image/png",
         bytes: b"pixels".to_vec(),
     });
     turn::run(

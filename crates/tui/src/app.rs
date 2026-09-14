@@ -3749,7 +3749,7 @@ fn run_turn_animated(
     // "[Image #2]" has to be able to count to the picture that answers it.
     for image in session.sent_pasted() {
         task = task.with_image(PastedImage {
-            media_type: image.media_type.to_string(),
+            media_type: image.media_type,
             bytes: image.bytes.clone(),
         });
     }
