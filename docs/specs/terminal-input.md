@@ -1265,8 +1265,8 @@ rendering fault rather than as a border with no room for all of it.
 `verified-by: bravebot_tui::render::how_to_search_the_prompts_is_said_where_somebody_would_look`
 `verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`
 
-<a id="INPUT-31"></a>
-### INPUT-31: customizable keybindings and non-remappable safety keys
+<a id="INPUT-32"></a>
+### INPUT-32: a settings file can move seven chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
