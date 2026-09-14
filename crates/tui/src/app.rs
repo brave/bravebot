@@ -1087,6 +1087,15 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         //
         // It reaches this process at all because raw mode turns off the terminal's flow control,
         // where this chord is the byte that freezes the screen.
+        //
+        // Except on a prompt walked back to, where the line in the box is one the history put
+        // there: putting it away stores a second copy of a stored prompt, and the search is what
+        // somebody who has walked back at all is looking for. Before the arm below, since that one
+        // answers every line.
+        KeyCode::Char('s') if ctrl && session.history.is_browsing() => {
+            session.open_history_search_here();
+            Action::Redraw
+        }
         KeyCode::Char('s') if ctrl => {
             session.stash();
             Action::Redraw
@@ -8579,6 +8588,64 @@ mod tests {
         assert!(!session.searching_history());
     }
 
+    /// Walking back at all says the wanted prompt is an old one, and the workspace somebody is in
+    /// is the narrower question about it. The list it opens on is the whole point: seeded with the
+    /// prompt in the box it would answer with that prompt alone, and narrowed to somewhere else it
+    /// would answer with nothing. A line put away earlier is not touched, since the slot holds one
+    /// line and this press is not putting anything into it.
+    #[test]
+    fn ctrl_s_searches_this_workspace_while_an_older_prompt_is_shown() {
+        let mut session = Session::new("none");
+        for (workspace, prompt) in [
+            ("/work/elsewhere", "why is the picker slow"),
+            ("/work/here", "commit that"),
+            ("/work/here", "run the tests"),
+        ] {
+            session.now_in_workspace(workspace);
+            type_line(&mut session, prompt);
+            handle_key(&mut session, key(KeyCode::Enter));
+            session.complete("ok", Vec::new(), 0);
+        }
+
+        type_line(&mut session, "half a thought");
+        handle_key(&mut session, ctrl('s'));
+        assert_eq!(
+            session.stashed(),
+            Some("half a thought"),
+            "the line was not put away"
+        );
+
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(
+            session.input(),
+            "run the tests",
+            "the history was not walked"
+        );
+
+        assert_eq!(handle_key(&mut session, ctrl('s')), Action::Redraw);
+        let search = session.history_search().expect("the search did not open");
+        assert!(search.here(), "the search opened over every workspace");
+        assert_eq!(
+            search.needle(),
+            "",
+            "the search opened looking for the prompt in the box"
+        );
+        assert_eq!(
+            session
+                .history_matches()
+                .iter()
+                .map(|entry| entry.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["commit that", "run the tests"],
+            "not this workspace's prompts"
+        );
+        assert_eq!(
+            session.stashed(),
+            Some("half a thought"),
+            "the line put away earlier is gone"
+        );
+    }
+
     /// Somebody who typed half a prompt and then reached for the history has already said what
     /// they are looking for.
     #[test]
@@ -8590,6 +8657,28 @@ mod tests {
         assert_eq!(
             session.history_match().expect("a prompt").prompt,
             "run the tests"
+        );
+    }
+
+    /// A prompt walked back to is not something anybody typed to look for it. Seeded with it, the
+    /// search answers with the one prompt already in the box, which is the walk it exists to take
+    /// somebody off: the hint offering the search is drawn in that very state.
+    #[test]
+    fn the_search_does_not_start_from_a_prompt_walked_back_to() {
+        let mut session = having_sent(&["run the tests", "commit that"]);
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "commit that", "the history was not walked");
+
+        handle_key(&mut session, ctrl('r'));
+        assert_eq!(
+            session.history_search().expect("a search").needle(),
+            "",
+            "the search opened looking for the prompt in the box"
+        );
+        assert_eq!(
+            session.history_matches().len(),
+            2,
+            "prompts are missing from the list"
         );
     }
 

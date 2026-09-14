@@ -281,9 +281,15 @@ history-age-minutes = { $count }m ago
 history-age-hours = { $count }h ago
 history-age-days = { $count }d ago
 history-age-months = { $count }mo ago
-# In the border of the box while a stored prompt is being walked to, saying what the other way in is.
+# In the border of the box while a stored prompt is being walked to: which of the stored prompts is
+# in the box, of how many.
 input-history-position = History { $index }/{ $total }
+# At the other end of that same border, the ways in: the search over every prompt, and the search
+# narrowed to the ones sent from this project. The narrower one is dropped where the row will not
+# hold both beside the position, and then the other one is, so a longer wording is one that fewer
+# terminals show at all.
 input-history-search = ctrl-r to search
+input-history-scope = ctrl-s this project
 resume-heading = Resume session
 resume-search-placeholder = Search…
 resume-keys = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc for a new session

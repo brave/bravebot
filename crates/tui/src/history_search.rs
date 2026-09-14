@@ -108,6 +108,15 @@ impl Search {
         self.up = 0;
     }
 
+    /// Narrow to this workspace's prompts, whatever scope the search was on.
+    ///
+    /// Set rather than swapped, so a search opened narrow is narrow however this one arrived at the
+    /// scope it is on.
+    pub fn narrow(&mut self) {
+        self.here = true;
+        self.up = 0;
+    }
+
     /// The prompts this search answers with, oldest first.
     ///
     /// `project` is the workspace the session runs in, and is what the narrowed scope compares

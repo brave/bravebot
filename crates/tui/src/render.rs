@@ -2313,23 +2313,35 @@ fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
         });
 
     if let Some((index, total)) = session.history.position() {
-        block = block.title_top(Line::from(Span::styled(
-            format!(
-                " {} ",
-                t!(input_history_position, index = index, total = total)
-            ),
-            dim(),
-        )));
-        // The other way in, said where somebody has just shown they are looking for an old prompt.
+        let position = format!(
+            " {} ",
+            t!(input_history_position, index = index, total = total)
+        );
+        // The other ways in, said where somebody has just shown they are looking for an old prompt.
         // A search nobody can find is a search nobody has, and walking back one at a time is what
         // a person does until they learn there is something better.
-        block = block.title_top(
-            Line::from(Span::styled(
-                format!(" {} ", t!(input_history_search)),
-                dim(),
-            ))
-            .right_aligned(),
-        );
+        //
+        // Given up in order where the row will not hold all of it, the way the hint line under the
+        // box is: the narrower scope first, then the search itself. Never cut instead, since the
+        // border is one row and a right-aligned title long enough to reach the left one is drawn
+        // over it, which leaves the position cut mid-word and reads as a rendering fault. Which
+        // prompt is being shown is what only this row says, so it is the part that stays.
+        let room = area.width.saturating_sub(2) as usize;
+        let taken = wrap::display_width(&position);
+        let ways_in = [
+            format!(
+                " {}  ·  {} ",
+                t!(input_history_search),
+                t!(input_history_scope)
+            ),
+            format!(" {} ", t!(input_history_search)),
+        ]
+        .into_iter()
+        .find(|title| taken + wrap::display_width(title) <= room);
+        block = block.title_top(Line::from(Span::styled(position, dim())));
+        if let Some(ways_in) = ways_in {
+            block = block.title_top(Line::from(Span::styled(ways_in, dim())).right_aligned());
+        }
     }
 
     frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -2602,7 +2614,7 @@ fn shortcuts(editing: crate::vim::Editing) -> [(&'static str, &'static str); 21]
         ("ctrl-l", "watch a delegate work"),
         ("ctrl-o", "open the scroller"),
         ("ctrl-r", "search earlier prompts"),
-        ("ctrl-s", "stash, or bring it back"),
+        ("ctrl-s", "stash, bring it back, or search"),
         ("ctrl-t", "show what a turn did"),
         ("ctrl-v", "paste, pictures too"),
         ("drag", "select, copy on release"),
@@ -5415,7 +5427,8 @@ mod tests {
 
     /// A search nobody can find is a search nobody has. Both places somebody looks say it: the key
     /// list, and the border of the box at the moment they have shown they want an older prompt by
-    /// walking back to one.
+    /// walking back to one. The border names both ways in, since from there the two are one key
+    /// apart and only the border says which is which.
     #[test]
     fn how_to_search_the_prompts_is_said_where_somebody_would_look() {
         let mut session = Session::new("none");
@@ -5430,7 +5443,34 @@ mod tests {
 
         session.recall_older();
         let browsing = rendered_at(&session, 120, 40);
-        assert!(browsing.contains(t!(input_history_search)), "{browsing}");
+        for named in [t!(input_history_search), t!(input_history_scope)] {
+            assert!(browsing.contains(named), "{named} is unsaid: {browsing}");
+        }
+    }
+
+    /// Which prompt is being shown is what only this row says, so the ways in are what a border with
+    /// no room for everything gives up, the narrower scope first. Drawn anyway, the right-hand title
+    /// lands on top of the position and cuts it mid-word, which reads as a rendering fault rather
+    /// than as a row with no room.
+    #[test]
+    fn a_border_gives_up_the_ways_in_one_at_a_time() {
+        let mut session = Session::new("none");
+        session.type_char('a');
+        session.submit().expect("the prompt is sent");
+        session.complete("ok", Vec::new(), 0);
+        session.recall_older();
+        let position = t!(input_history_position, index = 1, total = 1);
+
+        let some_room = rendered_at(&session, 40, 12);
+        assert!(some_room.contains(&position), "{some_room}");
+        assert!(some_room.contains("ctrl-r"), "{some_room}");
+        assert!(!some_room.contains("ctrl-s"), "{some_room}");
+
+        // Far below any width these strings could be shortened to, so a translation cannot decide
+        // whether this half of the test is testing anything.
+        let none = rendered_at(&session, 30, 12);
+        assert!(none.contains(&position), "{none}");
+        assert!(!none.contains("ctrl-r"), "{none}");
     }
 
     /// The list folds into columns, so it does not push the transcript off a short terminal the way
