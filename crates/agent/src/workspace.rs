@@ -619,7 +619,7 @@ impl Workspace {
             Reach::Confined => self.resolve(&relative)?,
             Reach::Dropped => self.resolve_attachment(&relative, reach)?,
         };
-        let label = policy.observe_path(Capability::FileRead, &relative)?;
+        let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
 
         let raw = std::fs::read(&resolved).map_err(|e| WorkspaceError::Io {
             path: relative.clone(),
@@ -720,7 +720,7 @@ impl Workspace {
         // The reach is the caller's, from the shape of the gesture that produced the path, and
         // never from anything the file holds.
         let resolved = self.resolve_attachment(&relative, reach)?;
-        let label = policy.observe_path(Capability::FileRead, &relative)?;
+        let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
 
         let raw = std::fs::read(&resolved).map_err(|e| WorkspaceError::Io {
             path: relative.clone(),
@@ -768,7 +768,7 @@ impl Workspace {
                 reason: "the path was not trusted",
             })?;
 
-        let label = policy.observe_path(Capability::FileRead, &relative)?;
+        let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
         Ok(Labelled::new(self.page(&relative, offset, limit)?, label))
     }
 
@@ -1955,5 +1955,55 @@ impl Workspace {
             Ok(relative) => relative.to_string_lossy().to_string(),
             Err(_) => path.to_string_lossy().to_string(),
         }
+    }
+
+    /// The name the trust map holds a rule about `named` under.
+    ///
+    /// The same rule [`Workspace::relative_display`] applies to a path this crate resolved, applied
+    /// to one a caller was given: an absolute path naming something inside the primary root is the
+    /// same file as its relative spelling, so it is reduced to that spelling before the map is
+    /// consulted or a rule is written. Without it one file has a key in each namespace and two
+    /// answers, and the absolute one is covered by nothing, so a file the user vouched for at
+    /// startup is quarantined under half its names (TRUST-3).
+    ///
+    /// Where the path lands decides *whether* it is reduced, and the spelling decides *what to*.
+    /// Both halves are load bearing. A name spelled inside the root that resolves outside it is
+    /// left as it is, because the project's own rules have nothing to say about a file the project
+    /// does not hold, and its relative spelling is not another way of naming that file but a name
+    /// confinement refuses. And the name it reduces to is the one the caller wrote rather than the
+    /// one it resolves to, because keying on the destination hands back the rule for a *different*
+    /// name: a file in an untrusted subtree would be readable as trusted through a link inside the
+    /// project. One file with two names of its own therefore still has two rules, which is a cost
+    /// of keying on the name that the spec records rather than one this closes.
+    ///
+    /// A `..` component leaves the name alone, for the same reason the kernel's own normalisation
+    /// leaves one as written: confinement refuses such a path rather than resolving it (TRUST-10),
+    /// so it is refused before anything reads it, and reducing it here would be guessing at which
+    /// file it named.
+    pub(crate) fn trust_key(&self, named: &str) -> String {
+        let candidate = Path::new(named);
+        let climbs = candidate
+            .components()
+            .any(|c| matches!(c, Component::ParentDir));
+        if !candidate.is_absolute() || climbs {
+            return named.to_string();
+        }
+
+        // Spelling it inside the project is not landing in it. An added directory can admit an
+        // absolute path that leaves the root through a link, where `resolve` refuses the relative
+        // spelling of that same name for going outside.
+        match destination(candidate) {
+            Some(resolved) if resolved.starts_with(&self.root) => {}
+            _ => return named.to_string(),
+        }
+        let reduced = self.relative_display(candidate);
+
+        // The root named as itself is left alone. Its relative name is the empty prefix, which is
+        // the rule covering the whole project, and that rule is the startup question's to write
+        // (TRUST-7) rather than something a spelling of one path can reach.
+        if reduced.is_empty() {
+            return named.to_string();
+        }
+        reduced
     }
 }

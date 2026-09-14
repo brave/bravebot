@@ -132,6 +132,116 @@ fn a_second_spelling_of_a_distrusted_file_is_read_as_untrusted() {
     assert!(policy.finish());
 }
 
+/// The other half of that rule, at the spelling the two namespaces meet on. A relative rule and an
+/// absolute rule are separate (TRUST-3), and `/add-dir` will accept a directory the project sits
+/// inside, so from then on a project file has an absolute name that resolves. If the map is asked
+/// about that name as written it finds nothing, and the answer the user gave at startup about the
+/// whole workspace (TRUST-7) covers only half of what it named.
+#[test]
+fn a_project_file_named_absolutely_is_read_under_its_relative_rule() {
+    let scratch = Scratch::new("absolute-inside-the-project");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/main.rs"), "fn main() {}").unwrap();
+
+    // What makes the absolute spelling reach the file at all: confinement refuses one otherwise.
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace
+        .add_directory(scratch.path.to_str().expect("utf-8 path"))
+        .expect("a directory the project sits inside is added");
+
+    // The startup answer: the workspace is the user's own.
+    let mut trust = TrustStore::new();
+    trust.trust(".");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let relative = workspace
+        .read(&mut policy, &Labelled::trusted("src/main.rs".to_string()))
+        .expect("the relative spelling reads");
+
+    // Built from the canonical root, which is where an absolute path the planner writes comes
+    // from: a listing, or the path a tool handed back.
+    let named = workspace.root().join("src/main.rs").display().to_string();
+    let absolute = workspace
+        .read(&mut policy, &Labelled::trusted(named))
+        .expect("the absolute spelling reads");
+
+    assert_eq!(
+        absolute.label().integrity,
+        relative.label().integrity,
+        "one file answered two ways, so the startup answer covers only its relative name"
+    );
+    assert_eq!(relative.label().integrity, Integrity::Trusted);
+}
+
+/// The limit of that reduction, which is where it would otherwise launder. Spelling a path inside
+/// the project is not landing inside it: a link in the project pointing at an added directory makes
+/// `<root>/shared/fetched.json` resolve out of the project, and an absolute name is admitted on
+/// where it lands (TRUST-10), so that name opens. Reducing it to `shared/fetched.json` would hand
+/// back the project's own rule for a file the project does not hold, and the relative spelling of
+/// that name is one confinement refuses outright.
+#[test]
+fn a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule() {
+    let scratch = Scratch::new("absolute-through-a-link");
+    let project = scratch.path.join("project");
+    let shared = scratch.path.join("shared");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("fetched.json"), "a fetched page").unwrap();
+    std::os::unix::fs::symlink(&shared, project.join("shared")).unwrap();
+
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace
+        .add_directory(shared.to_str().expect("utf-8 path"))
+        .expect("a directory beside the project is added");
+
+    // The startup answer about the workspace, and the page that landed in the added directory.
+    let named = workspace
+        .root()
+        .join("shared/fetched.json")
+        .display()
+        .to_string();
+    let mut trust = TrustStore::new();
+    trust.trust(".");
+    trust.distrust(&named);
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    workspace
+        .read(
+            &mut policy,
+            &Labelled::trusted("shared/fetched.json".to_string()),
+        )
+        .expect_err("the relative spelling leaves the project and is refused");
+
+    let through_the_link = workspace
+        .read(&mut policy, &Labelled::trusted(named))
+        .expect("the absolute spelling names a file in an added directory");
+
+    assert_eq!(
+        through_the_link.label().integrity,
+        Integrity::Untrusted,
+        "a link inside the project read the added directory's file under the project's rule"
+    );
+}
+
 #[test]
 fn a_trusted_path_and_trusted_contents_can_be_written() {
     let scratch = Scratch::new("write");

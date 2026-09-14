@@ -1869,11 +1869,17 @@ fn read_file<S: Sink, C: Confirmer>(
     // the prompt off has to come before it, or the path spends its one question of the turn on a
     // prompt nobody sees and the trail records an offer that was never made. That is the defect
     // this block was rewritten to fix, and the order is what holds it fixed.
+
+    // The name the map holds a rule about this file under, which is the relative one where the
+    // planner spelled a file in the project by its absolute path. Every question below is about the
+    // map, so all of them ask about that name and not about the spelling.
+    let keyed = workspace.trust_key(&proposed_path);
+
     let media = crate::workspace::media_for(&proposed_path);
-    if policy.read_is_quarantined(&proposed_path)
+    if policy.read_is_quarantined(&keyed)
         && media.is_none()
         && workspace.names_a_file(&proposed_path)
-        && policy.should_offer_vouch(&proposed_path)
+        && policy.should_offer_vouch(&keyed)
     {
         // Whether the question is put has already been settled. What the file holds shapes the
         // preview and decides nothing further: the head of it is cut inside the kernel, so the
@@ -1894,14 +1900,14 @@ fn read_file<S: Sink, C: Confirmer>(
             truncated,
         };
         if confirmer.confirm_vouch(&request) == Decision::Approve {
-            policy.vouch_for_named_path(&proposed_path);
+            policy.vouch_for_named_path(&keyed);
         }
     }
 
     // A reference to a file the planner may not read already is that file, so reading it has
     // nothing to hand back but another name for the same thing, which reads as the read having
     // failed. One planner went four references deep before giving up. Nothing to do but say so.
-    if destination == Destination::Reference && policy.read_is_quarantined(&proposed_path) {
+    if destination == Destination::Reference && policy.read_is_quarantined(&keyed) {
         return confirmed(
             format!(
                 "{shown_path} already names that file, and nothing will show you what is in \
@@ -1947,9 +1953,15 @@ fn read_file<S: Sink, C: Confirmer>(
     // is nothing for them to be a slice of: honouring them would mean opening the file at the
     // moment the planner asked, which is the one thing this branch exists to avoid. The reference
     // is of the file, and what is read from it is read when something needs the bytes.
-    if policy.read_is_quarantined(&proposed_path) {
+    if policy.read_is_quarantined(&keyed) {
         return match workspace.survey(&proposed_path) {
-            Ok(bytes) => Produced::deferring(path, shown_path, bytes).of_content(),
+            // Deferred under the keyed name as well. The slot carries the map's answer about this
+            // file, and the answer that quarantined it is the one it has to carry: keyed one way
+            // and labelled the other, a file held back for being untrusted would arrive in the
+            // slot as trusted.
+            Ok(bytes) => {
+                Produced::deferring(Labelled::trusted(keyed), shown_path, bytes).of_content()
+            }
             // A path that names nothing is said so now, exactly as an eager read would have.
             Err(e) => problem(format!("error: {e}")),
         };
@@ -2560,8 +2572,10 @@ fn write_file<S: Sink, C: Confirmer>(
 
     match workspace.write_endorsed(policy, &path, &body) {
         Ok(_) => {
-            // The file now holds this data, so the map must say what the path means.
-            policy.reconcile_after_write(&proposed_path, body_label);
+            // The file now holds this data, so the map must say what the path means. Under the
+            // name the map keys on, or an absolute spelling of a file in the project would record
+            // a second rule about it rather than saying what its one rule already says.
+            policy.reconcile_after_write(&workspace.trust_key(&proposed_path), body_label);
             let (note, changes) = change_report(intent, existing.as_deref(), &shown, replaced_age);
 
             // What the model is told, which is what its own account of the turn will repeat. It
@@ -2713,7 +2727,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     // on a promoted value would be routed by the model's own proposal.
     match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current) {
         Ok(_) => {
-            policy.reconcile_after_write(&proposed_path, body_label);
+            policy.reconcile_after_write(&workspace.trust_key(&proposed_path), body_label);
             let (note, changes) = change_report(Intent::Edit, Some(&current), &shown, None);
             let headline = format!("edited {shown_path}: {occurrences} replacement(s)");
 

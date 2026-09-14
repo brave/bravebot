@@ -70,6 +70,13 @@ one map of full paths, which would remove this clause.
 A rule under the working directory decides nothing about a directory opened by absolute path, and
 the reverse. `/` is never treated as the empty prefix.
 
+An absolute path that names and resolves inside the working directory is not in the absolute
+namespace at all: reading, writing, vouching for or quarantining a file the workspace reaches that
+way asks about its relative name, so those operations answer the same for a project file whichever
+way it was spelled. The name is reduced by spelling, so a `..` component or a link out of the
+project keeps the name it was given, and an absolute rule covering the project decides nothing about
+the files inside it.
+
 **Why.** The working directory's own rule is the **empty** prefix, since every path in the project
 is named relative to it. Match absolute paths against that same map and the empty prefix covers
 every one of them, so answering yes at startup would silently vouch for every directory opened
@@ -80,6 +87,33 @@ reaching where it was never given.
 The same relative path also exists in both places and names different files, so even without the
 prefix problem one map could not tell them apart.
 
+The reduction is what keeps that separation from splitting a file the project already holds. Only a
+directory the project sits inside makes such a path reachable at all (TRUST-9, TRUST-10), and after
+that the same file has a name in each namespace: the startup answer covering the workspace
+(TRUST-7) would cover only half of what it named, and a write reconciling under one name would say
+nothing about the other. Which way round the two are reconciled follows from the same clause: an
+absolute rule reaching inside the project is an answer given about a directory and not about the
+work, so the project's own rules decide its files and a directory added above it does not.
+
+Where the path lands decides whether it is reduced and the spelling decides the name, and each half
+answers a different question. A name spelled inside the project that resolves out of it is left
+alone, because the project has no rules about a file it does not hold and confinement refuses that
+name's relative spelling outright. Keying on the spelling rather than on the destination is what
+keeps the reduction from being a laundering step of its own: resolving the tail would return the
+rule for a *different* name, so a file in an untrusted subtree would be readable as trusted through
+a link inside the project. A file with two names of its own therefore still has two rules, which is
+a cost of keying on the name and is written down below.
+
+The reduction is the workspace's, so it holds for what the workspace does: the reads, writes,
+listings, vouches and quarantines that go through it. Two things stay outside it, and in opposite
+directions. The prompt before a write asks under the spelling it was given, since it also matches
+the rules a person wrote in advance and those are matched on the path as written, so it asks where a
+reduced name would not have. A `run` line's output is labelled from the paths the line spelled
+([tools/command-line.md](tools/command-line.md#CMDLINE-8)), so where a directory above the project
+is trusted, a proven line naming a project file absolutely is still labelled from that directory's
+rule. That is what such a line answered before this reduction existed, and closing it means settling
+which spellings a command line is proven to read, which is that clause's question.
+
 `verified-by: bravebot_core::trust::an_absolute_rule_does_not_decide_a_relative_path`
 `verified-by: bravebot_core::trust::trusting_the_workspace_says_nothing_about_an_added_directory`
 `verified-by: bravebot_core::trust::trusting_the_filesystem_root_does_not_trust_the_workspace`
@@ -87,6 +121,9 @@ prefix problem one map could not tell them apart.
 `verified-by: bravebot_core::trust::the_deepest_absolute_rule_wins`
 `verified-by: bravebot_core::trust::equivalent_absolute_spellings_are_the_same_rule`
 `verified-by: bravebot_core::trust::every_equivalent_absolute_spelling_reaches_the_same_rule`
+`verified-by: bravebot_agent::workspace::a_project_file_named_absolutely_is_read_under_its_relative_rule`
+`verified-by: bravebot_agent::workspace::a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule`
+`verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
 
 ## What a write does
 

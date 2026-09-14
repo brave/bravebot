@@ -1595,7 +1595,10 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
 
     for index in 0..task.files.len() {
         let path = routing_path(&policy, &format!("file_{index}"));
-        policy.vouch_for_named_path(&path);
+        // The rule goes under the name the map keys on: `@` takes the word the user typed, so a
+        // file in the project can arrive spelled absolutely, and a rule under that spelling would
+        // leave the read below asking about the relative one and finding nothing.
+        policy.vouch_for_named_path(&workspace.trust_key(&path));
         let contents = workspace.read(&mut policy, &Labelled::trusted(path.clone()))?;
         admit_context_file(&mut policy, conversation, &path, &contents)?;
     }
@@ -1605,7 +1608,10 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // which is rarely inside the workspace, so this is the read that is not confined to it.
     for index in 0..task.dropped_text.len() {
         let path = routing_path(&policy, &format!("dropped_{index}"));
-        policy.vouch_for_named_path(&path);
+        // Keyed as the read below keys it. A drop usually arrives from outside the project, where
+        // the name stands as it is, but one from inside it has a relative name and that is the one
+        // the read will ask about.
+        policy.vouch_for_named_path(&workspace.trust_key(&path));
         let contents =
             workspace.read_dropped_text(&mut policy, &Labelled::trusted(path.clone()))?;
         admit_context_file(&mut policy, conversation, &path, &contents)?;
@@ -1657,8 +1663,8 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             let media = task.attachments[index].media.clone();
 
             // Attaching the file is the grant, exactly as naming one with `@` is. Recorded before
-            // the read so the read sees it.
-            policy.vouch_for_named_path(&path);
+            // the read so the read sees it, and under the name the read will ask about.
+            policy.vouch_for_named_path(&workspace.trust_key(&path));
 
             let contents = workspace.read_dropped_attachment(
                 &mut policy,
