@@ -19,7 +19,7 @@
 //! Nothing here inspects content to make a decision. Text is moved between shapes and handed on with
 //! whatever label it arrived under.
 
-use bravebot_aichat::protocol::Effort;
+use bravebot_aichat::protocol::{Cached, Effort};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -692,6 +692,13 @@ impl From<BedrockUsage> for bravebot_aichat::protocol::Usage {
                 + usage.cache_read_input_tokens
                 + usage.cache_write_input_tokens,
             completion_tokens: usage.output_tokens,
+            // Carried as well as added in. Summed alone they say what the round sent and nothing
+            // about what it cost, and those differ by roughly ten times: a session where every
+            // breakpoint missed reports the same figures as one where every one of them hit.
+            cached: Cached {
+                read_tokens: usage.cache_read_input_tokens,
+                written_tokens: usage.cache_write_input_tokens,
+            },
         }
     }
 }
@@ -1092,6 +1099,35 @@ mod tests {
             "a cached round read as a smaller prompt than it sent"
         );
         assert_eq!(usage.completion_tokens, 40);
+    }
+
+    /// A round served out of the cache and one that read the whole prompt cost about ten times
+    /// different, so a figure that cannot tell them apart cannot say whether caching is working.
+    #[test]
+    fn a_cached_round_is_told_apart_from_one_that_read_the_whole_prompt() {
+        let cached: bravebot_aichat::protocol::Usage = BedrockUsage {
+            input_tokens: 12,
+            output_tokens: 40,
+            cache_read_input_tokens: 900,
+            cache_write_input_tokens: 88,
+        }
+        .into();
+        let fresh: bravebot_aichat::protocol::Usage = BedrockUsage {
+            input_tokens: 1000,
+            output_tokens: 40,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+        }
+        .into();
+
+        assert_eq!(
+            cached.prompt_tokens, fresh.prompt_tokens,
+            "the two rounds sent the same prompt"
+        );
+        assert_ne!(
+            cached, fresh,
+            "a cached round reported exactly what an uncached one did"
+        );
     }
 
     /// The prompt and the schemas are the same bytes every round, so the request says so.

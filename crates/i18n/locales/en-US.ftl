@@ -525,6 +525,14 @@ status-time-inference = on the model
 status-time-tools = running tools
 status-time-stalled = waiting on you
 status-time-overhead = unaccounted for
+# How much of the last turn's prompt the service did not have to read. Two figures because they are
+# priced differently: a read is a fraction of what a fresh token costs and a write is above it, so a
+# breakpoint on a prefix nothing reads back is a loss that only the second figure shows.
+# The label says which turn because the counts above it are the whole session's, and a reader who
+# took this for a session total would divide it by them and conclude the wrong rate.
+status-cache = Prompt cache, last turn
+status-cache-read = served from the cache
+status-cache-written = written to it for the next turn
 status-trust = Trust
 status-nothing-vouched-for = nothing vouched for
 status-trusted = trusted

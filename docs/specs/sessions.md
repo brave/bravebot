@@ -485,3 +485,12 @@ run to arrive.
 - **A rewind overwrites edits made since the turn.** What goes back is what the path held before
   the turn wrote to it, so a file the user edited themselves in between loses that edit. Nothing
   compares the file against what the turn left there, and nothing asks first.
+
+- **The per-turn breakdown counts what a turn sent, which is not what it cost.** A cached prompt
+  token is charged at a fraction of a fresh one, so two turns recorded at the same figure can differ
+  about tenfold in money. How much of a prompt a service answered out of its own cache is a figure
+  [backends.md](backends.md) carries out of a reply that states one, and it is not kept here. What is
+  written stays comparable across turns and across sessions, which is what the record is read for,
+  and it cannot be read as a bill. Keeping the split would mean a resumed session reporting a cache
+  it never used; the figures are on the status panel for the turn that just ran, where they are a
+  measurement rather than a history.

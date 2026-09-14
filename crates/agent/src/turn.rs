@@ -13,7 +13,7 @@
 //! each turn, resuming a conversation that outlives it.
 
 use base64::Engine;
-use bravebot_aichat::protocol::{ChatRequest, Effort, ImageUrl, Message, Part, ToolCall};
+use bravebot_aichat::protocol::{Cached, ChatRequest, Effort, ImageUrl, Message, Part, ToolCall};
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet};
@@ -841,6 +841,15 @@ pub struct Outcome {
     /// ended, which is the only figure worth comparing against
     /// [`bravebot_config::Config::context_budget`].
     pub context_tokens: u64,
+    /// Of [`Outcome::tokens`], how much the backend served out of its prompt cache.
+    ///
+    /// Summed over the rounds like the total, and for the same reason: a turn's first round writes
+    /// the prefix that the rest of them read back, so the round that paid for it and the rounds
+    /// that profited are only the same figure once added together.
+    ///
+    /// Both figures zero from a backend that reports nothing about a cache, which is the same thing
+    /// this says about a turn whose cache missed.
+    pub cached: Cached,
     /// Whether this turn's requests went out on the premium tier.
     ///
     /// A fact about what happened rather than about the configuration. Every build that knows a
@@ -1331,6 +1340,7 @@ fn record_answer<S: Sink>(
 /// Nothing here reads a report. It is labelled by the context that produced it and presented
 /// through the same gate as any other result, so a delegate whose own context met something
 /// untrusted hands its parent a reference rather than words.
+#[allow(clippy::too_many_arguments)]
 fn collect_delegates<S: Sink, R: Reporter>(
     delegates: &mut Vec<Working<'_>>,
     policy: &mut Policy<'_, S>,
@@ -1338,6 +1348,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
     reporter: &mut R,
     tokens: &mut u64,
     output_tokens: &mut u64,
+    cached: &mut Cached,
     wait: bool,
 ) -> Result<usize, TurnError> {
     let mut collected = 0;
@@ -1363,6 +1374,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 policy.adopt_from_delegate(&working.seeded, &finished.vouched);
                 *tokens += finished.delegated.usage.total();
                 *output_tokens += finished.delegated.usage.completion_tokens;
+                cached.add(finished.delegated.usage.cached);
 
                 let kind = finished.delegated.kind;
                 let note = format!(
@@ -1744,6 +1756,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // output to a running total that also holds prompt tokens would make the figure jump by the
     // size of the re-sent history every round.
     let mut output_tokens = 0u64;
+    // Summed over the turn like the total, and starting from zero with it: this says what this
+    // turn's requests did, not what the session has done, and the session adds its turns up itself.
+    let mut cached = Cached::default();
     // Seeded from the conversation rather than starting at zero. A session is many turns, and a
     // figure that began again with each one would only notice a conversation growing inside a
     // single long turn: fifty short turns would fill the context with nothing watching.
@@ -1795,6 +1810,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                 &mut reporter,
                 &mut tokens,
                 &mut output_tokens,
+                &mut cached,
                 false,
             )?;
 
@@ -1821,6 +1837,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                     Ok(Some(done)) => {
                         tokens += done.usage.total();
                         output_tokens += done.usage.completion_tokens;
+                        cached.add(done.usage.cached);
                         reporter.narration(format!(
                             "the conversation was getting long, so {} earlier messages were \
                          summarised and the last {} kept as they are",
@@ -1910,6 +1927,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             spent.inference += asked_at.elapsed();
             tokens += completion.usage.total();
             output_tokens += completion.usage.completion_tokens;
+            cached.add(completion.usage.cached);
             context_tokens = completion.usage.prompt_tokens;
             conversation.measured(context_tokens);
 
@@ -1933,6 +1951,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                     &mut reporter,
                     &mut tokens,
                     &mut output_tokens,
+                    &mut cached,
                     true,
                 )?;
                 break completion;
@@ -1952,6 +1971,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                         &mut reporter,
                         &mut tokens,
                         &mut output_tokens,
+                        &mut cached,
                         true,
                     )?;
                     continue;
@@ -2147,6 +2167,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                 // having cost almost nothing.
                 tokens += output.usage.total();
                 output_tokens += output.usage.completion_tokens;
+                cached.add(output.usage.cached);
                 // Kept as the turn goes rather than read off the last round, and overwritten by each
                 // call: a turn that says when to wake twice meant the second one, which is the answer
                 // it ended on.
@@ -2651,6 +2672,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         tokens,
         output_tokens,
         context_tokens,
+        cached,
         // Whether a credential was actually presented, which is what `route` decides from. A
         // subscription that was found is one that will be spent on every round of this turn.
         premium: subscription.is_some(),

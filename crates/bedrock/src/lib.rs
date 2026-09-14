@@ -1143,6 +1143,10 @@ mod tests {
         assert_eq!(reply.usage.completion_tokens, 42);
         assert_eq!(reply.usage.total(), 1_042);
         assert!(reply.counted, "the service reported its own figure");
+        // The split as well as the sum. A streamed reply is the ordinary path here, so a total that
+        // survives the stream without it would leave the common case unable to say what it cost.
+        assert_eq!(reply.usage.cached.read_tokens, 800);
+        assert_eq!(reply.usage.cached.written_tokens, 100);
     }
 
     /// Until the service reports a figure, a count of what arrived is shown so a reply in flight

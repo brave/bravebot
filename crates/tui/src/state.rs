@@ -632,6 +632,11 @@ pub struct TurnSnapshot {
     pub spend: std::collections::BTreeMap<usize, u64>,
     /// Timing by turn before this turn.
     pub timing: std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
+    /// What the turn before this one read out of the cache, or `None` if it was the first.
+    ///
+    /// Kept with the spend it belongs beside: undoing a turn that is no longer in the token count
+    /// must not leave the panel reporting the cache that turn hit.
+    pub cached: Option<bravebot_aichat::protocol::Cached>,
     /// Trust map rules before this turn.
     pub trust: bravebot_core::trust::TrustStore,
     /// Trusted programs before this turn.
@@ -829,6 +834,17 @@ pub struct Session {
     /// the same reasoning as [`Session::served`]: whether premium is in use is a fact about a
     /// request, and every build knows a premium host whether or not one is ever reached.
     premium: Option<bool>,
+    /// How much of the last turn's prompt the backend served out of its own cache.
+    ///
+    /// `None` until a turn has run, and `None` for a session restored from a record: this is not
+    /// kept there, so a resumed session says nothing about a cache rather than repeating what the
+    /// run before it measured.
+    ///
+    /// The last turn rather than the session, which is the figure worth reading. Caching is a
+    /// property of a request, and a total over a session that compacted part way through mixes the
+    /// turns whose prefix survived with the turns whose prefix was rewritten and averages away the
+    /// only thing the number is for.
+    cached: Option<bravebot_aichat::protocol::Cached>,
     /// Prompts already sent, for recall with the arrow keys.
     pub history: crate::history::History,
     /// What the mouse is sweeping over, or what it last swept over.
@@ -1082,6 +1098,7 @@ impl Session {
             // Nothing has been served, so nothing has been compared. Set by the first turn.
             served_names_are_comparable: true,
             premium: None,
+            cached: None,
             history: crate::history::History::new(),
             selection: None,
             copied: None,
@@ -1371,6 +1388,9 @@ impl Session {
         self.tokens = 0;
         self.spend.clear();
         self.timing.clear();
+        // Goes with the spend rather than staying like the chosen model: it describes the prompt the
+        // cleared conversation sent, and the panel prints it beside a cost that is now zero.
+        self.cached = None;
         self.occupancy = Occupancy::Unmeasured;
         self.written = 0;
         self.todos.clear();
@@ -4725,6 +4745,25 @@ impl Session {
         self.premium
     }
 
+    /// Record how much of the turn just finished the backend did not have to read.
+    pub fn served_from_cache(&mut self, cached: bravebot_aichat::protocol::Cached) {
+        self.cached = Some(cached);
+    }
+
+    /// Put back what an earlier turn read, or forget the figure with `None`.
+    ///
+    /// The figure is the last turn's, so anything that changes which turn that is has to say so:
+    /// undoing a turn puts back the one before it, and a turn that failed leaves no measurement to
+    /// report at all.
+    pub fn restore_cache(&mut self, cached: Option<bravebot_aichat::protocol::Cached>) {
+        self.cached = cached;
+    }
+
+    /// What the last turn read out of the cache and wrote into it, or `None` before one has run.
+    pub fn cached(&self) -> Option<bravebot_aichat::protocol::Cached> {
+        self.cached
+    }
+
     /// The model the server last reported using, or `None` before any turn has run.
     pub fn served_model(&self) -> Option<&str> {
         self.served.as_ref().map(|(_, served)| served.as_str())
@@ -7492,6 +7531,7 @@ mod tests {
             tokens: 10,
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
+            cached: None,
             trust: bravebot_core::trust::TrustStore::new(),
             programs: bravebot_core::programs::TrustedPrograms::default(),
             transcript_len: 0,
@@ -7528,6 +7568,53 @@ mod tests {
             "the previous turn survived clear"
         );
         assert!(s.last_turn_backups.is_empty(), "the backups survived clear");
+    }
+
+    /// A cache figure describes the exchange that clearing throws away, and the panel prints it
+    /// beside a spend that clearing sets back to zero. Keeping it would report a cache hit for a
+    /// conversation nobody can read, next to a cost of nothing.
+    #[test]
+    fn clearing_forgets_what_the_last_turn_read_out_of_the_cache() {
+        let mut s = session();
+        s.served_from_cache(bravebot_aichat::protocol::Cached {
+            read_tokens: 900,
+            written_tokens: 100,
+        });
+        assert!(s.cached().is_some(), "the figure was never recorded");
+
+        s.clear();
+        assert_eq!(s.cached(), None, "the cache figure survived clear");
+    }
+
+    /// The panel reports the last turn's split, so anything that changes which turn is the last one
+    /// has to move the figure with it. Rewinding a turn puts back what the turn before it read, and
+    /// a turn that measured nothing leaves nothing to report rather than the turn before it.
+    #[test]
+    fn the_cache_figure_follows_which_turn_is_the_last_one() {
+        let mut s = session();
+        let first = bravebot_aichat::protocol::Cached {
+            read_tokens: 400,
+            written_tokens: 50,
+        };
+        s.served_from_cache(first);
+        s.served_from_cache(bravebot_aichat::protocol::Cached {
+            read_tokens: 900,
+            written_tokens: 100,
+        });
+
+        s.restore_cache(Some(first));
+        assert_eq!(
+            s.cached(),
+            Some(first),
+            "rewinding did not put back the earlier turn's figure"
+        );
+
+        s.restore_cache(None);
+        assert_eq!(
+            s.cached(),
+            None,
+            "a turn that measured nothing left the one before it on the panel"
+        );
     }
 
     /// What belongs to the user rather than to the session survives, since none of it is a

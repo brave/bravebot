@@ -6,6 +6,8 @@ governs:
   - crates/agent/src/backend.rs
   - crates/bedrock/src/credentials.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/status.rs
+  - crates/tui/src/state.rs
   - crates/config/src/bedrock.rs
   - crates/config/src/lib.rs
   - crates/aichat/src/lib.rs
@@ -740,7 +742,9 @@ a cache write and nothing else.
 
 **The reported prompt is what was sent, not what was read.** This API states `inputTokens` net of
 the cache and reports the cached tokens beside it, so the three are added back together on the way
-into a `Usage`. Without that a cached round reads as a conversation that shrank while it grew.
+into a `Usage`. Without that a cached round reads as a conversation that shrank while it grew. They
+are also carried through separately, which is what BACKEND-31 requires and the only way anything can
+say whether this clause is working.
 
 **A model that refuses them is not sent them again.** Prompt caching is not something every model
 this backend can reach offers, and one that does not refuses the whole request rather than reading
@@ -755,6 +759,12 @@ the breakpoints are a part of the request nobody asked for and the service refus
 
 **Only this backend.** The aichat endpoint and an OpenAI-compatible gateway take a different wire
 format, which has no field for this and asks for nothing.
+
+**A breakpoint carries no label and asks for nothing.** It marks a prefix of a request that has
+already been assembled, after every gate that decided what may be in it. Which bytes the service
+kept from a previous request of the same session cannot put a byte into this one that was not sent,
+so nothing in [labels.md](labels.md) reads differently for a request that carries breakpoints than
+for one that does not.
 
 `verified-by: bravebot_bedrock::protocol::the_system_prompt_carries_a_breakpoint`
 `verified-by: bravebot_bedrock::protocol::the_last_block_of_the_conversation_carries_a_breakpoint`
@@ -849,6 +859,65 @@ would make a file that mentions the block at all speak for names it never named.
 `verified-by: bravebot_config::settings::an_empty_attribution_is_a_choice_of_nothing`
 `verified-by: bravebot_config::settings::an_attribution_name_no_file_wrote_is_unset`
 
+<a id="BACKEND-31"></a>
+### BACKEND-31: a reply reports how much of the prompt the service did not have to read
+
+A reply's usage carries two figures beside the prompt total: how much of the prompt the service
+answered out of its own cache, and how much this request wrote into that cache for the next one to
+read. Both are counted inside the prompt total rather than beside it, so one figure says what a
+round sent and the other two say what it cost. Bedrock states both. An OpenAI-compatible reply
+states the read alone, in `prompt_tokens_details.cached_tokens`, there being no field in that
+protocol for a write. A service stating neither leaves both at zero.
+
+A turn sums them over its rounds, as it sums the total, and a delegate's are added to the turn that
+spawned it.
+
+**Why.** A cached token is charged at a fraction of a fresh one and a written one above it, so the
+prompt total is the one figure that does not move when caching begins working. Two sessions of the
+same length, one whose every breakpoint hit and one whose every breakpoint missed, send an identical
+prompt and differ about tenfold in money and in latency. Without the split, BACKEND-27 is a
+requirement whose effect nothing can observe, and a regression in it costs an order of magnitude
+while every figure reported stays where it was.
+
+**Summed rather than kept per round.** A turn's first round writes the prefix that its later rounds
+read back, so the round that pays and the rounds that profit are different rounds. One round's
+figure reports one or the other.
+
+**Zero is silence, not a miss.** Both figures at zero says a service that reports nothing about a
+cache exactly as much as it says a round whose cache missed, and nothing here distinguishes them.
+Whatever presents these figures presents nothing when they are zero, rather than presenting a miss
+that may not have happened. That holds of each figure alone: a turn that established a prefix and
+read nothing back reports the write and says nothing about the read.
+
+**The status panel reports the last turn's, beside what the session cost.** The last turn rather
+than a total over the session, because caching is a property of a request: a session that compacted
+part way through has turns whose prefix survived and turns whose prefix was rewritten, and a total
+averages away the thing the figures are for. Nothing about a cache is kept in a session record, so a
+resumed session reports nothing until a turn has run. Clearing goes with what the conversation spent
+rather than with the model the user chose, the figures describing a prompt that has been thrown away.
+Anything else that changes which turn is the last one moves the figures with it: rewinding a turn
+puts back what the turn before it read, and a turn that failed or was stopped reports nothing rather
+than leaving the turn before it on the panel.
+
+**Presented as two figures and never as their sum.** They are priced in opposite directions, a read
+at a fraction of a fresh token and a write above one, so a turn that saved almost the whole prompt
+and a turn that paid a premium on it add up the same. The heading carries no total of its own, and
+says which turn it speaks for, the counts beside it being the session's.
+
+`verified-by: bravebot_bedrock::protocol::a_cached_round_is_told_apart_from_one_that_read_the_whole_prompt`
+`verified-by: bravebot_bedrock::lib::both_halves_of_the_cost_survive_the_stream`
+`verified-by: bravebot_aichat::protocol::the_cache_figure_is_read_out_of_the_details_object`
+`verified-by: bravebot_aichat::protocol::a_usage_object_without_cache_figures_still_parses`
+`verified-by: bravebot_aichat::protocol::a_null_cache_figure_reads_as_silence_rather_than_failing_the_reply`
+`verified-by: bravebot_agent::turn::a_turn_sums_what_its_rounds_read_out_of_the_cache`
+`verified-by: bravebot_agent::turn::a_turn_against_a_server_that_says_nothing_about_a_cache_reports_nothing`
+`verified-by: bravebot_agent::turn::a_turn_counts_what_its_delegates_read_out_of_the_cache`
+`verified-by: bravebot_tui::status::the_panel_says_how_much_of_the_prompt_came_out_of_the_cache`
+`verified-by: bravebot_tui::status::a_backend_that_reports_nothing_about_a_cache_gets_no_cache_lines`
+`verified-by: bravebot_tui::status::a_turn_that_only_wrote_to_the_cache_does_not_report_a_read_of_zero`
+`verified-by: bravebot_tui::state::clearing_forgets_what_the_last_turn_read_out_of_the_cache`
+`verified-by: bravebot_tui::state::the_cache_figure_follows_which_turn_is_the_last_one`
+
 ## Known costs
 
 - **The effort level is the one field in a Bedrock request that a single provider defines.** The
@@ -893,6 +962,30 @@ would make a file that mentions the block at all speak for names it never named.
   expire during a session, and the tool that holds them is the one the person already signs in
   with. That is a process this code did not write, reading a configuration this code does not
   govern.
+
+- **Compaction throws away everything the cache held.** A summary replaces the messages in front of
+  the last few, which is a rewrite of the very prefix both breakpoints sit in, so the round after a
+  compaction reads nothing back and pays a cache write to establish the new prefix. That is the
+  right way round, the point of compacting being that the old prefix is no longer worth sending at
+  all, but it means the sessions that benefit most from caching are the ones that periodically lose
+  it, and a session compacting often enough could write more than it ever reads. Nothing here
+  measures that: BACKEND-31's figures are per turn, and the turn that compacted is charged for the
+  write in the same figure as the rounds that profited from it.
+
+- **An ephemeral cache entry expires on a few minutes of inactivity, and nothing here tracks it.** A
+  person who thinks between turns misses more often than the token arithmetic suggests, and a miss
+  looks identical to a service that reports nothing: the reply carries a zero read either way.
+  Neither figure says when the last request was, so nothing can distinguish a prefix that expired
+  from one that was never established.
+
+- **The aichat endpoint Brave runs reports nothing about a cache, so BACKEND-31 measures nothing
+  there.** That server does not answer `include_usage` with an OpenAI `usage` block at all: it sends
+  a `brave-chat.contentReceipt` carrying `total_tokens` and `trimmed_tokens`, and neither says
+  whether any of the prompt was served from a cache. Whether the service caches, and whether asking
+  it to would be worth anything, is therefore not a question this code can answer from a reply, and
+  both figures stay at the zero BACKEND-31 defines as silence. The field
+  `prompt_tokens_details.cached_tokens` is read for the gateway case, where a server states it,
+  which costs a field and settles nothing about Brave's own endpoint.
 
 - **A gateway credential may be a plaintext string in the settings file.** The shape this block
   borrows has a field for one, and taking the shape means taking the field. Naming a variable is

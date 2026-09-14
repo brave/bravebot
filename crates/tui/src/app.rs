@@ -2016,6 +2016,9 @@ fn event_loop(
                     session.tokens = snapshot.tokens;
                     session.restore_spend(snapshot.tokens, snapshot.spend);
                     session.restore_timing(snapshot.timing);
+                    // With the spend, for the same reason clearing takes it: the figure describes a
+                    // prompt that is no longer part of what this session sent.
+                    session.restore_cache(snapshot.cached);
                     session.written = 0;
                     session.finished = None;
                     trust = snapshot.trust;
@@ -2150,6 +2153,7 @@ fn event_loop(
                     turns: session.turns,
                     tokens: session.tokens,
                     timing: session.timing_total(),
+                    cached: session.cached(),
                     trust: &trust,
                     programs: &programs,
                     looping: session.looping(),
@@ -2279,6 +2283,7 @@ fn event_loop(
                         tokens: session.tokens,
                         spend: session.spend_by_turn().clone(),
                         timing: session.timing_by_turn().clone(),
+                        cached: session.cached(),
                         trust: trust.clone(),
                         programs: programs.clone(),
                         transcript_len: session.transcript.len(),
@@ -4231,6 +4236,11 @@ fn fold_outcome(
             // only the worker saw.
             session.spent_time(outcome.timing);
 
+            // How much of what the turn sent the backend recognised, which the two figures above
+            // cannot say: a turn costs the same tokens whether they were read or recognised, and
+            // about ten times the money.
+            session.served_from_cache(outcome.cached);
+
             // What the turn's last request came to, against what it would be compacted at. Not
             // the same figure as the cost above: that adds every round together, this says how
             // full the context is now.
@@ -4306,6 +4316,10 @@ fn fold_outcome(
                 .map(|stamped| crate::audit::as_line(&stamped.event))
                 .collect();
             session.fail(t!(session_error, problem = error));
+            // The panel reports the last turn's cache split, and this turn is now the last one. It
+            // measured nothing, so leaving the turn before it on the panel would report a figure
+            // against an exchange that never finished.
+            session.restore_cache(None);
             if let Some(last) = session.transcript.last_mut() {
                 last.trail = trail;
             }

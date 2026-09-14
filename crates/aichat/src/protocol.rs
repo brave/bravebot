@@ -406,6 +406,67 @@ pub struct Usage {
     pub prompt_tokens: u64,
     #[serde(default)]
     pub completion_tokens: u64,
+    /// Of the prompt, how much of it the service did not have to read again.
+    #[serde(default, rename = "prompt_tokens_details", deserialize_with = "cached")]
+    pub cached: Cached,
+}
+
+/// How much of a prompt a service answered out of its own cache.
+///
+/// A split of [`Usage::prompt_tokens`] rather than anything extra: both figures are already
+/// inside it, because what was sent is what was sent whoever ended up reading it. Kept because
+/// the total cannot say what a round cost. Reading a cached token is a fraction of the price of
+/// reading a fresh one and writing one costs above it, so a session whose cache hit every round
+/// and one whose cache missed every round report the same prompt and differ about tenfold in
+/// money and in latency.
+///
+/// Both zero means a service that said nothing about a cache as much as it means a round that
+/// missed, and nothing here distinguishes the two.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Cached {
+    /// Served out of the cache instead of read.
+    pub read_tokens: u64,
+    /// Written into the cache on the way past, for the next request to read back.
+    pub written_tokens: u64,
+}
+
+impl Cached {
+    /// Add another request's figures, for a total over a turn or a session.
+    pub fn add(&mut self, other: Cached) {
+        self.read_tokens += other.read_tokens;
+        self.written_tokens += other.written_tokens;
+    }
+
+    /// Whether either figure has anything in it.
+    pub fn any(&self) -> bool {
+        self.read_tokens > 0 || self.written_tokens > 0
+    }
+}
+
+/// Read the cache figure out of the object this protocol nests it in.
+///
+/// The nesting stops here, so the rest of the agent reads one shape however a service stated it.
+/// Nothing is read for what a request wrote: this protocol states no field for it, and a service
+/// that charges for a cache write reports it in a shape of its own.
+///
+/// Both levels are optional because a server may state the field and put `null` in it, which
+/// `serde(default)` does not cover: that only answers for a field nobody sent. Refusing such a
+/// reply would fail the whole turn over a figure this reads for information.
+fn cached<'de, D>(deserializer: D) -> Result<Cached, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct Details {
+        #[serde(default)]
+        cached_tokens: Option<u64>,
+    }
+    Ok(Cached {
+        read_tokens: Option::<Details>::deserialize(deserializer)?
+            .and_then(|details| details.cached_tokens)
+            .unwrap_or_default(),
+        written_tokens: 0,
+    })
 }
 
 impl Usage {
@@ -662,6 +723,7 @@ impl StreamAccumulator {
         self.usage.unwrap_or(Usage {
             prompt_tokens: self.receipt.unwrap_or_default(),
             completion_tokens: self.content_chunks,
+            ..Usage::default()
         })
     }
 
@@ -701,6 +763,7 @@ impl StreamAccumulator {
         let usage = self.usage.unwrap_or(Usage {
             prompt_tokens: self.receipt.unwrap_or_default(),
             completion_tokens: self.content_chunks,
+            ..Usage::default()
         });
         (self.content, self.model, calls, usage)
     }
@@ -1279,6 +1342,50 @@ mod tests {
             "choices":[{"message":{"content":"hi"}}]}"#;
         let parsed: ChatResponse = serde_json::from_str(raw).unwrap();
         assert_eq!(parsed.usage().total(), 9);
+    }
+
+    /// A gateway that caches states how much of the prompt it did not read again. Reading it costs
+    /// a field, and without it a session behind such a gateway cannot say whether caching is on.
+    #[test]
+    fn the_cache_figure_is_read_out_of_the_details_object() {
+        let raw = r#"{"model":"m","usage":{"prompt_tokens":1200,"completion_tokens":34,
+            "prompt_tokens_details":{"cached_tokens":1100}},
+            "choices":[{"message":{"content":"hi"}}]}"#;
+        let parsed: ChatResponse = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.usage().cached.read_tokens, 1100);
+        // Inside the prompt rather than beside it, so nothing about the total moved.
+        assert_eq!(parsed.usage().prompt_tokens, 1200);
+    }
+
+    /// The field is the newer half of this protocol and plenty of servers state neither it nor the
+    /// object holding it, so both absences have to read as a server that said nothing.
+    #[test]
+    fn a_usage_object_without_cache_figures_still_parses() {
+        let raw = r#"{"model":"m","usage":{"prompt_tokens":9,"prompt_tokens_details":{}},
+            "choices":[{"message":{"content":"hi"}}]}"#;
+        let parsed: ChatResponse = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.usage().cached, Cached::default());
+        assert!(!parsed.usage().cached.any());
+    }
+
+    /// A server may state the field and put `null` in it, at either level. Reading the figure is
+    /// worth a field and no more than that, so a null has to read as the silence it is rather than
+    /// failing the reply it arrived on and with it the turn.
+    #[test]
+    fn a_null_cache_figure_reads_as_silence_rather_than_failing_the_reply() {
+        for usage in [
+            r#"{"prompt_tokens":9,"completion_tokens":1,"prompt_tokens_details":null}"#,
+            r#"{"prompt_tokens":9,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":null}}"#,
+        ] {
+            let raw = format!(
+                r#"{{"model":"m","usage":{usage},"choices":[{{"message":{{"content":"hi"}}}}]}}"#
+            );
+            let parsed: ChatResponse =
+                serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{usage} was refused: {e}"));
+            assert_eq!(parsed.usage().cached, Cached::default());
+            // The reply is still read for everything else it stated.
+            assert_eq!(parsed.usage().prompt_tokens, 9);
+        }
     }
 
     /// Sessions on disk record `content` as a bare string. Reading one back has to keep working,
