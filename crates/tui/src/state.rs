@@ -8923,6 +8923,37 @@ mod tests {
             assert!(call_line.activity.is_none());
         }
 
+        /// A resumed session still has the picture, so the transcript has to say the prompt came
+        /// with one without drawing the bytes: a data URI redrawn as a prompt is several screens
+        /// of base64 in place of the words the person typed.
+        #[test]
+        fn a_resumed_prompt_that_carried_a_picture_shows_its_words_and_not_the_bytes() {
+            use bravebot_aichat::protocol::{ImageUrl, Part};
+
+            let transcript = resumed(
+                vec![Message::user_parts(vec![
+                    Part::Text {
+                        text: "what is [Image #1]?".to_string(),
+                    },
+                    Part::ImageUrl {
+                        image_url: ImageUrl {
+                            url: "data:image/png;base64,cGl4ZWxz".to_string(),
+                        },
+                    },
+                ])],
+                &BTreeMap::new(),
+            );
+
+            let prompt = transcript
+                .iter()
+                .find(|entry| entry.speaker == Speaker::User)
+                .expect("the prompt is in the transcript");
+            assert_eq!(
+                prompt.text, "what is [Image #1]?",
+                "the redrawn prompt is not the marker the interface wrote"
+            );
+        }
+
         /// A turn's trail still lands on the last thing the turn said, and a call is a thing the
         /// turn said. Anything else would put the trail above work it covers.
         #[test]

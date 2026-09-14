@@ -11,9 +11,6 @@ docs/specs/cli.md:CLI-6: a failure exits non-zero
 docs/specs/incognito.md:INCOG-7: importing a subscription is refused rather than silently skipped
 docs/specs/layering.md:LAYER-2: `bravebot-core` and `bravebot-agent` are both the driver
 docs/specs/naming-files.md:NAME-3: the rule outlives the read
-docs/specs/pasting.md:PASTE-4: the picture is inlined, never linked
-docs/specs/pasting.md:PASTE-5: a paste does not lower context integrity
-docs/specs/pasting.md:PASTE-9: a pasted picture is kept with the session and comes back on resume
 docs/specs/processors.md:PROC-9: the confinement is the capability set, not an operating system boundary
 docs/specs/routing.md:ROUTE-7: before adding a tool, ask what its routing field is
 docs/specs/sessions.md:SESSION-2: nothing untrusted is ever written down

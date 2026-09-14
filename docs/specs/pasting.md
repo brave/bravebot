@@ -96,7 +96,7 @@ the clipboard reader owns, and never from a filename or from what a tool printed
 A URL would have the endpoint fetch it over a connection this process never makes, which is an
 egress `bravebot-net` could not gate.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_pasted_image_reaches_the_model_with_the_prompt`
 
 
 <a id="PASTE-5"></a>
@@ -105,7 +105,7 @@ egress `bravebot-net` could not gate.
 It says nothing about content the planner has met. Lowering it here would have a screenshot mark
 everything the planner then wrote as untrusted, on the strength of the user's own input.
 
-`verified-by: none`
+`verified-by: bravebot_core::policy::a_pasted_image_does_not_lower_what_the_context_has_met`
 
 
 <a id="PASTE-6"></a>
@@ -163,7 +163,8 @@ planner answering about something it can no longer see. Quarantined content is n
 all, and this is not an exception to that: a pasted picture was never quarantined, it is the user's
 own input.
 
-`verified-by: none`
+`verified-by: bravebot_tui::sessions::a_pasted_picture_is_kept_with_the_session_and_comes_back_on_a_resume`
+`verified-by: bravebot_tui::state::a_resumed_prompt_that_carried_a_picture_shows_its_words_and_not_the_bytes`
 
 ## Known costs
 
