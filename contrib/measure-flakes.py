@@ -408,12 +408,15 @@ def existing_issues(repo, gh):
     return {issue["title"]: issue["number"] for issue in listed}
 
 
-def file_issues(flaky, samples, threads, repo, limit, gh):
+def file_issues(flaky, samples, threads, repo, assign, limit, gh):
     """One issue per flaky test, and nothing at all for a test that already has one.
 
     Returns the section to append to the report, and whether every write that was meant to happen
     did. A test that already has an issue is named with its number instead: a weekly job that files
     the same thing every Monday is a job whose issues get closed unread.
+
+    Each issue arrives assigned to `assign`, where a login was given: nobody triages what this
+    files, so one that names nobody waits until a person notices it and assigns it by hand.
     """
     heading = ["### Issues", ""]
     existing = existing_issues(repo, gh)
@@ -439,8 +442,13 @@ def file_issues(flaky, samples, threads, repo, limit, gh):
         if filed >= limit:
             held.append(test)
             continue
+        create = ["issue", "create", "--repo", repo, "--title", title]
+        # No login is no flag at all rather than an empty one, the way an empty --file-issues files
+        # nothing: a run by hand assigns nobody, since the person running it is already looking.
+        if assign:
+            create += ["--assignee", assign]
         code, output = gh(
-            ["issue", "create", "--repo", repo, "--title", title, "--body-file", "-"],
+            create + ["--body-file", "-"],
             issue_body(test, failed, reported, threads, url, samples.get(test)),
         )
         if code != 0:
@@ -560,6 +568,13 @@ def main():
         help="open an issue for each flaky test that has none; an empty value files nothing",
     )
     parser.add_argument(
+        "--assign",
+        metavar="LOGIN",
+        # Who owns a flake is the workflow's business rather than this script's, so the login is
+        # passed in rather than named here.
+        help="assign each issue this run opens to this login; an empty value assigns nobody",
+    )
+    parser.add_argument(
         "--issue-limit",
         type=at_least_one,
         default=ISSUE_LIMIT,
@@ -592,6 +607,7 @@ def main():
             samples,
             args.test_threads,
             args.file_issues,
+            args.assign,
             args.issue_limit,
             dry_gh if args.dry_run else run_gh,
         )
@@ -744,6 +760,15 @@ def created(calls):
     ]
 
 
+def assignees(calls):
+    """Who each issue a recording was asked to open would land on, `None` where it names nobody."""
+    return [
+        arguments[arguments.index("--assignee") + 1] if "--assignee" in arguments else None
+        for arguments, _ in calls
+        if arguments[:2] == ["issue", "create"]
+    ]
+
+
 def selftest():
     """Prove the parse and the report say the thing the job exists to say.
 
@@ -862,7 +887,7 @@ def selftest():
     # Filing is the half that writes to a repository everybody shares, and the failure that costs
     # most is a second issue for a test that already has one.
     gh, calls = recording_gh()
-    section, delivered = file_issues(flaky, samples, 16, "owner/repo", ISSUE_LIMIT, gh)
+    section, delivered = file_issues(flaky, samples, 16, "owner/repo", "netzenbot", ISSUE_LIMIT, gh)
     opened = created(calls)
     checks.append(
         (
@@ -892,11 +917,28 @@ def selftest():
             machine() in clean and all(machine() in body for _, body in opened),
         )
     )
+    # Nothing here is triaged, so an issue naming nobody is one no person has agreed to look at:
+    # #275 was filed unassigned and stayed that way until somebody assigned it by hand.
+    checks.append(
+        (
+            "every issue is assigned to the login the run was given",
+            assignees(calls) == ["netzenbot", "netzenbot"],
+        )
+    )
+
+    unowned, calls = recording_gh()
+    file_issues(flaky, samples, 16, "owner/repo", "", ISSUE_LIMIT, unowned)
+    checks.append(
+        (
+            "a run given no login assigns nobody rather than a person named nothing",
+            assignees(calls) == [None, None],
+        )
+    )
 
     covered, calls = recording_gh(
         existing=[(76, "Flaky test: a_reply_arrives_before_the_deadline")]
     )
-    section, _ = file_issues(flaky, samples, 16, "owner/repo", ISSUE_LIMIT, covered)
+    section, _ = file_issues(flaky, samples, 16, "owner/repo", "netzenbot", ISSUE_LIMIT, covered)
     checks.append(
         (
             "a test that already has an issue is named rather than filed again",
@@ -909,7 +951,9 @@ def selftest():
     # Filing blind is how one test ends up with five issues, so an unanswerable question files
     # nothing and says the report did not get out.
     blind, calls = recording_gh(listable=False)
-    section, delivered = file_issues(flaky, samples, 16, "owner/repo", ISSUE_LIMIT, blind)
+    section, delivered = file_issues(
+        flaky, samples, 16, "owner/repo", "netzenbot", ISSUE_LIMIT, blind
+    )
     checks.append(
         (
             "a listing that failed files nothing and does not pass silently",
@@ -918,7 +962,7 @@ def selftest():
     )
 
     capped, calls = recording_gh()
-    section, _ = file_issues(flaky, samples, 16, "owner/repo", 1, capped)
+    section, _ = file_issues(flaky, samples, 16, "owner/repo", "netzenbot", 1, capped)
     checks.append(
         (
             "one run files no more issues than its limit, worst rate first",

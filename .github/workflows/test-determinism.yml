@@ -81,6 +81,10 @@ jobs:
       # rates go to the job summary either way, and no rate fails this job, since going red over a
       # known two percent flake is the state this exists to replace.
       #
+      # Assigned to netzenbot, the account that opens the fix pull requests here. Nothing this job
+      # files is triaged, so an issue naming nobody waits on a person noticing it: #275 was filed
+      # unassigned on a Monday and assigned by hand seven hours later, which is the step this saves.
+      #
       # A hundred runs rather than thirty. Thirty accounts for a test that loses about a tenth of
       # its runs and nothing rarer, and a tenth is where the flakes found in this suite were
       # measured, over ten runs each. A rate that rough puts them on either side of that line, so
@@ -96,4 +100,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           contrib/measure-flakes.py --runs "$RUNS" --test-threads "$THREADS" \
-            --file-issues "$ISSUES" --summary "$GITHUB_STEP_SUMMARY"
+            --file-issues "$ISSUES" --assign netzenbot --summary "$GITHUB_STEP_SUMMARY"

@@ -50,9 +50,12 @@ to ignore, which is the problem this exists for, so a rate is reported and never
 `--file-issues OWNER/REPO` opens one issue per flaky test, titled `Flaky test: <name>`, saying the
 rate, the parallelism it was measured at and what the failure said. A test that already has an issue
 under that title gets nothing, whoever opened it, so a weekly run adds only what is new instead of
-filing the same test every Monday. `--dry-run` prints what it would send and sends nothing;
-`--issue-limit` bounds how many one run may open, since the first measurement of a suite nobody has
-measured could otherwise arrive as twenty issues at once. The exit code is still not a verdict on
+filing the same test every Monday. `--assign LOGIN` puts that login on every issue the run opens:
+nothing here is triaged, so an issue naming nobody waits until a person notices it and assigns it by
+hand. The workflow passes `netzenbot`; a run by hand assigns nobody unless it says otherwise.
+`--dry-run` prints what it would send and sends nothing; `--issue-limit` bounds how many one run may
+open, since the first measurement of a suite nobody has measured could otherwise arrive as twenty
+issues at once. The exit code is still not a verdict on
 the tests: it is nonzero when the measurement did not happen, or when an issue that was meant to be
 filed was not, because a filer that has quietly stopped working looks exactly like a suite that
 stopped being flaky.
