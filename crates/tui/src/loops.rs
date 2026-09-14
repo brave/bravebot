@@ -22,8 +22,9 @@ use std::time::{Duration, Instant};
 /// It is not zero because a loop with no gap at all is a way to spend a rate limit rather than a
 /// way to watch something, and because the interface has to stay usable between ticks.
 ///
-/// A wait a *turn* asks for is bounded far more tightly, and by the tool that takes it: that
-/// number is the planner's rather than the person's.
+/// A wait a *turn* asks for is bounded by the tool that takes it, lower than this at the bottom and
+/// far more tightly at the top: that number is the planner's rather than the person's, and a turn's
+/// own length already keeps the interface usable between ticks.
 const FLOOR: Duration = Duration::from_secs(5);
 
 /// How long a loop may run before it ends itself.
@@ -590,7 +591,7 @@ mod tests {
     /// number to rather than a second clamp of its own.
     #[test]
     fn a_wait_a_turn_asked_for_is_held_to_the_bounds() {
-        for (asked, held) in [(1, Wakeup::FLOOR), (86_400, Wakeup::CEILING)] {
+        for (asked, held) in [(0, Wakeup::FLOOR), (86_400, Wakeup::CEILING)] {
             let mut running = Running::begin(parse("watch").expect("a request"));
             let now = Instant::now();
             running.dispatched();

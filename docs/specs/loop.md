@@ -134,17 +134,22 @@ still the one using this session.
 | The wait | Shortest | Longest |
 |---|---|---|
 | an interval the person gave | 5 seconds | 7 days |
-| a delay a turn asked for | 1 minute | 1 hour |
+| a delay a turn asked for | 1 second | 1 hour |
 
 A number outside the bounds becomes the nearer of the two, and a person who wrote one is told
 what it became rather than left believing they are watching something ten times more closely than
 they are.
 
-**Why the two rows differ.** An interval the person typed is their own number, and `10s` means
-ten seconds. It is bounded at all only because a loop with no gap is a way to spend a rate limit
-rather than a way to watch something, and because the interface has to stay usable between ticks;
-it is capped only at the age a loop cannot outlive anyway. A delay a *turn* asked for is the
-planner's number rather than the person's, so it is held much more tightly at both ends: a person
+**Why neither floor paces a watch.** Both waits are measured from the end of a tick, and a tick is
+a whole turn, so a turn that takes a minute spaces itself out whatever the floor says. Neither
+number is what makes a loop fast. They are non-zero only because a loop with no gap at all is a way
+to spend a rate limit rather than a way to watch something, and the person's is the higher of the
+two because the interface has to stay usable between ticks, where a turn's own length already
+supplies that gap.
+
+**Why the ceilings differ.** An interval the person typed is their own number, and `10s` means ten
+seconds, so it is capped only at the age a loop cannot outlive anyway. A delay a *turn* asked for is
+the planner's number rather than the person's, so it is held much more tightly at that end: a person
 started the loop and is entitled to see it do something, and a turn that wants longer than an hour
 can say so in its answer, where somebody reads it, rather than by going quiet for a day.
 
@@ -279,5 +284,6 @@ asked again then, which is exactly what [LOOP-9](#LOOP-9) already bounds.
   a five-minute loop left open overnight is a hundred and fifty turns nobody read.
 - **A self-paced loop is paced by the thing it is watching over.** The planner chooses the wait
   from a context it also wrote, so a turn that misjudges what it is waiting for will keep
-  misjudging it. The bounds hold the cost to one turn an hour at worst; nothing holds the
-  usefulness.
+  misjudging it. The ceiling holds a slow loop to one turn an hour; at the other end the floor
+  holds almost nothing, and what a fast loop costs is set by how long a turn takes. Nothing holds
+  the usefulness.

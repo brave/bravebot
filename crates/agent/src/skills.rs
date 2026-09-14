@@ -347,8 +347,9 @@ you keep calling it. Call it once, at the end of the turn, after the work is don
 
 - delay_seconds from what you are actually waiting on rather than from a round number. Something \
   that takes ten minutes to change is not worth looking at in sixty seconds, and something that \
-  changes hourly is not worth looking at in five minutes. The wait is held to between a minute \
-  and an hour.
+  changes hourly is not worth looking at in five minutes. The wait is held to between a second \
+  and an hour, and it starts when this turn ends, so a whole turn separates two looks however \
+  short you make it: asking for the floor buys you the pace of a turn, not the pace you named.
 - noop true where this tick found nothing to do and changed nothing, false where something \
   happened worth keeping: an edit, a message, a finding. Runs of quiet ticks are counted and \
   shown to the user as a single line, so an honest noop is what keeps a long watch readable.

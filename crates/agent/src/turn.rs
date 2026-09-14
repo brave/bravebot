@@ -772,9 +772,11 @@ pub struct Wakeup {
 impl Wakeup {
     /// The shortest wait a turn may ask for.
     ///
-    /// A tick is a request to an endpoint and a turn can run for minutes, so anything faster is a
-    /// way to spend a rate limit rather than a way to watch something.
-    pub const FLOOR: std::time::Duration = std::time::Duration::from_secs(60);
+    /// The wait is measured from the end of a tick and a tick is a whole turn, so how fast a watch
+    /// actually looks is set by how long the turn takes rather than by this. It is not zero because
+    /// a loop with no gap at all is a way to spend a rate limit rather than a way to watch
+    /// something.
+    pub const FLOOR: std::time::Duration = std::time::Duration::from_secs(1);
 
     /// The longest.
     ///

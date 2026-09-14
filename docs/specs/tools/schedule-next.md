@@ -39,7 +39,7 @@ and SCHED-1 is untouched: a turn may still choose only a moment, and never what 
 <a id="SCHED-3"></a>
 ### SCHED-3: the wait is held to its bounds before it is reported back
 
-Between a minute and an hour. The number the planner is told is the number it is getting, not the
+Between a second and an hour. The number the planner is told is the number it is getting, not the
 number it asked for.
 
 **Why.** A tool that echoed what it was given would have the next answer describing a schedule

@@ -761,8 +761,10 @@ pub fn available(scheduling: Scheduling) -> Vec<Tool> {
                 "delay_seconds": {
                     "type": "integer",
                     "description": "How long to wait before the next run. Held to between \
-                                    60 and 3600 seconds, so anything outside that becomes \
-                                    the nearest of the two."
+                                    1 and 3600 seconds, so anything outside that becomes \
+                                    the nearest of the two. The wait starts when this turn \
+                                    ends, so a whole turn separates two looks however short \
+                                    it is."
                 },
                 "reason": {
                     "type": "string",
@@ -5969,7 +5971,7 @@ mod tests {
         /// next answer describes a schedule that is not happening.
         #[test]
         fn a_wait_outside_the_bounds_is_reported_as_the_one_that_will_happen() {
-            for (asked, held) in [(1u64, 60u64), (86_400, 3_600)] {
+            for (asked, held) in [(0u64, 1u64), (86_400, 3_600)] {
                 let produced = call(json!({"delay_seconds": asked, "noop": false}));
                 assert_eq!(
                     produced.wakeup.expect("a wakeup").after,
