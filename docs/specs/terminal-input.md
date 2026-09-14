@@ -11,6 +11,7 @@ governs:
   - crates/tui/src/vim.rs
   - crates/tui/src/config_prompt.rs
   - crates/tui/src/keybindings.rs
+  - crates/config/src/settings.rs
 ---
 
 ## Scope
@@ -1267,9 +1268,10 @@ rendering fault rather than as a border with no room for all of it.
 <a id="INPUT-31"></a>
 ### INPUT-31: customizable keybindings and non-remappable safety keys
 
-Actions triggered by terminal control chords can be configured in settings. A binding maps an
-action name to a chord specification such as `ctrl-s`, `ctrl-x`, or `alt-o`. Supported configurable
-actions include:
+A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
+`ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
+action's key says nothing about the other six. There is no second file and no other spelling of the
+block, so one place answers what a key does. Seven actions can be moved, and nothing else can:
 
 - `editor` (default: `ctrl-g`): open external editor for the current prompt.
 - `watch` (default: `ctrl-l`): watch background delegate or inspect running actions.
@@ -1316,6 +1318,9 @@ active chord names rather than hardcoded default labels.
 `verified-by: bravebot_tui::keybindings::no_two_actions_are_left_on_one_chord`
 `verified-by: bravebot_tui::keybindings::two_actions_can_trade_chords`
 `verified-by: bravebot_tui::keybindings::custom_chords_override_defaults`
+`verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`
+`verified-by: bravebot_config::settings::a_keybindings_entry_that_is_not_a_chord_is_dropped`
+`verified-by: bravebot_config::settings::a_project_layer_overrides_keybindings_per_name`
 `verified-by: bravebot_tui::render::the_shortcut_list_reflects_custom_keybindings`
 `verified-by: bravebot_tui::render::the_stashed_line_names_the_custom_stash_chord`
 `verified-by: bravebot_tui::render::the_scroller_help_names_custom_scroller_exit_chord`
