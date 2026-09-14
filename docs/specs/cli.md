@@ -102,10 +102,15 @@ exiting successfully with an explanation on stdout.
 
 It prints every backend this build can reach and what identifies it, which names the settings set,
 which settings files are in force and which of them won a name more than one set, the model in force
-and whether it was chosen or defaulted, the confinement available on this platform, and the state of
-any imported subscription. The signing key is named as never transmitted, and a value from a settings
-file is never printed: where a credential decides whether a backend works, what is reported is that
-one was found. A configuration error makes it fail rather than pass with a warning.
+and whether it was chosen or defaulted, where the state directory is or that there is none, the
+confinement available on this platform, and the state of any imported subscription. The signing key
+is named as never transmitted, and a value from a settings file is never printed: where a credential
+decides whether a backend works, what is reported is that one was found. A configuration error makes
+it fail rather than pass with a warning.
+
+Where there is no state directory, the report says why, names what is not kept without one, and says
+that a checkout's own settings, skills and instructions are read regardless. It is reported rather
+than failed on, and sits outside the configuration section, which a configuration error stops early.
 
 **Why.** It exists to answer "what will this actually use", so reporting a default when a choice
 is in force would explain the wrong thing, and naming one backend where two are reachable would
@@ -116,8 +121,29 @@ holds credentials on some machines, and a diagnostic that prints one is a diagno
 into issues. Whether one was found still has to be said, because a backend nothing can authenticate
 is the case this is most often run to explain.
 
+The state directory is the same argument one step further out. What outlives a session is kept in it,
+and [STATE-2](state-directory.md#STATE-2) makes an absent `HOME` a state this program supports rather
+than an error, so every subsystem treats the absence as absence and none of them says a word about
+it. A report that left it unsaid would describe a machine which works once and forgets as a healthy
+one: the `settings` line above says at most that no file was found, which reads as a file nobody has
+written rather than a directory there is nowhere to put. On Windows, where `HOME` is not the variable
+the platform sets, that is every user.
+
+Both halves are named because the absence is partial, and which half is which cannot be worked out
+from the report otherwise. A checkout's own settings, skills and `AGENTS.md` are read with no home at
+all; the same files of the user's own, the session records behind `--resume`, the prompt history and
+the recorded model and theme are not. A report naming only the loss would have somebody looking for
+why the file in front of them is ignored when it is in force.
+
+Failing on it is the wrong answer to the same fact: a container or a daemon with no `HOME` runs as
+designed and wants none of what it is not getting, so what is owed there is a sentence rather than an
+error. The section sits outside the configuration one because a configuration error stops that
+section before it prints anything, and where state is kept is a fact about the machine either way.
+
 `verified-by: bravebot_cli::main::a_gateway_credential_is_reported_as_found_and_never_printed`
 `verified-by: bravebot_cli::main::a_gateway_with_no_credential_is_reported_as_having_none`
+`verified-by: bravebot_cli::main::doctor_names_the_state_directory_it_resolved`
+`verified-by: bravebot_cli::main::a_missing_state_directory_is_reported_with_what_it_costs`
 
 <a id="CLI-8"></a>
 ### CLI-8: `--mode` chooses how a one-shot is run; the default is the turn loop

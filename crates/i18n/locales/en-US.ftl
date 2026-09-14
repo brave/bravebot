@@ -148,6 +148,19 @@ doctor-settings-overridden = { $name } from { $path }
 doctor-leo = leo
 doctor-subscription =
     { $environment } subscription imported, { $unspent } of { $total } credentials unspent
+doctor-state-directory = state directory { $path }
+# What outlives a session is kept in this directory, so a machine without one keeps none of it, and
+# nothing else in the report says so. The absence is partial: a checkout's own files are read as
+# usual, and saying which half is lost is what stops this reading as "your AGENTS.md is ignored".
+doctor-state-directory-absent = no state directory: HOME names nothing
+doctor-state-directory-not-kept = not kept
+doctor-state-directory-forgotten =
+    sessions and --resume, prompt history, the model and theme you choose
+doctor-state-directory-not-read = not read
+doctor-state-directory-your-own =
+    settings, skills and standing instructions of your own; a checkout's own still apply
+doctor-state-directory-remedy = to keep them
+doctor-state-directory-set-home = set HOME to a directory of your own
 doctor-confinement = confinement { $level }
 # How much confinement was actually achieved. The sandbox reports which of the three it got and
 # the interface is what names it, because bravebot-sandbox holds no words for a person.
