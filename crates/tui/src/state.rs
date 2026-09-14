@@ -334,7 +334,7 @@ impl Entry {
     }
 }
 
-/// A prompt typed while a turn was running, waiting for it to end.
+/// A line typed while a turn was running, waiting for it to end.
 ///
 /// Settled when it was queued rather than when it is sent, because what it names is what the box
 /// held at that moment. A file the user took off the line afterwards was never part of this
@@ -347,6 +347,13 @@ pub struct Queued {
     attached: Vec<Attached>,
     /// Pictures it named, settled at the same moment and for the same reason.
     pasted: Vec<AttachedImage>,
+    /// Whether the line is a command, and so waits to be carried out rather than to be sent.
+    ///
+    /// Decided by the caller, since which words are commands is the input box's to know and not
+    /// this type's. What it changes is where the line may go: a command is never offered to the
+    /// turn in flight, because the only thing that could do with it there is the planner, and a
+    /// command is not something the planner is asked.
+    command: bool,
 }
 
 /// What the session is doing.
@@ -3328,9 +3335,9 @@ impl Session {
         if self.shortcuts {
             return Offered::Shortcuts;
         }
-        // A line being composed while a turn runs is one Enter will queue, and what is offered for
-        // it is machinery for finishing something about to be sent, which is the one thing a
-        // running turn refuses.
+        // A line being composed while a turn runs is one Enter will queue; what is offered for it is
+        // machinery for finishing something about to be sent, which is the one thing a running turn
+        // refuses.
         if self.status == Status::Working {
             return Offered::Nothing;
         }
@@ -4179,6 +4186,24 @@ impl Session {
     /// Only while a turn is running. With none there is nothing to wait for and
     /// [`Session::submit`] is what Enter means.
     pub fn queue(&mut self) -> bool {
+        self.queue_line(false)
+    }
+
+    /// Take the current line as a command to carry out when the turn in flight has finished.
+    ///
+    /// The same wait a prompt gets, and for the same reason: the person pressed Enter, so the line
+    /// leaves the box and is remembered, and what has not happened yet is the turn. The difference is
+    /// at the far end. A prompt that was waiting becomes a turn of its own; a command that was waiting
+    /// is dispatched, which is what pressing Enter on it at rest would have done.
+    ///
+    /// Which words are commands is the caller's to say. This only promises what a line marked one is
+    /// spared: it is never put where the running turn can reach it, so nothing about it is sent
+    /// anywhere, and nothing about it is in the conversation while it waits.
+    pub fn queue_command(&mut self) -> bool {
+        self.queue_line(true)
+    }
+
+    fn queue_line(&mut self, command: bool) -> bool {
         if self.status != Status::Working {
             return false;
         }
@@ -4199,11 +4224,18 @@ impl Session {
         // The resolved copy lives only there. What is kept here is what the person typed, because
         // that is what the screen and the history are for, and a second copy of the resolved line
         // would be one for the two to disagree over.
-        self.pending.push(resolved);
+        //
+        // Never for a command. That buffer is the one thing that reaches the planner from here, and
+        // handing it a command is how one used to be answered as a question about itself. A command
+        // waits in the queue below and nowhere else.
+        if !command {
+            self.pending.push(resolved);
+        }
         self.queued.push(Queued {
             prompt,
             attached,
             pasted,
+            command,
         });
         self.scroll = 0;
         true
@@ -4259,11 +4291,15 @@ impl Session {
     /// could reach it: until it is taken the prompt is still waiting, and it belongs above the box
     /// where a waiting prompt is drawn. This is the moment it becomes part of the conversation, so
     /// this is the moment it joins the transcript, which reads in the order things happened.
+    ///
+    /// The oldest prompt rather than the oldest line, because a command was never offered to the
+    /// turn: what the turn just took is the oldest line that had a copy in the buffer, and a command
+    /// queued ahead of it has one waiting there still.
     pub fn interjected(&mut self) {
-        if self.queued.is_empty() {
+        let Some(taken) = self.queued.iter().position(|waiting| !waiting.command) else {
             return;
-        }
-        let gone = self.queued.remove(0);
+        };
+        let gone = self.queued.remove(taken);
         self.transcript.push(Entry::user(gone.prompt));
         self.scroll = 0;
     }
@@ -4274,8 +4310,11 @@ impl Session {
     /// to do. It becomes a turn of its own, and as its own turn it gets what a turn gets: routing
     /// precommitted from it, and the files and pictures it named carried with it. That is why one
     /// left over is better off here than interjected, and why nothing tries to hurry it.
+    ///
+    /// A command at the head of the queue stops this, rather than being sent: the queue is drained in
+    /// the order it was typed, and [`Session::take_queued_command`] is what takes that one.
     pub fn send_queued(&mut self) -> Option<String> {
-        if self.status != Status::Idle || self.queued.is_empty() {
+        if self.status != Status::Idle || self.queued.first().is_none_or(|next| next.command) {
             return None;
         }
         let next = self.queued.remove(0);
@@ -4284,6 +4323,22 @@ impl Session {
         // the very turn this line started.
         self.pending.take();
         Some(self.begin_turn(next.prompt, (next.attached, next.pasted)))
+    }
+
+    /// Take the command waiting longest, if the session is free to carry one out.
+    ///
+    /// The line as it was typed, for the caller to dispatch exactly as it dispatches one typed at
+    /// rest. Nothing here decides what any command does, and nothing here puts anything in the
+    /// transcript: a command is not part of the conversation, and it was not while it waited either.
+    ///
+    /// Only from the head of the queue, so the order somebody typed things in is the order they
+    /// happen in: a command behind a prompt waits for that prompt's turn, the same way the prompt
+    /// waited for the turn that was running when it was typed.
+    pub fn take_queued_command(&mut self) -> Option<String> {
+        if self.status != Status::Idle || !self.queued.first()?.command {
+            return None;
+        }
+        Some(self.queued.remove(0).prompt)
     }
 
     /// The loop repeating a prompt, where one is running.
@@ -4538,8 +4593,15 @@ impl Session {
         //
         // Before anything is disturbed, so that finding nothing left to take leaves the box exactly
         // as it was rather than half rewritten.
+        //
+        // A command comes back whatever the turn has reached, because there is nothing to take back
+        // from: it was never offered to the turn, so no copy of it is anywhere for the planner to
+        // have been given. What makes a prompt unreclaimable is that it has already gone.
         let mut reclaimed = Vec::new();
-        while !self.queued.is_empty() && self.pending.forget_last() {
+        while let Some(command) = self.queued.last().map(|waiting| waiting.command) {
+            if !command && !self.pending.forget_last() {
+                break;
+            }
             reclaimed.push(self.queued.pop().expect("the queue was not empty"));
         }
         if reclaimed.is_empty() {

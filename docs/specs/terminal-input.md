@@ -233,7 +233,7 @@ named here and nowhere else:
 
 | Key | Why it may differ |
 |---|---|
-| Enter | sends, which is the whole of what is refused (INPUT-10) |
+| Enter | sends, which is the whole of what is refused (INPUT-10), and a line that is one of the words a slash may begin waits to be carried out rather than to be sent ([commands.md](commands.md)) |
 | Escape, Ctrl-C | stop the turn in flight (INPUT-4) |
 | Ctrl-D | leaves, which is not something the box does |
 | Ctrl-G | hands the screen the turn is drawing on to an editor (INPUT-14) |
@@ -278,6 +278,12 @@ attached to no press.
 
 Enter mid-turn takes the line out of the box and holds it. It is drawn under the box, marked, so
 the person can see that what they sent went somewhere.
+
+**A line that is a command is taken the same way, and waits to be carried out rather than to be
+sent.** It comes off the box and is drawn under it like anything else waiting, but it is not offered
+to the turn in flight, so nothing about it reaches the planner. What carries it out is the queue
+being reached once the turn has ended, and a prompt behind it goes when it has, as any waiting prompt
+does. Which lines are commands is [commands.md](commands.md)'s.
 
 **The turn in flight takes it.** A turn asks between rounds, after the round's tool calls have run
 and before the next request goes out, and everything waiting goes into the conversation there, in
@@ -338,10 +344,12 @@ was ignored. This does not weaken what a running turn refuses: a second turn sti
 while the first is in flight, and the queue is what makes that refusal visible instead of silent.
 
 `verified-by: bravebot_tui::app::enter_queues_a_prompt_while_a_turn_is_running`
+`verified-by: bravebot_tui::app::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
 `verified-by: bravebot_tui::app::starting_a_line_mid_turn_does_not_queue_it`
 `verified-by: bravebot_tui::app::a_prompt_queued_mid_turn_is_within_the_running_turns_reach`
 `verified-by: bravebot_tui::app::a_queued_prompt_joins_the_transcript_when_the_planner_is_given_it`
 `verified-by: bravebot_tui::app::a_prompt_that_outlived_the_turn_is_sent_once`
+`verified-by: bravebot_tui::app::a_prompt_queued_behind_a_command_is_sent_once_the_command_has_run`
 `verified-by: bravebot_tui::app::what_is_still_waiting_stays_in_step_with_what_is_drawn`
 `verified-by: bravebot_agent::turn::a_prompt_typed_mid_turn_reaches_the_planner_on_the_next_round`
 `verified-by: bravebot_agent::turn::a_prompt_typed_mid_turn_is_recorded_as_the_users_own_input`

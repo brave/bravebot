@@ -242,6 +242,27 @@ fn argument_to<'a>(line: &'a str, command: &str) -> Option<&'a str> {
     rest.strip_prefix(' ').map(str::trim)
 }
 
+/// The command word the line is, or `None` where the line is a prompt.
+///
+/// Read off the table rather than word by word, because the question is only which command was
+/// typed and not what it does. A caller deciding what to do about one needs an arm each; a caller
+/// that has only to recognise one gets every word the table names, so a command added there is
+/// recognised here without anybody having to remember to.
+///
+/// A command the table gives no argument is only ever itself: the ladder dispatches those on the
+/// bare word, so `/undo the last change` is a prompt there and has to be one here too. The
+/// argument the table names is what says which of the two a word is, so the two agree by reading
+/// the same column rather than by anybody keeping two lists in step.
+fn command_typed(line: &str) -> Option<&'static str> {
+    commands()
+        .into_iter()
+        .find(|command| match argument_to(line, command.name) {
+            Some(argument) => !command.argument.is_empty() || argument.is_empty(),
+            None => false,
+        })
+        .map(|command| command.name)
+}
+
 /// What a key press asked for.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -907,135 +928,18 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             Some(line) => Action::Run(line),
             None => Action::None,
         },
-        // Typed before submitting, so the word never reaches the planner as a prompt.
-        KeyCode::Enter if session.input().trim() == EXIT_COMMAND => {
+        // Every command on one arm, reading the one table the set is written in, so a word the table
+        // names is dispatched and never sent. Before the arm that completes a half-typed one, which
+        // is what a whole word is not, and before the arm that submits, which is what the word must
+        // not reach.
+        //
+        // The line is taken off the box before it is dispatched, the way each of these arms took it
+        // before doing anything, so a command that opens a picker or ends the session does not leave
+        // its own word sitting in the box behind it.
+        KeyCode::Enter if command_typed(session.input()).is_some() => {
+            let line = session.input().to_string();
             session.clear_input();
-            session.quit();
-            Action::Quit
-        }
-        KeyCode::Enter if session.input().trim() == MODEL_COMMAND => {
-            session.clear_input();
-            Action::ChooseModel
-        }
-        KeyCode::Enter if argument_to(session.input(), THEME_COMMAND).is_some() => {
-            let name = argument_to(session.input(), THEME_COMMAND)
-                .expect("the guard just matched")
-                .to_string();
-            session.clear_input();
-            if name.is_empty() {
-                Action::ChooseTheme
-            } else {
-                Action::SetTheme(name)
-            }
-        }
-        KeyCode::Enter if argument_to(session.input(), EFFORT_COMMAND).is_some() => {
-            let level = argument_to(session.input(), EFFORT_COMMAND)
-                .expect("the guard just matched")
-                .to_string();
-            session.clear_input();
-            if level.is_empty() {
-                Action::ChooseEffort
-            } else {
-                Action::SetEffort(level)
-            }
-        }
-        KeyCode::Enter if session.input().trim() == CONFIG_COMMAND => {
-            session.clear_input();
-            Action::ChooseEditing
-        }
-        KeyCode::Enter if session.input().trim() == STATUS_COMMAND => {
-            session.clear_input();
-            Action::Status
-        }
-        KeyCode::Enter if session.input().trim() == COMPACT_COMMAND => {
-            session.clear_input();
-            Action::Compact
-        }
-        // The question is taken verbatim and never sent as a prompt: it goes out over a copy of
-        // the conversation and the copy is thrown away, so nothing about it joins the exchange.
-        KeyCode::Enter if argument_to(session.input(), BTW_COMMAND).is_some() => {
-            let question = argument_to(session.input(), BTW_COMMAND)
-                .expect("the guard just matched")
-                .to_string();
-            session.clear_input();
-            Action::Aside(question)
-        }
-        KeyCode::Enter if session.input().trim() == CLEAR_COMMAND => {
-            session.clear_input();
-            Action::Clear
-        }
-        KeyCode::Enter if argument_to(session.input(), EXPORT_COMMAND).is_some() => {
-            let path = argument_to(session.input(), EXPORT_COMMAND)
-                .expect("the guard just matched")
-                .to_string();
-            session.clear_input();
-            if path.is_empty() {
-                Action::Export(None)
-            } else {
-                Action::Export(Some(path))
-            }
-        }
-        KeyCode::Enter if session.input().trim() == UNDO_COMMAND => {
-            session.clear_input();
-            Action::Undo
-        }
-        KeyCode::Enter if argument_to(session.input(), ADD_DIR_COMMAND).is_some() => {
-            let directory = argument_to(session.input(), ADD_DIR_COMMAND)
-                .expect("the guard just matched")
-                .to_string();
-            session.clear_input();
-            Action::AddDirectory(directory)
-        }
-        KeyCode::Enter if argument_to(session.input(), CD_COMMAND).is_some() => {
-            let directory = argument_to(session.input(), CD_COMMAND)
-                .expect("the guard just matched")
-                .to_string();
-            session.clear_input();
-            Action::ChangeDirectory(directory)
-        }
-        KeyCode::Enter if argument_to(session.input(), RENAME_COMMAND).is_some() => {
-            let name = argument_to(session.input(), RENAME_COMMAND)
-                .expect("the guard just matched")
-                .to_string();
-            session.clear_input();
-            Action::Rename(name)
-        }
-        // The command that sends a prompt rather than the line it was typed on. `/loop 5m check
-        // the deploy` arms the loop and hands back "check the deploy", which is what every tick
-        // sends from here on.
-        KeyCode::Enter if argument_to(session.input(), LOOP_COMMAND).is_some() => {
-            let argument = argument_to(session.input(), LOOP_COMMAND)
-                .expect("the guard just matched")
-                .to_string();
-            session.clear_input();
-            match crate::loops::parse(&argument) {
-                Some(request) => match session.start_loop(request) {
-                    Some(prompt) => Action::Submit(prompt),
-                    None => Action::Redraw,
-                },
-                None => {
-                    session.note(t!(loop_needs_a_prompt));
-                    Action::Redraw
-                }
-            }
-        }
-        // The command that sends nothing. A goal is a condition and not a prompt, so setting one
-        // arms it and waits: what it keeps going is whatever the person asks for next.
-        KeyCode::Enter if argument_to(session.input(), GOAL_COMMAND).is_some() => {
-            let argument = argument_to(session.input(), GOAL_COMMAND)
-                .expect("the guard just matched")
-                .to_string();
-            session.clear_input();
-            match crate::goals::parse(&argument) {
-                crate::goals::Asked::Report => session.report_goal(),
-                crate::goals::Asked::Clear => {
-                    if !session.clear_goal() {
-                        session.note(t!(goal_none));
-                    }
-                }
-                crate::goals::Asked::Set(condition) => session.start_goal(condition),
-            }
-            Action::Redraw
+            dispatch_command(session, &line)
         }
         // A half-typed command, after every arm that recognises a whole one. Enter takes the
         // highlighted row rather than sending "/mod" to the planner, which is never what was meant.
@@ -1055,6 +959,126 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         },
         _ => navigate(session, key),
     }
+}
+
+/// Carry out the command a line is, whether it was typed just now or queued while a turn ran.
+///
+/// One place both callers reach, because the two differ only in when the line arrives. Enter at rest
+/// dispatches the line the box holds; the loop dispatches the line somebody queued once the turn it
+/// was waiting for has ended. Neither reads anything but the line, so a queued command cannot be
+/// confused by whatever is in the box by the time it runs.
+///
+/// The line, not the box, for that reason: a person who queued `/clear` and then began typing
+/// something else has a box that is theirs, and this must not read it or write it.
+///
+/// Every word [`commands`] names is answered here. The last line is unreachable for any of them and
+/// is a table entry that nobody wired up: `every_command_in_the_table_dispatches` is what says so,
+/// since a word recognised and then quietly dropped would be worse than one never recognised.
+fn dispatch_command(session: &mut Session, line: &str) -> Action {
+    if line.trim() == EXIT_COMMAND {
+        session.quit();
+        return Action::Quit;
+    }
+    if line.trim() == MODEL_COMMAND {
+        return Action::ChooseModel;
+    }
+    if let Some(name) = argument_to(line, THEME_COMMAND) {
+        return if name.is_empty() {
+            Action::ChooseTheme
+        } else {
+            Action::SetTheme(name.to_string())
+        };
+    }
+    if let Some(level) = argument_to(line, EFFORT_COMMAND) {
+        return if level.is_empty() {
+            Action::ChooseEffort
+        } else {
+            Action::SetEffort(level.to_string())
+        };
+    }
+    if line.trim() == CONFIG_COMMAND {
+        return Action::ChooseEditing;
+    }
+    if line.trim() == STATUS_COMMAND {
+        return Action::Status;
+    }
+    if line.trim() == COMPACT_COMMAND {
+        return Action::Compact;
+    }
+    // The question is taken verbatim and never sent as a prompt: it goes out over a copy of the
+    // conversation and the copy is thrown away, so nothing about it joins the exchange.
+    if let Some(question) = argument_to(line, BTW_COMMAND) {
+        return Action::Aside(question.to_string());
+    }
+    if line.trim() == CLEAR_COMMAND {
+        return Action::Clear;
+    }
+    if let Some(path) = argument_to(line, EXPORT_COMMAND) {
+        return if path.is_empty() {
+            Action::Export(None)
+        } else {
+            Action::Export(Some(path.to_string()))
+        };
+    }
+    if line.trim() == UNDO_COMMAND {
+        return Action::Undo;
+    }
+    if let Some(directory) = argument_to(line, ADD_DIR_COMMAND) {
+        return Action::AddDirectory(directory.to_string());
+    }
+    if let Some(directory) = argument_to(line, CD_COMMAND) {
+        return Action::ChangeDirectory(directory.to_string());
+    }
+    if let Some(name) = argument_to(line, RENAME_COMMAND) {
+        return Action::Rename(name.to_string());
+    }
+    // The command that sends a prompt rather than the line it was typed on. `/loop 5m check the
+    // deploy` arms the loop and hands back "check the deploy", which is what every tick sends from
+    // here on.
+    if let Some(argument) = argument_to(line, LOOP_COMMAND) {
+        return match crate::loops::parse(argument) {
+            Some(request) => match session.start_loop(request) {
+                Some(prompt) => Action::Submit(prompt),
+                None => Action::Redraw,
+            },
+            None => {
+                session.note(t!(loop_needs_a_prompt));
+                Action::Redraw
+            }
+        };
+    }
+    // The command that sends nothing. A goal is a condition and not a prompt, so setting one arms it
+    // and waits: what it keeps going is whatever the person asks for next.
+    if let Some(argument) = argument_to(line, GOAL_COMMAND) {
+        match crate::goals::parse(argument) {
+            crate::goals::Asked::Report => session.report_goal(),
+            crate::goals::Asked::Clear => {
+                if !session.clear_goal() {
+                    session.note(t!(goal_none));
+                }
+            }
+            crate::goals::Asked::Set(condition) => session.start_goal(condition),
+        }
+        return Action::Redraw;
+    }
+    Action::None
+}
+
+/// The next thing the queue is holding for the loop, if the session is free to take it.
+///
+/// A command somebody queued while a turn ran is carried out here rather than anywhere in the key
+/// handling, because nobody is going to press anything to make it happen: the press already happened,
+/// and this is the loop keeping the promise the queue made. It becomes the action Enter on that line
+/// would have become at rest, which is the whole of what was deferred.
+///
+/// A prompt waiting behind a command goes from here too. The turn loop sends what is queued as each
+/// turn ends and stops at a command, so without this the line behind one would wait for a key press
+/// that nobody is going to make.
+fn queued_next(session: &mut Session) -> Option<Action> {
+    if let Some(line) = session.take_queued_command() {
+        return Some(dispatch_command(session, &line));
+    }
+    session.send_queued().map(Action::Submit)
 }
 
 /// The keys that mean the same thing whether or not a turn is running.
@@ -1322,6 +1346,22 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // prompt somebody wants back mid-turn is the one the turn they are watching came from.
     if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
         session.open_history_search();
+        return Action::Redraw;
+    }
+
+    // Before the arm that queues a prompt, because the two do the same thing to the box and differ
+    // only in what is waiting afterwards. This line waits to be carried out; the queue is what a
+    // person typing mid-turn already understands, so a command joins it rather than sitting in the
+    // box asking to be pressed again. What it is spared is the running turn: a queued command is
+    // never offered to it, so the planner is never asked what to clear.
+    //
+    // Not in shell mode, where the line is a command line and `/status` is a path to a program, for
+    // the reason the idle ladder answers a shell line before its command arms.
+    if key.code == KeyCode::Enter
+        && !session.shell
+        && command_typed(session.input()).is_some()
+        && session.queue_command()
+    {
         return Action::Redraw;
     }
 
@@ -1967,28 +2007,33 @@ fn event_loop(
         // sent again.
         let action = match session.loop_tick() {
             Some(prompt) => Action::Submit(prompt),
-            None => {
-                if !event::poll(POLL)? {
-                    continue;
-                }
-                match event::read()? {
-                    // Presses only. Asking for disambiguated keys asks for releases as well, and a
-                    // release handled as a press types every character twice.
-                    TermEvent::Key(key) if key.kind == KeyEventKind::Release => Action::None,
-                    TermEvent::Key(key) => handle_key(&mut session, key),
-                    TermEvent::Mouse(mouse) => handle_mouse(&mut session, mouse),
-                    TermEvent::Paste(text) => handle_paste(&mut session, &text),
-                    // Coming back from copying something is the moment a picture appears on the
-                    // clipboard, and the cheapest moment to notice: once per switch away and back,
-                    // rather than a clipboard tool spawned on a timer for the whole life of the
-                    // session.
-                    TermEvent::FocusGained => {
-                        session.image_on_clipboard = crate::clipboard::holds_an_image();
-                        Action::Redraw
+            // Then what the queue is holding, before the interface settles down to wait, for the
+            // reason a tick is looked at here.
+            None => match queued_next(&mut session) {
+                Some(action) => action,
+                None => {
+                    if !event::poll(POLL)? {
+                        continue;
                     }
-                    _ => Action::None,
+                    match event::read()? {
+                        // Presses only. Asking for disambiguated keys asks for releases as well, and a
+                        // release handled as a press types every character twice.
+                        TermEvent::Key(key) if key.kind == KeyEventKind::Release => Action::None,
+                        TermEvent::Key(key) => handle_key(&mut session, key),
+                        TermEvent::Mouse(mouse) => handle_mouse(&mut session, mouse),
+                        TermEvent::Paste(text) => handle_paste(&mut session, &text),
+                        // Coming back from copying something is the moment a picture appears on the
+                        // clipboard, and the cheapest moment to notice: once per switch away and back,
+                        // rather than a clipboard tool spawned on a timer for the whole life of the
+                        // session.
+                        TermEvent::FocusGained => {
+                            session.image_on_clipboard = crate::clipboard::holds_an_image();
+                            Action::Redraw
+                        }
+                        _ => Action::None,
+                    }
                 }
-            }
+            },
         };
 
         needs_draw |= !matches!(action, Action::None);
@@ -8048,6 +8093,312 @@ mod tests {
         assert!(session.input().is_empty(), "the line stayed in the box");
         assert_eq!(session.queued.len(), 1);
         assert_eq!(session.queued[0].prompt, "second");
+    }
+
+    /// A command is not a prompt, so what waits for the turn is the word itself, to be carried out
+    /// when the turn ends. It used to wait as a prompt, which put `/clear` into the running turn's
+    /// reach: the planner was asked what to clear and the session was never cleared.
+    #[test]
+    fn a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.status, Status::Working);
+
+        for c in CLEAR_COMMAND.chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+
+        assert!(session.input().is_empty(), "the line stayed in the box");
+        assert_eq!(session.queued.len(), 1, "the command is not waiting");
+        assert_eq!(session.queued[0].prompt, CLEAR_COMMAND);
+        assert_eq!(
+            session.interjections().take(),
+            None,
+            "the running turn was handed the command"
+        );
+        assert_eq!(
+            session
+                .transcript
+                .last()
+                .expect("the first prompt is in the transcript")
+                .text,
+            "first",
+            "the command joined the conversation while it waited"
+        );
+    }
+
+    /// What queueing promises, and the whole of what was deferred: the word runs when the queue is
+    /// reached, it runs as the command rather than as anything the planner is asked, and it runs off
+    /// the loop, since the press that asked for it has already been made.
+    #[test]
+    fn the_command_queued_while_a_turn_ran_is_carried_out_when_the_turn_ends() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        for c in CLEAR_COMMAND.chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        assert_eq!(
+            queued_next(&mut session),
+            None,
+            "it was carried out while the turn was still running"
+        );
+
+        session.complete("answered", Vec::new(), 0);
+        assert_eq!(queued_next(&mut session), Some(Action::Clear));
+        assert!(session.queued.is_empty(), "it is still waiting");
+        assert_eq!(queued_next(&mut session), None, "it was carried out twice");
+    }
+
+    /// The line behind a command has nobody else to send it: what sends a queued prompt is a turn
+    /// ending, and the turn that ended stopped at the command in front of it. Left to the key
+    /// handling it would have sat there marked as waiting until the person typed something unrelated.
+    #[test]
+    fn a_prompt_queued_behind_a_command_is_sent_once_the_command_has_run() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        for c in CLEAR_COMMAND.chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        for c in "and tidy up".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        session.complete("answered", Vec::new(), 0);
+
+        assert_eq!(
+            queued_next(&mut session),
+            Some(Action::Clear),
+            "the prompt went before the command in front of it"
+        );
+        assert_eq!(
+            queued_next(&mut session),
+            Some(Action::Submit("and tidy up".to_string())),
+            "the prompt behind the command was left waiting"
+        );
+        assert_eq!(session.status, Status::Working);
+    }
+
+    /// The turn takes the oldest prompt, and a command queued ahead of one is not it. Popping the head
+    /// of the queue regardless would have recorded the command as the line the planner was given and
+    /// left the prompt waiting for a turn that had already read it.
+    #[test]
+    fn a_queued_command_is_not_what_the_turn_took() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        for c in CLEAR_COMMAND.chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        for c in "and tidy up".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(
+            session.interjections().take().as_deref(),
+            Some("and tidy up"),
+            "the turn was offered something other than the prompt"
+        );
+        session.interjected();
+
+        assert_eq!(
+            session
+                .transcript
+                .last()
+                .expect("the interjection is in the transcript")
+                .text,
+            "and tidy up",
+            "the command was recorded as the line the turn took"
+        );
+        assert_eq!(session.queued.len(), 1, "the command stopped waiting");
+        assert_eq!(session.queued[0].prompt, CLEAR_COMMAND);
+    }
+
+    /// A queued command comes back like a queued prompt, because a person who changed their mind about
+    /// `/clear` has the same claim on it. It comes back whatever the turn has reached: what stops a
+    /// prompt coming back is the planner having been given it, and a command was given to nobody.
+    #[test]
+    fn a_queued_command_comes_back_to_the_box() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        for c in CLEAR_COMMAND.chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+
+        assert!(session.unqueue(), "the command could not be taken back");
+        assert_eq!(session.input(), CLEAR_COMMAND);
+        assert!(session.queued.is_empty(), "it is waiting still");
+    }
+
+    /// The two paths have to agree about which lines are commands, and the table is what says so: a
+    /// command it gives no argument is only ever the bare word. Queueing `/undo the last change` as a
+    /// command would carry out an undo the idle path sends to the planner instead.
+    #[test]
+    fn a_command_that_takes_no_argument_is_only_the_bare_word_mid_turn() {
+        let line = format!("{UNDO_COMMAND} the last change");
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.status, Status::Working);
+
+        for c in line.chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(session.queued.len(), 1, "the prompt was not queued");
+        assert_eq!(session.queued[0].prompt, line);
+        assert_eq!(
+            session.interjections().take().as_deref(),
+            Some(line.as_str()),
+            "a prompt was queued as a command"
+        );
+    }
+
+    /// In shell mode the line is a command line and `/status` is a path to a program, which is the
+    /// guard the idle ladder answers ahead of its command arm. Taking it for a command would run this
+    /// program's `/status` at the end of the turn instead of the one the person named.
+    #[test]
+    fn a_shell_line_is_not_taken_for_a_command_while_a_turn_runs() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.shell = true;
+
+        for c in STATUS_COMMAND.chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        session.complete("answered", Vec::new(), 0);
+
+        assert_eq!(
+            session.take_queued_command(),
+            None,
+            "a command line was queued as a command"
+        );
+    }
+
+    /// Every word in the table rather than the one that was reported. The arm reads the same table the
+    /// idle path dispatches from, so a command added there waits as a command here without anybody
+    /// having to remember a second list.
+    #[test]
+    fn no_command_is_sent_as_a_prompt_while_a_turn_runs() {
+        for command in commands() {
+            let mut session = Session::new("none");
+            type_line(&mut session, "first");
+            handle_key(&mut session, key(KeyCode::Enter));
+            assert_eq!(session.status, Status::Working);
+
+            for c in command.name.chars() {
+                handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+            }
+            handle_key_while_working(&mut session, key(KeyCode::Enter));
+
+            assert_eq!(
+                session.interjections().take(),
+                None,
+                "the running turn was handed {}",
+                command.name
+            );
+            session.complete("answered", Vec::new(), 0);
+            assert_eq!(
+                session.take_queued_command().as_deref(),
+                Some(command.name),
+                "{} did not wait to be carried out",
+                command.name
+            );
+        }
+    }
+
+    /// The narrowness CMD-2 asks for, on the path that had no command arm at all: a sentence about
+    /// a command is a sentence, and a command with its argument is still the command. An arm that
+    /// took either for the other would make the box mid-turn a different language from the box at
+    /// rest.
+    #[test]
+    fn a_prompt_mentioning_a_command_is_queued_while_a_turn_runs() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(session.status, Status::Working);
+        for c in "what does /clear do".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(
+            session.queued.len(),
+            1,
+            "the question was taken as a command"
+        );
+        assert_eq!(session.queued[0].prompt, "what does /clear do");
+        assert_eq!(
+            session.interjections().take().as_deref(),
+            Some("what does /clear do"),
+            "a question waits as a command"
+        );
+    }
+
+    /// A command that takes an argument is a command on this path too, argument and all. `/rename`
+    /// mid-turn used to name nothing and ask the planner about renaming instead.
+    #[test]
+    fn a_command_with_an_argument_is_not_sent_as_a_prompt_while_a_turn_runs() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(session.status, Status::Working);
+        for c in "/rename the parser work".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        assert_eq!(
+            session.interjections().take(),
+            None,
+            "the running turn was handed the command"
+        );
+        session.complete("answered", Vec::new(), 0);
+
+        let queued = session
+            .take_queued_command()
+            .expect("the command was not waiting to be carried out");
+        assert_eq!(
+            dispatch_command(&mut session, &queued),
+            Action::Rename("the parser work".to_string())
+        );
+    }
+
+    /// The fallback in [`dispatch_command`] is unreachable, and this is what says so: a word the table
+    /// names that no arm answers would be recognised, taken off the box and then quietly dropped, which
+    /// is worse than a word nobody recognises. The bare word is enough for every one of them, since a
+    /// command that takes an argument takes an empty one.
+    #[test]
+    fn every_command_in_the_table_dispatches() {
+        for command in commands() {
+            let mut session = Session::new("none");
+            assert_ne!(
+                dispatch_command(&mut session, command.name),
+                Action::None,
+                "{} is in the table and does nothing",
+                command.name
+            );
+        }
     }
 
     /// The point of queueing, and what it used to fail at: a prompt typed mid-turn is put where the
