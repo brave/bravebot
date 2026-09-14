@@ -78,6 +78,7 @@ taken off.
 `verified-by: bravebot_tui::loops::a_leading_interval_wins_over_a_trailing_one`
 `verified-by: bravebot_tui::loops::a_line_with_no_interval_is_paced_by_the_planner`
 `verified-by: bravebot_tui::loops::a_word_that_is_not_a_time_stays_part_of_the_prompt`
+`verified-by: bravebot_tui::loops::a_word_that_merely_starts_with_every_is_not_an_interval`
 `verified-by: bravebot_tui::loops::a_count_too_large_to_be_a_duration_is_not_an_interval`
 `verified-by: bravebot_tui::loops::an_interval_with_nothing_to_send_is_not_a_request`
 `verified-by: bravebot_tui::app::the_bare_loop_command_is_still_the_command`
