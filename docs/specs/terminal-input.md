@@ -1279,9 +1279,18 @@ actions include:
 - `trail` (default: `ctrl-t`): toggle turn execution trail visibility.
 - `paste` (default: `ctrl-v`): paste from clipboard.
 
-Safety invariants: fundamental terminal control keys cannot be remapped. In particular, `ctrl-c`
-(stop and exit), `escape` (cancel/clear), `enter` (submit prompt), and bare typing characters are
-reserved and reject reassignment.
+**A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is
+typed into the line, Enter sends, Escape clears it, Tab takes what is offered, and the arrows walk
+the caret and the history. Shift over a character is refused as well, because a terminal reports
+Shift-A as `A` with Shift held, so a chord written `shift-a` or `ctrl-shift-a` names an event that
+never arrives. Four chords are refused while carrying Ctrl: Ctrl-C, which stops and then leaves,
+and Ctrl-D, which leaves (INPUT-4), and Ctrl-J and Shift-Enter, which start a line (INPUT-2).
+
+**Why.** The arms that read a configured chord sit above the arm that types, so a letter handed to
+an action is a letter that can no longer be written: a settings file could take `x` out of the
+alphabet. Refusing the whole unmodified half of the keyboard is one rule a person can hold rather
+than a list of the keys that happen to be taken today, and the keys the issue is about, Ctrl-S and
+Ctrl-O, are reachable under it.
 
 If a configured chord conflicts with a reserved key, an invalid chord format, or another action's
 chord, the conflicting actions fall back to their default bindings.
@@ -1291,6 +1300,9 @@ active chord names rather than hardcoded default labels.
 
 `verified-by: bravebot_tui::keybindings::parses_hyphen_and_plus_delimiters`
 `verified-by: bravebot_tui::keybindings::reserved_keys_are_rejected`
+`verified-by: bravebot_tui::keybindings::a_key_the_box_already_answers_is_not_on_offer`
+`verified-by: bravebot_tui::keybindings::a_chord_carrying_ctrl_or_alt_is_on_offer`
+`verified-by: bravebot_tui::app::a_settings_file_cannot_take_a_letter_away_from_typing`
 `verified-by: bravebot_tui::keybindings::invalid_chord_falls_back_to_default`
 `verified-by: bravebot_tui::keybindings::conflicting_chords_fall_back_to_defaults`
 `verified-by: bravebot_tui::keybindings::custom_chords_override_defaults`

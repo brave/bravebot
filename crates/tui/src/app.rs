@@ -6369,6 +6369,34 @@ mod tests {
         assert_eq!(session.input(), "the next thing");
     }
 
+    /// A settings file naming a key the box already answers does not get it. The arms that read a
+    /// configured chord sit above the one that types, so a letter handed to an action would be a
+    /// letter that can no longer be written.
+    #[test]
+    fn a_settings_file_cannot_take_a_letter_away_from_typing() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("stash".to_string(), "x".to_string());
+        custom.insert("trail".to_string(), "?".to_string());
+        session.adopt_keybindings(&custom);
+
+        for c in "exit".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            session.input(),
+            "exit",
+            "a letter an action was given stopped typing"
+        );
+
+        session.clear_input();
+        handle_key(&mut session, key(KeyCode::Char('?')));
+        assert!(
+            matches!(session.offered(), crate::state::Offered::Shortcuts),
+            "the key list stopped answering the key that opens it"
+        );
+    }
+
     /// Customizable keybindings route actions to the configured chord, and the default chord
     /// is ignored once remapped.
     #[test]
@@ -6385,7 +6413,11 @@ mod tests {
 
         // Default ctrl-s should be ignored for stashing now
         handle_key(&mut session, ctrl('s'));
-        assert_eq!(session.input(), "custom key test", "default chord still stashed");
+        assert_eq!(
+            session.input(),
+            "custom key test",
+            "default chord still stashed"
+        );
 
         // Custom alt-s stashes
         let alt_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT);
@@ -6394,11 +6426,18 @@ mod tests {
 
         // Custom alt-s restores the line
         handle_key(&mut session, alt_s);
-        assert_eq!(session.input(), "custom key test", "custom chord did not restore stash");
+        assert_eq!(
+            session.input(),
+            "custom key test",
+            "custom chord did not restore stash"
+        );
 
         // Default ctrl-o should not open scroller
         handle_key(&mut session, ctrl('o'));
-        assert!(!session.scrolling(), "default ctrl-o opened scroller when remapped");
+        assert!(
+            !session.scrolling(),
+            "default ctrl-o opened scroller when remapped"
+        );
 
         // Custom alt-o opens scroller
         let alt_o = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT);
@@ -6433,12 +6472,18 @@ mod tests {
 
         // Custom alt-s stashes mid-turn
         let alt_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT);
-        assert_eq!(handle_key_while_working(&mut session, alt_s), Action::Redraw);
+        assert_eq!(
+            handle_key_while_working(&mut session, alt_s),
+            Action::Redraw
+        );
         assert_eq!(session.input(), "");
 
         // Custom alt-o opens scroller mid-turn
         let alt_o = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT);
-        assert_eq!(handle_key_while_working(&mut session, alt_o), Action::Redraw);
+        assert_eq!(
+            handle_key_while_working(&mut session, alt_o),
+            Action::Redraw
+        );
         assert!(session.scrolling());
     }
 

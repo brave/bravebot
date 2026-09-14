@@ -4,9 +4,8 @@
 //! bindings that collide with historical terminal conventions (such as Ctrl-S for XOFF
 //! flow control or Ctrl-O for tty output discard).
 //!
-//! Safety invariants:
-//! - Core cancellation contracts (Ctrl-C, Esc, Enter) cannot be rebound.
-//! - Conflicting, reserved, or unparseable bindings fall back cleanly to defaults.
+//! A configured chord has to carry Ctrl or Alt, and four of those are spoken for anyway. Anything
+//! else, and anything the parser cannot read, leaves the action on the chord it had.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::{BTreeMap, HashSet};
@@ -94,7 +93,11 @@ impl KeyChord {
             ' '
         };
 
-        let parts: Vec<&str> = s.split(delimiter).map(str::trim).filter(|p| !p.is_empty()).collect();
+        let parts: Vec<&str> = s
+            .split(delimiter)
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .collect();
         if parts.is_empty() {
             return None;
         }
@@ -131,7 +134,10 @@ impl KeyChord {
             "pagedown" | "pgdn" => KeyCode::PageDown,
             "home" => KeyCode::Home,
             "end" => KeyCode::End,
-            f if f.starts_with('f') && f.len() > 1 && f[1..].chars().all(|c| c.is_ascii_digit()) => {
+            f if f.starts_with('f')
+                && f.len() > 1
+                && f[1..].chars().all(|c| c.is_ascii_digit()) =>
+            {
                 let num: u8 = f[1..].parse().ok()?;
                 KeyCode::F(num)
             }
@@ -142,17 +148,36 @@ impl KeyChord {
         Some(Self { code, modifiers })
     }
 
-    /// Whether this chord is a reserved system contract that cannot be rebound.
+    /// Whether this chord is one the box already answers, and so is not an action's to take.
+    ///
+    /// A chord has to carry Ctrl or Alt, because every unmodified key is spoken for: a letter or a
+    /// punctuation mark is typed into the line, Enter sends, Escape clears it, Tab takes what is
+    /// offered, and the arrows walk the caret and the history (INPUT-4, INPUT-13).
+    ///
+    /// Shift over a character is refused for a different reason: a terminal reports Shift-A as `A`
+    /// with Shift held, so a chord written `shift-a` or `ctrl-shift-a` names an event that never
+    /// arrives. Taking it would leave the action quietly dead instead of on a key that works.
+    ///
+    /// Four chords are spoken for even carrying Ctrl. Ctrl-C stops the nearest thing there is to
+    /// stop and leaves from an empty box, and Ctrl-D leaves (INPUT-4); Ctrl-J and Shift-Enter start
+    /// a line (INPUT-2).
     pub fn is_reserved(&self) -> bool {
-        // Ctrl-C is the fundamental cancellation contract and emergency exit.
-        if self.code == KeyCode::Char('c') && self.modifiers == KeyModifiers::CONTROL {
+        if !self.modifiers.contains(KeyModifiers::CONTROL)
+            && !self.modifiers.contains(KeyModifiers::ALT)
+        {
             return true;
         }
-        // Bare Enter and bare Escape are fundamental input mode controls.
-        if (self.code == KeyCode::Enter || self.code == KeyCode::Esc) && self.modifiers.is_empty() {
+        if self.code == KeyCode::Enter {
             return true;
         }
-        false
+        if self.modifiers.contains(KeyModifiers::SHIFT) && matches!(self.code, KeyCode::Char(_)) {
+            return true;
+        }
+        self.modifiers == KeyModifiers::CONTROL
+            && matches!(
+                self.code,
+                KeyCode::Char('c') | KeyCode::Char('d') | KeyCode::Char('j')
+            )
     }
 }
 
@@ -303,6 +328,56 @@ mod tests {
         let bindings = Keybindings::from_map(&map);
         // Should fall back to default ctrl-s
         assert_eq!(bindings.stash, KeyChord::ctrl('s'));
+    }
+
+    /// A key the box already answers is not an action's to take. Every one of these parses, so what
+    /// refuses them is the rule about which chords are on offer rather than the parser.
+    #[test]
+    fn a_key_the_box_already_answers_is_not_on_offer() {
+        for spelling in [
+            "x",            // a letter is typed into the line
+            "9",            // so is a digit
+            "shift-x",      // a shifted character arrives shifted, so this would never match
+            "ctrl-shift-x", // nor would this
+            "tab",          // takes what is offered
+            "shift-tab",    // cycles what to ask before acting
+            "up",           // walks the history
+            "pgdn",         // scrolls the transcript
+            "esc",          // clears the line
+            "enter",        // sends
+            "shift-enter",  // starts a line
+            "ctrl-j",       // starts a line as well
+            "ctrl-c",       // stops, then leaves
+            "ctrl-d",       // leaves
+        ] {
+            let chord = KeyChord::parse(spelling).expect("the spelling should parse");
+            assert!(chord.is_reserved(), "{spelling} was offered up");
+
+            let mut map = BTreeMap::new();
+            map.insert("stash".to_string(), spelling.to_string());
+            assert_eq!(
+                Keybindings::from_map(&map).stash,
+                KeyChord::ctrl('s'),
+                "{spelling} took the stash chord"
+            );
+        }
+    }
+
+    /// The chords a person would reach for instead are on offer, including the two the issue is
+    /// about: Ctrl-S is XOFF on a terminal with flow control left on, and Ctrl-O discards output.
+    #[test]
+    fn a_chord_carrying_ctrl_or_alt_is_on_offer() {
+        for spelling in [
+            "ctrl-x",
+            "alt-s",
+            "alt-o",
+            "ctrl-alt-p",
+            "alt-f5",
+            "ctrl-pgup",
+        ] {
+            let chord = KeyChord::parse(spelling).expect("the spelling should parse");
+            assert!(!chord.is_reserved(), "{spelling} was refused");
+        }
     }
 
     #[test]
