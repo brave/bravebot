@@ -6486,5 +6486,47 @@ mod tests {
                 sink.events()
             );
         }
+
+        /// The same property for the file named by reference rather than typed. A planner working
+        /// in a directory it may not read names `path_ref`, so this is the one way it can pick a
+        /// destination without a path in its words at all, and a fallen context must not pick one
+        /// either. The name is refused before the slot is resolved, so the file it stands for is
+        /// never named on the way to refusing.
+        #[test]
+        fn a_reference_destination_is_refused_once_the_context_has_met_something_untrusted() {
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_vouching(&mut sink);
+            let mut slots = SlotStore::new();
+            policy
+                .defer(
+                    "list_files",
+                    SlotId::new("ref:1"),
+                    "a.txt",
+                    &Labelled::trusted("a.txt".to_string()),
+                    7,
+                    &mut slots,
+                )
+                .expect("the file is reserved");
+
+            let mut policy = policy.resuming(Integrity::Untrusted);
+            let Err(refusal) = path_argument(
+                &mut policy,
+                "write_file",
+                Purpose::Effect,
+                &slots,
+                &json!({"path_ref": "ref:1"}),
+            ) else {
+                panic!("a fallen context must not name a destination");
+            };
+
+            assert!(
+                refusal.contains("must not decide anything"),
+                "the refusal does not say why: {refusal}"
+            );
+            assert!(
+                !refusal.contains("a.txt"),
+                "the refusal named the file the reference stands for: {refusal}"
+            );
+        }
     }
 }
