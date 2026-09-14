@@ -574,15 +574,15 @@ fn keybindings_block(
     }
     if let Some(serde_json::Value::Array(blocks)) = root.get("bindings") {
         for item in blocks {
-            if let serde_json::Value::Object(b) = item {
-                if let Some(serde_json::Value::Object(inner)) = b.get("bindings") {
-                    for (chord, action_val) in inner {
-                        if let serde_json::Value::String(action) = action_val {
-                            let action_name = action.rsplit(':').next().unwrap_or(action).trim();
-                            let chord_trim = chord.trim();
-                            if !action_name.is_empty() && !chord_trim.is_empty() {
-                                map.insert(action_name.to_ascii_lowercase(), chord_trim.to_string());
-                            }
+            if let Some(serde_json::Value::Object(inner)) =
+                item.as_object().and_then(|b| b.get("bindings"))
+            {
+                for (chord, action_val) in inner {
+                    if let serde_json::Value::String(action) = action_val {
+                        let action_name = action.rsplit(':').next().unwrap_or(action).trim();
+                        let chord_trim = chord.trim();
+                        if !action_name.is_empty() && !chord_trim.is_empty() {
+                            map.insert(action_name.to_ascii_lowercase(), chord_trim.to_string());
                         }
                     }
                 }

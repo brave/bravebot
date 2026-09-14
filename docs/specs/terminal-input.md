@@ -1264,8 +1264,8 @@ rendering fault rather than as a border with no room for all of it.
 `verified-by: bravebot_tui::render::how_to_search_the_prompts_is_said_where_somebody_would_look`
 `verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`
 
-<a id="INPUT-28"></a>
-### INPUT-28: customizable keybindings and non-remappable safety keys
+<a id="INPUT-31"></a>
+### INPUT-31: customizable keybindings and non-remappable safety keys
 
 Actions triggered by terminal control chords can be configured in settings. A binding maps an
 action name to a chord specification such as `ctrl-s`, `ctrl-x`, or `alt-o`. Supported configurable
@@ -1289,10 +1289,13 @@ chord, the conflicting actions fall back to their default bindings.
 Dynamic rendering: the shortcut listing (`?`) and prompt stashed indicators dynamically reflect the
 active chord names rather than hardcoded default labels.
 
-`verified-by: bravebot_tui::keybindings::tests::parses_hyphen_and_plus_delimiters`
-`verified-by: bravebot_tui::keybindings::tests::reserved_keys_are_rejected`
-`verified-by: bravebot_tui::keybindings::tests::invalid_chord_falls_back_to_default`
-`verified-by: bravebot_tui::keybindings::tests::conflicting_chords_fall_back_to_defaults`
-`verified-by: bravebot_tui::keybindings::tests::custom_chords_override_defaults`
+`verified-by: bravebot_tui::keybindings::parses_hyphen_and_plus_delimiters`
+`verified-by: bravebot_tui::keybindings::reserved_keys_are_rejected`
+`verified-by: bravebot_tui::keybindings::invalid_chord_falls_back_to_default`
+`verified-by: bravebot_tui::keybindings::conflicting_chords_fall_back_to_defaults`
+`verified-by: bravebot_tui::keybindings::custom_chords_override_defaults`
 `verified-by: bravebot_tui::render::the_shortcut_list_reflects_custom_keybindings`
 `verified-by: bravebot_tui::render::the_stashed_line_names_the_custom_stash_chord`
+`verified-by: bravebot_tui::render::the_scroller_help_names_custom_scroller_exit_chord`
+`verified-by: bravebot_tui::app::custom_keybindings_route_actions_and_old_chords_are_ignored`
+`verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`

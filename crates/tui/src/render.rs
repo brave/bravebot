@@ -1332,7 +1332,7 @@ fn draw_scroller(frame: &mut Frame, session: &Session) -> Laid {
     // Over the transcript rather than beside it, because a key list is read instead of the
     // transcript and never at the same time.
     if session.scroller().is_some_and(|scroller| scroller.help) {
-        draw_scroller_help(frame, frame.area());
+        draw_scroller_help(frame, frame.area(), session);
     }
 
     if let Some(selection) = &session.selection {
@@ -1361,15 +1361,18 @@ fn scroller_keys() -> [(&'static str, &'static str); 9] {
 }
 
 /// What closes the scroller, which is the one row of the key list that is never dropped.
-fn scroller_exit() -> (&'static str, &'static str) {
-    ("q / esc / ctrl-o", t!(scroller_key_close))
+fn scroller_exit(bindings: &crate::keybindings::Keybindings) -> (String, &'static str) {
+    (
+        format!("q / esc / ctrl-c / {}", bindings.scroller_name()),
+        t!(scroller_key_close),
+    )
 }
 
 /// Draw the key list over the transcript.
 ///
 /// Short terminals lose rows from the middle of the list rather than the end of it. Every row here
 /// is a convenience except the last, and the last is the only one somebody is stuck without.
-fn draw_scroller_help(frame: &mut Frame, area: Rect) {
+fn draw_scroller_help(frame: &mut Frame, area: Rect, session: &Session) {
     let row = |(key, what): (&str, &str)| {
         Line::from(vec![
             Span::styled(format!(" {key:<18}"), Style::default().fg(Color::Cyan)),
@@ -1393,7 +1396,8 @@ fn draw_scroller_help(frame: &mut Frame, area: Rect) {
         .take(room.saturating_sub(1))
         .map(row)
         .collect();
-    rows.push(row(scroller_exit()));
+    let (exit_chord, exit_desc) = scroller_exit(session.bindings());
+    rows.push(row((&exit_chord, exit_desc)));
 
     let width = area.width.min(58);
     let height = (rows.len() as u16 + if bordered { 2 } else { 0 }).min(area.height);
@@ -2593,6 +2597,7 @@ const SHORTCUTS_HINT: &str = "? for shortcuts";
 /// the one place a binding's meaning is written down: a list that went on saying "clear the line" to
 /// somebody whose Escape takes the letters as commands would advertise a binding that is not there.
 /// Every other row means the same thing either way.
+#[cfg(test)]
 fn shortcuts(editing: crate::vim::Editing) -> [(&'static str, &'static str); 21] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
@@ -2658,6 +2663,7 @@ fn session_shortcuts(
 }
 
 /// The shortcuts in as many columns as the width will hold.
+#[cfg(test)]
 fn shortcut_lines(editing: crate::vim::Editing, width: u16) -> Vec<Line<'static>> {
     let default_bindings = crate::keybindings::Keybindings::default();
     shortcut_lines_with(editing, &default_bindings, width)
@@ -4345,12 +4351,28 @@ mod tests {
 
             let (drawn, _) = screen(&session);
             assert!(
-                drawn.contains("q / esc / ctrl-o"),
+                drawn.contains("q / esc / ctrl-c / ctrl-o"),
                 "the way out was not drawn whole: {drawn}"
             );
             assert!(
                 drawn.contains("ctrl-c"),
                 "ctrl-c closes the scroller and the list left it out: {drawn}"
+            );
+        }
+
+        /// When the scroller chord is customized, the help overlay displays the customized chord.
+        #[test]
+        fn the_scroller_help_names_custom_scroller_exit_chord() {
+            let mut session = reading();
+            let mut custom = std::collections::BTreeMap::new();
+            custom.insert("scroller".to_string(), "alt-o".to_string());
+            session.adopt_keybindings(&custom);
+            session.toggle_scroller_help();
+
+            let (drawn, _) = screen(&session);
+            assert!(
+                drawn.contains("q / esc / ctrl-c / alt-o"),
+                "custom way out was not drawn: {drawn}"
             );
         }
 

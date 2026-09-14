@@ -6369,6 +6369,79 @@ mod tests {
         assert_eq!(session.input(), "the next thing");
     }
 
+    /// Customizable keybindings route actions to the configured chord, and the default chord
+    /// is ignored once remapped.
+    #[test]
+    fn custom_keybindings_route_actions_and_old_chords_are_ignored() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("stash".to_string(), "alt-s".to_string());
+        custom.insert("scroller".to_string(), "alt-o".to_string());
+        session.adopt_keybindings(&custom);
+
+        for c in "custom key test".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        // Default ctrl-s should be ignored for stashing now
+        handle_key(&mut session, ctrl('s'));
+        assert_eq!(session.input(), "custom key test", "default chord still stashed");
+
+        // Custom alt-s stashes
+        let alt_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT);
+        assert_eq!(handle_key(&mut session, alt_s), Action::Redraw);
+        assert_eq!(session.input(), "", "custom chord did not stash");
+
+        // Custom alt-s restores the line
+        handle_key(&mut session, alt_s);
+        assert_eq!(session.input(), "custom key test", "custom chord did not restore stash");
+
+        // Default ctrl-o should not open scroller
+        handle_key(&mut session, ctrl('o'));
+        assert!(!session.scrolling(), "default ctrl-o opened scroller when remapped");
+
+        // Custom alt-o opens scroller
+        let alt_o = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT);
+        handle_key(&mut session, alt_o);
+        assert!(session.scrolling(), "custom alt-o did not open scroller");
+
+        // Custom alt-o closes scroller
+        handle_key(&mut session, alt_o);
+        assert!(!session.scrolling(), "custom alt-o did not close scroller");
+    }
+
+    /// Custom keybindings function properly mid-turn in handle_key_while_working.
+    #[test]
+    fn custom_keybindings_work_while_a_turn_runs() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("stash".to_string(), "alt-s".to_string());
+        custom.insert("scroller".to_string(), "alt-o".to_string());
+        session.adopt_keybindings(&custom);
+
+        handle_key(&mut session, key(KeyCode::Char('x')));
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.status, Status::Working);
+
+        for c in "working input".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+
+        // Default ctrl-s does not stash
+        handle_key_while_working(&mut session, ctrl('s'));
+        assert_eq!(session.input(), "working input");
+
+        // Custom alt-s stashes mid-turn
+        let alt_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT);
+        assert_eq!(handle_key_while_working(&mut session, alt_s), Action::Redraw);
+        assert_eq!(session.input(), "");
+
+        // Custom alt-o opens scroller mid-turn
+        let alt_o = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT);
+        assert_eq!(handle_key_while_working(&mut session, alt_o), Action::Redraw);
+        assert!(session.scrolling());
+    }
+
     /// Escape means "stop this" before it means anything else, so a turn in flight is cancelled
     /// rather than the input being cleared.
     #[test]

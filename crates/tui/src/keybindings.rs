@@ -194,14 +194,14 @@ impl Keybindings {
 
         // Helper to resolve one action binding safely.
         let mut resolve_action = |name: &str, default_chord: KeyChord, slot: &mut KeyChord| {
-            if let Some(spec) = configured.get(name) {
-                if let Some(chord) = KeyChord::parse(spec) {
-                    if !chord.is_reserved() && !used.contains(&chord) {
-                        *slot = chord;
-                        used.insert(chord);
-                        return;
-                    }
-                }
+            if let Some(chord) = configured
+                .get(name)
+                .and_then(|spec| KeyChord::parse(spec))
+                .filter(|chord| !chord.is_reserved() && !used.contains(chord))
+            {
+                *slot = chord;
+                used.insert(chord);
+                return;
             }
             // Retain or fallback to default
             if !used.contains(&default_chord) {
