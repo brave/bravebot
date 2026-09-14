@@ -10,6 +10,7 @@ governs:
   - crates/cli/src/main.rs
   - crates/tui/src/sessions.rs
   - crates/tui/src/resume.rs
+  - crates/tui/src/confirm.rs
 guards:
   - symbol: Policy::before_planning
   - symbol: Policy::adopt_manifest
@@ -163,3 +164,52 @@ observe before it plans. Name a workspace file instead.
 `verified-by: bravebot_cli::main::an_unknown_mode_is_refused_rather_than_guessed`
 `verified-by: bravebot_cli::main::a_leading_mode_flag_is_a_task_not_an_unknown_option`
 `verified-by: bravebot_agent::manifest::piped_input_is_refused_rather_than_dropped`
+
+<a id="MANIFEST-10"></a>
+### MANIFEST-10: a plan runs only once somebody has said yes to it
+
+Between freezing a plan and walking it, the frozen plan is put to a person: the task in their own
+words, then every step in order, each naming its tier, what it would do, and every routing field the
+step fixed. The routing is part of what is being answered for, so the line a person reads carries the
+directory a search runs in and the glob it filters by, not the pattern alone. Declining stops the run,
+and what was declined comes back with the error under MANIFEST-3, so the plan can still be read.
+Nothing has been read or written by then, so a declined run leaves the workspace exactly as it was.
+
+The question is asked once, and there is no standing form of it. Nothing between the plan and the
+run can reshape the plan, so there is nothing to ask a second time; and a plan is written afresh for
+each run, so remembering an answer would be approving steps nobody has seen.
+
+Approving a plan is not approving its writes. This mode widens the scope of the precommitment and
+does not replace the gates inside it, so each write is still put to the person as its step reaches it.
+
+Where nobody can be asked the answer is no, as it is everywhere else, so an unattended run stops
+before its first step unless permissions were skipped outright.
+
+**Why.** The gates the other clauses install are all about what a plan may say. None of them is
+about whether anybody wanted it: a validated, wholly untainted plan is still a model's choice of a
+run's worth of effects, and this mode's own guarantee, that nothing after the plan can reshape it, is
+what makes one question about the whole of it worth more than a question per step.
+
+`verified-by: bravebot_agent::manifest::a_plan_nobody_approved_runs_nothing`
+`verified-by: bravebot_agent::manifest::approving_a_plan_is_not_approving_its_writes`
+`verified-by: bravebot_agent::permission_mode::a_plan_is_put_to_a_person_in_every_mode_but_bypass`
+`verified-by: bravebot_tui::confirm::the_plan_prompt_shows_the_task_and_every_step`
+`verified-by: bravebot_tui::confirm::the_plan_prompt_says_what_approving_it_does_and_does_not_do`
+`verified-by: bravebot_tui::remote_confirm::a_plan_crosses_with_every_step_and_the_answer_comes_back`
+`verified-by: bravebot_core::manifest::a_described_step_names_every_routing_field_it_fixes`
+
+## Known costs
+
+- **While no session can start a manifest run, a plan runs only where permissions were skipped.**
+  MANIFEST-9 keeps every session on the turn loop, so the one place a run starts is the one-shot
+  command, and a one-shot command has nobody to ask. MANIFEST-10's answer where nobody can be asked
+  is no, so the mode walks a plan only under `--dangerously-skip-permissions` until a session can
+  start a run. The prompt a person would answer is written and carried to the terminal already, so
+  what is missing is the way in rather than the question. Refusing is the right side to fail on
+  meanwhile: the alternative is the run this clause exists to stop.
+- **A processing step's instruction is not on the line.** What the person reads is which slots it
+  reads and which it fills, and the sentence a processor is given is left off, so a plan that
+  transforms text under an instruction nobody read still passes the gate. It routes nothing, which
+  is why it is a cost rather than a hole in MANIFEST-10: a processor's output is a slot, and every
+  step that lands a slot anywhere names the destination on its own line and is put to the person
+  again as its turn comes.

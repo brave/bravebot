@@ -204,12 +204,20 @@ impl Step {
     }
 
     /// How this step reads to a person, for the summary shown before the run starts.
+    ///
+    /// Every routing field the contract names, and not only the headline one. This line is the
+    /// whole of what somebody is shown before they answer for the plan, and a routing field they
+    /// were not shown is one they did not endorse: a search names where it runs as much as it names
+    /// what it looks for, and both are locked before the question is put.
     pub fn describe(&self) -> String {
         let contract = contract_for(self.tool).expect("a validated step names a known tool");
-        let subject = contract
+        let headline = contract
             .headline
             .iter()
-            .find_map(|field| self.args.get(*field).and_then(Arg::text))
+            .copied()
+            .find(|field| self.args.get(*field).and_then(Arg::text).is_some());
+        let subject = headline
+            .and_then(|field| self.args.get(field).and_then(Arg::text))
             .unwrap_or("");
 
         let reads = match self.reads.as_slice() {
@@ -228,7 +236,28 @@ impl Step {
             None => String::new(),
         };
 
-        format!("{} {subject}{reads}{writes}", contract.verb)
+        // An empty one is left out rather than printed blank. An omitted listing pattern or search
+        // include is locked as the empty string, which is the absence of a filter rather than a
+        // destination anybody has to read.
+        let elsewhere = contract
+            .routing
+            .iter()
+            .copied()
+            .filter(|field| Some(*field) != headline)
+            .filter_map(|field| {
+                self.args
+                    .get(field)
+                    .and_then(Arg::text)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| format!("{field} {value}"))
+            })
+            .collect::<Vec<_>>();
+        let routing = match elsewhere.is_empty() {
+            true => String::new(),
+            false => format!(" ({})", elsewhere.join(", ")),
+        };
+
+        format!("{} {subject}{reads}{writes}{routing}", contract.verb)
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
@@ -1353,6 +1382,58 @@ mod tests {
         assert_eq!(lines[0], "read README.md into readme");
         assert_eq!(lines[1], "process from readme into summary");
         assert_eq!(lines[2], "answer from summary");
+    }
+
+    /// A search decides where it runs and what it matches, not only what it looks for, and a listing
+    /// decides what it filters by. All of it is locked before the plan is put to anybody, so all of
+    /// it has to be on the line they read: a yes given to a pattern is not a yes to whichever
+    /// subtree somebody else chose to run it in.
+    #[test]
+    fn a_described_step_names_every_routing_field_it_fixes() {
+        let searching = validate(&Draft::new(vec![
+            DraftStep::new("search")
+                .with_text("pattern", "TODO")
+                .with_text("directory", "crates")
+                .with_text("include", "*.rs")
+                .with_text("out_slot", "hits"),
+            answer("hits"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            searching.steps()[0].describe(),
+            "search for TODO into hits (directory crates, include *.rs)"
+        );
+
+        let listing = validate(&Draft::new(vec![
+            DraftStep::new("list_files")
+                .with_text("directory", "docs")
+                .with_text("pattern", "*.md")
+                .with_text("out_slot", "names"),
+            answer("names"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            listing.steps()[0].describe(),
+            "list docs into names (pattern *.md)"
+        );
+    }
+
+    /// A filter the plan left out is locked as the empty string, and printing that would read as a
+    /// destination rather than as the absence of one. The directory a search runs in has no such
+    /// value, so where the plan omitted it the line shows the root it was locked to instead.
+    #[test]
+    fn a_routing_field_that_filters_nothing_is_left_off_the_line() {
+        let plan = validate(&Draft::new(vec![
+            DraftStep::new("search")
+                .with_text("pattern", "TODO")
+                .with_text("out_slot", "hits"),
+            answer("hits"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            plan.steps()[0].describe(),
+            "search for TODO into hits (directory .)"
+        );
     }
 
     #[test]

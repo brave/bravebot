@@ -185,6 +185,10 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         self.lent.hold().confirm_server(request)
     }
 
+    fn confirm_manifest(&mut self, request: &crate::confirm::ManifestRequest) -> Decision {
+        self.lent.hold().confirm_manifest(request)
+    }
+
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
         self.lent.hold().ask_user(asking)
     }

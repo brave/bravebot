@@ -20,8 +20,8 @@
 //! decision taken against a question nobody matched is worse than no decision at all.
 
 use bravebot_agent::confirm::{
-    Confirmer, Decision, FetchRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
-    VouchRequest, WriteRequest,
+    Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RunDecision, RunRequest,
+    ServerRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Shown,
@@ -93,6 +93,8 @@ pub enum ToMain {
     Vouch(VouchRequest),
     /// A language server the planner would like started. The main thread must reply.
     Server(ServerRequest),
+    /// A frozen plan that will not run until somebody approves it. The main thread must reply.
+    Manifest(ManifestRequest),
     /// The planner is asking the user something. The main thread must reply.
     Ask(Asking),
     /// The task list changed. No reply.
@@ -144,6 +146,7 @@ pub enum Reply {
     Fetch(Decision),
     Vouch(Decision),
     Server(Decision),
+    Manifest(Decision),
     Ask(Vec<Answer>),
 }
 
@@ -221,6 +224,16 @@ impl Confirmer for RemoteConfirmer {
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
         match self.exchange(ToMain::Server(request.clone())) {
             Some(Reply::Server(decision)) => decision,
+            _ => Decision::Reject,
+        }
+    }
+
+    /// A reply to any other question is not an answer to this one. Every other question is about
+    /// one effect and this is about a whole run, so taking a write's yes for it would run steps
+    /// nobody was shown.
+    fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+        match self.exchange(ToMain::Manifest(request.clone())) {
+            Some(Reply::Manifest(decision)) => decision,
             _ => Decision::Reject,
         }
     }
@@ -377,6 +390,65 @@ mod tests {
             &["/usr/bin/git".into()],
             "/tmp/project",
         )
+    }
+
+    fn a_plan() -> ManifestRequest {
+        ManifestRequest {
+            task: "tidy the notes".into(),
+            steps: vec![
+                "1. [fetch] read notes.md into notes".into(),
+                "2. [act] write notes to summary.md".into(),
+            ],
+        }
+    }
+
+    /// Every step crosses to the terminal, since the person is answering for all of them, and the
+    /// answer crosses back.
+    #[test]
+    fn a_plan_crosses_with_every_step_and_the_answer_comes_back() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let (answer_tx, answer_rx) = channel();
+
+        let responder = thread::spawn(move || {
+            match inbound.recv().expect("a message arrived") {
+                ToMain::Manifest(asked) => {
+                    assert_eq!(asked.task, "tidy the notes");
+                    assert_eq!(asked.steps.len(), 2);
+                }
+                other => panic!("expected a plan question, got {other:?}"),
+            }
+            answer_tx
+                .send(Reply::Manifest(Decision::Approve))
+                .expect("answered");
+        });
+
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        assert_eq!(confirmer.confirm_manifest(&a_plan()), Decision::Approve);
+        responder.join().expect("responder finished");
+    }
+
+    /// A yes to a write is not a yes to the plan the write is in. Every other question is about one
+    /// effect and this one is about a whole run, so taking one for the other would walk steps nobody
+    /// was ever shown.
+    #[test]
+    fn an_approved_write_does_not_approve_a_plan() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let (answer_tx, answer_rx) = channel();
+
+        let responder = thread::spawn(move || {
+            inbound.recv().expect("a message arrived");
+            answer_tx
+                .send(Reply::Write(Decision::Approve))
+                .expect("answered");
+        });
+
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        assert_eq!(
+            confirmer.confirm_manifest(&a_plan()),
+            Decision::Reject,
+            "consent to a write was taken as consent to a whole plan"
+        );
+        responder.join().expect("responder finished");
     }
 
     /// The run question reaches the other side and the answer comes back.
@@ -650,6 +722,7 @@ mod tests {
                     ToMain::Fetch(_) => seen.push("fetch"),
                     ToMain::Vouch(_) => seen.push("vouch"),
                     ToMain::Server(_) => seen.push("server"),
+                    ToMain::Manifest(_) => seen.push("manifest"),
                     ToMain::Todos(_) => seen.push("todos"),
                     ToMain::Written(_) => seen.push("written"),
                     ToMain::Phase(_) => seen.push("phase"),

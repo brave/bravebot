@@ -151,7 +151,9 @@ section before it prints anything, and where state is kept is a fact about the m
 `turn` observes and decides step by step, which is what an unqualified `bravebot "task"` has
 always been. `manifest` plans the whole run first, then executes it. An unknown name is refused
 rather than guessed. Both modes are unattended, with an empty trust map: where nobody can be
-asked, nothing is approved unless the flag in CLI-1 says otherwise.
+asked, nothing is approved unless the flag in CLI-1 says otherwise. A plan is one of the things
+nobody is there to approve ([manifest.md](manifest.md#MANIFEST-10)), so a one-shot `manifest` run
+stops before its first step unless that flag was given.
 
 This is a different axis from the mode in [permission-modes.md](permission-modes.md), and the two
 compose. `--mode` decides when control flow is settled; the other decides who answers a prompt.
@@ -163,7 +165,7 @@ is all that remains of a document nobody can see. The plan never shares stdout w
 `verified-by: bravebot_cli::main::a_leading_mode_flag_is_a_task_not_an_unknown_option`
 `verified-by: bravebot_cli::main::an_unknown_mode_is_refused_rather_than_guessed`
 `verified-by: bravebot_cli::main::a_failed_plan_is_printed_beside_the_reply`
-`verified-by: bravebot_agent::manifest::an_unattended_manifest_run_does_not_write`
+`verified-by: bravebot_agent::manifest::a_plan_nobody_approved_runs_nothing`
 
 <a id="CLI-9"></a>
 ### CLI-9: a one-shot run names its own model, or asks for the one a session would

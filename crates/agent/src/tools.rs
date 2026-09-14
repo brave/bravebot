@@ -5546,6 +5546,11 @@ mod tests {
                 Decision::Reject
             }
 
+            /// Refuses. A test double is not a person agreeing to a plan.
+            fn confirm_manifest(&mut self, _request: &crate::confirm::ManifestRequest) -> Decision {
+                Decision::Reject
+            }
+
             fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
                 self.seen.push(asking.clone());
                 self.reply.clone()

@@ -3765,7 +3765,7 @@ fn run_turn_animated(
         // writes and waits, the other reports progress and moves on.
         let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main.clone());
         let mut asking = crate::remote_confirm::RemoteConfirmer::new(to_main, answer_rx, typed);
-        // Wrapped rather than replaced, because two of the six questions still have to cross back to
+        // Wrapped rather than replaced, because two of the confirmer's questions still cross back to
         // the terminal: a question the planner posed asks for information rather than consent, and an
         // interjection is the person typing unprompted.
         //
@@ -3914,6 +3914,16 @@ fn run_turn_animated(
                     ));
                 }
                 let _ = answer_tx.send(crate::remote_confirm::Reply::Server(answer.decision()));
+            }
+            crate::remote_confirm::ToMain::Manifest(request) => {
+                let answer = crate::confirm::ask_manifest(terminal, &request);
+                if answer == crate::confirm::Answer::Interrupt {
+                    cancel.cancel();
+                }
+                // Nothing is noted on the transcript. The answer covers this plan and no other, so
+                // there is no standing decision to record, and the plan itself is about to be
+                // walked in the open where the transcript will show every step of it.
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Manifest(answer.decision()));
             }
             crate::remote_confirm::ToMain::Ask(asking) => {
                 // A planner that loops back over the same decision should not make the user
