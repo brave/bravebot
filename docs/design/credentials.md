@@ -21,6 +21,19 @@ from those.
 and bearer tokens carried in HTTP headers. Concretely: email, chat,
 issue trackers, most SaaS APIs, and after phase 4, `git push` over HTTPS and arbitrary HTTP.
 
+## The rungs this refers to
+
+The spec ranks how a credential may be held, and this document uses those rungs throughout.
+
+| rung | what the agent holds |
+| --- | --- |
+| 1 | nothing. Something else performs the action, or a boundary adds the real value on the way out |
+| 2 | a capability: a right to one action, scoped and expiring |
+| 3 | a bearer secret, fetched at the step that uses it and dropped after |
+| 4 | a bearer secret, held indefinitely |
+
+Take the highest rung the far end offers. Anything lower is a deliberate, recorded choice.
+
 ## What Brave Vault already gives us
 
 | our requirement | what exists |
@@ -356,6 +369,39 @@ pasted token arrives through whatever typed it.
 **Where a service can mint a bounded credential, that is the one we ask for.** An installation
 token for one repository rather than a personal access token, an assumed role with a session
 policy rather than a static key. Holding the broader form instead is the same recorded lowering.
+
+## What each capability needs
+
+The concrete inventory, and the reason rung 1 is worth the work. The last column is the form that
+survives an agent being wrong.
+
+| capability | usually held as | worst case | the form to use |
+| --- | --- | --- | --- |
+| inference | API key, subscription token | spend, and the transcript | our own, kept from every program we start |
+| source control | a token, a key, or a logged-in tool | push anywhere, and a pipeline file is remote code execution | an installation token, one repository, expiring |
+| continuous integration | pipeline token | runs code holding that repository's secrets | per-job identity, nothing stored |
+| package registries | publish token | a supply-chain compromise of everyone downstream | never standing; single-use and confirmed |
+| cloud | a profile on disk, a session, a metadata endpoint | usually everything | an assumed role with a session policy, minutes long |
+| email | app password, or a broad scope | account recovery for every service, and unbounded egress | the broker sends; provider-side scope to read |
+| payments | a card number | see below | an issuer-minted credential, one merchant, one amount |
+| protocol servers | a token to the server, and the server's own tokens downstream | a confused deputy nobody here can see | resource-bound, never forwarded |
+| databases | a connection string in a file | production, read and write | a dynamic secret with a lease |
+| browser sessions | cookies in a profile | acts as the person everywhere the grant reaches | origin-scoped, and still a bearer token |
+| remote hosts | a private key file | lateral movement | an agent socket, which is already the right shape |
+| signing | a signing key | signs releases as the person | hardware-backed, with a physical touch |
+| chat and documents | a workspace token | an egress channel with a friendly name | send-only, one destination, per item |
+
+**Payments deserve the detail**, because they are the worst case and the clearest. A card number is
+static, bearer, unscoped, uncapped, and revocable only by reissuing the card and updating every
+merchant that stored it. The security code adds nothing against something holding both. The only
+defensible form is minted per purchase by the issuer, locked to one merchant with a maximum and an
+expiry, and the agent-payment schemes now shipping add a signed mandate proving the person
+authorised that purchase. Note where the bound lives: the issuer enforces it, so an agent talked
+into asking for more still cannot get it. That is the same argument as the broker running as a
+different operating-system user.
+
+**Nothing in this table is in scope for the phases below except email**, and the rest are listed so
+the shape of the work after it is visible rather than implied.
 
 ## The two paths
 
