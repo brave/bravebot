@@ -16,7 +16,7 @@ guards:
       - crates/agent/src/tools.rs: 21
       - crates/agent/src/turn.rs: 4
       - crates/agent/src/workspace.rs: 2
-      - crates/agent/tests/workspace.rs: 36
+      - crates/agent/tests/workspace.rs: 37
       - crates/aichat/tests/client.rs: 2
       - crates/core/src/policy.rs: 39
       - crates/core/src/value.rs: 1

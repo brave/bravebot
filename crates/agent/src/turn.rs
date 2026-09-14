@@ -35,7 +35,7 @@ use crate::conversation::{Conversation, TOOL_RESULT_PREFIX};
 use crate::report::{DelegateId, IgnoreReports, Phase, Reporter};
 use crate::timing::{Elapsed, Timing};
 use crate::tools;
-use crate::workspace::{Workspace, WorkspaceError};
+use crate::workspace::{Paging, Workspace, WorkspaceError};
 
 /// How a planner is introduced to itself.
 ///
@@ -2424,11 +2424,32 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                             // so a search that stopped short reaches the planner looking exactly
                             // like one that found everything there was.
                             let capped = if output.incomplete {
+                                // Where the cap can be asked past, the offset is the advice:
+                                // narrowing is a guess, and a guess that misses loses the part
+                                // that was cut off.
+                                let rest = match output.paging {
+                                    Some(Paging::Continue(offset)) => {
+                                        format!("Ask again with offset {offset} for the rest.")
+                                    }
+                                    _ => "Narrow it, or work through a subdirectory to cover \
+                                          the rest."
+                                        .to_string(),
+                                };
                                 format!(
                                     "\n\nThe {} stopped at a cap, so this result is incomplete: it \
-                                 is a sample and not the whole answer. Narrow it, or work \
-                                 through a subdirectory to cover the rest.",
+                                 is a sample and not the whole answer. {rest}",
                                     output.tool
+                                )
+                            } else if let Some(Paging::PastTheEnd { found }) = output.paging {
+                                // The other end of the same contract. A page past the last match is
+                                // empty, and an empty result nobody explains reads as the pattern
+                                // having gone from the tree: the count is what says otherwise, and
+                                // it is written into a body the planner may not read.
+                                format!(
+                                    "\n\nThat offset is past the last match. The {} found {} in \
+                                     all, and the earlier ones are still there.",
+                                    output.tool,
+                                    crate::tools::tally(found, "match", "matches")
                                 )
                             } else {
                                 String::new()

@@ -3299,6 +3299,178 @@ fn a_truncated_search_tells_the_model_it_is_incomplete() {
     );
 }
 
+/// Being told the answer is partial is only half of it. Without a way to ask for the rest the
+/// planner's one recourse is a narrower glob, which is the guessing a search exists to avoid,
+/// and the matches past the cap are unreachable however many times it guesses.
+#[test]
+fn the_model_can_ask_for_a_later_page_of_matches() {
+    let scratch = Scratch::new("search-offset");
+    // Distinct text per line, so which page came back is visible in the request.
+    let body: String = (0..300).map(|n| format!("needle {n}\n")).collect();
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "search",
+            r#"{"pattern":"needle","directory":".","offset":201}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("find needle");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("a.txt:300: needle 299"),
+        "the last match was out of reach at an offset past the cap: {second}"
+    );
+    assert!(
+        !second.contains("a.txt:1: needle 0"),
+        "the offset was ignored and the first page came back again: {second}"
+    );
+}
+
+/// Quarantine is the default footing, so this is the case that decides whether the offset is
+/// any use: written into a body the planner is never shown, it reaches nobody who could act on
+/// it, and the cap is back to being one nothing can be asked past.
+#[test]
+fn a_quarantined_capped_search_says_where_to_continue() {
+    let scratch = Scratch::new("search-offset-quarantined");
+    // One past the cap, so matches are left behind rather than exactly filling it.
+    let body: String = (0..201).map(|_| "needle\n").collect();
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("search", r#"{"pattern":"needle","directory":"."}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("find needle");
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("a.txt:1: needle"),
+        "the matches reached the model, so this is not the quarantined case: {second}"
+    );
+    assert!(
+        second.contains("offset 201"),
+        "a capped search the planner may not read named no offset: {second}"
+    );
+}
+
+/// A page past the last match returns nothing, and a search reports nothing when the pattern is
+/// absent. Told apart here, because the planner asked for this offset off the back of a page it
+/// already has: read as absence, the matches it was shown a round ago look withdrawn.
+#[test]
+fn a_search_past_the_last_match_says_how_many_there_were() {
+    let scratch = Scratch::new("search-offset-past-the-end");
+    std::fs::write(scratch.path.join("a.txt"), "needle\nneedle\nneedle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "search",
+            r#"{"pattern":"needle","directory":".","offset":500}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("find needle");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("3 matches"),
+        "a page past the end did not say how many matches there were: {second}"
+    );
+    assert!(
+        !second.contains("(no matches)"),
+        "a page past the end was reported as the pattern being absent: {second}"
+    );
+}
+
+/// The same fact for the footing a search is on by default. The count is written into a body the
+/// planner may not read, so on its own it reaches nobody: an empty reference and no word about it
+/// is exactly what a pattern absent from the tree looks like.
+#[test]
+fn a_quarantined_page_past_the_last_match_says_how_many_there_were() {
+    let scratch = Scratch::new("search-offset-past-the-end-quarantined");
+    std::fs::write(scratch.path.join("a.txt"), "needle\nneedle\nneedle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "search",
+            r#"{"pattern":"needle","directory":".","offset":500}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("find needle");
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("3 matches"),
+        "a page past the end the planner may not read said nothing about the matches it has \
+         already seen: {second}"
+    );
+}
+
 /// The search a real turn kept failing to make. Four rounds went on "drop.*file",
 /// "attached.*render" and "fn.*attached" against a literal matcher, each answered with silence
 /// that reads as proof the string is absent.

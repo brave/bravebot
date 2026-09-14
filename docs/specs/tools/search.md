@@ -10,8 +10,8 @@ governs:
 
 ## Scope
 
-Finding lines in the workspace that match a pattern. `pattern`, `directory` and `include` are
-routing; `case_sensitive` is a property of the call rather than of anything read. There are no
+Finding lines in the workspace that match a pattern. `pattern`, `directory`, `include` and `offset`
+are routing; `case_sensitive` is a property of the call rather than of anything read. There are no
 content arguments. The result is the matching lines, or a reference.
 
 ## Clauses
@@ -183,3 +183,45 @@ its own files from a search is a tree that can hide them from review. The names 
 ones no project uses for its own sources, so skipping them needs nobody's word for it.
 
 `verified-by: bravebot_agent::workspace::a_search_skips_vendored_dependencies`
+
+<a id="SEARCH-8"></a>
+### SEARCH-8: a search stopped by the match cap says where to continue from
+
+The result gives the offset of the first match left behind, and a further search asking for that
+offset returns the matches from there.
+
+Only the match cap can be asked past. A walk that stopped short of the tree or ran out of time
+reached neither the end of the matches nor a count of them, so it offers no later page and asks for
+a narrower search as before.
+
+An offset past the last match returns nothing and says how many matches there were, so that an
+empty page cannot be read as the pattern having gone from the tree between two calls. A pattern that
+is nowhere in the tree is an ordinary empty result at every offset: there is no page behind it to
+say is still there.
+
+Both of those reach the planner whether or not it may read the result, for the reason
+[SEARCH-3](#SEARCH-3) gives about a notice written inside a body nobody is shown. A search is
+quarantined by default, so a contract that held only for a trusted workspace would hold for the
+minority of them.
+
+**Why.** Narrowing the pattern or dropping to a subdirectory is otherwise the only way past the cap,
+and it is a guess about where the matches that were cut off are. A guess that misses drops exactly
+those, and nothing in the narrower result says so: it comes back complete, which reads as the whole
+answer. A common word in a large tree then has as many matches as the cap allows that can be read
+and an unknown number that cannot. This is the paging [read-file.md](read-file.md) gives a long
+file, applied to a long list of matches.
+
+The walk is repeated rather than resumed. A search holds no state between calls and visits files in
+a fixed order, so counting to the offset again reaches the same match. A cursor would have to
+survive between turns and still mean something after the tree changed underneath it. Reading every
+file again is the cost of not keeping one.
+
+`verified-by: bravebot_agent::workspace::a_capped_search_says_where_to_continue_from`
+`verified-by: bravebot_agent::workspace::the_reported_offset_returns_the_following_matches`
+`verified-by: bravebot_agent::workspace::a_search_that_could_not_reach_every_file_offers_no_later_page`
+`verified-by: bravebot_agent::workspace::an_offset_past_the_last_match_says_how_many_there_were`
+`verified-by: bravebot_agent::workspace::an_offset_into_a_pattern_that_is_absent_is_not_a_page_past_the_end`
+`verified-by: bravebot_agent::turn::the_model_can_ask_for_a_later_page_of_matches`
+`verified-by: bravebot_agent::turn::a_quarantined_capped_search_says_where_to_continue`
+`verified-by: bravebot_agent::turn::a_search_past_the_last_match_says_how_many_there_were`
+`verified-by: bravebot_agent::turn::a_quarantined_page_past_the_last_match_says_how_many_there_were`
