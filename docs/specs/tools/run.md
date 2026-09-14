@@ -280,8 +280,10 @@ process starts, so editing it applies to the next session rather than to a run a
 
 **Not a confinement mechanism, and it must not be read as one.** A program that reaches the network
 is unconfined and unpoliced, so it can send anything it can read: a file, the workspace, a credential
-of the user's own. What closes here is the narrow part of the gap, the credentials a person could
-not have been shown at the prompt and had no way to withhold. The rest of what they hand over is
+of the user's own. Those requests are the program's own and do not pass the gate in
+[network-egress.md](../network-egress.md), which governs what this process sends rather than what a
+program it started sends. What closes here is the narrow part of the gap, the credentials a person
+could not have been shown at the prompt and had no way to withhold. The rest of what they hand over is
 still handed over. Nothing is established about what the program then does, and the label on the
 output is unaffected.
 
