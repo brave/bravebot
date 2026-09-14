@@ -1346,7 +1346,7 @@ fn draw_scroller(frame: &mut Frame, session: &Session) -> Laid {
 ///
 /// The way out is last and is never the row that did not fit: a list that scrolled its own exit
 /// off the screen would be a mode nobody could leave.
-fn scroller_keys() -> [(&'static str, &'static str); 8] {
+fn scroller_keys() -> [(&'static str, &'static str); 9] {
     [
         ("up/down, j/k", t!(scroller_key_line)),
         ("ctrl-u / ctrl-d", t!(scroller_key_half_page)),
@@ -1356,6 +1356,7 @@ fn scroller_keys() -> [(&'static str, &'static str); 8] {
         ("/ then n/N", t!(scroller_key_search)),
         ("v", t!(scroller_key_editor)),
         ("?", t!(scroller_key_this_list)),
+        ("any key", t!(scroller_key_close_list)),
     ]
 }
 
@@ -2578,7 +2579,7 @@ const SHORTCUTS_HINT: &str = "? for shortcuts";
 /// the one place a binding's meaning is written down: a list that went on saying "clear the line" to
 /// somebody whose Escape takes the letters as commands would advertise a binding that is not there.
 /// Every other row means the same thing either way.
-fn shortcuts(editing: crate::vim::Editing) -> [(&'static str, &'static str); 20] {
+fn shortcuts(editing: crate::vim::Editing) -> [(&'static str, &'static str); 21] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "take letters as commands",
@@ -2599,6 +2600,7 @@ fn shortcuts(editing: crate::vim::Editing) -> [(&'static str, &'static str); 20]
         ("ctrl-d", "exit"),
         ("ctrl-g", "write prompt in $EDITOR"),
         ("ctrl-l", "watch a delegate work"),
+        ("ctrl-o", "open the scroller"),
         ("ctrl-r", "search earlier prompts"),
         ("ctrl-s", "stash, or bring it back"),
         ("ctrl-t", "show what a turn did"),
@@ -4258,6 +4260,42 @@ mod tests {
             );
         }
 
+        /// A press spent putting the list away is a press that did not scroll, and a list that
+        /// does not say so is indistinguishable from an interface that ignored the key.
+        #[test]
+        fn the_help_says_that_any_key_puts_it_away() {
+            let mut session = reading();
+            session.toggle_scroller_help();
+
+            let (drawn, _) = screen(&session);
+            assert!(
+                drawn.contains("any key"),
+                "the list never said what puts it away: {drawn}"
+            );
+            assert!(
+                drawn.contains(t!(scroller_key_close_list)),
+                "nothing said the press closes the list: {drawn}"
+            );
+        }
+
+        /// The list is the one place the keys are written down, so a key that closes the mode and
+        /// is named nowhere on the screen is a way out a person cannot find.
+        #[test]
+        fn the_help_names_every_key_that_closes_the_scroller() {
+            let mut session = reading();
+            session.toggle_scroller_help();
+
+            let (drawn, _) = screen(&session);
+            assert!(
+                drawn.contains("q / esc / ctrl-o"),
+                "the way out was not drawn whole: {drawn}"
+            );
+            assert!(
+                drawn.contains("ctrl-c"),
+                "ctrl-c closes the scroller and the list left it out: {drawn}"
+            );
+        }
+
         /// The way out is the one row of a key list that must never be the row that did not fit.
         #[test]
         fn the_help_renders_on_a_tiny_terminal() {
@@ -5297,6 +5335,21 @@ mod tests {
             assert!(output.contains(key), "{key} missing");
             assert!(output.contains(meaning), "{key} has no meaning on screen");
         }
+    }
+
+    /// Walking the array the list is drawn from pins that the list is drawn, never that it is
+    /// complete. The chord that opens the scroller was named only inside the scroller, which is a
+    /// place reachable only by somebody who already knew the key.
+    #[test]
+    fn the_list_names_the_chord_that_opens_the_scroller() {
+        let mut session = Session::new("none");
+        session.type_char('?');
+        let output = rendered_at(&session, 120, 40);
+
+        assert!(
+            output.contains("ctrl-o"),
+            "the one place the keys are written down left out ctrl-o: {output}"
+        );
     }
 
     /// The list is the one place a binding's meaning is written down, so it cannot go on saying that
