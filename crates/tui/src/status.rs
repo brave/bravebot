@@ -95,6 +95,12 @@ pub struct Facts<'a> {
     /// reading this wants to know which of the three things to do something about, and only the
     /// split can tell them: a faster model, a faster test suite, or fewer prompts.
     pub timing: bravebot_agent::timing::Timing,
+    /// How much of the last turn's prompt the backend answered out of its own cache.
+    ///
+    /// `None` before a turn has run. Zero in both halves where the service reported nothing about a
+    /// cache, which every backend but Bedrock currently does, and that is not the same answer as a
+    /// turn whose cache missed.
+    pub cached: Option<bravebot_aichat::protocol::Cached>,
     pub trust: &'a TrustStore,
     pub programs: &'a TrustedPrograms,
     /// The loop repeating a prompt, where the person started one.
@@ -302,6 +308,31 @@ pub fn report(facts: &Facts<'_>) -> Report {
         }
     }
 
+    // Beside the token count because it answers the question that count cannot. A prompt is the
+    // same size whether the service read it or recognised it, and these two are the difference in
+    // what that cost: a cached token is charged at a fraction of a fresh one, and a written one
+    // above it.
+    //
+    // Drawn only where the service reported something. Both figures zero says a backend that
+    // states nothing about a cache as readily as it says a turn whose cache missed, and a panel
+    // cannot report the second without asserting it was not the first.
+    //
+    // The heading carries no figure of its own, which is where this departs from the time report
+    // above it. Adding the two together would report the one number that says nothing: a read is
+    // charged at a fraction of a fresh token and a write above it, so a turn that saved almost the
+    // whole prompt and a turn that paid a premium on it come to the same sum.
+    if let Some(cached) = facts.cached.filter(bravebot_aichat::protocol::Cached::any) {
+        lines.push(Line::new(t!(status_cache), ""));
+        for (count, note) in [
+            (cached.read_tokens, t!(status_cache_read)),
+            (cached.written_tokens, t!(status_cache_written)),
+        ] {
+            if count > 0 {
+                lines.push(Line::new("", tokens(count)).with_note(note));
+            }
+        }
+    }
+
     // Last because it is the part that grows. What a write recorded is the thing nothing else
     // reports: a file an earlier turn marked untrusted is invisible until it refuses to be read.
     let rules: Vec<(&str, Integrity)> = facts.trust.rules().collect();
@@ -466,6 +497,9 @@ mod tests {
             // Nothing measured, which is what a session looks like before its first turn. Tests
             // about the time report set this themselves.
             timing: bravebot_agent::timing::Timing::default(),
+            // Nothing observed about a cache, on the same footing. Tests about the cache lines set
+            // this themselves.
+            cached: None,
             trust,
             programs: &NOTHING_VOUCHED,
             // Nothing repeating, which is every session that has not been asked to. Tests about
@@ -982,6 +1016,75 @@ mod tests {
             "a stall that never happened was reported: {shown}"
         );
         assert!(!shown.contains("running tools"), "{shown}");
+    }
+
+    /// The token count says what the turn sent, which is the same figure whether the service read
+    /// the prompt or recognised it. Only this pair says which, and a person asking whether caching
+    /// is working has nowhere else to look.
+    #[test]
+    fn the_panel_says_how_much_of_the_prompt_came_out_of_the_cache() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut hit = facts(&config, &trust);
+        hit.cached = Some(bravebot_aichat::protocol::Cached {
+            read_tokens: 41_200,
+            written_tokens: 1_800,
+        });
+
+        let shown = rendered(&report(&hit));
+        assert!(shown.contains("served from the cache"), "{shown}");
+        assert!(
+            shown.contains("41.2k"),
+            "the read was not reported: {shown}"
+        );
+        assert!(shown.contains("written to it for the next turn"), "{shown}");
+        assert!(
+            shown.contains("1.8k"),
+            "the write was not reported: {shown}"
+        );
+        // The two are priced differently, so their sum is the one figure that says nothing about
+        // what the turn cost. Reporting it would undo the split the rest of this reports.
+        assert!(
+            !shown.contains("43k"),
+            "the read and the write were added together: {shown}"
+        );
+        // The counts above this line are the session's, so the heading has to say this one is not.
+        assert!(shown.contains("last turn"), "{shown}");
+    }
+
+    /// Every backend but Bedrock reports nothing about a cache. Presenting that as a session whose
+    /// cache missed would be reporting a measurement nobody took, and it is the reading a person
+    /// would take from two zeroes.
+    #[test]
+    fn a_backend_that_reports_nothing_about_a_cache_gets_no_cache_lines() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut silent = facts(&config, &trust);
+        silent.cached = Some(bravebot_aichat::protocol::Cached::default());
+
+        let shown = rendered(&report(&silent));
+        assert!(!shown.contains("served from the cache"), "{shown}");
+        assert!(!shown.contains("Prompt cache"), "{shown}");
+    }
+
+    /// A turn that established a prefix and read nothing back reports the write alone, on the
+    /// footing a part of the time report that never happened says nothing rather than `0`.
+    #[test]
+    fn a_turn_that_only_wrote_to_the_cache_does_not_report_a_read_of_zero() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut first = facts(&config, &trust);
+        first.cached = Some(bravebot_aichat::protocol::Cached {
+            read_tokens: 0,
+            written_tokens: 2_400,
+        });
+
+        let shown = rendered(&report(&first));
+        assert!(shown.contains("written to it for the next turn"), "{shown}");
+        assert!(
+            !shown.contains("served from the cache"),
+            "a read that never happened was reported: {shown}"
+        );
     }
 
     /// A session with nothing sent has no name yet, and saying so is better than an empty line.

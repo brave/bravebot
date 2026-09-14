@@ -2150,6 +2150,7 @@ fn event_loop(
                     turns: session.turns,
                     tokens: session.tokens,
                     timing: session.timing_total(),
+                    cached: session.cached(),
                     trust: &trust,
                     programs: &programs,
                     looping: session.looping(),
@@ -4220,6 +4221,11 @@ fn fold_outcome(
             // session's own, taken from the moment Enter was pressed; this fills in the parts, which
             // only the worker saw.
             session.spent_time(outcome.timing);
+
+            // How much of what the turn sent the backend recognised, which the two figures above
+            // cannot say: a turn costs the same tokens whether they were read or recognised, and
+            // about ten times the money.
+            session.served_from_cache(outcome.cached);
 
             // What the turn's last request came to, against what it would be compacted at. Not
             // the same figure as the cost above: that adds every round together, this says how

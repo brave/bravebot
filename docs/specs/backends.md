@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/backend.rs
   - crates/bedrock/src/credentials.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/status.rs
   - crates/config/src/bedrock.rs
   - crates/config/src/lib.rs
   - crates/aichat/src/lib.rs
@@ -878,7 +879,19 @@ figure reports one or the other.
 **Zero is silence, not a miss.** Both figures at zero says a service that reports nothing about a
 cache exactly as much as it says a round whose cache missed, and nothing here distinguishes them.
 Whatever presents these figures presents nothing when they are zero, rather than presenting a miss
-that may not have happened.
+that may not have happened. That holds of each figure alone: a turn that established a prefix and
+read nothing back reports the write and says nothing about the read.
+
+**The status panel reports the last turn's, beside what the session cost.** The last turn rather
+than a total over the session, because caching is a property of a request: a session that compacted
+part way through has turns whose prefix survived and turns whose prefix was rewritten, and a total
+averages away the thing the figures are for. Nothing about a cache is kept in a session record, so a
+resumed session reports nothing until a turn has run.
+
+**Presented as two figures and never as their sum.** They are priced in opposite directions, a read
+at a fraction of a fresh token and a write above one, so a turn that saved almost the whole prompt
+and a turn that paid a premium on it add up the same. The heading carries no total of its own, and
+says which turn it speaks for, the counts beside it being the session's.
 
 `verified-by: bravebot_bedrock::protocol::a_cached_round_is_told_apart_from_one_that_read_the_whole_prompt`
 `verified-by: bravebot_aichat::protocol::the_cache_figure_is_read_out_of_the_details_object`
@@ -887,6 +900,9 @@ that may not have happened.
 `verified-by: bravebot_agent::turn::a_turn_sums_what_its_rounds_read_out_of_the_cache`
 `verified-by: bravebot_agent::turn::a_turn_against_a_server_that_says_nothing_about_a_cache_reports_nothing`
 `verified-by: bravebot_agent::turn::a_turn_counts_what_its_delegates_read_out_of_the_cache`
+`verified-by: bravebot_tui::status::the_panel_says_how_much_of_the_prompt_came_out_of_the_cache`
+`verified-by: bravebot_tui::status::a_backend_that_reports_nothing_about_a_cache_gets_no_cache_lines`
+`verified-by: bravebot_tui::status::a_turn_that_only_wrote_to_the_cache_does_not_report_a_read_of_zero`
 
 ## Known costs
 

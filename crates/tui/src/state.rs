@@ -829,6 +829,17 @@ pub struct Session {
     /// the same reasoning as [`Session::served`]: whether premium is in use is a fact about a
     /// request, and every build knows a premium host whether or not one is ever reached.
     premium: Option<bool>,
+    /// How much of the last turn's prompt the backend served out of its own cache.
+    ///
+    /// `None` until a turn has run, and `None` for a session restored from a record: this is not
+    /// kept there, so a resumed session says nothing about a cache rather than repeating what the
+    /// run before it measured.
+    ///
+    /// The last turn rather than the session, which is the figure worth reading. Caching is a
+    /// property of a request, and a total over a session that compacted part way through mixes the
+    /// turns whose prefix survived with the turns whose prefix was rewritten and averages away the
+    /// only thing the number is for.
+    cached: Option<bravebot_aichat::protocol::Cached>,
     /// Prompts already sent, for recall with the arrow keys.
     pub history: crate::history::History,
     /// What the mouse is sweeping over, or what it last swept over.
@@ -1082,6 +1093,7 @@ impl Session {
             // Nothing has been served, so nothing has been compared. Set by the first turn.
             served_names_are_comparable: true,
             premium: None,
+            cached: None,
             history: crate::history::History::new(),
             selection: None,
             copied: None,
@@ -4723,6 +4735,16 @@ impl Session {
     /// Whether the last turn spent a subscription credential, or `None` before one has run.
     pub fn premium(&self) -> Option<bool> {
         self.premium
+    }
+
+    /// Record how much of the turn just finished the backend did not have to read.
+    pub fn served_from_cache(&mut self, cached: bravebot_aichat::protocol::Cached) {
+        self.cached = Some(cached);
+    }
+
+    /// What the last turn read out of the cache and wrote into it, or `None` before one has run.
+    pub fn cached(&self) -> Option<bravebot_aichat::protocol::Cached> {
+        self.cached
     }
 
     /// The model the server last reported using, or `None` before any turn has run.
