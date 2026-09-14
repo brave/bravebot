@@ -3368,16 +3368,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Accept a reference the planner named, as the source of content for an effect.
     ///
-    /// A slot id is routing: it decides which bytes an effect carries. It is nonetheless
-    /// promotable here, for a different reason than a read path is. A reference name is not
-    /// content and never was: the driver minted it, handed it to the planner, and the only
-    /// names that resolve to anything are ones the driver itself created. So the worst a wrong
-    /// name can do is carry the wrong quarantined bytes to a destination that still had to be
-    /// endorsed on its own. It cannot invent a destination, and it cannot conjure content that
-    /// was never observed.
+    /// A slot id is routing: it decides what an effect touches. A `path_ref` picks the file a
+    /// write lands in, a `contents_ref` picks the bytes carried into one, and the reference
+    /// `read_output` names picks what a person is put in front of. So this is not a promotion the
+    /// way a read path is, and it asks the two questions LABEL-5 asks of any argument.
     ///
-    /// Private names are refused for the same reason [`Policy::promote_confined_read`] refuses
-    /// them: a name derived from the user's data would be that data, in a field that gets read.
+    /// - **Private is refused**, for the reason [`Policy::promote_confined_read`] refuses it: a
+    ///   name derived from the user's data would be that data, in a field that gets read.
+    /// - **A fallen context is refused**, exactly as [`Policy::read_planner_argument`] refuses
+    ///   the path a planner types. An argument reaching a gate here is wrapped `(U,pub)` as a
+    ///   pessimism, so the wrapper says nothing about the name inside it; the integrity of the
+    ///   planner's words is the integrity of the context it wrote them in.
+    ///
+    /// That the driver minted the name bounds what a wrong one reaches. It resolves to a file the
+    /// driver already holds or to nothing at all, so no name invents a destination and none
+    /// conjures content that was never observed. What it does not do is make the *choice* among
+    /// the names already handed out the planner's own once its context has fallen, any more than
+    /// picking among questions an attacker steered makes those questions the planner's.
+    ///
+    /// Like the other gates that ask about the context, this cannot fire on the paths that exist.
+    /// It is here so that a change letting untrusted bytes into the planner's context stops every
+    /// reference argument at once, rather than leaving this one still deciding things.
     pub fn accept_reference(
         &mut self,
         tool: &str,
@@ -3390,6 +3401,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "reference",
                 Principle::Confinement,
                 format!("{tool}.{field} cannot name a reference from {label}"),
+            ));
+        }
+        if self.context != Integrity::Trusted {
+            return Err(self.deny(
+                "reference",
+                Principle::IntegrityGate,
+                format!(
+                    "{tool}.{field} cannot name a reference: this context has met untrusted \
+                     content, so which reference the planner picks is untrusted too and must not \
+                     decide anything"
+                ),
             ));
         }
 
@@ -7799,6 +7821,36 @@ mod tests {
                     .accept_reference("write_file", "contents_ref", &private)
                     .is_err()
             );
+        }
+
+        /// A reference argument is held to the context like any other argument. That the driver
+        /// minted the name bounds what a wrong one reaches, but `path_ref` still chooses the file
+        /// a write lands in, so a planner whose context has met untrusted content is choosing a
+        /// destination an attacker may have steered. The person endorsing the resolved path is
+        /// not a substitute: they are being asked about the choice, not making it.
+        #[test]
+        fn a_reference_cannot_be_named_once_the_context_has_met_something_untrusted() {
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing_with("task", "write it"),
+                ReleasePlan::new(),
+                all_capabilities(),
+                &mut sink,
+            )
+            .unwrap()
+            .resuming(Integrity::Untrusted);
+
+            let named = Labelled::new("ref:0".to_string(), Label::untrusted_public());
+            let denial = policy
+                .accept_reference("write_file", "path_ref", &named)
+                .expect_err("a fallen context must not name a reference");
+
+            assert_eq!(denial.principle, Principle::IntegrityGate);
+            assert!(
+                denial.message.contains("must not decide anything"),
+                "the refusal does not say why: {denial}"
+            );
+            assert!(!policy.finish(), "the refusal was not recorded");
         }
 
         /// Writing back into the workspace lowers confidentiality, because nothing is leaving,

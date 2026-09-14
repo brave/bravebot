@@ -47,6 +47,12 @@ one off the call as the JSON literal it is, since a literal names nothing and ho
 there is nothing in it to promote or to endorse. A routing *string* does name something, and none is
 ever read straight off the call: a gate in the policy layer is what hands it over.
 
+Some of those strings name a reference the driver minted instead of a path or a program the planner
+composed. Trusted binds them as it binds the rest, but on the context the planner named the
+reference in rather than on the string, which arrives as pessimistically wrapped as any other
+routing string: a turn whose context has met untrusted content can name no reference at all.
+[routing.md](../routing.md) is where that is settled.
+
 `lsp` is the one tool whose result is split across both footings rather than being one or the other:
 a location is structure and is reported whatever the trust map says, while the text at that location
 is content and is quarantined when it is untrusted. [LSP-3](lsp.md#LSP-3) is where that is settled,
@@ -61,6 +67,7 @@ something carries, and a planner's context holds nothing untrusted.
 `verified-by: bravebot_core::policy::routing_refuses_untrusted_values`
 `verified-by: bravebot_core::policy::routing_refuses_private_values`
 `verified-by: bravebot_core::policy::fetched_content_can_be_written_but_cannot_choose_the_path`
+`verified-by: bravebot_agent::tools::a_reference_destination_is_refused_once_the_context_has_met_something_untrusted`
 
 <a id="TOOL-2"></a>
 ### TOOL-2: before adding a tool, ask what its routing field is

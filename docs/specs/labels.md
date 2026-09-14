@@ -184,8 +184,13 @@ the planner wrote them in. So an argument may be read while that context has met
 and is refused once it has. Locating a passage to replace is the case that shows why: `old_text` is
 compared against the file, and a comparison decides whether the write happens at all.
 
+An argument naming something the driver minted is held the same way, since the planner is the one
+who picks which of those names a call is about. [routing.md](routing.md) is where that case is
+settled.
+
 `verified-by: bravebot_core::policy::requesting_untrusted_content_is_refused`
 `verified-by: bravebot_core::policy::an_argument_cannot_be_read_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_core::policy::a_reference_cannot_be_named_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_core::policy::a_private_argument_is_refused_rather_than_read`
 `verified-by: bravebot_agent::tools::an_edit_from_a_trusted_context_replaces_the_passage`
 `verified-by: bravebot_agent::tools::an_edit_is_refused_once_the_context_has_met_something_untrusted`

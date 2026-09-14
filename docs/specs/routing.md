@@ -9,6 +9,7 @@ guards:
   - symbol: Policy::before_granted_action
   - symbol: Policy::before_endorsed_destination
   - symbol: Policy::promote_confined_read
+  - symbol: Policy::accept_reference
   - symbol: Policy::path_of_reference
 ---
 
@@ -43,11 +44,26 @@ never reaches a component that decides, neither the planner nor the driver.
 
 Derived only from trusted input, and never from fetched content. Untrusted routing is an injection
 attempt and is refused. Trusted-but-private is refused too, since a routing field ends up
-somewhere this policy stops governing. The one field authorised by something other than its label
-is a destination a person endorsed, which ROUTE-8 governs.
+somewhere this policy stops governing.
+
+Some routing fields are authorised by something other than their own integrity. A destination a
+person endorsed is one, and ROUTE-8 governs it. A reference the planner names is another.
+
+A reference name is minted by the driver and handed to the planner, and it arrives back wrapped as
+pessimistically as anything the planner composes, so its own label says nothing about the name
+inside it. What is asked instead is the integrity of the context the planner named it in: a context
+that has met untrusted content may name no reference. That the driver minted the name is not what
+settles this. Minting bounds what a wrong name reaches, since such a name resolves to a file the
+driver already holds or to nothing at all, but choosing among the names already handed out still
+chooses where an effect lands, and the person who endorses the resolved destination is being asked
+about that choice rather than making it.
+
+Confidentiality stays the value's own. A private name is refused, since a name derived from the
+user's data is that data.
 
 `verified-by: bravebot_core::policy::routing_refuses_untrusted_values`
 `verified-by: bravebot_core::policy::routing_refuses_private_values`
+`verified-by: bravebot_core::policy::a_reference_cannot_be_named_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_core::value::trusted_private_values_are_not_routing_safe`
 
 <a id="ROUTE-3"></a>
