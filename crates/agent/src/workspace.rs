@@ -1966,10 +1966,15 @@ impl Workspace {
     /// answers, and the absolute one is covered by nothing, so a file the user vouched for at
     /// startup is quarantined under half its names (TRUST-3).
     ///
-    /// Reduced by spelling and not by where the path lands, which is what makes the two answers the
-    /// same answer. Resolving the tail would follow a symlink and hand back the rule for a
-    /// *different* name, so a file inside an untrusted subtree could be read as trusted through a
-    /// link its absolute spelling resolved and its relative spelling did not.
+    /// Where the path lands decides *whether* it is reduced, and the spelling decides *what to*.
+    /// Both halves are load bearing. A name spelled inside the root that resolves outside it is
+    /// left as it is, because the project's own rules have nothing to say about a file the project
+    /// does not hold, and its relative spelling is not another way of naming that file but a name
+    /// confinement refuses. And the name it reduces to is the one the caller wrote rather than the
+    /// one it resolves to, because keying on the destination hands back the rule for a *different*
+    /// name: a file in an untrusted subtree would be readable as trusted through a link inside the
+    /// project. One file with two names of its own therefore still has two rules, which is a cost
+    /// of keying on the name that the spec records rather than one this closes.
     ///
     /// A `..` component leaves the name alone, for the same reason the kernel's own normalisation
     /// leaves one as written: confinement refuses such a path rather than resolving it (TRUST-10),
@@ -1982,6 +1987,14 @@ impl Workspace {
             .any(|c| matches!(c, Component::ParentDir));
         if !candidate.is_absolute() || climbs {
             return named.to_string();
+        }
+
+        // Spelling it inside the project is not landing in it. An added directory can admit an
+        // absolute path that leaves the root through a link, where `resolve` refuses the relative
+        // spelling of that same name for going outside.
+        match destination(candidate) {
+            Some(resolved) if resolved.starts_with(&self.root) => {}
+            _ => return named.to_string(),
         }
         let reduced = self.relative_display(candidate);
 

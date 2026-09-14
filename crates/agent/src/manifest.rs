@@ -1223,7 +1223,7 @@ fn run_step<S: Sink, C: Confirmer>(
                         "read_file",
                         out_slot,
                         &path,
-                        &Labelled::trusted(path.clone()),
+                        &Labelled::trusted(workspace.trust_key(&path)),
                         bytes,
                         slots,
                     )

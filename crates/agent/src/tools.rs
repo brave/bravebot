@@ -1955,7 +1955,13 @@ fn read_file<S: Sink, C: Confirmer>(
     // is of the file, and what is read from it is read when something needs the bytes.
     if policy.read_is_quarantined(&keyed) {
         return match workspace.survey(&proposed_path) {
-            Ok(bytes) => Produced::deferring(path, shown_path, bytes).of_content(),
+            // Deferred under the keyed name as well. The slot carries the map's answer about this
+            // file, and the answer that quarantined it is the one it has to carry: keyed one way
+            // and labelled the other, a file held back for being untrusted would arrive in the
+            // slot as trusted.
+            Ok(bytes) => {
+                Produced::deferring(Labelled::trusted(keyed), shown_path, bytes).of_content()
+            }
             // A path that names nothing is said so now, exactly as an eager read would have.
             Err(e) => problem(format!("error: {e}")),
         };
