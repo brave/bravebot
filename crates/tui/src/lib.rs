@@ -23,6 +23,7 @@ pub mod goals;
 pub mod history;
 pub mod history_search;
 pub mod indicator;
+pub mod keybindings;
 pub mod logo;
 pub mod loops;
 pub mod markdown;
