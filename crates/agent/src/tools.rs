@@ -2831,11 +2831,12 @@ fn read_output<S: Sink, C: Confirmer>(
 ///
 /// The order is the whole of the safety argument, and it is the same order a write goes through:
 ///
-/// 1. The pipeline is assembled from the planner's arguments, which are untrusted.
+/// 1. The plan is compiled from the planner's command line, which is untrusted.
 /// 2. Every program name is resolved **once**, to an absolute path.
 /// 3. The person is shown that exact argv and that exact binary, and answers.
-/// 4. The approval mints an endorsement bound to that exact pipeline.
-/// 5. `before_run` consumes it, and only then does anything execute, by the resolved path.
+/// 4. The approval mints an endorsement bound to that exact plan, which is the steps, the join
+///    shape, the directory and the files it writes, not the argv alone.
+/// 5. `before_plan` consumes it, and only then does anything execute, by the resolved path.
 ///
 /// Nothing here branches on untrusted content. The argv is released for display, which is what a
 /// person reading it is; what comes back from the program is never read by the driver or the

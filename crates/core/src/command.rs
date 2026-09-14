@@ -815,8 +815,8 @@ mod tests {
         assert_eq!(pipeline.display(), "git log | head -3");
     }
 
-    /// A grant is bound to this value, so two different pipelines must never produce the same
-    /// one. Delimiting would not have held: an argument may contain any byte a delimiter could be.
+    /// The encoding has to identify a pipeline, so two different ones must never produce the same
+    /// value. Delimiting would not have held: an argument may contain any byte a delimiter could be.
     #[test]
     fn two_pipelines_never_encode_alike() {
         let one = Pipeline::new(vec![Stage::new("prog", vec!["a".into(), "b".into()])]);
@@ -831,7 +831,7 @@ mod tests {
         assert_ne!(
             split.canonical(),
             joined.canonical(),
-            "a stage boundary must be part of what is endorsed"
+            "a stage boundary must be part of what the encoding distinguishes"
         );
     }
 
@@ -844,8 +844,8 @@ mod tests {
         assert_ne!(one.canonical(), other.canonical());
     }
 
-    /// The same pipeline must encode the same way every time, or an endorsement issued for one
-    /// would not match the run it was issued for.
+    /// The same pipeline must encode the same way every time, or the value would identify the
+    /// occasion rather than the pipeline.
     #[test]
     fn the_same_pipeline_encodes_the_same_way() {
         let build = || Pipeline::new(vec![Stage::new("git", vec!["log".into()])]);

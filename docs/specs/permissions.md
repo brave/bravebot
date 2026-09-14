@@ -14,7 +14,7 @@ guards:
   - symbol: Policy::before_read
   - symbol: Policy::read_is_denied
   - symbol: Policy::before_write
-  - symbol: Policy::before_run_rules
+  - symbol: Policy::before_plan_rules
 ---
 
 ## Scope
@@ -141,7 +141,7 @@ line. No shell ever sees either.
 
 `verified-by: bravebot_core::permissions::a_pipeline_is_allowed_only_when_every_stage_is`
 `verified-by: bravebot_core::permissions::restricting_one_stage_restricts_the_whole_pipeline`
-`verified-by: bravebot_core::policy::a_denied_stage_cannot_hide_between_two_permitted_ones`
+`verified-by: bravebot_core::policy::a_denied_step_refuses_the_whole_line`
 `verified-by: bravebot_core::policy::a_denied_program_cannot_be_smuggled_inside_an_argument`
 
 ## What a rule does
@@ -182,7 +182,7 @@ writing: saying yes at startup trusts the whole tree, and a rule is how one file
 answer without declining the rest of it. It holds against a mode that answers every prompt for the
 same reason: the refusal comes before there is a prompt, so there is nothing for a mode to answer.
 
-`verified-by: bravebot_core::policy::a_denied_program_does_not_run_at_all`
+`verified-by: bravebot_core::policy::a_denied_step_refuses_the_whole_line`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_and_its_contents_do_not_reach_the_planner`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_even_where_writes_are_approved`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_by_a_processor_either`
@@ -222,7 +222,6 @@ command is not. The second is structural: that prompt is the only moment such a 
 anybody, and the endorsement is minted for the path the person saw, so nothing a pattern says can
 stand in for having looked.
 
-`verified-by: bravebot_core::policy::private_input_asks_even_for_a_command_a_rule_allows`
 `verified-by: bravebot_core::policy::private_input_asks_even_for_a_line_a_rule_allows`
 `verified-by: bravebot_core::policy::a_reference_named_write_asks_whatever_a_rule_says`
 

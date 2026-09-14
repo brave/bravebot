@@ -59,7 +59,7 @@ workspace is the one move that lowers confidentiality without releasing anything
 destination is inside the boundary the bytes came from.
 
 `verified-by: bravebot_core::policy::a_write_back_into_the_workspace_lowers_only_confidentiality`
-`verified-by: bravebot_core::policy::private_input_asks_even_for_a_vouched_command`
+`verified-by: bravebot_core::policy::private_input_asks_even_for_a_vouched_line`
 
 ## The one relaxation
 
@@ -93,7 +93,7 @@ be asked, effects are refused rather than applied unseen.
 `verified-by: bravebot_core::policy::a_granted_action_needs_a_matching_endorsement`
 `verified-by: bravebot_core::policy::an_endorsement_cannot_be_replayed`
 `verified-by: bravebot_core::policy::an_endorsement_does_not_transfer_to_another_value`
-`verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_a_different_pipeline`
+`verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_a_different_line`
 `verified-by: bravebot_core::policy::ungranted_capabilities_are_refused`
 `verified-by: bravebot_core::policy::a_run_needs_the_capability_as_well_as_the_endorsement`
 

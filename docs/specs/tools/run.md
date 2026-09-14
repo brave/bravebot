@@ -50,7 +50,7 @@ mode are separate modules, so a change to one cannot quietly become a shell for 
 `verified-by: bravebot_agent::exec::a_redirection_in_an_argument_writes_no_file`
 `verified-by: bravebot_agent::exec::stages_are_chained_so_one_feeds_the_next`
 `verified-by: bravebot_agent::exec::a_single_stage_returns_what_it_printed`
-`verified-by: bravebot_core::policy::an_empty_pipeline_is_refused`
+`verified-by: bravebot_core::policy::a_line_with_no_steps_is_refused`
 
 <a id="RUN-2"></a>
 ### RUN-2: the plan is routing and must be endorsed by a person
@@ -60,7 +60,6 @@ Untrusted text never becomes one. The endorsement is bound to that exact plan, s
 for the same steps joined differently, not for the same steps writing somewhere else, and not for
 the same steps in another directory.
 
-`verified-by: bravebot_core::policy::a_run_without_an_endorsement_is_refused`
 `verified-by: bravebot_core::policy::a_plan_without_an_endorsement_is_refused`
 `verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_a_plan_that_writes_elsewhere`
 `verified-by: bravebot_agent::exec::a_stage_runs_the_binary_it_was_resolved_to`
@@ -104,10 +103,9 @@ the trust map says about the path, so the second route is always private and alw
 `verified-by: bravebot_core::command::a_file_redirected_into_a_program_is_private_input`
 `verified-by: bravebot_core::command::a_redirection_on_a_later_step_is_private_input`
 `verified-by: bravebot_core::command::a_plan_that_feeds_a_program_nothing_releases_nothing`
-`verified-by: bravebot_core::policy::output_nobody_vouched_for_is_untrusted_and_private`
-`verified-by: bravebot_core::policy::output_of_a_vouched_command_is_trusted`
-`verified-by: bravebot_core::policy::output_of_a_vouched_command_is_still_private`
-`verified-by: bravebot_core::policy::one_unvouched_stage_makes_the_whole_output_untrusted`
+`verified-by: bravebot_core::policy::output_of_a_line_nobody_vouched_for_is_untrusted_and_private`
+`verified-by: bravebot_core::policy::output_of_a_line_whose_every_step_was_vouched_for_is_trusted_and_still_private`
+`verified-by: bravebot_core::policy::one_unvouched_step_makes_the_whole_lines_output_untrusted`
 
 <a id="RUN-5"></a>
 ### RUN-5: every run asks, unless every stage was vouched for or proven
@@ -126,7 +124,7 @@ does not fully recognise asks.
 
 `verified-by: bravebot_core::policy::a_command_nobody_vouched_for_is_put_to_a_person`
 `verified-by: bravebot_core::policy::a_vouched_command_is_not_asked_about_again`
-`verified-by: bravebot_core::policy::one_unvouched_stage_puts_the_whole_pipeline_to_a_person`
+`verified-by: bravebot_core::policy::one_unvouched_step_puts_the_whole_line_to_a_person`
 `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_does_not_ask`
 `verified-by: bravebot_core::policy::a_line_reading_an_unvouched_path_still_asks`
 `verified-by: bravebot_core::policy::one_step_nothing_can_account_for_makes_the_whole_line_opaque`
@@ -148,7 +146,6 @@ honest about what it covers, and the refusal is made twice: once where the promp
 again where an answer is acted on, since an invariant about what the trusted list may hold does
 not rest on a drawing.
 
-`verified-by: bravebot_core::policy::private_input_asks_even_for_a_vouched_command`
 `verified-by: bravebot_core::policy::private_input_asks_even_for_a_vouched_line`
 `verified-by: bravebot_agent::cmdline::an_input_redirection_is_private_input`
 `verified-by: bravebot_agent::turn::a_line_that_reads_a_file_is_not_remembered_however_it_is_answered`

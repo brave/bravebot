@@ -105,7 +105,7 @@ impl WriteRequest {
 /// right.
 ///
 /// There is no `needs_approval` field, and there is no variant of this that skips the prompt.
-/// Every run asks. See [`bravebot_core::policy::Policy::run_needs_approval`] for why that has no
+/// Every run asks. See [`bravebot_core::policy::Policy::plan_needs_approval`] for why that has no
 /// exceptions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunRequest {
