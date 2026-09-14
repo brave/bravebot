@@ -401,14 +401,12 @@ fn spelled_by_vi(session: &Session, key: KeyEvent) -> Option<KeyEvent> {
         crate::state::Spelled::Down => KeyCode::Down,
         // The chord rather than the action, so the arm that opens the search is the only place it is
         // opened from and the two cannot come to disagree about when it may be.
-        crate::state::Spelled::SearchPrompts => return Some(ctrl_press('r')),
+        crate::state::Spelled::SearchPrompts => {
+            let chord = session.bindings().history;
+            return Some(KeyEvent::new(chord.code, chord.modifiers));
+        }
     };
     Some(KeyEvent::new(code, KeyModifiers::NONE))
-}
-
-/// One key held with Ctrl, as the terminal delivers it.
-fn ctrl_press(c: char) -> KeyEvent {
-    KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
 }
 
 /// Whether a key press asks for the next permission mode.
@@ -843,7 +841,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
 
     // Before the match, since a key that moves the caret cannot also be one of the keys below:
     // the ones this answers are exactly the ones nothing else claims.
-    if edit_line(session, key) {
+    if !session.bindings().claims(&key) && edit_line(session, key) {
         return Action::Redraw;
     }
 
@@ -1333,7 +1331,7 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // Before the modifier guard, since the readline bindings are how the caret moves on a terminal
     // that sends nothing for the named keys, and a line that can be typed mid-turn has to be
     // editable mid-turn: the alternative is a box that takes words and will not let them be fixed.
-    if edit_line(session, key) {
+    if !session.bindings().claims(&key) && edit_line(session, key) {
         return Action::Redraw;
     }
 
@@ -6571,6 +6569,52 @@ mod tests {
 
         handle_key(&mut session, alt('r'));
         assert!(!session.searching_history(), "the chord did not close it");
+    }
+
+    /// In Vi mode, `/` in NORMAL mode translates to the configured history chord rather than
+    /// hardcoded ctrl-r, opening the prompt history search.
+    #[test]
+    fn vi_mode_search_prompts_uses_configured_history_chord() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("history".to_string(), "alt-r".to_string());
+        session.adopt_keybindings(&custom);
+        session.adopt_editing(Some("vim"));
+
+        type_line(&mut session, "first prompt");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.complete("ok", Vec::new(), 0);
+
+        // Enter vi normal mode via Escape
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert!(session.vi_normal());
+
+        // In Vi NORMAL mode, `/` opens prompt history search
+        handle_key(&mut session, key(KeyCode::Char('/')));
+        assert!(session.searching_history(), "vi / did not open history search with custom chord");
+    }
+
+    /// A configured chord that collides with a readline line-editing key (such as ctrl-u or alt-b)
+    /// executes the configured action rather than being swallowed by line editing.
+    #[test]
+    fn configured_keybinding_overrides_readline_editing() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        // ctrl-u is readline delete_to_line_start; bound to stash here
+        custom.insert("stash".to_string(), "ctrl-u".to_string());
+        session.adopt_keybindings(&custom);
+
+        type_line(&mut session, "line to stash");
+        let ctrl_u = ctrl('u');
+        assert_eq!(handle_key(&mut session, ctrl_u), Action::Redraw);
+        assert_eq!(session.input(), "", "ctrl-u did not stash the line");
+        assert_eq!(session.stashed(), Some("line to stash"));
+
+        // Unbound readline keys still perform editing normally
+        type_line(&mut session, "hello world");
+        // ctrl-w deletes previous word
+        handle_key(&mut session, ctrl('w'));
+        assert_eq!(session.input(), "hello ");
     }
 
     /// Escape means "stop this" before it means anything else, so a turn in flight is cancelled

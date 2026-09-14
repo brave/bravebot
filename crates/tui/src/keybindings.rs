@@ -322,6 +322,17 @@ impl Keybindings {
     pub fn paste_name(&self) -> String {
         self.paste.display()
     }
+
+    /// Whether any of the seven configurable actions answers this key event.
+    pub fn claims(&self, key: &KeyEvent) -> bool {
+        self.is_stash(key)
+            || self.is_scroller(key)
+            || self.is_editor(key)
+            || self.is_history(key)
+            || self.is_trail(key)
+            || self.is_watch(key)
+            || self.is_paste(key)
+    }
 }
 
 #[cfg(test)]
@@ -481,5 +492,16 @@ mod tests {
         let bindings = Keybindings::from_map(&map);
 
         assert_eq!(bindings.stash, KeyChord::ctrl('s'));
+    }
+
+    #[test]
+    fn unknown_actions_in_map_are_ignored() {
+        let mut map = BTreeMap::new();
+        map.insert("unknown_action".to_string(), "alt-x".to_string());
+        map.insert("stash".to_string(), "alt-s".to_string());
+        let bindings = Keybindings::from_map(&map);
+
+        assert_eq!(bindings.stash, KeyChord::alt('s'));
+        assert_eq!(bindings.scroller, KeyChord::ctrl('o'));
     }
 }

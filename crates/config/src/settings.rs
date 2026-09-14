@@ -1400,4 +1400,25 @@ mod tests {
             Some(&"alt-o".to_string())
         );
     }
+
+    #[test]
+    fn a_local_layer_overrides_project_and_global_keybindings() {
+        let settings = Layers::new("keybindings-local-override")
+            .global(r#"{"keybindings": {"stash": "alt-s", "scroller": "alt-o", "editor": "alt-e"}}"#)
+            .project(r#"{"keybindings": {"stash": "ctrl-x", "scroller": "ctrl-u"}}"#)
+            .local(r#"{"keybindings": {"stash": "ctrl-p"}}"#)
+            .read();
+        assert_eq!(
+            settings.keybindings().get("stash"),
+            Some(&"ctrl-p".to_string())
+        );
+        assert_eq!(
+            settings.keybindings().get("scroller"),
+            Some(&"ctrl-u".to_string())
+        );
+        assert_eq!(
+            settings.keybindings().get("editor"),
+            Some(&"alt-e".to_string())
+        );
+    }
 }

@@ -1314,6 +1314,10 @@ meaning in both, and the chord an action was moved off of does nothing.
 chord these modes did not ask the bindings about is not merely unanswered: it is read as the letter
 it carries, and the search a person moved a chord to open narrows itself to prompts holding an `s`.
 
+**A configured chord takes precedence over line editing.** When a chord is moved onto one of the
+readline editing keys (such as `ctrl-u` or `alt-b`), the action answers rather than the line
+editing arm. In vi's normal mode, `/` translates to the chord configured for history search.
+
 **The screen names the chord that answers.** `?` lists the keys from the one place they are written
 down (INPUT-13), and the seven rows above are asked of the chord in force rather than spelled out
 there. So is every other line that names one: the row saying what brings a stashed line back
@@ -1340,10 +1344,12 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::conflicting_chords_fall_back_to_defaults`
 `verified-by: bravebot_tui::keybindings::no_two_actions_are_left_on_one_chord`
 `verified-by: bravebot_tui::keybindings::two_actions_can_trade_chords`
+`verified-by: bravebot_tui::keybindings::unknown_actions_in_map_are_ignored`
 `verified-by: bravebot_tui::keybindings::custom_chords_override_defaults`
 `verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`
 `verified-by: bravebot_config::settings::a_keybindings_entry_that_is_not_a_chord_is_dropped`
 `verified-by: bravebot_config::settings::a_project_layer_overrides_keybindings_per_name`
+`verified-by: bravebot_config::settings::a_local_layer_overrides_project_and_global_keybindings`
 `verified-by: bravebot_tui::render::the_shortcut_list_reflects_custom_keybindings`
 `verified-by: bravebot_tui::render::the_stashed_line_names_the_custom_stash_chord`
 `verified-by: bravebot_tui::render::the_help_names_the_chord_the_scroller_was_opened_with`
@@ -1356,3 +1362,5 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::app::a_moved_chord_leaves_the_view_it_opened`
 `verified-by: bravebot_tui::app::custom_keybindings_route_actions_and_old_chords_are_ignored`
 `verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`
+`verified-by: bravebot_tui::app::vi_mode_search_prompts_uses_configured_history_chord`
+`verified-by: bravebot_tui::app::configured_keybinding_overrides_readline_editing`
