@@ -220,6 +220,8 @@ that must never be the line that did not fit.
 
 `verified-by: bravebot_tui::render::the_scroller_says_it_is_open_and_which_key_closes_it`
 `verified-by: bravebot_tui::app::the_help_key_lists_the_keys`
+`verified-by: bravebot_tui::render::the_help_says_that_any_key_puts_it_away`
+`verified-by: bravebot_tui::render::the_help_names_every_key_that_closes_the_scroller`
 `verified-by: bravebot_tui::render::the_help_renders_on_a_tiny_terminal`
 
 
