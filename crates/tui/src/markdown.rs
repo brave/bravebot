@@ -206,6 +206,7 @@ mod tests {
 
     #[test]
     fn inline_code_is_coloured() {
+        let _held = theme::exclusive();
         assert_eq!(shown("run `make check` first"), "run make check first");
         assert_eq!(
             styles_of("run `make check` first", "make check").fg,
@@ -216,6 +217,7 @@ mod tests {
     /// Nesting is the common case in a reply: a bold clause containing a path.
     #[test]
     fn code_inside_bold_keeps_both() {
+        let _held = theme::exclusive();
         let style = styles_of("**edit `main.rs` now**", "main.rs");
         assert!(is_bold(style));
         assert_eq!(style.fg, Some(code()));

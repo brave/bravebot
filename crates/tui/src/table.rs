@@ -626,6 +626,7 @@ mod tests {
 
     #[test]
     fn the_header_is_bold_and_code_in_a_cell_keeps_its_colour() {
+        let _held = theme::exclusive();
         let rows = laid("| a |\n| --- |\n| `x` |", 40).rows;
         assert!(
             rows[0]
