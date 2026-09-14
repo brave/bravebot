@@ -20,6 +20,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthChar;
 
 use crate::audit::TrailLine;
+use crate::keybindings::Keybindings;
 use crate::logo;
 use crate::markdown;
 use crate::state::{Delegate, Laid, Output, Session, Speaker, Status, Watched};
@@ -1361,9 +1362,12 @@ fn scroller_keys() -> [(&'static str, &'static str); 9] {
 }
 
 /// What closes the scroller, which is the one row of the key list that is never dropped.
-fn scroller_exit(bindings: &crate::keybindings::Keybindings) -> (String, &'static str) {
+///
+/// Ctrl-C is named by the meaning rather than here. It closes the scroller wherever the chord that
+/// opened it has been moved to, and naming it in both columns had the row listing it twice.
+fn scroller_exit(bindings: &Keybindings) -> (String, &'static str) {
     (
-        format!("q / esc / ctrl-c / {}", bindings.scroller_name()),
+        format!("q / esc / {}", bindings.scroller_name()),
         t!(scroller_key_close),
     )
 }
@@ -2536,7 +2540,7 @@ fn lines_beneath_the_box(
         crate::state::Offered::Commands(commands) => command_lines(session, commands),
         crate::state::Offered::Files(entries) => entry_lines(session, entries),
         crate::state::Offered::Shortcuts => {
-            shortcut_lines_with(session.editing(), session.bindings(), width)
+            shortcut_lines(session.editing(), session.bindings(), width)
         }
     });
     lines
@@ -2597,47 +2601,16 @@ const SHORTCUTS_HINT: &str = "? for shortcuts";
 /// the one place a binding's meaning is written down: a list that went on saying "clear the line" to
 /// somebody whose Escape takes the letters as commands would advertise a binding that is not there.
 /// Every other row means the same thing either way.
-#[cfg(test)]
-fn shortcuts(editing: crate::vim::Editing) -> [(&'static str, &'static str); 21] {
+///
+/// The chords a settings file can move are asked of the bindings rather than written here, so the
+/// list names the key that answers rather than the key that used to. The seven the file can move are
+/// the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
+fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, &'static str); 21] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "take letters as commands",
     };
     [
-        ("!", "run a shell command"),
-        ("/", "commands"),
-        ("@", "name a file"),
-        ("?", "this list"),
-        ("enter", "send"),
-        ("shift-enter", "new line, or ctrl-j"),
-        ("tab", "take what is offered"),
-        ("shift-tab", "what to ask before acting"),
-        ("esc", escape),
-        ("up / down", "earlier prompts"),
-        ("pgup / pgdn", "scroll the transcript"),
-        ("ctrl-c", "stop, clear, then exit"),
-        ("ctrl-d", "exit"),
-        ("ctrl-g", "write prompt in $EDITOR"),
-        ("ctrl-l", "watch a delegate work"),
-        ("ctrl-o", "open the scroller"),
-        ("ctrl-r", "search earlier prompts"),
-        ("ctrl-s", "stash, bring it back, or search"),
-        ("ctrl-t", "show what a turn did"),
-        ("ctrl-v", "paste, pictures too"),
-        ("drag", "select, copy on release"),
-    ]
-}
-
-/// All shortcuts with dynamic keybindings reflected.
-fn session_shortcuts(
-    editing: crate::vim::Editing,
-    bindings: &crate::keybindings::Keybindings,
-) -> Vec<(String, &'static str)> {
-    let escape = match editing {
-        crate::vim::Editing::Ordinary => "clear the line",
-        crate::vim::Editing::Vi => "take letters as commands",
-    };
-    vec![
         ("!".to_string(), "run a shell command"),
         ("/".to_string(), "commands"),
         ("@".to_string(), "name a file"),
@@ -2651,34 +2624,27 @@ fn session_shortcuts(
         ("pgup / pgdn".to_string(), "scroll the transcript"),
         ("ctrl-c".to_string(), "stop, clear, then exit"),
         ("ctrl-d".to_string(), "exit"),
-        (bindings.editor_name().to_string(), "write prompt in $EDITOR"),
-        (bindings.watch_name().to_string(), "watch a delegate work"),
-        (bindings.scroller_name().to_string(), "open the scroller"),
-        (bindings.history_name().to_string(), "search earlier prompts"),
-        (bindings.stash_name().to_string(), "stash, or bring it back"),
-        (bindings.trail_name().to_string(), "show what a turn did"),
-        (bindings.paste_name().to_string(), "paste, pictures too"),
+        (bindings.editor_name(), "write prompt in $EDITOR"),
+        (bindings.watch_name(), "watch a delegate work"),
+        (bindings.scroller_name(), "open the scroller"),
+        (bindings.history_name(), "search earlier prompts"),
+        (bindings.stash_name(), "stash, bring it back, or search"),
+        (bindings.trail_name(), "show what a turn did"),
+        (bindings.paste_name(), "paste, pictures too"),
         ("drag".to_string(), "select, copy on release"),
     ]
 }
 
 /// The shortcuts in as many columns as the width will hold.
-#[cfg(test)]
-fn shortcut_lines(editing: crate::vim::Editing, width: u16) -> Vec<Line<'static>> {
-    let default_bindings = crate::keybindings::Keybindings::default();
-    shortcut_lines_with(editing, &default_bindings, width)
-}
-
-/// The shortcuts in as many columns as the width will hold, with custom keybindings.
 ///
 /// Filled down each column rather than across each row, so the markers stay together at the top of
 /// the first one: read across and `!`, `/` and `@` would be split up by whatever the width happened
 /// to be. One column when nothing else fits, and the meanings are cut to the width there rather
 /// than drawn past the edge, where the terminal would wrap them under the keys and put the list one
 /// row over the height the layout reserved for it.
-fn shortcut_lines_with(
+fn shortcut_lines(
     editing: crate::vim::Editing,
-    bindings: &crate::keybindings::Keybindings,
+    bindings: &Keybindings,
     width: u16,
 ) -> Vec<Line<'static>> {
     /// Blank columns between one column of the list and the next.
@@ -2693,7 +2659,7 @@ fn shortcut_lines_with(
         return Vec::new();
     }
 
-    let listed = session_shortcuts(editing, bindings);
+    let listed = shortcuts(editing, bindings);
     let key_column = listed
         .iter()
         .map(|(key, _)| key.chars().count())
@@ -3710,9 +3676,9 @@ mod tests {
         #[test]
         fn the_shortcut_list_names_the_key_that_watches() {
             assert!(
-                shortcuts(crate::vim::Editing::Ordinary)
+                shortcuts(crate::vim::Editing::Ordinary, &Keybindings::default())
                     .iter()
-                    .any(|(key, _)| *key == "ctrl-l"),
+                    .any(|(key, _)| key == "ctrl-l"),
                 "the shortcut list does not name the key"
             );
         }
@@ -4351,28 +4317,34 @@ mod tests {
 
             let (drawn, _) = screen(&session);
             assert!(
-                drawn.contains("q / esc / ctrl-c / ctrl-o"),
+                drawn.contains("q / esc / ctrl-o"),
                 "the way out was not drawn whole: {drawn}"
             );
-            assert!(
-                drawn.contains("ctrl-c"),
-                "ctrl-c closes the scroller and the list left it out: {drawn}"
+            assert_eq!(
+                drawn.matches("ctrl-c").count(),
+                1,
+                "the row listed ctrl-c more than once: {drawn}"
             );
         }
 
-        /// When the scroller chord is customized, the help overlay displays the customized chord.
+        /// The row names the chord that opened the scroller, so a settings file moving it does not
+        /// leave the way out advertising a key that no longer opens or closes anything.
         #[test]
-        fn the_scroller_help_names_custom_scroller_exit_chord() {
+        fn the_help_names_the_chord_the_scroller_was_opened_with() {
             let mut session = reading();
-            let mut custom = std::collections::BTreeMap::new();
-            custom.insert("scroller".to_string(), "alt-o".to_string());
-            session.adopt_keybindings(&custom);
+            let mut moved = std::collections::BTreeMap::new();
+            moved.insert("scroller".to_string(), "alt-o".to_string());
+            session.adopt_keybindings(&moved);
             session.toggle_scroller_help();
 
             let (drawn, _) = screen(&session);
             assert!(
-                drawn.contains("q / esc / ctrl-c / alt-o"),
-                "custom way out was not drawn: {drawn}"
+                drawn.contains("q / esc / alt-o"),
+                "the way out was not drawn whole: {drawn}"
+            );
+            assert!(
+                !drawn.contains("ctrl-o"),
+                "the way out went on naming the chord nothing answers: {drawn}"
             );
         }
 
@@ -5411,7 +5383,7 @@ mod tests {
         session.type_char('?');
         let output = rendered_at(&session, 120, 40);
 
-        for (key, meaning) in session_shortcuts(session.editing(), session.bindings()) {
+        for (key, meaning) in shortcuts(session.editing(), session.bindings()) {
             assert!(output.contains(&key), "{key} missing");
             assert!(output.contains(meaning), "{key} has no meaning on screen");
         }
@@ -5467,7 +5439,7 @@ mod tests {
         session.type_char('?');
         let output = rendered_at(&session, 120, 40);
 
-        for (key, meaning) in session_shortcuts(session.editing(), session.bindings()) {
+        for (key, meaning) in shortcuts(session.editing(), session.bindings()) {
             assert!(output.contains(&key), "{key} missing");
             assert!(output.contains(meaning), "{key} has no meaning on screen");
         }
@@ -5485,10 +5457,22 @@ mod tests {
 
         session.type_char('?');
         let output = rendered_at(&session, 120, 40);
-        assert!(output.contains("ctrl-u"), "custom scroller chord missing: {output}");
-        assert!(output.contains("ctrl-x"), "custom stash chord missing: {output}");
-        assert!(!output.contains("ctrl-o"), "default scroller chord should not be displayed: {output}");
-        assert!(!output.contains("ctrl-s"), "default stash chord should not be displayed: {output}");
+        assert!(
+            output.contains("ctrl-u"),
+            "custom scroller chord missing: {output}"
+        );
+        assert!(
+            output.contains("ctrl-x"),
+            "custom stash chord missing: {output}"
+        );
+        assert!(
+            !output.contains("ctrl-o"),
+            "default scroller chord should not be displayed: {output}"
+        );
+        assert!(
+            !output.contains("ctrl-s"),
+            "default stash chord should not be displayed: {output}"
+        );
     }
 
     /// When stash is customized, the stashed line reminder names the customized chord.
@@ -5508,8 +5492,14 @@ mod tests {
         let lines = stashed_lines(&session, 80);
         assert_eq!(lines.len(), 1);
         let rendered = lines[0].to_string();
-        assert!(rendered.contains("ctrl-x to bring it back"), "custom stash chord missing from stashed line: {rendered}");
-        assert!(!rendered.contains("ctrl-s"), "default stash chord should not appear in stashed line: {rendered}");
+        assert!(
+            rendered.contains("ctrl-x to bring it back"),
+            "custom stash chord missing from stashed line: {rendered}"
+        );
+        assert!(
+            !rendered.contains("ctrl-s"),
+            "default stash chord should not appear in stashed line: {rendered}"
+        );
     }
 
     /// The transcript stays behind the search, because a prompt is recognised by what it was asked
@@ -5584,13 +5574,14 @@ mod tests {
     /// one row per binding would.
     #[test]
     fn the_shortcuts_use_fewer_rows_where_the_width_allows() {
+        let bindings = Keybindings::default();
         for editing in crate::vim::Editing::ALL {
-            let wide = shortcut_lines(editing, 200).len();
-            let narrow = shortcut_lines(editing, 40).len();
+            let wide = shortcut_lines(editing, &bindings, 200).len();
+            let narrow = shortcut_lines(editing, &bindings, 40).len();
             assert!(wide < narrow, "{wide} rows wide, {narrow} narrow");
             assert_eq!(
                 narrow,
-                shortcuts(editing).len(),
+                shortcuts(editing, &bindings).len(),
                 "a narrow terminal cut a binding"
             );
         }
@@ -5602,14 +5593,21 @@ mod tests {
     /// go wrong.
     #[test]
     fn no_shortcut_row_runs_past_the_edge() {
-        for editing in crate::vim::Editing::ALL {
-            for width in 0..=200u16 {
-                for line in shortcut_lines(editing, width) {
-                    let drawn = line.to_string();
-                    assert!(
-                        drawn.chars().count() <= width as usize,
-                        "a row ran past {width} editing {editing:?}: {drawn}"
-                    );
+        // Including a settings file's chords, which are the longest names the list ever holds and so
+        // are what the arithmetic fitting the columns has to be measured against.
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("scroller".to_string(), "ctrl-alt-pgdn".to_string());
+        moved.insert("stash".to_string(), "ctrl-alt-f12".to_string());
+        for bindings in [Keybindings::default(), Keybindings::from_map(&moved)] {
+            for editing in crate::vim::Editing::ALL {
+                for width in 0..=200u16 {
+                    for line in shortcut_lines(editing, &bindings, width) {
+                        let drawn = line.to_string();
+                        assert!(
+                            drawn.chars().count() <= width as usize,
+                            "a row ran past {width} editing {editing:?}: {drawn}"
+                        );
+                    }
                 }
             }
         }
@@ -5629,11 +5627,12 @@ mod tests {
     /// strings, so this is what keeps them from disagreeing about which key to press.
     #[test]
     fn the_hint_and_the_list_name_the_same_key() {
-        let key = shortcuts(crate::vim::Editing::Ordinary)
-            .iter()
+        let key = shortcuts(crate::vim::Editing::Ordinary, &Keybindings::default())
+            .into_iter()
             .find(|(_, meaning)| *meaning == "this list")
-            .map(|(key, _)| *key)
+            .map(|(key, _)| key)
             .expect("the list lists itself");
+        let key = key.as_str();
         assert!(
             SHORTCUTS_HINT.starts_with(key),
             "the hint says {SHORTCUTS_HINT:?} and the list says {key:?}"

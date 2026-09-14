@@ -1305,8 +1305,17 @@ first, so the other cannot be reached at all, and the list `?` puts up names the
 while one of the two lines is a lie. Which action wins would come down to the order the code reads
 them in, which is nothing a person could predict from what they wrote, so neither wins.
 
-Dynamic rendering: the shortcut listing (`?`) and prompt stashed indicators dynamically reflect the
-active chord names rather than hardcoded default labels.
+**The screen names the chord that answers.** `?` lists the keys from the one place they are written
+down (INPUT-13), and the seven rows above are asked of the chord in force rather than spelled out
+there, as are the row saying what brings a stashed line back (INPUT-17) and the scroller's way out
+([SCROLL-7](scroller.md#SCROLL-7)). Where a clause of this spec or another names one of the seven, it
+names the default.
+
+**Why.** A list is worth having only where it is right, and a person reads it at the moment a key
+they pressed did nothing. Keeping a second copy for the defaults is the same list twice: the copy
+`?` was drawn from had already stopped saying that Ctrl-S searches as well (INPUT-31), and nothing
+on the screen would have shown it. The scroller's way out named Ctrl-C in the keys and again in the
+meaning beside them, which reads as two different presses.
 
 `verified-by: bravebot_tui::keybindings::parses_hyphen_and_plus_delimiters`
 `verified-by: bravebot_tui::keybindings::reserved_keys_are_rejected`
@@ -1323,6 +1332,8 @@ active chord names rather than hardcoded default labels.
 `verified-by: bravebot_config::settings::a_project_layer_overrides_keybindings_per_name`
 `verified-by: bravebot_tui::render::the_shortcut_list_reflects_custom_keybindings`
 `verified-by: bravebot_tui::render::the_stashed_line_names_the_custom_stash_chord`
-`verified-by: bravebot_tui::render::the_scroller_help_names_custom_scroller_exit_chord`
+`verified-by: bravebot_tui::render::the_help_names_the_chord_the_scroller_was_opened_with`
+`verified-by: bravebot_tui::render::the_help_names_every_key_that_closes_the_scroller`
+`verified-by: bravebot_tui::render::no_shortcut_row_runs_past_the_edge`
 `verified-by: bravebot_tui::app::custom_keybindings_route_actions_and_old_chords_are_ignored`
 `verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`
