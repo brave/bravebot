@@ -511,8 +511,9 @@ technique is comparing one look's token with the next's, per
 and then `job_output` with `wait_seconds`, per [RUN-17](#RUN-17). Neither reaches past the turn by
 itself: a background job is killed when the turn ends, and comparing a token needs a later look. So
 the description must say that past the end of the turn there is only a loop, which the planner cannot
-start and a person starts by typing `/loop`, which is [loop.md](../loop.md); that outside a loop the
-first look is taken now regardless; and that where nothing is watching, the answer says so.
+start and a person starts by typing `/loop` with an interval and the request itself on one line, which
+is [loop.md](../loop.md); that outside a loop the first look is taken now regardless; and that where
+nothing is watching, the answer says so.
 
 **Why the file branch names no command.** The recipe this clause first shipped was `tail -f`, and it
 was wrong twice over. It is not in the read-proven table, so every watch of a file cost an approval
@@ -538,10 +539,14 @@ the file once, reported what it held, and left nothing watching; asked again, it
 there was no change. Both techniques already existed, and the sentence carrying the bounded one was
 about servers, so nothing joined a request to watch to either of them.
 
-**And why the loop branch says who starts it.** A description that told the planner to use a loop
-would be describing something it has no way to do, and the failure it invites is worse than doing
-nothing: a turn that reports a watch it never started. What the planner can do is say that, and say
-what the person would type.
+**And why the loop branch says who starts it, and hands over a line that works.** A description that
+told the planner to use a loop would be describing something it has no way to do, and the failure it
+invites is worse than doing nothing: a turn that reports a watch it never started. What the planner can
+do is say that, and say what the person would type. Which has to be the whole line, interval and
+request together, because a loop repeats the line the person typed and an interval with nothing after
+it is not a line: the command refuses it and starts nothing. Naming only the command and an interval
+is how a session that had taken a correct baseline still left somebody with a watch that could not
+start, and no way to tell from what they were told why it had not.
 
 **Which is not the same as doing nothing.** Naming the loop is the end of the answer and not the whole
 of it. Wording that offered a bounded branch and a loop branch, with no default for a request that

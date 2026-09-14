@@ -125,10 +125,22 @@ moved says the file was written, not what changed: an identical rewrite moves it
 leaves the modification time alone moves nothing. Both are [READ-7](#READ-7)'s limits, and an answer
 that reports a moved token as a changed file is claiming more than the token said.
 
-**It must say who can look again.** A later look past the end of this turn is not the planner's to
-arrange: only a loop outlives a turn, a loop is a person's to start by typing `/loop`, which is
-[loop.md](../loop.md), and inside a loop the next tick is the next look. And where nothing is watching
-the file, the description must have it say so, or no change reads as a promise to report the next one.
+**It must say who can look again, and hand over a line that works.** A later look past the end of this
+turn is not the planner's to arrange: only a loop outlives a turn, a loop is a person's to start by
+typing `/loop`, which is [loop.md](../loop.md), and inside a loop the next tick is the next look. The
+description must have the planner give the whole line to type, interval and request together, and must
+say that a command and an interval with nothing after them send nothing: a loop repeats the line the
+person typed, so an interval alone is not a line and the command refuses it. And where nothing is
+watching the file, the description must have it say so, or no change reads as a promise to report the
+next one.
+
+**Why that last part is not pedantry.** A session took the baseline this clause asks for, compared two
+looks correctly, said plainly that nothing was watching, and then told the person to type `/loop 10s`.
+Every step but the last was right, and the last one made the rest worthless: that line starts nothing,
+so a person who followed the instruction got a refusal from the command and no watch, having been told a
+tick would compare the file each time. A description that routes a question to a technique the planner
+cannot finish has to name the thing that finishes it exactly, or the accurate part of the answer is what
+makes the wrong part credible.
 
 **And it must not offer a comparison the planner cannot make.** Nothing in the description may have
 the planner read a modification time or a hash in order to compare it with a later one. Neither of

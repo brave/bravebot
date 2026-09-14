@@ -70,9 +70,12 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
              says the file was written, not what changed: a rewrite of the same bytes moves it \
              too, and a change that leaves the file's modification time alone moves nothing. \
              Looking again past the end of this turn is not yours to start: only a loop outlives \
-             one, a person starts a loop by typing /loop with an interval, and inside a loop the \
-             next tick is the next look. Where nothing is watching the file, say so, or no change \
-             reads as a promise to report the next one. \
+             one, and a person starts one by typing /loop, an interval, and the request itself, all \
+             on one line. Give them that whole line to type. /loop and an interval with nothing \
+             after them send nothing at all, so naming the command and the interval alone hands \
+             somebody a line that does not start the watch you told them it would. Inside a loop \
+             the next tick is the next look. Where nothing is watching the file, say so, or no \
+             change reads as a promise to report the next one. \
              \
              A picture or a PDF (.png, .jpg, .gif, .webp, .pdf) comes back as a reference rather \
              than as anything you can look at, whoever vouched for the directory it is in. Give \
@@ -543,8 +546,10 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
              ends, and comparing a token needs a later look, which only a loop will make. Inside a \
              loop the next tick is the next look, so report what this tick saw and leave the rest \
              to the next one. Outside a loop, take the first look now and say that nothing will \
-             make the next one unless the person starts a loop by typing /loop with an interval, \
-             because a watch you cannot start is not one to report as started. And say which \
+             make the next one unless the person starts a loop, which they do by typing /loop, an \
+             interval, and the request itself on one line. Give them that whole line to type: /loop \
+             and an interval with nothing after them send nothing at all, and a watch you cannot \
+             start is not one to report as started. And say which \
              window you watched, or which looks you compared, rather than a time of day, which you \
              have no clock for; where nothing is watching now, say that too.",
             json!({
@@ -4819,6 +4824,8 @@ mod tests {
             "wait_seconds",
             "killed when the turn ends",
             "/loop",
+            "the request itself",
+            "send nothing at all",
         ] {
             assert!(
                 described.contains(stated),
@@ -4941,6 +4948,10 @@ mod tests {
             "not what changed",
             "no clock for",
             "/loop",
+            // A session told somebody to type `/loop 10s`, which starts nothing: a loop repeats the
+            // line the person typed, and an interval with no request after it is not a line.
+            "the request itself",
+            "send nothing at all",
             "Where nothing is watching",
         ] {
             assert!(
