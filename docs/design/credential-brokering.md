@@ -1,10 +1,13 @@
-# Credentials: the design
+# Credential brokering: the design
 
 What Brave builds, in what order, and what the user has to do. The normative spec that states what
 must be true follows separately.
 
 **We adopt [Brave Vault](https://github.com/brave-experiments/brave-vault)'s model and its grant
 machinery, harden it, and make bravebot one of its agents. We do not build a second broker.**
+
+**The broker is the authority, and it is the performer.** Those are the spec's words for the thing
+this document calls the broker, and nothing else in here is either.
 
 Brave Vault's *design* is our design, and its plan already states our principles: the agent never
 holds the vault secret, capabilities rather than credentials, short-lived and single-use, least
@@ -13,26 +16,26 @@ every grant auditable and revocable. It is Rust and runs on all three platforms.
 
 ## What credentials this design covers
 
-Two conditions have to hold: **the broker can hold the credential**, and **it can either perform
-the action itself or intercept the request on the way out**. Everything in or out of scope follows
-from those.
+Two conditions have to hold: **the broker can hold the credential**, and **it can either perform the
+action itself or intercept the request on the way out**. Everything in scope follows from those, and
+what fails one of them is in **What this does not cover**.
 
 **In scope.** OAuth tokens and API keys the broker obtains, short-lived tokens it mints or fetches,
 and bearer tokens carried in HTTP headers. Concretely: email, chat,
 issue trackers, most SaaS APIs, and after phase 4, `git push` over HTTPS and arbitrary HTTP.
 
-## The rungs this refers to
+## The tiers this refers to
 
-The spec ranks how a credential may be held, and this document uses those rungs throughout.
+The spec ranks how a credential may be held, and this document uses those tiers throughout.
 
-| rung | what the agent holds |
+| tier | what the account holds |
 | --- | --- |
-| 1 | nothing. Something else performs the action, or a boundary adds the real value on the way out |
-| 2 | a capability: a right to one action, scoped and expiring |
-| 3 | a bearer secret, fetched at the step that uses it and dropped after |
-| 4 | a bearer secret, held indefinitely |
+| Delegated | nothing. Something else performs the action, or a boundary adds the real value on the way out |
+| Granted | a bounded derivative the issuer minted: a right to one action, scoped and expiring |
+| Held briefly | a bearer secret, fetched at the step that uses it and dropped after |
+| Held | a bearer secret, held indefinitely |
 
-Take the highest rung the far end offers. Anything lower is a deliberate, recorded choice.
+Take the highest tier the far end offers. Anything lower is a deliberate, recorded choice.
 
 ## What Brave Vault already gives us
 
@@ -40,7 +43,7 @@ Take the highest rung the far end offers. Anything lower is a deliberate, record
 | --- | --- |
 | an action performed so the agent never sees the secret | `use` fills a login through the native-messaging host and extension. The pattern is proven; that one action is all there is |
 | a grant is a capability, not a mood | a handle grants nothing on its own and only lets the agent ask; the grant it exchanges for names one item and one action |
-| short-lived, least privilege | per item and per action. Ad-hoc grants default to 60 seconds and one use; pre-created grants take a user-configurable `max_uses` and TTL, which is the standing-grant row below rather than this one |
+| short-lived, least privilege | per item and per action. Ad-hoc grants take the vault's current default of 60 seconds and one use, superseded by the lifetimes below; pre-created grants take a user-configurable `max_uses` and TTL, which is the standing-grant row below rather than this one |
 | every grant auditable and revocable | logged, and revocable per agent or per grant from the Agents panel |
 | approval outside the agent's own process | the app draws the prompt in its own window. Out of process, and **not** out of account: the helper drawing it shares a uid with the agent, so a same-uid attacker forges the answer |
 | standing grants, deliberately given | pre-authorisation in the Agents panel |
@@ -60,22 +63,21 @@ Excluding all three at enrolment costs nothing in scope and buys the central pro
 "no call returns credential bytes, except these", but **no call returns credential bytes**.
 
 Interactive password prompts are not a fourth path. `git push` over HTTPS and HTTP authenticate by
-substitution in phase 4, and everything else in scope is a delegated `perform`. There is no action
-that writes a secret to a child's stdin, stdout, or an askpass helper. A child bravebot started
-runs under the same uid and holds whatever it is given, so handing it plaintext is rung 3 wearing a
-different hat, not rung 1.
+substitution in phase 4, and everything else in scope is a broker `perform`. There is no action that
+writes a secret to a child's stdin, stdout, or an askpass helper. A child bravebot started runs
+under the same uid and holds whatever it is given, so handing it plaintext is Held briefly wearing a
+different hat, not Delegated.
 
 ## What is missing in Brave Vault
 
-Its *implementation* is a prototype. The vault file
-is encrypted with `const VAULT_PASSWORD: &str = "testing"`, so encryption at rest is decorative
-today. It also reads `BRAVE_SERVICES_KEY` from an `.envrc` in the person's home, and `.envrc` is
-direnv, so the key is exported into the environment of every shell entering that directory and
-everything those shells spawn. A broker that stores secrets carefully while holding its own
-service key in an inherited environment variable has a rung-4 credential underneath a rung-1
-design.
-The action paths do not carry over either: filling a login form through a browser extension shares
-nothing with sending mail or signing a request beyond the word "delegated".
+Its *implementation* is a prototype. The vault file is encrypted with `const VAULT_PASSWORD: &str =
+"testing"`, so encryption at rest is decorative today. It also reads `BRAVE_SERVICES_KEY` from an
+`.envrc` in the person's home, and `.envrc` is direnv, so the key is exported into the environment
+of every shell entering that directory and everything those shells spawn. A broker that stores
+secrets carefully while holding its own service key in an inherited environment variable has a Held
+credential underneath a Delegated design. The action paths do not carry over either: filling a login
+form through a browser extension shares nothing with sending mail or signing a request beyond the
+word "delegated".
 
 | gap | why it matters for bravebot |
 | --- | --- |
@@ -83,7 +85,7 @@ nothing with sending mail or signing a request beyond the word "delegated".
 | hardening before it holds anything real | a key-derivation password held in the platform store instead of the `testing` constant, and `BRAVE_SERVICES_KEY` out of the environment and into that store |
 | action: `perform` beyond form fill | sending mail, signing a request, calling an API. Their plan names signing as intended, nothing implements it, and form-fill code does not generalise |
 | destination scoping for calls that are not browser navigations | today's control is the browser requesting host permissions when cookies are grabbed, which bounds which origin a session comes from. Nothing constrains which endpoint a service token may reach |
-| placeholders and egress substitution | `git push` over HTTPS and arbitrary HTTP cannot be delegated whole, so something must substitute at the boundary |
+| placeholders and egress substitution | `git push` over HTTPS and arbitrary HTTP cannot be performed whole by the broker, so something must substitute at the boundary |
 | caps | rate, volume and distinct destinations. Grants expire but are not throttled |
 | separate operating-system user | the README names this as the gap itself. It is the largest single improvement available, because it is what makes the store unreadable by anything running as the person |
 | headless operation | the approval channel is a window and the never-reveal path runs through a browser extension. Over SSH there is neither. Out of scope rather than scheduled: a standing grant is redeemable only while a verified helper session for that uid is connected, so a box with no helper has no credential path |
@@ -185,25 +187,23 @@ stolen disk, and nothing else. **After phase 1 the account boundary is still the
 as it is before. That is the right trade for a daemon that must start unattended, and it is a
 smaller claim than the `testing` constant invites.
 
-**Phase 1 also gives a property up, and it should be said rather than discovered.** Today's broker
+**Phase 1 also gives a property up.** Today's broker
 lives inside the unlocked desktop app and goes away when the vault locks, so while it is locked
-nothing can ask at all. A daemon holding a machine-unlocked key is reachable whenever the machine
-is on. That is the price of a daemon that starts without anyone logging in, and the account
-boundary is what stands in its place.
+nothing can ask at all. A daemon holding a machine-unlocked key is reachable whenever the machine is
+on. That is the price of a daemon that starts without anyone logging in.
 
-The obvious alternative is a trap. **A keychain used from the person's own account protects
-nothing here.** Claude Code CLI creates its
-keychain item with `security add-generic-password` and no access-control arguments, so the item
-trusts `/usr/bin/security`, which any process can invoke, and one command returns its access and
-refresh tokens with no prompt. Binding the item to a binary instead does not help.
-`SecTrustedApplicationCreateFromPath` has been deprecated since macOS 10.15, and the modern
-mechanism, access groups on the data protection keychain, needs a code-signing entitlement and a
-login session, which a daemon does not have.
-**The account boundary is the control, not the store.** A keychain item belonging to another user is
-unreadable by tooling run as the person, with no access list and no deprecated API involved.
+The obvious alternative is a trap. **A keychain used from the person's own account protects nothing
+here.** Claude Code CLI creates its keychain item with `security add-generic-password` and no
+access-control arguments, so the item trusts `/usr/bin/security`, which any process can invoke, and
+one command returns its access and refresh tokens with no prompt. Binding the item to a binary
+instead does not help. `SecTrustedApplicationCreateFromPath` has been deprecated since macOS 10.15,
+and the modern mechanism, access groups on the data protection keychain, needs a code-signing
+entitlement and a login session, which a daemon does not have. A keychain item belonging to another
+user is unreadable by tooling run as the person, with no access list and no deprecated API
+involved.
 
 For fleets, the vault gains a backend for HashiCorp Vault or the cloud provider's secret manager,
-because dynamic secrets with leases are genuinely a rung we cannot otherwise reach. That is not the
+because dynamic secrets with leases are genuinely a tier we cannot otherwise reach. That is not the
 default and it is not phase one.
 
 ## Peer verification
@@ -342,10 +342,8 @@ survived a collapse that took everything else.
 | the ceiling bound to the verified binary, so no read path is reachable | the choice of lifetime offered |
 | a verified helper session, for that uid, to redeem a standing grant | a locked screen, which does not drop the session |
 
-**Approval is still per request, not per application.** Against a same-uid attacker the two are
-identical, because that attacker forges either answer. The
-reason to keep it is the other two cases: a person who over-grants by accident, and software that
-is buggy rather than hostile. It is a courtesy, and worth having as one.
+**The courtesies are worth keeping anyway**, for the two cases that are not this attacker: a
+person who over-grants by accident, and software that is buggy rather than hostile.
 
 ## How a credential arrives
 
@@ -372,8 +370,9 @@ policy rather than a static key. Holding the broader form instead is the same re
 
 ## What each capability needs
 
-The concrete inventory, and the reason rung 1 is worth the work. The last column is the form that
-survives an agent being wrong.
+The concrete inventory, and the reason Delegated is worth the work. The last column is the form
+that survives an agent being wrong. **Nothing here is in scope for the phases below except email**,
+and the rest are listed so the shape of the work after it is visible rather than implied.
 
 | capability | usually held as | worst case | the form to use |
 | --- | --- | --- | --- |
@@ -400,14 +399,14 @@ authorised that purchase. Note where the bound lives: the issuer enforces it, so
 into asking for more still cannot get it. That is the same argument as the broker running as a
 different operating-system user.
 
-**Nothing in this table is in scope for the phases below except email**, and the rest are listed so
-the shape of the work after it is visible rather than implied.
-
 ## The two paths
 
-**Delegated.** The broker performs the action whole and reports the outcome. Sending mail, signing
-a request, calling an API. No placeholder, no proxy, no certificate work. This is the strongest
-rung at a fraction of the cost and it covers most of what new capabilities need.
+**Both reach Delegated**, which is why the tier is not what separates them. In each the agent holds
+nothing and the broker decides every use and can refuse. What differs is who makes the call.
+
+**Performed.** The broker performs the action whole and reports the outcome. Sending mail, signing a
+request, calling an API. No placeholder, no proxy, no certificate work, at a fraction of the cost,
+and it covers most of what new capabilities need.
 
 **Substituted.** For actions only the agent can perform: `git push`, arbitrary HTTP, a tool that
 authenticates for itself. The agent gets `bvb-<32 hex>`, unique per session and credential.
@@ -464,9 +463,9 @@ and what we promise is a connection-time failure naming which of the two it was.
 
 ## Email
 
-**Send is delegated**, as a new `perform` action. The recipient decides where the effect lands, so
-it is routing and must be releasable and trusted. Mail the agent read can therefore never name the
-recipient of mail it sends, which closes reply-to-injection with no rule of its own.
+**Send is performed by the broker**, as a new `perform` action. The recipient decides where the
+effect lands, so it is routing and must be releasable and trusted. Mail the agent read can therefore
+never name the recipient of mail it sends, which closes reply-to-injection with no rule of its own.
 
 Two things about where that check lives. Only the trusted half fires today, since the releasable
 half passes by construction until confidentiality propagates through the planner. And it is
@@ -561,8 +560,8 @@ are real.**
 | phase | lands | buys |
 | --- | --- | --- |
 | 1 | vault hardening: key derivation from a real password held in a store that unlocks without a session, `BRAVE_SERVICES_KEY` out of the environment and into that store, scrubbed from every child the broker spawns, and no release-build path that reads a secret from the environment at all; broker moved to `_bravevault`; UI helper split into the person's session; peer verification on three platforms | a broker that can hold a secret at all. Nothing above is optional and nothing below is safe without it |
-| 2 | bravebot enrols with the restricted action set, bound to the verified binary; `Grant` type; rung reported everywhere | a working handle, whose ceiling is `perform` and `placeholder` and nothing else |
-| 3 | service-token item type; `perform`; `send_mail`; PKCE with the verifier on the broker; envelope equality; a verified helper session required to redeem a standing grant; **and its bounds in the same phase**: lifetimes, caps in bytes and requests, trail integrity | email send at the strongest rung, bounded on the day it ships |
+| 2 | bravebot enrols with the restricted action set, bound to the verified binary; `Grant` type; tier reported everywhere | a working handle, whose ceiling is `perform` and `placeholder` and nothing else |
+| 3 | service-token item type; `perform`; `send_mail`; PKCE with the verifier on the broker; envelope equality; a verified helper session required to redeem a standing grant; **and its bounds in the same phase**: lifetimes, caps in bytes and requests, trail integrity | email send at Delegated, bounded on the day it ships |
 | 4 | `placeholder` and egress substitution, local certificate authority, position binding, SigV4 re-signing | `git push` over HTTPS and arbitrary HTTP without holding tokens |
 | 5 | HashiCorp Vault and cloud secret manager backends | a store for interactive machines, and real dynamic secrets. Not unattended operation |
 | 6 | provider-side scoped mailbox read | inbox access that is not account recovery |
@@ -637,17 +636,17 @@ unattended operation. Phase 5 does not undo the helper-session rule.
 Each row fails one of the two conditions in **What credentials this design covers**: the broker cannot hold the
 credential, or there is nowhere to perform or intercept the action.
 
-| not covered | why |
-| --- | --- |
-| ambient authority: a logged-in `gh`, `aws sso`, `docker.sock`, a metadata endpoint | there is no credential to hand the broker. It never sees anything, and only confinement helps |
-| credentials already on disk: `~/.aws`, `~/.ssh`, tool caches | the broker did not obtain them. Migrating one in helps only if the original copy can be deleted, and an SSO cache regenerates itself |
-| key material such as an SSH key | the secret never travels, so there is nothing to substitute. Covering it means the broker becomes a signing oracle, which is `ssh-agent`, and this design does not build one |
-| passcodes, magic links, reset links | they arrive through the capability somebody granted, so the bound is provider-side scoping, which is phase 6 |
-| clients that pin certificates | no interception point. This fails at connection time and says why |
-| non-HTTP protocols: SMTP and IMAP directly, SSH, database wire protocols | the egress boundary is HTTP-shaped. Either the broker performs the whole action or there is no path |
-| a tool reading its own configuration file | `terraform` reading `~/.aws/credentials` bypasses both paths. Masking listed config files at the boundary is a later intercept path, not phase 4 |
-| tokens held by a connected protocol server | that server holds its own downstream credentials. Nothing here sees or bounds them |
-| pushes, biometrics, hardware-key touches | not bytes, so nothing can hold them |
+| not covered | fails | why |
+| --- | --- | --- |
+| ambient authority: a logged-in `gh`, `aws sso`, `docker.sock`, a metadata endpoint | hold | there is no credential to hand the broker. It never sees anything, and only confinement helps |
+| credentials already on disk: `~/.aws`, `~/.ssh`, tool caches | hold | the broker did not obtain them. Migrating one in helps only if the original copy can be deleted, and an SSO cache regenerates itself |
+| key material such as an SSH key | intercept | the secret never travels, so there is nothing to substitute. Covering it means the broker becomes a signing oracle, which is `ssh-agent`, and this design does not build one |
+| passcodes, magic links, reset links | hold | they arrive through the capability somebody granted, so the bound is provider-side scoping, which is phase 6 |
+| clients that pin certificates | intercept | no interception point. This fails at connection time and says why |
+| non-HTTP protocols: SMTP and IMAP directly, SSH, database wire protocols | intercept | the egress boundary is HTTP-shaped. Either the broker performs the whole action or there is no path |
+| a tool reading its own configuration file | intercept | `terraform` reading `~/.aws/credentials` bypasses both paths. Masking listed config files at the boundary is a later intercept path, not phase 4 |
+| tokens held by a connected protocol server | hold | that server holds its own downstream credentials. Nothing here sees or bounds them |
+| pushes, biometrics, hardware-key touches | hold | not bytes, so nothing can hold them |
 
 **The honest summary: this makes new capabilities safe and retrofits nothing.** Email and GitHub
 work because the broker obtains those tokens itself. A developer's existing AWS profile and SSH
@@ -762,3 +761,7 @@ confidentiality propagates through the planner. Test 16 is what bounds the body 
 33. The local certificate authority is absent from the person's login keychain.
 34. A pinned server and a runtime whose trust store we cannot configure produce distinct errors,
     each naming its own cause.
+
+**Phases 5 and 6 have no tests here.** Neither is specified to the level that would make one
+checkable, and inventing tests for them now would gate a phase against a property that does not
+exist yet.
