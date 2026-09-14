@@ -1362,7 +1362,7 @@ fn scroller_keys() -> [(&'static str, &'static str); 9] {
 
 /// What closes the scroller, which is the one row of the key list that is never dropped.
 fn scroller_exit() -> (&'static str, &'static str) {
-    ("q / esc / ctrl-c / ctrl-o", t!(scroller_key_close))
+    ("q / esc / ctrl-o", t!(scroller_key_close))
 }
 
 /// Draw the key list over the transcript.
