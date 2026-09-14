@@ -408,6 +408,156 @@ what was printed: nothing here reads a byte of it.
 `verified-by: bravebot_agent::turn::what_a_background_job_printed_is_quarantined_like_any_other_output`
 `verified-by: bravebot_agent::exec::a_background_pipeline_does_not_see_this_agents_credentials`
 
+<a id="RUN-17"></a>
+### RUN-17: a look at a job may wait for it, inside the turn that owns it
+
+`job_output` takes `wait_seconds`, and a call that gives it comes back at the first of four things:
+output arriving that the caller has not been handed, the job ending, the wait running out, or the
+turn being cancelled. Which of the four it was is not reported separately, because the answer already
+says it: how many new lines there are, whether the job has ended, and how long the wait actually
+lasted.
+
+**Between one second and ten minutes, and a value outside that is refused.** [RUN-11](#RUN-11)'s
+deadline is clamped instead, and the difference is what a caller can tell afterwards. A run whose
+deadline was shortened still ends, and the answer says how long it took, so nothing is hidden. A wait
+that was shortened comes back with silence, and silence carries no length: a caller that asked about
+ten minutes and was quietly given one reads the same nothing either way and reports it as ten
+minutes of nothing.
+
+**The bound is the wait's own, not the deadline's.** The two numbers happen to match today and are
+still separate, because they answer separate questions. A deadline bounds how long a pipeline may
+run; a wait bounds how long one look may sit watching one. Deciding that a build may take longer is
+not deciding that a single look may sit there longer, and a wait bounded by whatever the deadline
+bounds today would move whenever that decision was made. Both of the wait's numbers are quoted to the
+planner, in the tool's description and in the refusal, so they are pinned to what a caller is told
+rather than to each other.
+
+**The window is named, to the planner and not only on a screen.** A wait that ends early because
+output arrived is otherwise indistinguishable from one that sat out its bound, so the answer says how
+many seconds were spent, and says that nothing is watching now. Without it, nothing new is read as a
+standing account of the job rather than as an account of some seconds of it. It is said as structure
+on the result, beside the exit codes and the clock, because the words a person watching reads reach a
+screen and stop there.
+
+**A job still running is reported as running and not as stopped.** [RUN-11](#RUN-11)'s stop is
+something that happened to a pipeline; a look is not. Reporting a look at a live job the way a
+deadline is reported tells the planner the job is over, which is exactly the wrong thing to tell one
+that is waiting for the job to print again.
+
+**A job that has ended is reported by the codes its steps exited with.** Not as having succeeded, and
+not as whatever the look then did to it. A caller that waited for a build to finish and was told it
+exited zero reports a red build as green, and where the output is quarantined that one sentence is the
+whole account of the build the planner ever gets. The codes are structure this driver kept about a
+pipeline it started, so saying them reads nothing of what was printed.
+
+**This still cannot outlive the turn.** [RUN-15](#RUN-15) is unchanged: the handle is dropped at the
+end of the turn and the pipeline dies with it. A wait is a way to spend part of one turn watching,
+not a way to be told about something later, and the tool says so where it offers it. Watching that
+has to survive a turn is [loop.md](../loop.md) and nothing here.
+
+**Nothing of the output is read.** Both things the wait watches are counts this driver kept about a
+pipeline it started: how many bytes have arrived, and which steps have exited. That is the
+bookkeeping [RUN-16](#RUN-16) already provides for, and the byte count is only ever compared against
+itself. A program does therefore decide when a wait returns by choosing when to print, which is
+exactly what a caller asking to be told about new output asked for, and the bytes themselves still
+reach anybody only under the label the plan was given.
+
+**What is new is counted per pipe.** A pipeline has one pipe for its standard output and one for each
+stage's standard error, and what a look hands back composes them with the output first. A single
+offset into that composition is therefore wrong the moment a line arrives on standard output after
+something has printed on standard error: every byte of the error text moves further along, the offset
+names a place in the middle of text the caller was already shown, and the bytes it was waiting for sit
+before that place and are never handed over at all. One offset per pipe, and each pipe compared
+against itself. A character the pipe has only half delivered is held back until the rest of it
+arrives, rather than handed over as a replacement character that the real one would then never
+replace.
+
+**The token is checked every pass, and no pass blocks.** A bound running to ten minutes and a person
+who has changed their mind are the whole reason: cancelling should not mean sitting through the rest
+of somebody else's `tail -f`. Checking often is only worth as much as the longest pass, so nothing
+inside a pass waits on anything. In particular a wait asks only whether the steps have exited, and
+does not also give the pipes their moment to catch up with them: that moment belongs to the look that
+settles the final account, is spent after the wait has returned, and is outside the bound. Spending it
+inside would carry a wait past the seconds it was given and would sit there without looking at the
+token.
+
+**Why.** Without a wait, watching a job costs a whole turn per look. The planner calls `job_output`,
+is told nothing has happened, has to answer, and is asked the same question again, so a program that
+prints once a minute costs a round trip a minute and the user reads a running commentary of nothing.
+It is also what a bounded "tell me when this changes" needs in order to be answerable at all: one
+call that covers a window, rather than a snapshot the planner is tempted to report as an answer about
+the window.
+
+`verified-by: bravebot_agent::exec::waiting_for_more_returns_when_the_job_prints_rather_than_at_the_bound`
+`verified-by: bravebot_agent::exec::waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_further`
+`verified-by: bravebot_agent::exec::waiting_for_more_returns_when_the_job_ends_without_printing`
+`verified-by: bravebot_agent::exec::a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound`
+`verified-by: bravebot_agent::exec::what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other`
+`verified-by: bravebot_agent::exec::a_character_split_across_two_pipe_reads_is_handed_over_whole`
+`verified-by: bravebot_agent::tools::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`
+`verified-by: bravebot_agent::tools::job_output_offers_a_bounded_wait_rather_than_only_a_snapshot`
+`verified-by: bravebot_agent::report::a_look_that_waited_is_described_with_both_the_window_and_the_warning`
+`verified-by: bravebot_agent::report::one_second_is_described_in_the_singular`
+`verified-by: bravebot_agent::turn::one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made`
+`verified-by: bravebot_agent::turn::a_job_output_call_reports_the_code_a_finished_job_exited_with`
+
+<a id="RUN-18"></a>
+### RUN-18: the tool's own description routes a request to watch something to one of two techniques
+
+`run`'s description must say that a request to watch something, or to be told when it changes, is
+first a question about **what** is being watched, because a file and a program are watched by
+different means. A file takes no command at all: `read_file` hands back a change token and the
+technique is comparing one look's token with the next's, per
+[read-file.md](read-file.md#READ-7). A program's own output is watched here, with `background: true`
+and then `job_output` with `wait_seconds`, per [RUN-17](#RUN-17). Neither reaches past the turn by
+itself: a background job is killed when the turn ends, and comparing a token needs a later look. So
+the description must say to take the first look now and call `schedule_next` at the end of the turn,
+which has the planner asked again after the wait with the person's line unchanged
+([SCHED-6](schedule-next.md#SCHED-6), [LOOP-14](../loop.md#LOOP-14)); and that where no further look
+has been scheduled, the answer says so.
+
+**Why the file branch names no command.** The recipe this clause first shipped was `tail -f`, and it
+was wrong twice over. It is not in the read-proven table, so every watch of a file cost an approval
+the planner had no reason to expect, and it reports appends only, so a file truncated or replaced
+under it looked untouched. A planner that reached for it anyway wrote its own poller instead, which
+the command-line grammar refused. The token needs no command, no approval, and no program whose
+output would come back quarantined.
+
+**A turn already inside a loop is the third case, and gets a sentence of its own.** There the next
+look is the next tick, so the description has such a turn report what this tick saw and leave the rest
+to the next one, and arrange nothing. Without that sentence a tick reads the instruction above and
+schedules a second look on top of the one its loop is already taking.
+
+**The window, never a time of day.** The description must have the answer name the window it watched,
+or the looks it compared, rather than date either, and must say why: the planner has no clock. It is told today's date and told not
+to ask a program for the time, so an instruction to say when it looked is an invitation to invent an
+hour, which is worse than the sample it was reporting.
+
+**Why a clause about wording.** A tool's description is the only instruction the planner reliably
+reads, so wording that changes behaviour is behaviour; [command-line.md](command-line.md) states that
+generally. This one has its own case. Asked to say when a file changed, a session read
+the file once, reported what it held, and left nothing watching; asked again, it read again and said
+there was no change. Both techniques already existed, and the sentence carrying the bounded one was
+about servers, so nothing joined a request to watch to either of them.
+
+**And why the turn arranges the next look rather than the person.** This clause used to have the
+description say that a loop was the person's to start and hand over the line to type, because at the
+time it was. Both attempts at that sentence failed in the same place. The first named the command and
+an interval, and a session that had taken a correct baseline told somebody to type `/loop 10s`, which
+starts nothing: an interval with no request after it is not a line, so the command refused it. The
+second handed over the whole line and was still an answer that ends in homework for whoever asked the
+question. What the planner can do now is arrange the look itself, and a description that told it to ask
+instead would be describing the worse of the two.
+
+**Which is not the same as doing nothing.** Scheduling the next look is the end of the answer and not
+the whole of it. Wording that offered a bounded branch and a loop branch, with no default for a request
+that named no bound, sent an open-ended one to the branch that requires no work: asked to say when a
+file changed, a session replied that a loop would be needed and made no tool call at all. That is a
+worse answer than the single read this pair of clauses set out to correct, because the person was left
+without even the file. Hence the first look happens in the turn that was asked.
+
+`verified-by: bravebot_agent::tools::the_run_description_routes_a_watch_request_to_one_of_the_two_techniques`
+
 ## Open questions
 
 - Whether to confine children is issue #4. Whether output can ever be trusted by proof rather than

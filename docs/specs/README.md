@@ -25,7 +25,7 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [pasting.md](pasting.md) | `PASTE` | 9 | what Ctrl-V puts into a turn, text or picture, and on what footing |
 | [dropping.md](dropping.md) | `DROP` | 9 | what dragging a file onto the terminal puts into a turn, and on what footing |
 | [shell-mode.md](shell-mode.md) | `SHELL` | 5 | the `!` prompt: a line the user typed, and why the planner can never reach it |
-| [skills.md](skills.md) | `SKILL` | 10 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
+| [skills.md](skills.md) | `SKILL` | 11 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
 | [instructions.md](instructions.md) | `INSTR` | 9 | which instruction files are looked for, where, in what order, and where what they say ends up |
 | [cli.md](cli.md) | `CLI` | 11 | running without the interactive interface: one-shot tasks, piped input, and `doctor` |
 | [manifest.md](manifest.md) | `MANIFEST` | 9 | plan the whole run first, then execute it with no model in the control path |
@@ -40,7 +40,7 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [network-egress.md](network-egress.md) | `NET` | 6 | every request that leaves this process, and what comes back |
 | [backends.md](backends.md) | `BACKEND` | 30 | which service answers a request, and what a person may choose between |
 | [compaction.md](compaction.md) | `COMPACT` | 10 | shortening a long conversation into a summary of itself, in the request only |
-| [loop.md](loop.md) | `LOOP` | 13 | sending one prompt again and again until somebody stops it |
+| [loop.md](loop.md) | `LOOP` | 14 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 16 | one condition a person set, judged after every turn, until it holds |
 | [sessions.md](sessions.md) | `SESSION` | 20 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
 | [state-directory.md](state-directory.md) | `STATE` | 2 | `~/.bravebot`, and who on the machine may read what is written into it |
@@ -59,7 +59,7 @@ the routing-versus-content split they share.
 | Spec | Id | Clauses | Tool |
 |---|---|---|---|
 | [tools/tool-surface.md](tools/tool-surface.md) | `TOOL` | 3 | the surface every tool shares |
-| [tools/read-file.md](tools/read-file.md) | `READ` | 5 | `read_file` |
+| [tools/read-file.md](tools/read-file.md) | `READ` | 7 | `read_file` |
 | [tools/list-files.md](tools/list-files.md) | `LIST` | 5 | `list_files` |
 | [tools/search.md](tools/search.md) | `SEARCH` | 8 | `search` |
 | [tools/lsp.md](tools/lsp.md) | `LSP` | 10 | `lsp` |
@@ -67,7 +67,7 @@ the routing-versus-content split they share.
 | [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 4 | `edit_file` |
 | [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 3 | `spawn_processor` |
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 5 | `spawn_agent` |
-| [tools/run.md](tools/run.md) | `RUN` | 16 | `run` |
+| [tools/run.md](tools/run.md) | `RUN` | 18 | `run` |
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
 | [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 2 | `read_output` |
 | [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 5 | `fetch_url` |

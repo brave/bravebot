@@ -4306,6 +4306,29 @@ impl Session {
         self.dispatch_tick()
     }
 
+    /// Start looking again because the turn that just ended asked to, repeating the person's line.
+    ///
+    /// Nothing is sent now. The turn that asked has just taken the look it is reporting, so the
+    /// first tick is the wait away rather than immediate, and the person reads one answer rather
+    /// than the same answer twice.
+    ///
+    /// Refused while a goal is set, because a goal is the one thing a session is working towards
+    /// and a watch nobody typed is not a reason to drop it. A person's own `/loop` may replace a
+    /// goal, since they are there to mean it.
+    pub fn watch_again(&mut self, prompt: &str, wakeup: crate::loops::Wakeup) {
+        if self.goal.is_some() {
+            self.note(t!(loop_not_armed_under_a_goal));
+            return;
+        }
+        let after = crate::loops::spell(wakeup.after);
+        self.looping = Some(crate::loops::Running::armed(
+            prompt.to_string(),
+            wakeup,
+            Instant::now(),
+        ));
+        self.note(t!(loop_armed_by_the_turn, after = after));
+    }
+
     /// Stop the loop, and say whether there was one.
     pub fn stop_loop(&mut self) -> bool {
         let stopped = self.looping.take().is_some();
@@ -7053,6 +7076,50 @@ mod tests {
                 .filter(|entry| entry.speaker == Speaker::User)
                 .count(),
             1
+        );
+    }
+
+    /// A watch a turn arranged sends nothing now. The turn asking for it has just taken the look
+    /// it is reporting, so a tick dispatched here would send the line again before the person has
+    /// read the answer, and the second answer would describe the same look.
+    #[test]
+    fn a_watch_a_turn_arranged_sends_nothing_until_the_wait_is_up() {
+        let mut s = session();
+        s.watch_again(
+            "tell me when a.txt changes",
+            crate::loops::Wakeup::asked(900, false),
+        );
+
+        let running = s.looping().expect("a loop");
+        assert_eq!(running.prompt(), "tell me when a.txt changes");
+        assert!(!running.due(Instant::now()), "a tick was due at once");
+        assert_eq!(s.status, Status::Idle);
+        assert_eq!(
+            s.transcript
+                .iter()
+                .filter(|entry| entry.speaker == Speaker::User)
+                .count(),
+            0,
+            "a line was sent before the wait was up"
+        );
+    }
+
+    /// A goal is the one thing a session is working towards, and a session does one thing at a
+    /// time. A person's own `/loop` may replace a goal, because they are there to mean it; a watch
+    /// nobody typed dropping the condition the work is judged against is not the same trade.
+    #[test]
+    fn a_watch_a_turn_arranged_does_not_replace_a_goal() {
+        let mut s = session();
+        s.start_goal("cargo test exits 0".to_string());
+        s.watch_again(
+            "tell me when a.txt changes",
+            crate::loops::Wakeup::asked(900, false),
+        );
+
+        assert!(s.looping().is_none(), "a turn started a loop under a goal");
+        assert_eq!(
+            s.goal().map(crate::goals::Running::condition),
+            Some("cargo test exits 0")
         );
     }
 

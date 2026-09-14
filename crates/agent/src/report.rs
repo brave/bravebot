@@ -226,10 +226,10 @@ pub struct Shown {
 /// Structure rather than content: nothing here was read out of a byte the program printed, so it
 /// may be drawn on a row and told to the planner alike.
 ///
-/// Three cases and not a boolean, because a run stopped at the wall-clock limit is neither of the
-/// other two. A server told to serve a page serves it, prints as it goes and never exits, and
-/// reporting that as a failure would be wrong. See [tools/run.md](../../../docs/specs/tools/run.md)
-/// RUN-11.
+/// Not a boolean, because a run stopped at the wall-clock limit is neither of the first two, and a
+/// background job looked at while it goes on running is none of the three. A server told to serve a
+/// page serves it, prints as it goes and never exits, and reporting that as a failure would be
+/// wrong. See [tools/run.md](../../../docs/specs/tools/run.md) RUN-11 and RUN-17.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     /// Every stage exited zero, or a line with branches did what it was told.
@@ -238,6 +238,27 @@ pub enum Outcome {
     Failed(String),
     /// It outstayed the limit and was stopped, with what it had run for by then.
     Stopped(std::time::Duration),
+    /// It was still going when it was looked at, and was left going.
+    ///
+    /// Separate from [`Outcome::Stopped`] because nothing stopped it: a look at a background job is
+    /// not the end of the job, and a caller told it was stopped stops asking about a program that
+    /// is still printing.
+    Running {
+        /// How long it has been going, which is not how long the look waited.
+        ran_for: std::time::Duration,
+        /// How long this look waited for it, where it waited at all.
+        ///
+        /// The window the answer accounts for. Without it, nothing new reads as a standing account
+        /// of the job rather than as an account of some seconds of it.
+        waited: Option<std::time::Duration>,
+    },
+}
+
+/// A whole number of seconds with its unit, pluralised.
+///
+/// Every duration these sentences quote goes through here, so none of them can say "1 seconds".
+fn seconds(duration: std::time::Duration) -> String {
+    crate::tools::tally(duration.as_secs() as usize, "second", "seconds")
 }
 
 impl Outcome {
@@ -256,6 +277,29 @@ impl Outcome {
                  printed by then and not the whole of what it would print.",
                 after.as_secs()
             ),
+            Self::Running {
+                ran_for,
+                waited: None,
+            } => format!(
+                "It is still running after {} and was left running, so this is what it had \
+                 printed by the moment you looked and not the whole of what it will print.",
+                seconds(*ran_for)
+            ),
+            // The window as well as the warning. Both, because each answers a different wrong
+            // reading: without the warning a truncated log looks like the whole of one, and without
+            // the window a look that came back with nothing looks like an account of the whole job
+            // rather than of the seconds it watched.
+            Self::Running {
+                ran_for,
+                waited: Some(waited),
+            } => format!(
+                "It is still running after {} and was left running. This look waited {} for it, so \
+                 this is what it had printed by the end of that wait and not the whole of what it \
+                 will print, and where nothing is here nothing arrived in those seconds rather \
+                 than nothing at all. Nothing is watching it now.",
+                seconds(*ran_for),
+                seconds(*waited)
+            ),
         }
     }
 
@@ -267,6 +311,18 @@ impl Outcome {
             Self::Stopped(after) => format!(
                 "still running after {} seconds, so it was stopped; what it printed first is here",
                 after.as_secs()
+            ),
+            Self::Running {
+                ran_for,
+                waited: None,
+            } => format!("still running after {}", seconds(*ran_for)),
+            Self::Running {
+                ran_for,
+                waited: Some(waited),
+            } => format!(
+                "still running after {}; waited {} for it",
+                seconds(*ran_for),
+                seconds(*waited)
             ),
             Self::Succeeded => "succeeded".to_string(),
             Self::Failed(detail) => detail.clone(),
@@ -725,6 +781,48 @@ mod tests {
         assert!(!Activity::running("Update", "a.rs").done("+1 -0").failed);
     }
 
+    /// Two wrong readings, so two sentences. Without the warning a log that stops in the middle
+    /// reads as the whole of one; without the window a look that came back with nothing reads as an
+    /// account of the whole job rather than of the seconds it watched.
+    #[test]
+    fn a_look_that_waited_is_described_with_both_the_window_and_the_warning() {
+        let said = Outcome::Running {
+            ran_for: std::time::Duration::from_secs(90),
+            waited: Some(std::time::Duration::from_secs(30)),
+        }
+        .describe();
+
+        assert!(
+            said.contains("waited 30 seconds"),
+            "the window the look watched is not in what the caller is told: {said}"
+        );
+        assert!(
+            said.contains("not the whole of what it will print"),
+            "a partial log is described as the whole of one: {said}"
+        );
+    }
+
+    /// Every duration in these sentences is a number the planner reads, and "1 seconds" in one of
+    /// them is a driver that cannot count reporting on a program.
+    #[test]
+    fn one_second_is_described_in_the_singular() {
+        let said = Outcome::Running {
+            ran_for: std::time::Duration::from_secs(1),
+            waited: Some(std::time::Duration::from_secs(1)),
+        }
+        .describe();
+
+        assert!(
+            !said.contains("1 seconds"),
+            "a one-second duration is described in the plural: {said}"
+        );
+        assert_eq!(
+            said.matches("1 second").count(),
+            2,
+            "both of the durations should read as one second: {said}"
+        );
+    }
+
     /// The first wait is the one that needs explaining: the model has the task and nothing
     /// else, and there is no tool call yet to show for it.
     #[test]
@@ -768,9 +866,11 @@ mod tests {
     /// shows up in the transcript as the fallback, which tells the user nothing.
     #[test]
     fn every_offered_tool_has_its_own_verb() {
-        for tool in crate::tools::available(false)
+        for tool in crate::tools::available(crate::tools::Scheduling::ArrangingALook)
             .into_iter()
-            .chain(crate::tools::available(true))
+            .chain(crate::tools::available(
+                crate::tools::Scheduling::PacingALoop,
+            ))
         {
             let name = &tool.function.name;
             assert_ne!(

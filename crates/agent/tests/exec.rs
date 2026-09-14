@@ -1114,3 +1114,225 @@ fn a_background_pipeline_reported_as_ended_has_all_of_its_output() {
         "a job reported as ended was missing what it printed: {printed:?}"
     );
 }
+
+/// Waits for the job's output to arrive, so the caller can watch a running program.
+///
+/// A caller with only a snapshot has to ask again to learn anything, and every ask is another whole
+/// round trip. Returning as soon as something arrives is what makes one call able to answer a
+/// question about a program that has not printed yet.
+#[test]
+fn waiting_for_more_returns_when_the_job_prints_rather_than_at_the_bound() {
+    let scratch = Scratch::new("wait-for-output");
+    let resolved = script(
+        &scratch.path,
+        "chatty",
+        "#!/bin/sh\necho first\nsleep 1\necho second\nsleep 30\n",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("chatty", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    for _ in 0..100 {
+        if job.printed().contains("first") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Asserted rather than assumed: where the first line has not arrived, the wait below returns on
+    // it and every assertion after this reports a fault in the wait instead of a slow warm-up.
+    assert!(
+        job.printed().contains("first"),
+        "the job had not printed its first line within five seconds, so nothing below is a test \
+         of the wait"
+    );
+
+    let began = std::time::Instant::now();
+    job.wait_for_more(std::time::Duration::from_secs(30), &Cancel::new());
+    let waited = began.elapsed();
+
+    assert!(
+        waited < std::time::Duration::from_secs(15),
+        "a wait sat out its bound though the job printed after a second: {waited:?}"
+    );
+    let printed = job.printed();
+    assert!(
+        printed.contains("second"),
+        "the wait returned without the output it was waiting for: {printed:?}"
+    );
+}
+
+/// Output the caller has already been handed is not something new, so it does not end a wait. A
+/// wait that returned on it would report the same lines twice and answer a question about the
+/// window nobody watched.
+#[test]
+fn waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_further() {
+    let scratch = Scratch::new("wait-out-the-bound");
+    let resolved = script(
+        &scratch.path,
+        "quiet",
+        "#!/bin/sh\necho listening\nsleep 30\n",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    for _ in 0..100 {
+        if job.printed().contains("listening") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Asserted rather than assumed: where the line has not arrived, the wait below returns on it and
+    // the assertion that it lasted its bound reports a fault in the wait instead of a slow warm-up.
+    assert!(
+        job.printed().contains("listening"),
+        "the job had not printed within five seconds, so nothing below is a test of the wait"
+    );
+
+    let bound = std::time::Duration::from_secs(2);
+    let began = std::time::Instant::now();
+    job.wait_for_more(bound, &Cancel::new());
+    let waited = began.elapsed();
+
+    assert!(
+        waited >= bound,
+        "a wait came back early on output the caller already had: {waited:?}"
+    );
+    assert!(
+        !job.ended(),
+        "a program sleeping for 30s was reported ended"
+    );
+}
+
+/// A job that has exited will never print again, so waiting on for the rest of the bound would buy
+/// nothing and spend the turn the caller has.
+#[test]
+fn waiting_for_more_returns_when_the_job_ends_without_printing() {
+    let scratch = Scratch::new("wait-until-ended");
+    let resolved = script(&scratch.path, "silent", "#!/bin/sh\nsleep 1\nexit 0\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("silent", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let began = std::time::Instant::now();
+    job.wait_for_more(std::time::Duration::from_secs(60), &Cancel::new());
+    let waited = began.elapsed();
+
+    assert!(
+        waited < std::time::Duration::from_secs(30),
+        "a wait on a job that had exited ran to its bound: {waited:?}"
+    );
+    assert!(job.ended(), "the wait returned before the job had ended");
+}
+
+/// What arrived on one pipe is never reported as what arrived on the other.
+///
+/// The composed text puts standard output first, so a line arriving on it after standard error has
+/// printed moves the whole of the error text further along. A single offset into that composition
+/// then names a place inside text the caller was already shown: it is handed the error line a second
+/// time, the line it was actually waiting for sits before the offset and is skipped, and the offset
+/// moves past it for good.
+#[test]
+fn what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other() {
+    let scratch = Scratch::new("since-interleaved");
+    let resolved = script(
+        &scratch.path,
+        "both",
+        "#!/bin/sh\necho out1\necho err1 >&2\nsleep 1\necho out2\nsleep 30\n",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("both", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    for _ in 0..100 {
+        if job.printed().contains("err1") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let mut seen = exec::Seen::default();
+    let first = job.since(&mut seen);
+    assert!(
+        first.contains("out1") && first.contains("err1"),
+        "the first look was handed neither stream in full, so nothing below is a test of the \
+         second: {first:?}"
+    );
+
+    job.wait_for_more(std::time::Duration::from_secs(30), &Cancel::new());
+    let second = job.since(&mut seen);
+    assert!(
+        second.contains("out2"),
+        "the line that arrived on standard output was never handed over: {second:?}"
+    );
+    assert!(
+        !second.contains("err1"),
+        "a line the caller had already been shown was handed over a second time: {second:?}"
+    );
+}
+
+/// A character the pipe has not finished delivering is held back, not taken lossily.
+///
+/// Taking it now would hand over one replacement character and move the offset past the bytes that
+/// produced it, so the character on its way would never reach anybody at all. Holding it back costs
+/// one more look and delivers it.
+#[test]
+fn a_character_split_across_two_pipe_reads_is_handed_over_whole() {
+    let scratch = Scratch::new("since-split-character");
+    let resolved = script(
+        &scratch.path,
+        "split",
+        "#!/bin/sh\nprintf '\\303'\nsleep 1\nprintf '\\251 done\\n'\nsleep 30\n",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("split", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    let mut seen = exec::Seen::default();
+    for _ in 0..100 {
+        if job.has_more(&seen) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        job.has_more(&seen),
+        "the first byte of the character never arrived, so nothing below is a test of the hold-back"
+    );
+
+    let held = job.since(&mut seen);
+    assert!(
+        held.is_empty(),
+        "half a character was handed over as a replacement character: {held:?}"
+    );
+
+    job.wait_for_more(std::time::Duration::from_secs(30), &Cancel::new());
+    let whole = job.since(&mut seen);
+    assert!(
+        whole.contains("\u{e9} done"),
+        "the character was never handed over whole: {whole:?}"
+    );
+    assert!(
+        !whole.contains('\u{fffd}'),
+        "the character arrived as a replacement character: {whole:?}"
+    );
+}
+
+/// The bound runs to ten minutes, and somebody who has changed their mind should not have to sit
+/// through the rest of a wait they asked to stop. The token is checked every pass for that reason
+/// rather than once at the end, and nothing inside a pass blocks.
+#[test]
+fn a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound() {
+    let scratch = Scratch::new("wait-cancelled");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let cancel = Cancel::new();
+    cancel.cancel();
+    let began = std::time::Instant::now();
+    job.wait_for_more(std::time::Duration::from_secs(600), &cancel);
+    let waited = began.elapsed();
+
+    assert!(
+        waited < std::time::Duration::from_secs(5),
+        "a cancelled wait went on waiting: {waited:?}"
+    );
+}

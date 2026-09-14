@@ -449,6 +449,34 @@ fn what_the_prompt_advertises_holds_no_bodies() {
     );
 }
 
+/// A description is the whole of what the planner decides a skill from, and the loop instructions
+/// only make sense where something else supplies the repetition. Advertised for a request to watch
+/// something, they reach a session that is no such thing, and their account of a tick reads there
+/// as an instruction to look once and report: the snapshot that leaves nothing watching.
+#[test]
+fn the_loop_skill_is_advertised_for_a_tick_and_for_nothing_else() {
+    let scratch = Scratch::new("loop-only-for-a-tick");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, _) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    let advertised = &catalogue.get("loop").expect("the loop skill").description;
+    assert!(
+        advertised.contains("Load it when this turn is a tick of a loop."),
+        "the loop skill no longer says when to load it: {advertised}"
+    );
+    for recruiting in ["watch", "repeated"] {
+        assert!(
+            !advertised.contains(recruiting),
+            "the loop skill recruits itself outside a loop, on '{recruiting}': {advertised}"
+        );
+    }
+}
+
 /// The order a filesystem hands back entries varies by machine, and the prompt would vary with
 /// it. Two runs of the same session must offer the same skills in the same order.
 #[test]

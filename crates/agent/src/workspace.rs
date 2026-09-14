@@ -786,11 +786,19 @@ impl Workspace {
         limit: usize,
     ) -> Result<Page, WorkspaceError> {
         let resolved = self.resolve(relative)?;
-
-        let raw = std::fs::read(&resolved).map_err(|e| WorkspaceError::Io {
+        let io = |e: std::io::Error| WorkspaceError::Io {
             path: relative.to_string(),
             detail: e.to_string(),
-        })?;
+        };
+
+        // Before the bytes rather than after them. A file written while it is being read hands back
+        // the new content, and a token taken afterwards describes that same new state: the next look
+        // matches it and reports that nothing happened, with the planner holding content it never
+        // saw the token for. Taken first, the token describes a state at or before the content, so
+        // the next look differs and reports a change that did happen.
+        let change_token = change_token(&std::fs::metadata(&resolved).map_err(io)?);
+
+        let raw = std::fs::read(&resolved).map_err(io)?;
 
         if looks_binary(&raw) {
             return Err(WorkspaceError::Binary {
@@ -824,6 +832,7 @@ impl Workspace {
             total_lines: total,
             long_lines,
             ends_with_newline: contents.ends_with('\n'),
+            change_token,
         })
     }
 
@@ -1294,6 +1303,39 @@ fn looks_binary(bytes: &[u8]) -> bool {
     control * 100 / head.len() > 30
 }
 
+/// A token that differs after a file is written, for comparing one look at it with the next.
+///
+/// Size and modification time, hashed together into hex. **Opaque on purpose.** A rendered
+/// modification time is a clock, and the planner has none: it is told today's date and told not to
+/// ask a program for the time, so a token it could read an hour out of is an invitation to date a
+/// sample it has no way to date. Two tokens can be compared and neither can be read.
+///
+/// **Shape rather than content.** Nothing derived from the bytes goes into it, which is what keeps
+/// it in the class of fact a byte count already belongs to: something the driver may hand a planner
+/// about a file whether or not the planner may see inside it. A hash of the contents would be
+/// content, and releasing content-derived bits about a file the trust map quarantines is the one
+/// thing that arrangement exists to prevent.
+///
+/// **Not an integrity claim, and it cannot become one.** A write restoring the same bytes changes
+/// the token, and a filesystem that leaves a modification time alone hides a change from it. What it
+/// answers is whether this file looks written-to since the last look, which is the question a planner
+/// asked to say when something changes actually has.
+fn change_token(metadata: &std::fs::Metadata) -> String {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::hash::DefaultHasher::new();
+    metadata.len().hash(&mut hasher);
+    if let Ok(modified) = metadata.modified() {
+        // Both directions are hashed with the side they fell on, so a time as far before the epoch
+        // as another is after it does not collide with it.
+        match modified.duration_since(std::time::UNIX_EPOCH) {
+            Ok(since) => (true, since.as_nanos()).hash(&mut hasher),
+            Err(before) => (false, before.duration().as_nanos()).hash(&mut hasher),
+        }
+    }
+    format!("{:016x}", hasher.finish())
+}
+
 /// A bounded window of a file's lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
@@ -1312,6 +1354,12 @@ pub struct Page {
     pub total_lines: usize,
     /// How many returned lines were individually shortened.
     pub long_lines: usize,
+    /// What to compare against the next look to see whether the file was written.
+    ///
+    /// See [`change_token`]. Of the whole file rather than of this window, so a paged read and a
+    /// whole one describe the same file the same way: what is being watched is the file, and a
+    /// window of it changing is not a different question.
+    pub change_token: String,
 }
 
 impl Page {

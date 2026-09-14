@@ -43,13 +43,29 @@ use crate::workspace::{Listing, Page, Paging, Workspace};
 /// The statuses the schema advertises, taken from the kernel so the two cannot drift.
 const TODO_STATUSES: [&str; 3] = Status::NAMES;
 
+/// What a turn may say about when it runs again.
+///
+/// Three states rather than a flag, because "nobody is pacing this turn" and "somebody else is"
+/// want opposite answers. A turn nobody is looping has to arrange its own later look or answer a
+/// request to report a change from one read and stop. A tick of a loop the person timed has that
+/// look coming already, so a tool for asking for one would have it schedule a second, and the
+/// wait would be dropped: the interval decides when that loop runs, not the turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scheduling {
+    /// Not a tick of anything. It may arrange the one later look a watch needs, which starts a
+    /// loop repeating the line the person typed.
+    ArrangingALook,
+    /// A tick of a loop nobody gave an interval for, setting the pace of the next tick.
+    PacingALoop,
+    /// A tick of a loop the person gave an interval for. There is nothing here to decide.
+    TheirInterval,
+}
+
 /// The tools the model may call.
 ///
-/// `self_paced` says this turn is a tick of a loop nobody gave an interval for, which is the one
-/// turn that may say when the next one happens. Offered rather than always present because a tool
-/// that does nothing outside one situation is a tool the planner has to be told to ignore, and a
-/// planner that calls it anyway would have been told it worked.
-pub fn available(self_paced: bool) -> Vec<Tool> {
+/// `scheduling` says what this turn may say about when it runs again, which decides whether
+/// `schedule_next` is offered at all and, where it is, which of two jobs its description describes.
+pub fn available(scheduling: Scheduling) -> Vec<Tool> {
     let mut tools = vec![
         Tool::function(
             "read_file",
@@ -57,6 +73,25 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
              file: long ones come back one page at a time, and the result says so and gives the \
              offset to continue from. Name the file with path, or with path_ref where a listing \
              gave you a reference instead of a name. \
+             \
+             Every read comes back with a change token, an opaque string standing for the file as \
+             it is now. The same token on a later read means nobody wrote the file in between; a \
+             different one means somebody did. So answer a question about whether something \
+             changes by reading it now, keeping the token, and comparing it with the token from \
+             your next look. Take that baseline in this turn rather than describing how one would \
+             be taken. For a file you may not be shown, the size in its reference is what there is \
+             to compare instead. Two things to say when you report a comparison. A change shows up \
+             at the look after it happened rather than when it happened, so say which looks you \
+             compared and never a time of day, which you have no clock for. And a token that moved \
+             says the file was written, not what changed: a rewrite of the same bytes moves it \
+             too, and a change that leaves the file's modification time alone moves nothing. \
+             The next look is yours to arrange: call schedule_next at the end of this turn and you \
+             are asked again after the wait, with the user's line sent unchanged, so a request to \
+             be told when a file changes is answered by reading it now and scheduling the look that \
+             would catch a change. Do that rather than telling somebody to arrange it themselves. \
+             Inside a loop the next tick is the next look, so there is nothing to arrange there. \
+             Where you have taken a look and not scheduled another, say so, because no change with \
+             nothing watching reads as a promise to report the next one. \
              \
              A picture or a PDF (.png, .jpg, .gif, .webp, .pdf) comes back as a reference rather \
              than as anything you can look at, whoever vouched for the directory it is in. Give \
@@ -524,7 +559,21 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
              A program meant to keep running, such as a server or a watcher, needs \
              background: true. Without it the line is waited on and stopped at its deadline \
              (300 seconds by default; set deadline_seconds to allow up to 600), so there is \
-             no moment at which it is up and you can do anything with it.",
+             no moment at which it is up and you can do anything with it. \
+             \
+             Asked to watch something, or to say when it changes, decide first what is being \
+             watched, because a file and a program are watched by different means. A file takes no \
+             command at all: read_file hands back a change token, and comparing the token from one \
+             look with the token from the next is the whole of the technique. A program's own \
+             output is watched here: start it with background: true and call job_output with \
+             wait_seconds, which is one call covering a window rather than a look per turn. \
+             Neither reaches past this turn by itself: a background job is killed when the turn \
+             ends, and comparing a token needs a later look. So take the first look now and call \
+             schedule_next at the end of the turn, which has you asked again after the wait with \
+             the user's line unchanged. Inside a loop that is already what happens, so report what \
+             this tick saw and leave the rest to the next one. And say which window you watched, \
+             or which looks you compared, rather than a time of day, which you have no clock for; \
+             where you have scheduled no further look, say that too.",
             json!({
                 "type": "object",
                 "properties": {
@@ -577,7 +626,13 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
              again after doing something else shows what happened in between rather than \
              repeating what you have seen. Output is quarantined exactly as a run's is: it comes \
              back as text where the user vouched for every command in the line, and otherwise as \
-             a reference to pass to read_output, spawn_processor or write_file.",
+             a reference to pass to read_output, spawn_processor or write_file. \
+             \
+             Use wait_seconds to wait for the job rather than asking it again and again. Without \
+             it a wait costs a whole turn per look: you call, are told nothing has happened, and \
+             answer only to be asked the same question. It is still a wait inside this turn, so it \
+             cannot tell you about anything that happens after the turn ends, and the job is \
+             killed then as it always was.",
             json!({
                 "type": "object",
                 "properties": {
@@ -590,6 +645,17 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
                         "description": "Stop the job after reading what it printed. Use it once \
                                         you are done with a server you started. Defaults to \
                                         false, which leaves it running."
+                    },
+                    "wait_seconds": {
+                        "type": "integer",
+                        "description": "Wait up to this many seconds instead of answering at \
+                                        once. Returns as soon as the job prints something you \
+                                        have not been shown or the job ends, and at the bound if \
+                                        it stays silent, so a long wait costs nothing when the \
+                                        thing you are waiting for happens early. Between 1 and \
+                                        600. A value outside that is refused rather than \
+                                        adjusted, so the wait you get is the wait you asked for. \
+                                        Omit it to look and answer straight away."
                     }
                 },
                 "required": ["job"]
@@ -671,45 +737,62 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
         ),
     ];
 
-    if self_paced {
-        tools.push(Tool::function(
-            "schedule_next",
+    let arranging = match scheduling {
+        Scheduling::TheirInterval => return tools,
+        Scheduling::PacingALoop => false,
+        Scheduling::ArrangingALook => true,
+    };
+    tools.push(Tool::function(
+        "schedule_next",
+        if !arranging {
             "Say when this loop should run again. The user started a loop with no interval, so \
-             each turn sets the pace for the next one. Call this once, at the end of the turn, \
-             after the work is done. You are choosing only the moment: the prompt is the user's \
-             own line and it is sent again unchanged, so there is nothing here to say what the \
-             next turn asks. Pick the wait from what you are actually waiting on, not from a \
-             round number: something that takes ten minutes to change is not worth looking at in \
-             one. Not calling it ends the loop, which is the right answer once there is nothing \
-             left to watch.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "delay_seconds": {
-                        "type": "integer",
-                        "description": "How long to wait before the next run. Held to between \
-                                        60 and 3600 seconds, so anything outside that becomes \
-                                        the nearest of the two."
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": "What you are waiting on, in a few words, e.g. \"watching \
-                                        the release build\". The user reads this; it is not sent \
-                                        anywhere and nothing acts on it."
-                    },
-                    "noop": {
-                        "type": "boolean",
-                        "description": "True when this run found nothing to do and changed \
-                                        nothing, false when something happened worth keeping: an \
-                                        edit, a message, a finding. Runs of quiet ticks are \
-                                        counted, so the user can see the loop is healthy without \
-                                        reading every one."
-                    }
+                 each turn sets the pace for the next one. Call this once, at the end of the turn, \
+                 after the work is done. You are choosing only the moment: the prompt is the \
+                 user's own line and it is sent again unchanged, so there is nothing here to say \
+                 what the next turn asks. Pick the wait from what you are actually waiting on, not \
+                 from a round number: something that takes ten minutes to change is not worth \
+                 looking at in one. Not calling it ends the loop, which is the right answer once \
+                 there is nothing left to watch."
+        } else {
+            "Arrange the next look at something, when one turn cannot answer what was asked. \
+                 A request to be told when something changes is the case this exists for: take the \
+                 first look now, answer from it, and call this at the end of the turn to be asked \
+                 again after the wait. You are choosing only the moment. The user's own line is \
+                 what gets sent again, unchanged, so there is nothing here to say what the next \
+                 turn asks, and that turn is asked in the same way when to look after it. Pick the \
+                 wait from what you are waiting on rather than from a round number. Do not call it \
+                 where this turn has already answered the question: looking again at something \
+                 settled is a loop somebody has to notice and stop."
+        },
+        json!({
+            "type": "object",
+            "properties": {
+                "delay_seconds": {
+                    "type": "integer",
+                    "description": "How long to wait before the next run. Held to between \
+                                    1 and 3600 seconds, so anything outside that becomes \
+                                    the nearest of the two. The wait starts when this turn \
+                                    ends, so a whole turn separates two looks however short \
+                                    it is."
                 },
-                "required": ["delay_seconds", "noop"]
-            }),
-        ));
-    }
+                "reason": {
+                    "type": "string",
+                    "description": "What you are waiting on, in a few words, e.g. \"watching \
+                                    the release build\". The user reads this; it is not sent \
+                                    anywhere and nothing acts on it."
+                },
+                "noop": {
+                    "type": "boolean",
+                    "description": "True when this run found nothing to do and changed \
+                                    nothing, false when something happened worth keeping: an \
+                                    edit, a message, a finding. Runs of quiet ticks are \
+                                    counted, so the user can see the loop is healthy without \
+                                    reading every one."
+                }
+            },
+            "required": ["delay_seconds", "noop"]
+        }),
+    ));
 
     tools
 }
@@ -731,8 +814,10 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
 /// - `todo_write`, because the list on the screen belongs to the turn the person is watching, and
 ///   a delegate writing to it would replace what they were reading with the steps of a sub-task
 ///   they did not ask about.
-/// - `schedule_next`, because only a tick of a self-paced loop may say when the next is due, and
-///   a delegate is not one.
+/// - `schedule_next`, because what it schedules is another turn of the session, sending the line
+///   the person typed. A delegate was given a task by a planner and ends when it answers, so a
+///   wait it asked for would either be dropped or would put the session back to work on something
+///   nobody at the keyboard is waiting for.
 /// - `fetch_url`, because every kind holds the capability for reaching the network so the driver
 ///   can make its model call, and that is the whole of what it buys. A delegate pointing a
 ///   request at a host of its own would be egress nobody approved for this sub-task, and the
@@ -741,7 +826,7 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
 pub fn for_delegate(capabilities: &bravebot_core::capability::CapabilitySet) -> Vec<Tool> {
     use bravebot_core::capability::Capability;
 
-    available(false)
+    available(Scheduling::ArrangingALook)
         .into_iter()
         .filter(|tool| match tool.function.name.as_str() {
             "spawn_agent" | "ask_user" | "todo_write" | "schedule_next" | "fetch_url" => false,
@@ -880,11 +965,11 @@ pub struct Tools<'a> {
     pub chat: Chat<'a>,
     /// The turn's stop token, so a slow program does not have to be waited out.
     pub cancel: &'a bravebot_core::cancel::Cancel,
-    /// Whether this turn is a tick of a self-paced loop, and so may say when the next is due.
+    /// What this turn may say about when it runs again.
     ///
     /// Read by dispatch as well as by the tool table, so a call to a tool this turn was not
     /// offered is answered the way any other unknown name is rather than quietly working.
-    pub self_paced: bool,
+    pub scheduling: Scheduling,
     /// The user's own directory, where their standing instructions and skills live.
     ///
     /// Carried so a delegate discovers the same ones this turn did. Without it a delegate would
@@ -963,10 +1048,12 @@ struct Job {
     /// to disagree: what a person vouched for can change during a turn, and a pipeline started
     /// before that must not have its output relabelled because of it.
     label: bravebot_core::label::Label,
-    /// How many bytes have already been handed over, so a later look reports what is new.
+    /// How much of each pipe has already been handed over, so a later look reports what is new.
     ///
-    /// A count of bytes, never a comparison of them: nothing here reads what was printed.
-    read: usize,
+    /// Counts of bytes, never a comparison of them: nothing here reads what was printed. Per pipe
+    /// rather than one offset into the composed text, because output arriving on one stream moves
+    /// where the other sits in that composition.
+    seen: crate::exec::Seen,
 }
 
 impl Jobs {
@@ -998,7 +1085,7 @@ impl Jobs {
                 running,
                 line,
                 label,
-                read: 0,
+                seen: crate::exec::Seen::default(),
             },
         );
         name
@@ -1552,7 +1639,12 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         // capability really is held.
         "fetch_url" if !tools.delegated => fetch_url(policy, tools, confirmer, &arguments),
         "job_output" => job_output(policy, tools, &arguments),
-        "schedule_next" if tools.self_paced => schedule_next(policy, &arguments),
+        // A delegate ends when it answers, and a tick the person timed has its next look coming
+        // already, so neither is offered this and a call from either is answered as an unknown
+        // name. Refused here as well as absent from the list.
+        "schedule_next" if !tools.delegated && tools.scheduling != Scheduling::TheirInterval => {
+            schedule_next(policy, tools.scheduling, &arguments)
+        }
         other => problem(format!("error: no such tool '{other}'")),
     };
 
@@ -1683,6 +1775,31 @@ fn deadline_from(arguments: &Value) -> Result<std::time::Duration, &'static str>
             None => Err("error: 'deadline_seconds' must be a whole number of seconds"),
         },
         _ => Ok(crate::exec::LIMIT),
+    }
+}
+
+/// How long a `job_output` call asked to wait, or `None` where it asked for none.
+///
+/// Refused rather than clamped, which is the opposite of what [`deadline_from`] does with a
+/// deadline. A deadline cut short still ends the run it was given for and the answer says how long
+/// that took, so the caller can see what it got. A wait cut short hands back the silence of a
+/// window nobody asked about, and silence is read as an answer.
+fn wait_from(arguments: &Value) -> Result<Option<std::time::Duration>, &'static str> {
+    let bounds =
+        crate::exec::WAIT_FLOOR.as_secs() as i64..=crate::exec::WAIT_CEILING.as_secs() as i64;
+    match arguments.get("wait_seconds") {
+        Some(value) if !value.is_null() => match value.as_i64() {
+            Some(seconds) if bounds.contains(&seconds) => {
+                Ok(Some(std::time::Duration::from_secs(seconds as u64)))
+            }
+            Some(_) => Err(
+                "error: 'wait_seconds' must be between 1 and 600, and a value outside \
+                            that is refused rather than adjusted: a wait quietly shortened hands \
+                            back silence about a window nobody watched.",
+            ),
+            None => Err("error: 'wait_seconds' must be a whole number of seconds"),
+        },
+        _ => Ok(None),
     }
 }
 
@@ -1845,7 +1962,8 @@ fn read_file<S: Sink, C: Confirmer>(
             let note = note_for(policy, "read_file", &page, |p| {
                 tally(p.lines.len(), "line", "lines")
             });
-            let rendered = policy.render_in_place("read_file", &page, |p| render_page(&p));
+            let rendered =
+                policy.render_in_place("read_file", &page, |p| render_page(&p, ChangeToken::Shown));
             Produced::new(rendered, shown_path, note).of_content()
         }
         Err(e) => problem(format!("error: {e}")),
@@ -1861,7 +1979,7 @@ pub(crate) fn read_into_slot(workspace: &Workspace, path: &str) -> Result<String
     workspace
         .page(path, 1, usize::MAX)
         .map(|page| {
-            let mut text = render_page(&page);
+            let mut text = render_page(&page, ChangeToken::Withheld);
             // A file that went through a slot used to come back a byte shorter than it went in,
             // because the lines are joined with newlines between them and none after. Every
             // processed file lost its last newline, which the next diff anybody reads calls
@@ -2096,22 +2214,10 @@ pub(crate) fn name_references(text: &str, named: &[(SlotId, Label, String)]) -> 
 ///
 /// The counts matter more than they look: a model handed a silent window of a large file
 /// will answer as though it read the whole thing.
-fn render_page(page: &Page) -> String {
-    if page.lines.is_empty() {
-        return if page.total_lines == 0 {
-            "(the file is empty)".to_string()
-        } else {
-            format!(
-                "(no lines at that offset; the file has {} lines)",
-                page.total_lines
-            )
-        };
-    }
-
-    let body = page.lines.join("\n");
+fn render_page(page: &Page, token: ChangeToken) -> String {
     let mut notes = Vec::new();
 
-    if page.first_line > 1 || page.next_line().is_some() {
+    if !page.lines.is_empty() && (page.first_line > 1 || page.next_line().is_some()) {
         notes.push(format!(
             "showing lines {}-{} of {}",
             page.first_line,
@@ -2125,12 +2231,36 @@ fn render_page(page: &Page) -> String {
     if page.long_lines > 0 {
         notes.push(format!("{} long line(s) were shortened", page.long_lines));
     }
+    if token == ChangeToken::Shown {
+        notes.push(format!("change token {}", page.change_token));
+    }
+
+    // An empty file and an offset past the end have no body, and the token belongs on them most of
+    // all: "tell me when the log appears" is asked of a file with nothing in it yet, and a read
+    // that answered it with nothing to compare would leave the next look nothing to compare against.
+    let body = match (page.lines.is_empty(), page.total_lines) {
+        (true, 0) => "(the file is empty)".to_string(),
+        (true, total) => format!("(no lines at that offset; the file has {total} lines)"),
+        (false, _) => page.lines.join("\n"),
+    };
 
     if notes.is_empty() {
         body
     } else {
         format!("{body}\n\n({})", notes.join("; "))
     }
+}
+
+/// Whether a rendered page carries the file's change token.
+///
+/// A read hands it over, which is what makes a question about change answerable at all: the planner
+/// keeps it and compares it with the token from the next look. A slot fill does not, because what a
+/// slot holds is the file's text for a processor to work on or a write to put back, and a note about
+/// the file is not part of the file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChangeToken {
+    Shown,
+    Withheld,
 }
 
 fn list_files<S: Sink>(
@@ -2716,7 +2846,7 @@ fn todo_write<S: Sink, R: Reporter>(
     Produced::new(summary, "", note)
 }
 
-/// Say when the next tick of a self-paced loop is due.
+/// Say when this turn should be asked again.
 ///
 /// The narrowest tool here. Nothing is read, nothing is written, and there is no path to endorse:
 /// the whole of what it decides is how long the caller waits before sending the same prompt
@@ -2727,7 +2857,11 @@ fn todo_write<S: Sink, R: Reporter>(
 ///
 /// The wait is held to its bounds where it is turned into a [`crate::turn::Wakeup`], so what the
 /// planner is told back is what will actually happen rather than what it asked for.
-fn schedule_next<S: Sink>(policy: &mut Policy<'_, S>, arguments: &Value) -> Produced {
+fn schedule_next<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    scheduling: Scheduling,
+    arguments: &Value,
+) -> Produced {
     let Some(seconds) = arguments.get("delay_seconds").and_then(Value::as_u64) else {
         return problem("error: 'delay_seconds' is required, as a whole number of seconds");
     };
@@ -2761,15 +2895,21 @@ fn schedule_next<S: Sink>(policy: &mut Policy<'_, S>, arguments: &Value) -> Prod
         }
     });
 
-    Produced::new(
-        Labelled::trusted(format!(
+    // Which of the two happened is worth telling the planner apart, because the answer it is
+    // writing differs: a tick reports what this look found and leaves the rest to the next one,
+    // while a turn that has just started a watch is telling somebody a watch now exists.
+    let confirmation = match scheduling {
+        Scheduling::PacingALoop | Scheduling::TheirInterval => format!(
             "scheduled: this loop runs again in {held} seconds, sending the user's own prompt \
              unchanged"
-        )),
-        "",
-        note,
-    )
-    .scheduling(wakeup)
+        ),
+        Scheduling::ArrangingALook => format!(
+            "scheduled: you will be asked again in {held} seconds, with the user's own prompt \
+             sent unchanged, so the next look is arranged and needs nothing from the user"
+        ),
+    };
+
+    Produced::new(Labelled::trusted(confirmation), "", note).scheduling(wakeup)
 }
 
 /// Hand quarantined content to an isolated model and quarantine what comes back.
@@ -3263,6 +3403,11 @@ fn job_output<S: Sink>(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
+    let wait = match wait_from(arguments) {
+        Ok(wait) => wait,
+        Err(refusal) => return problem(refusal),
+    };
+
     let Some(job) = tools.jobs.running.get_mut(&name) else {
         return problem(format!(
             "error: there is no background job called '{name}'. Only a job name run handed back \
@@ -3270,26 +3415,33 @@ fn job_output<S: Sink>(
         ));
     };
 
+    // None where there was nothing to wait for: a caller with unseen output already waiting for it
+    // asked to be told about output, and it is here. Whether there is any is byte counts the driver
+    // kept per pipe, never a comparison of what was printed.
+    let waited = wait
+        .filter(|_| !job.running.has_more(&job.seen))
+        .map(|bound| {
+            // Timed, so the answer can say which window it watched. A wait that ends early because the
+            // job printed or exited is otherwise indistinguishable from one that sat out its whole
+            // bound, and the difference is the whole of what a caller learns from silence.
+            let began = std::time::Instant::now();
+            job.running.wait_for_more(bound, tools.cancel);
+            began.elapsed()
+        });
+
     let ended = job.running.ended();
-    let printed = job.running.printed();
-    // Bytes, so a partial line is not counted as read. The count is the driver's own bookkeeping
-    // and nothing here compares what was printed.
-    let fresh = printed.get(job.read..).unwrap_or_default().to_string();
-    job.read = printed.len();
+    // Per pipe, so output arriving on one stream cannot shift where the other sits in the composed
+    // text and hand back bytes this caller was already shown.
+    let fresh = job.running.since(&mut job.seen);
 
     let ran_for = job.running.ran_for();
     let line = job.line.clone();
     let label = job.label;
 
-    if kill {
-        job.running.kill();
-    }
-
     // Said from the clock and the exit codes, which are structure: nothing here reads a byte of
-    // what the pipeline printed.
-    let outcome = if kill {
-        "killed".to_string()
-    } else if ended {
+    // what the pipeline printed. Worked out before the kill below, so a job that had already ended
+    // is reported as what it did rather than as what the kill would have done to it.
+    let outcome = if ended {
         let failed: Vec<String> = job
             .running
             .codes()
@@ -3301,17 +3453,32 @@ fn job_output<S: Sink>(
                 None => format!("step {} was killed", at + 1),
             })
             .collect();
+        // Failed rather than Succeeded where a step did not exit zero. A planner that waited for a
+        // build to finish and was told it exited 0 reports a red build as green, and where the
+        // output is quarantined that sentence is the only account of it the planner ever gets.
         if failed.is_empty() {
-            "ended, every step succeeded".to_string()
+            crate::report::Outcome::Succeeded
         } else {
-            format!("ended: {}", failed.join(", "))
+            crate::report::Outcome::Failed(failed.join(", "))
         }
+    } else if kill {
+        crate::report::Outcome::Stopped(ran_for)
     } else {
-        format!("still running after {} seconds", ran_for.as_secs())
+        // Running rather than Stopped: nothing stopped it, and a planner told a job it is waiting on
+        // was stopped stops asking about a program that is still printing.
+        crate::report::Outcome::Running { ran_for, waited }
     };
 
+    if kill {
+        job.running.kill();
+    }
+
+    // Composed from the outcome the planner is given rather than written out again here, so the
+    // screen and the planner cannot come to disagree about the same job. The window a wait watched
+    // is part of that outcome, which is why nothing adds it separately.
     let note = format!(
-        "{outcome}, {}",
+        "{}, {}",
+        outcome.summary(),
         tally(fresh.lines().count(), "new line", "new lines")
     );
 
@@ -3336,15 +3503,10 @@ fn job_output<S: Sink>(
     .capped(whole.is_some());
     produced.whole = whole;
     produced.untrusted = !label.is_trusted();
-    // So a person can be asked to read it later, and can see which command they are reading.
-    produced.printed_by = Some(crate::report::Command {
-        line,
-        outcome: if ended || kill {
-            crate::report::Outcome::Succeeded
-        } else {
-            crate::report::Outcome::Stopped(ran_for)
-        },
-    });
+    // So a person can be asked to read it later, and can see which command they are reading. This is
+    // also the one place the window a wait watched is said to the planner, which the note above is
+    // not: that one goes to a screen.
+    produced.printed_by = Some(crate::report::Command { line, outcome });
     produced
 }
 
@@ -4441,7 +4603,7 @@ mod tests {
 
     #[test]
     fn the_tool_set_is_reads_plus_gated_writes() {
-        let names: Vec<String> = available(false)
+        let names: Vec<String> = available(Scheduling::ArrangingALook)
             .iter()
             .map(|t| t.function.name.clone())
             .collect();
@@ -4462,7 +4624,8 @@ mod tests {
                 "job_output",
                 "read_output",
                 "spawn_agent",
-                "fetch_url"
+                "fetch_url",
+                "schedule_next"
             ]
         );
     }
@@ -4579,7 +4742,7 @@ mod tests {
     /// remembering: a test pinning the old reason for a rule outlives the reason.
     #[test]
     fn no_shell_is_offered() {
-        for tool in available(false) {
+        for tool in available(Scheduling::ArrangingALook) {
             let name = tool.function.name;
             assert!(!name.contains("shell"), "{name} takes a shell string");
             assert!(!name.contains("exec"), "{name} takes a shell string");
@@ -4592,7 +4755,7 @@ mod tests {
     /// how long to wait for it, and `directory` names where to run it.
     #[test]
     fn run_takes_one_command_line_and_nothing_else() {
-        let tool = available(false)
+        let tool = available(Scheduling::ArrangingALook)
             .into_iter()
             .find(|t| t.function.name == "run")
             .expect("run is offered");
@@ -4671,6 +4834,97 @@ mod tests {
         assert!(deadline_from(&json!({"deadline_seconds": [300]})).is_err());
     }
 
+    /// A wait is refused rather than clamped, which is where it parts company with a deadline. A
+    /// deadline cut short still ends the run it was given for and the answer says how long that
+    /// took. A wait cut short comes back with the silence of a shorter window, and a planner that
+    /// asked about ten minutes and was quietly given one reads that silence as ten minutes of it.
+    #[test]
+    fn a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened() {
+        use std::time::Duration;
+
+        // Nothing asked for is no wait, which is what every call before this one did.
+        assert_eq!(wait_from(&json!({})).unwrap(), None);
+        assert_eq!(wait_from(&json!({"wait_seconds": null})).unwrap(), None);
+
+        assert_eq!(
+            wait_from(&json!({"wait_seconds": 30})).unwrap(),
+            Some(Duration::from_secs(30))
+        );
+        // Both ends are inside, and written out as seconds rather than as the constants they come
+        // from: the numbers here are the ones the description and the refusal quote to the planner,
+        // so a test that reads them from the same constants would agree with itself while every
+        // sentence the planner sees had gone wrong.
+        assert_eq!(
+            wait_from(&json!({"wait_seconds": 1})).unwrap(),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(
+            wait_from(&json!({"wait_seconds": 600})).unwrap(),
+            Some(Duration::from_secs(600))
+        );
+
+        for outside in [0, -1, 601, 86_400] {
+            let refusal = wait_from(&json!({"wait_seconds": outside}))
+                .expect_err("a wait outside the bounds is refused");
+            assert!(
+                refusal.contains("between 1 and 600"),
+                "the refusal does not say what is allowed: {refusal}"
+            );
+        }
+
+        assert!(wait_from(&json!({"wait_seconds": "a while"})).is_err());
+        assert!(wait_from(&json!({"wait_seconds": 12.5})).is_err());
+        assert!(wait_from(&json!({"wait_seconds": true})).is_err());
+        assert!(wait_from(&json!({"wait_seconds": [30]})).is_err());
+    }
+
+    /// Without a way to wait, watching a job costs one whole turn per look: the planner calls, is
+    /// told nothing has happened, answers, and is asked the same question again. The argument is
+    /// what makes one call able to cover a window, so it has to be in the schema the planner reads
+    /// and the description has to say the wait ends when something arrives.
+    #[test]
+    fn job_output_offers_a_bounded_wait_rather_than_only_a_snapshot() {
+        let tool = available(Scheduling::ArrangingALook)
+            .into_iter()
+            .find(|t| t.function.name == "job_output")
+            .expect("job_output is offered");
+
+        let wait = &tool.function.parameters["properties"]["wait_seconds"];
+        assert_eq!(wait["type"], "integer", "wait_seconds is not offered");
+        let said = wait["description"].as_str().expect("it is described");
+        // Built from the constants rather than written out, so raising either bound fails here
+        // instead of leaving the planner told a number that is no longer the one enforced.
+        let bounds = format!(
+            "Between {} and {}",
+            crate::exec::WAIT_FLOOR.as_secs(),
+            crate::exec::WAIT_CEILING.as_secs()
+        );
+        for stated in [bounds.as_str(), "refused rather than adjusted"] {
+            assert!(
+                said.contains(stated),
+                "wait_seconds no longer says '{stated}': {said}"
+            );
+        }
+        let refusal = wait_from(&json!({"wait_seconds": 0})).expect_err("zero is refused");
+        assert!(
+            refusal.contains(&format!(
+                "between {} and {}",
+                crate::exec::WAIT_FLOOR.as_secs(),
+                crate::exec::WAIT_CEILING.as_secs()
+            )),
+            "the refusal quotes bounds that are not the ones enforced: {refusal}"
+        );
+        assert!(
+            said.contains("as soon as"),
+            "wait_seconds does not say a long wait is free when the thing happens early: {said}"
+        );
+        assert!(
+            tool.function.description.contains("wait_seconds"),
+            "job_output's description never names the argument: {}",
+            tool.function.description
+        );
+    }
+
     /// A tool's description is the only instruction the planner reliably reads, so wording that
     /// changes behaviour is behaviour. This one has to say that narrowing inside the line is the
     /// cheapest thing available, and give the shapes rather than gesture at them.
@@ -4686,6 +4940,60 @@ mod tests {
         assert!(
             described.contains("returns less"),
             "the description does not say to prefer whichever returns less: {described}"
+        );
+    }
+
+    /// A session asked to watch a file read it once, said what it held, and left nothing watching.
+    /// Both techniques already existed and nothing joined a watch request to either, so the
+    /// description has to: which one a bound picks, which one outlives a turn, and that the turn
+    /// arranges the later look itself instead of asking the person to arrange it.
+    #[test]
+    fn the_run_description_routes_a_watch_request_to_one_of_the_two_techniques() {
+        let described = run_description();
+        for stated in [
+            "watch something",
+            "background: true",
+            "wait_seconds",
+            "killed when the turn ends",
+            "call schedule_next at the end of the turn",
+        ] {
+            assert!(
+                described.contains(stated),
+                "the description does not say '{stated}': {described}"
+            );
+        }
+        // A file is watched by comparing read_file's token, and `tail -f` was the wrong recipe
+        // twice over: it is not in the read-proven table, so every watch of a file cost an
+        // approval, and it sees appends only, so a file truncated or replaced looked untouched.
+        assert!(
+            described.contains("read_file hands back a change token"),
+            "the description does not route a file to the token it can compare: {described}"
+        );
+        assert!(
+            !described.contains("tail -f"),
+            "the description still names tail -f as the way to watch a file: {described}"
+        );
+        // The failure that shipped: an open-ended request landed in the loop branch, which asks for
+        // nothing to be done, so the turn made no tool call at all and reported no watch.
+        assert!(
+            described.contains("take the first look now"),
+            "the description lets an unbounded watch request end the turn with no look: {described}"
+        );
+        assert!(
+            described.contains("scheduled no further look, say that too"),
+            "the description does not say to report that nothing is watching: {described}"
+        );
+        // A tick of a loop already has its next look coming, so a tick told to schedule one would
+        // be arranging a second look nobody asked for.
+        assert!(
+            described.contains("Inside a loop that is already what happens"),
+            "the description has a tick arrange a look the loop is already taking: {described}"
+        );
+        // Said, because the planner has no clock: the preamble gives it today's date and tells it
+        // not to run `date`, so an instruction to date a sample invites it to invent a time.
+        assert!(
+            described.contains("no clock for"),
+            "the description asks the planner for a time of day it cannot know: {described}"
         );
     }
 
@@ -4708,7 +5016,7 @@ mod tests {
     }
 
     fn run_description() -> String {
-        available(false)
+        available(Scheduling::ArrangingALook)
             .into_iter()
             .find(|t| t.function.name == "run")
             .expect("run is offered")
@@ -4721,7 +5029,7 @@ mod tests {
     /// reason to run a build. Vouching is the way out and the description has to say so.
     #[test]
     fn run_says_a_vouched_command_comes_back_readable() {
-        let tool = available(false)
+        let tool = available(Scheduling::ArrangingALook)
             .into_iter()
             .find(|t| t.function.name == "run")
             .expect("run is offered");
@@ -4743,6 +5051,74 @@ mod tests {
         );
     }
 
+    /// A read is a sample of one moment, so a planner told nothing else answers a question about
+    /// change from a snapshot: it reads the file, describes what is in it, and leaves nothing to
+    /// compare. The description has to hand it the comparison instead, and say what the comparison
+    /// does not settle.
+    ///
+    /// What it must not send the planner to is a program that reports a time or a hash. Those are
+    /// not in the read-proven table, so their output comes back quarantined, and a planner told to
+    /// compare three values it is handed as references cannot compare anything. The token exists
+    /// because the driver can hand over what those programs cannot.
+    #[test]
+    fn read_file_sends_a_question_about_change_to_a_token_it_can_compare() {
+        let tool = available(Scheduling::ArrangingALook)
+            .into_iter()
+            .find(|t| t.function.name == "read_file")
+            .expect("read_file is offered");
+        let description = &tool.function.description;
+
+        for stated in [
+            "change token",
+            "comparing it with the token from",
+            // The baseline is taken in the turn the question is asked, rather than deferred to a
+            // loop that nobody has started: a turn that names /loop and reads nothing answers less
+            // than the single read this clause exists to correct.
+            "Take that baseline in this turn",
+            "not what changed",
+            "no clock for",
+            // A session told somebody to type `/loop 10s`, which starts nothing. Handing over a
+            // line for the person to type was the wrong shape of answer: the turn can arrange the
+            // look itself, so it does.
+            "call schedule_next at the end of this turn",
+            "rather than telling somebody to arrange it themselves",
+            "not scheduled another, say so",
+        ] {
+            assert!(
+                description.contains(stated),
+                "read_file's description no longer says '{stated}'"
+            );
+        }
+        for absent in ["stat -f", "stat -c", "shasum"] {
+            assert!(
+                !description.contains(absent),
+                "read_file's description sends the planner to '{absent}', whose output is \
+                 quarantined and so cannot be compared"
+            );
+        }
+    }
+
+    /// A read hands the token over and a slot fill does not. What a slot holds is the file's text,
+    /// for a processor to work on or a write to put back, so a note about the file appended there
+    /// would put a line into every file that went through one.
+    #[test]
+    fn a_slot_is_filled_with_the_file_and_a_read_also_carries_its_token() {
+        let page = Page {
+            lines: vec!["alpha".to_string()],
+            ends_with_newline: true,
+            first_line: 1,
+            total_lines: 1,
+            long_lines: 0,
+            change_token: "0123456789abcdef".to_string(),
+        };
+
+        assert_eq!(render_page(&page, ChangeToken::Withheld), "alpha");
+        assert_eq!(
+            render_page(&page, ChangeToken::Shown),
+            "alpha\n\n(change token 0123456789abcdef)"
+        );
+    }
+
     /// The same ban across every tool rather than only `run`, because the tool a shell arrives in
     /// will not be the one anybody is watching. Shell mode gave the *user* a real shell, and the
     /// whole justification for that is that the planner has none: a field like this appearing
@@ -4759,7 +5135,7 @@ mod tests {
             "sh",
         ];
 
-        for tool in available(false) {
+        for tool in available(Scheduling::ArrangingALook) {
             let name = tool.function.name;
             let Some(properties) = tool.function.parameters["properties"].as_object() else {
                 continue;
@@ -4785,7 +5161,7 @@ mod tests {
     /// One session opened by asking where Brave was installed rather than looking.
     #[test]
     fn asking_is_described_as_a_last_resort_after_looking() {
-        let tool = available(false)
+        let tool = available(Scheduling::ArrangingALook)
             .into_iter()
             .find(|t| t.function.name == "ask_user")
             .expect("ask_user is offered");
@@ -4805,7 +5181,7 @@ mod tests {
     /// what made front-loading questions look obligatory.
     #[test]
     fn ask_user_says_that_looking_first_does_not_forfeit_the_question() {
-        let tool = available(false)
+        let tool = available(Scheduling::ArrangingALook)
             .into_iter()
             .find(|t| t.function.name == "ask_user")
             .expect("ask_user is offered");
@@ -4822,7 +5198,7 @@ mod tests {
     /// things to read results that never come back to it.
     #[test]
     fn run_says_its_output_does_not_come_back_to_the_planner() {
-        let tool = available(false)
+        let tool = available(Scheduling::ArrangingALook)
             .into_iter()
             .find(|t| t.function.name == "run")
             .expect("run is offered");
@@ -4842,7 +5218,7 @@ mod tests {
     #[test]
     fn the_mutating_tools_state_that_approval_is_required() {
         for name in ["write_file", "edit_file"] {
-            let tool = available(false)
+            let tool = available(Scheduling::ArrangingALook)
                 .into_iter()
                 .find(|t| t.function.name == name)
                 .unwrap_or_else(|| panic!("{name} is offered"));
@@ -4858,7 +5234,7 @@ mod tests {
     /// matching will propose passages that are refused.
     #[test]
     fn the_edit_tool_states_that_matching_is_exact() {
-        let edit = available(false)
+        let edit = available(Scheduling::ArrangingALook)
             .into_iter()
             .find(|t| t.function.name == "edit_file")
             .expect("edit_file is offered");
@@ -4873,7 +5249,7 @@ mod tests {
 
     #[test]
     fn every_tool_declares_a_schema() {
-        for tool in available(false) {
+        for tool in available(Scheduling::ArrangingALook) {
             assert_eq!(tool.kind, "function");
             assert_eq!(tool.function.parameters["type"], "object");
             assert!(!tool.function.description.is_empty());
@@ -4901,7 +5277,7 @@ mod tests {
     /// vocabulary the parser does not read.
     #[test]
     fn the_todo_schema_advertises_the_statuses_the_kernel_parses() {
-        let tool = available(false)
+        let tool = available(Scheduling::ArrangingALook)
             .into_iter()
             .find(|t| t.function.name == "todo_write")
             .expect("todo_write is offered");
@@ -4924,7 +5300,7 @@ mod tests {
     /// and the finished tasks will vanish from the display.
     #[test]
     fn the_todo_tool_states_that_the_whole_list_is_required() {
-        let tool = available(false)
+        let tool = available(Scheduling::ArrangingALook)
             .into_iter()
             .find(|t| t.function.name == "todo_write")
             .expect("todo_write is offered");
@@ -5557,7 +5933,7 @@ mod tests {
         use bravebot_core::event::RecordingSink;
         use bravebot_core::policy::{ReleasePlan, Routing};
 
-        fn call(arguments: Value) -> Produced {
+        fn scheduled(scheduling: Scheduling, arguments: Value) -> Produced {
             let mut sink = RecordingSink::new();
             let mut routing = Routing::new();
             routing.insert_trusted("task", "watch the build");
@@ -5568,43 +5944,118 @@ mod tests {
                 &mut sink,
             )
             .expect("policy");
-            schedule_next(&mut policy, &arguments)
+            schedule_next(&mut policy, scheduling, &arguments)
+        }
+
+        fn call(arguments: Value) -> Produced {
+            scheduled(Scheduling::PacingALoop, arguments)
+        }
+
+        /// Read what the model was told, through the display gate rather than by minting a
+        /// witness: only the policy layer can mint one, which is the point.
+        fn released(text: &Labelled<String>) -> String {
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "watch the build");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy");
+            let proof = policy.authorise_display_release("test inspects the tool result");
+            text.clone().declassify(&proof)
         }
 
         /// The whole reason this tool can exist. A turn may choose the moment and nothing else,
         /// so the field a person would have to read the loop's prompt to approve is not here to
-        /// be filled in.
+        /// be filled in. Checked for both offerings, because a turn nobody is looping is the one
+        /// that would most like to write its own next instruction.
         #[test]
         fn nothing_on_this_tool_says_what_the_next_turn_asks() {
-            let tool = available(true)
-                .into_iter()
-                .find(|t| t.function.name == "schedule_next")
-                .expect("schedule_next is offered to a self-paced tick");
-            let properties = tool.function.parameters["properties"]
-                .as_object()
-                .expect("properties");
-            let mut fields: Vec<&str> = properties.keys().map(String::as_str).collect();
-            fields.sort_unstable();
-            assert_eq!(fields, ["delay_seconds", "noop", "reason"]);
+            for scheduling in [Scheduling::ArrangingALook, Scheduling::PacingALoop] {
+                let tool = available(scheduling)
+                    .into_iter()
+                    .find(|t| t.function.name == "schedule_next")
+                    .expect("schedule_next is offered");
+                let properties = tool.function.parameters["properties"]
+                    .as_object()
+                    .expect("properties");
+                let mut fields: Vec<&str> = properties.keys().map(String::as_str).collect();
+                fields.sort_unstable();
+                assert_eq!(fields, ["delay_seconds", "noop", "reason"]);
+            }
         }
 
-        /// A tool that does nothing outside one situation is a tool the planner has to be told to
-        /// ignore, and one it calls anyway is one it was told worked.
+        /// A turn asked to report a change cannot answer from one read, so the tool that arranges
+        /// the later look has to be there before there is a loop to pace. What differs between the
+        /// two is only the wording: one is setting the pace of a loop already running, the other
+        /// is starting one, and a planner told the wrong story writes the wrong answer.
         #[test]
-        fn the_tool_that_paces_a_loop_is_offered_only_to_a_tick_of_one() {
+        fn any_turn_may_arrange_the_next_look_and_is_told_which_case_it_is() {
+            let described = |scheduling| {
+                available(scheduling)
+                    .into_iter()
+                    .find(|t| t.function.name == "schedule_next")
+                    .expect("schedule_next is offered")
+                    .function
+                    .description
+            };
+            let pacing = described(Scheduling::PacingALoop);
+            let starting = described(Scheduling::ArrangingALook);
             assert!(
-                !available(false)
+                pacing.contains("this loop should run again"),
+                "a tick was not told it is pacing a loop: {pacing}"
+            );
+            assert!(
+                starting.contains("told when something changes"),
+                "a turn outside a loop was not told what this is for: {starting}"
+            );
+        }
+
+        /// The one turn with nothing to decide. Its loop is already running on an interval a
+        /// person gave, so the next look is coming whatever this turn says, and a tool for asking
+        /// for one would have it arrange a second look nobody wants and then find the wait
+        /// dropped. A tool that does nothing where it is offered is a tool the planner has to be
+        /// told to ignore.
+        #[test]
+        fn a_tick_the_person_timed_is_offered_no_way_to_schedule_one() {
+            assert!(
+                !available(Scheduling::TheirInterval)
                     .iter()
                     .any(|t| t.function.name == "schedule_next"),
-                "an ordinary turn was offered a way to schedule the next one"
+                "a tick running on the person's interval was offered a way to reschedule itself"
             );
+        }
+
+        /// What the turn is told back has to match what it just did, because that sentence is
+        /// what the answer to the person is written from. A turn that arranged the first later
+        /// look and reports it as pacing an existing loop describes something the person never
+        /// started; one that reports a schedule as still needing them sends them off to type an
+        /// interval nothing is waiting for.
+        #[test]
+        fn a_turn_outside_a_loop_is_told_the_next_look_is_already_arranged() {
+            let starting = scheduled(
+                Scheduling::ArrangingALook,
+                json!({"delay_seconds": 300, "noop": false}),
+            );
+            let told = released(&starting.text);
+            assert!(
+                told.contains("you will be asked again") && told.contains("needs nothing"),
+                "{told}"
+            );
+
+            let pacing = call(json!({"delay_seconds": 300, "noop": false}));
+            let told = released(&pacing.text);
+            assert!(told.contains("this loop runs again"), "{told}");
         }
 
         /// The planner has to be told the wait it is getting, not the wait it asked for, or its
         /// next answer describes a schedule that is not happening.
         #[test]
         fn a_wait_outside_the_bounds_is_reported_as_the_one_that_will_happen() {
-            for (asked, held) in [(1u64, 60u64), (86_400, 3_600)] {
+            for (asked, held) in [(0u64, 1u64), (86_400, 3_600)] {
                 let produced = call(json!({"delay_seconds": asked, "noop": false}));
                 assert_eq!(
                     produced.wakeup.expect("a wakeup").after,

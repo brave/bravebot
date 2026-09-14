@@ -760,6 +760,11 @@ loop-unpaced = that turn did not say when to run again, so the loop has stopped
 loop-busy = /loop starts with a turn of its own, so it waits until this one is done
 loop-replaces-goal =
     the goal that was set has been cleared: a session works towards one thing at a time
+loop-armed-by-the-turn =
+    looking again in { $after }, repeating what you asked; ctrl-c stops it, and so does leaving
+loop-not-armed-under-a-goal =
+    a later look was asked for and not started: this session is working towards a goal, and it
+    does one thing at a time
 
 
 ## Working towards a condition

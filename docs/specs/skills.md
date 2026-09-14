@@ -176,6 +176,30 @@ itself claims.
 `verified-by: bravebot_agent::skills::a_built_in_skill_is_offered_wherever_a_session_runs`
 `verified-by: bravebot_agent::skills::a_skill_of_the_users_own_shadows_a_built_in_of_the_same_name`
 
+<a id="SKILL-13"></a>
+### SKILL-13: a built-in's description names the condition it is about, and nothing wider
+
+A built-in is offered in every session, per [SKILL-12](#SKILL-12), so nothing else decides when it
+applies: the sentence in its description is the whole of that decision, and every condition it names
+is an invitation to load the body somewhere. The loop skill's description therefore says to load it
+when this turn is a tick of a loop, and says nothing about being asked to watch or to repeat
+something.
+
+**Why that second condition was the bug and not a convenience.** The body describes a tick, where an
+interval supplies the repetition and the comparison is against what the last tick reported. Read in a
+session that is not a tick, the same words are the whole of the turn: look once, report what is there,
+and stop, which is exactly the snapshot that leaves nothing watching. It also tells the turn how to
+pace the next tick, using a tool that is in the table only when the turn is a tick, so a session that
+followed it there would promise a further look that nothing could arrange. A description that
+advertises a body to a session the body does not fit is a defect in the description.
+
+**What this clause does not do.** It narrows what the planner is invited to load, not what it may
+load: a session that asks for this skill by name still gets it. Keeping the built-in out of the
+advertised set altogether, where the turn is not a tick, is a wider change than a sentence and is not
+settled here.
+
+`verified-by: bravebot_agent::skills::the_loop_skill_is_advertised_for_a_tick_and_for_nothing_else`
+
 ## Known costs
 
 - **A skill downloaded into `~/.bravebot/skills` is trusted exactly as far as a config file the

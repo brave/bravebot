@@ -83,6 +83,16 @@ pub const FLOOR: Duration = Duration::from_secs(1);
 /// the turn spends waiting on one command, which is a budget decision.
 pub const CEILING: Duration = Duration::from_secs(600);
 
+/// The shortest and the longest one look at a background job may wait for it.
+///
+/// Their own pair rather than [`FLOOR`] and [`CEILING`]. Those bound a deadline, which is how long a
+/// pipeline is allowed to run, and raising what a program may take is not a decision about how long
+/// a single look may sit watching one. Both numbers are quoted to the planner in the tool's
+/// description and in its refusal, so a test pins those words to these values.
+pub const WAIT_FLOOR: Duration = Duration::from_secs(1);
+/// See [`WAIT_FLOOR`].
+pub const WAIT_CEILING: Duration = Duration::from_secs(600);
+
 /// How often the wait loop looks up to see whether it should stop.
 const TICK: Duration = Duration::from_millis(50);
 
@@ -645,6 +655,53 @@ impl Drain {
         let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
         String::from_utf8_lossy(&read).into_owned()
     }
+
+    /// How many bytes the pipe has delivered so far.
+    ///
+    /// The buffer's length, which is not the length of what [`Drain::text`] returns: that is taken
+    /// lossily, so one byte the pipe delivered can become three characters a caller sees. Only ever
+    /// compared against itself, to say whether more has arrived.
+    fn bytes_read(&self) -> usize {
+        self.read.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
+
+    /// What this pipe has delivered past `seen`, advancing `seen` by the bytes taken.
+    ///
+    /// A byte offset into this one pipe's buffer, which is the only offset that means anything:
+    /// see [`Seen`] for why an offset into the composed text does not.
+    ///
+    /// A final character the pipe has not finished delivering is held back rather than taken
+    /// lossily. Decoding a half-arrived character now would hand back U+FFFD and move the offset
+    /// past it, so the character that is on its way would never be handed to anybody. Bytes that
+    /// are not the start of a character are not waited for: they are not going to become valid.
+    fn since(&self, seen: &mut usize) -> String {
+        let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
+        let rest = &read[(*seen).min(read.len())..];
+        let take = match std::str::from_utf8(rest) {
+            Ok(_) => rest.len(),
+            Err(error) if error.error_len().is_none() => error.valid_up_to(),
+            Err(_) => rest.len(),
+        };
+        *seen = read.len() - rest.len() + take;
+        String::from_utf8_lossy(&rest[..take]).into_owned()
+    }
+}
+
+/// How much of each of a job's pipes a caller has already been handed.
+///
+/// One offset per pipe, never a single offset into what [`Background::printed`] composes. That
+/// composition puts standard output first, so a line arriving on standard output after standard
+/// error has printed moves every byte of the error text further along it: a lone offset into it then
+/// names a place in the middle of text the caller was already shown, and the bytes it was waiting
+/// for sit before that place and are never handed over at all.
+///
+/// Byte counts and nothing else. Comparing two of these says whether more has arrived; it never says
+/// what arrived, and nothing here reads a byte of it.
+#[derive(Debug, Default)]
+pub struct Seen {
+    stdout: usize,
+    /// One per standard-error pipe, grown to match when a pipeline's stages are first looked at.
+    stderr: Vec<usize>,
 }
 
 /// Kill every stage and reap it, so nothing is left behind.
@@ -695,6 +752,24 @@ impl Background {
     /// step's own child is still holding costs it once and does not leave a pipeline whose steps
     /// have all exited reported as running forever.
     pub fn ended(&mut self) -> bool {
+        if !self.steps_exited() {
+            return false;
+        }
+
+        let exited = *self.exited.get_or_insert_with(Instant::now);
+        while exited.elapsed() < DRAIN_GRACE && !self.drained() {
+            std::thread::sleep(TICK);
+        }
+        true
+    }
+
+    /// Whether every step has exited, without waiting for the pipes to catch up.
+    ///
+    /// [`Background::ended`] pays [`DRAIN_GRACE`] on top of this so that the account it gives is
+    /// complete. Anything waiting to a bound has to ask this instead: the grace would carry the wait
+    /// past the bound it was given, and it does not look at the cancellation token, so a person who
+    /// changed their mind would still sit through it.
+    fn steps_exited(&mut self) -> bool {
         for (index, child) in self.children.iter_mut().enumerate() {
             if self.finished[index] {
                 continue;
@@ -709,15 +784,7 @@ impl Background {
                 Err(_) => self.finished[index] = true,
             }
         }
-        if !self.finished.iter().all(|done| *done) {
-            return false;
-        }
-
-        let exited = *self.exited.get_or_insert_with(Instant::now);
-        while exited.elapsed() < DRAIN_GRACE && !self.drained() {
-            std::thread::sleep(TICK);
-        }
-        true
+        self.finished.iter().all(|done| *done)
     }
 
     /// Whether every pipe has reached its end, so nothing more of the output is to come.
@@ -749,6 +816,40 @@ impl Background {
         both_streams(&self.stdout.text(), &errored)
     }
 
+    /// What it has printed past `seen`, composed the way [`Background::printed`] composes it, and
+    /// advancing `seen` by what is taken.
+    ///
+    /// Per pipe rather than an offset into the composition, which is the whole point of [`Seen`].
+    pub fn since(&self, seen: &mut Seen) -> String {
+        seen.stderr.resize(self.stderr.len(), 0);
+        let mut text = self.stdout.since(&mut seen.stdout);
+        for (drain, seen) in self.stderr.iter().zip(seen.stderr.iter_mut()) {
+            let errored = drain.since(seen);
+            if !errored.is_empty() {
+                if !text.is_empty() && !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                text.push_str(&errored);
+            }
+        }
+        text
+    }
+
+    /// Whether any pipe has delivered anything past `seen`.
+    ///
+    /// Byte counts per pipe, so asking costs nothing however much a job has printed. Composing the
+    /// text to measure its length would copy the whole log every time somebody wanted to know
+    /// whether there was anything in it.
+    pub fn has_more(&self, seen: &Seen) -> bool {
+        if self.stdout.bytes_read() > seen.stdout {
+            return true;
+        }
+        self.stderr
+            .iter()
+            .enumerate()
+            .any(|(at, drain)| drain.bytes_read() > seen.stderr.get(at).copied().unwrap_or(0))
+    }
+
     /// How long it has been running.
     pub fn ran_for(&self) -> Duration {
         self.started.elapsed()
@@ -762,6 +863,48 @@ impl Background {
     /// Kill every step, and keep what it printed.
     pub fn kill(&mut self) {
         stop(&mut self.children);
+    }
+
+    /// How many bytes every pipe has delivered between them.
+    ///
+    /// Not the length of what [`Background::printed`] composes: that joins the streams and is taken
+    /// lossily. This is the raw total, and the one thing it answers is whether more has arrived
+    /// since it was last asked.
+    fn arrived(&self) -> usize {
+        self.stdout.bytes_read() + self.stderr.iter().map(Drain::bytes_read).sum::<usize>()
+    }
+
+    /// Wait for something to happen, and return at the first of four things.
+    ///
+    /// More arriving than had arrived when the wait started, every step having exited, `bound`
+    /// running out, and `cancel` being set. Which of the four it was is not reported, because the
+    /// caller then takes the account [`Background::ended`] and [`Background::printed`] give and that
+    /// account says it.
+    ///
+    /// **Nothing of the output is read.** Both conditions are counts this struct kept about a
+    /// pipeline it started: how many bytes have arrived, and which steps have exited. A program
+    /// that decides its own output therefore decides when this returns, which is exactly what a
+    /// caller waiting to be told about new output asked for, and the bytes themselves still reach
+    /// anybody only under the label the plan was given.
+    ///
+    /// `cancel` is checked on every pass rather than once at the end, and nothing inside a pass
+    /// blocks. The bound runs to ten minutes, and a person who has changed their mind should not have
+    /// to sit through the rest of somebody else's `tail -f`. This is also why the steps are asked
+    /// about with [`Background::steps_exited`] and not with [`Background::ended`]: the latter waits
+    /// out [`DRAIN_GRACE`] for the pipes, which would carry the wait past `bound` and would not look
+    /// at `cancel` while it did.
+    pub fn wait_for_more(&mut self, bound: Duration, cancel: &Cancel) {
+        let arrived = self.arrived();
+        let until = Instant::now() + bound;
+        loop {
+            if cancel.is_cancelled() || self.arrived() > arrived || self.steps_exited() {
+                return;
+            }
+            if Instant::now() >= until {
+                return;
+            }
+            std::thread::sleep(TICK);
+        }
     }
 }
 

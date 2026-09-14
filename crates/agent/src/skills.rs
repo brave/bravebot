@@ -306,11 +306,15 @@ struct BuiltIn {
 }
 
 /// The skills every session has, whatever is on the disk.
+///
+/// A description says when to load the skill, and the loop instructions apply where something else
+/// is already supplying the repetition. Naming a watch request here would advertise them to a
+/// session that is not a loop, where the account of a tick reads as an instruction to look once and
+/// say what changed, and where the tool it offers for pacing the next tick is not in the table.
 const BUILT_IN: [BuiltIn; 1] = [BuiltIn {
     name: "loop",
     description: "How a repeating turn works: what one tick is, what to do in it, and how to \
-                  say when the next is due. Load it when this turn is a tick of a loop, and when \
-                  the user asks for something to be watched or repeated.",
+                  say when the next is due. Load it when this turn is a tick of a loop.",
     body: LOOP,
 }];
 
@@ -343,8 +347,9 @@ you keep calling it. Call it once, at the end of the turn, after the work is don
 
 - delay_seconds from what you are actually waiting on rather than from a round number. Something \
   that takes ten minutes to change is not worth looking at in sixty seconds, and something that \
-  changes hourly is not worth looking at in five minutes. The wait is held to between a minute \
-  and an hour.
+  changes hourly is not worth looking at in five minutes. The wait is held to between a second \
+  and an hour, and it starts when this turn ends, so a whole turn separates two looks however \
+  short you make it: asking for the floor buys you the pace of a turn, not the pace you named.
 - noop true where this tick found nothing to do and changed nothing, false where something \
   happened worth keeping: an edit, a message, a finding. Runs of quiet ticks are counted and \
   shown to the user as a single line, so an honest noop is what keeps a long watch readable.

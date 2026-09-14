@@ -652,6 +652,12 @@ loop-stopped = la boucle est arrêtée
 loop-aged-out = la boucle a tourné une semaine et s'est arrêtée d'elle-même
 loop-unpaced = ce tour n'a pas dit quand recommencer, la boucle est donc arrêtée
 loop-busy = /loop commence par un tour à lui, il attend donc la fin de celui-ci
+loop-armed-by-the-turn =
+    nouveau regard dans { $after }, en répétant ce que vous avez demandé ; ctrl-c l'arrête, et
+    partir aussi
+loop-not-armed-under-a-goal =
+    un regard plus tard a été demandé sans être lancé : cette session travaille vers un objectif,
+    et elle fait une chose à la fois
 
 
 ## Coller, déposer et joindre

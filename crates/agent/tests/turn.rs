@@ -1139,9 +1139,11 @@ fn a_tick_of_a_self_paced_loop_says_when_to_run_again() {
 /// the whole failure a loop is supposed to avoid.
 #[test]
 fn a_tick_is_told_that_it_is_one_and_which_kind_of_loop_it_is_in() {
+    // `delay_seconds` stands for the tool being offered rather than its name, which the read_file
+    // and run descriptions both mention: the field is only in this one's schema.
     for (self_paced, expected, absent) in [
-        (true, "schedule_next", "timing is theirs"),
-        (false, "timing is theirs", "call schedule_next"),
+        (true, "each turn sets the pace", "timing is theirs"),
+        (false, "timing is theirs", "delay_seconds"),
     ] {
         let scratch = Scratch::new(&format!("tick-preamble-{self_paced}"));
         let workspace = Workspace::new(&scratch.path).expect("workspace");
@@ -1244,23 +1246,27 @@ fn a_turn_with_no_goal_is_told_nothing_about_a_condition() {
     );
 }
 
-/// Every other turn is offered no way to schedule one,/// Every other turn is offered no way to schedule one, and a call to it is answered the way any
-/// other name nobody offered is. A tool that quietly worked where it was not offered would let a
-/// turn nobody is looping schedule itself.
+/// A tick of a loop the person gave an interval for decides nothing about timing, so a call is
+/// answered the way any other name nobody offered is. A tool that quietly worked here would take a
+/// wait the interval is going to ignore and report it as arranged, which is a schedule the planner
+/// then describes to somebody and nothing keeps.
 #[test]
-fn a_turn_that_is_not_a_tick_cannot_schedule_one() {
-    let scratch = Scratch::new("schedule-next-unoffered");
+fn a_tick_the_person_timed_cannot_reschedule_itself() {
+    let scratch = Scratch::new("schedule-next-their-interval");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_sequence(vec![
         tool_request("schedule_next", r#"{"delay_seconds": 900, "noop": true}"#),
-        reply_with("there was no loop to pace"),
+        reply_with("the interval is keeping time"),
     ]);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
-    let task = Task::new("do the thing once");
+    let task = Task::new("watch the build").ticking(Some(turn::Tick {
+        number: 2,
+        self_paced: false,
+    }));
     let outcome = turn::run(
         &config,
         &egress,
@@ -1271,15 +1277,62 @@ fn a_turn_that_is_not_a_tick_cannot_schedule_one() {
     )
     .expect("turn runs");
 
-    assert!(outcome.wakeup.is_none(), "an ordinary turn scheduled one");
+    assert!(
+        outcome.wakeup.is_none(),
+        "a tick on the person's interval set a wait of its own"
+    );
 
     let first = received.recv().expect("first request");
     assert!(
-        !first.contains("schedule_next"),
-        "an ordinary turn was offered the tool: {first}"
+        !first.contains("delay_seconds"),
+        "a tick on the person's interval was offered the tool: {first}"
     );
     let second = received.recv().expect("second request");
     assert!(second.contains("no such tool"), "got: {second}");
+}
+
+/// A turn nobody is looping may arrange the next look, and the wait reaches the caller the same
+/// way a tick's does. This is the whole of what a session asked to report a change has: one turn
+/// cannot both read a file now and see it change later, so the turn that read it says when to look
+/// again. What the turn still may not do is say what that later turn asks; the person's line is
+/// what gets sent, and there is no field here for anything else.
+#[test]
+fn a_turn_that_is_not_a_tick_can_arrange_the_next_look() {
+    let scratch = Scratch::new("schedule-next-outside-a-loop");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("schedule_next", r#"{"delay_seconds": 900, "noop": true}"#),
+        reply_with("read it once; looking again in fifteen minutes"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("tell me when a.txt changes");
+    let outcome = turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let wakeup = outcome.wakeup.expect("the turn said when to look again");
+    assert_eq!(wakeup.after, std::time::Duration::from_secs(900));
+
+    let first = received.recv().expect("first request");
+    assert!(
+        first.contains("schedule_next"),
+        "a turn outside a loop was not offered the tool: {first}"
+    );
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("no such tool"),
+        "the call was refused as an unknown name: {second}"
+    );
 }
 
 /// An unknown tool is reported back as text rather than failing the turn.
@@ -3790,6 +3843,108 @@ fn a_small_read_has_no_paging_notice() {
     assert!(
         !second.contains("showing lines"),
         "a complete read claimed to be a page: {second}"
+    );
+}
+
+/// Asked whether a file changes, a planner can only compare what it was given. A token that
+/// reached a screen and stopped there is one it cannot compare, so this asserts on the request
+/// body: the token has to be in the conversation the next round is built from.
+///
+/// Two turns rather than two rounds, because the write has to land between the reads and a turn
+/// runs to the end before this test gets control back.
+#[test]
+fn a_read_hands_the_planner_a_token_that_moves_when_the_file_does() {
+    /// The 16 hex characters after the phrase, or a panic naming what was there instead.
+    fn token_in(body: &str) -> String {
+        let at = body
+            .find("change token ")
+            .unwrap_or_else(|| panic!("no change token reached the planner: {body}"));
+        body[at + "change token ".len()..]
+            .chars()
+            .take(16)
+            .collect()
+    }
+
+    let scratch = Scratch::new("read-token-turn");
+    let path = scratch.path.join("a.txt");
+    std::fs::write(&path, "alpha\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let read_it = || {
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        let task = Task::new("tell me when a.txt changes");
+        turn::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::Unattended,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+
+        let _first = received.recv().expect("first request");
+        received.recv().expect("second request")
+    };
+
+    let before = read_it();
+    let baseline = token_in(&before);
+    assert!(
+        baseline.chars().all(|c| c.is_ascii_hexdigit()),
+        "the token the planner was handed is not opaque hex: {baseline}"
+    );
+
+    std::fs::write(&path, "alpha\nbeta\n").unwrap();
+    let after = read_it();
+    assert_ne!(
+        baseline,
+        token_in(&after),
+        "the planner was handed the same token for a file that had been written"
+    );
+}
+
+/// The file a question about change is asked of is often one with nothing in it yet. A read that
+/// answered with no token would leave the next look nothing to compare against, which is the
+/// original failure with an empty file instead of a full one.
+#[test]
+fn a_read_of_an_empty_file_still_carries_a_token() {
+    let scratch = Scratch::new("read-token-empty");
+    std::fs::write(scratch.path.join("log.txt"), "").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"log.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("tell me when log.txt changes");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("the file is empty") && second.contains("change token"),
+        "an empty file came back with nothing to compare: {second}"
     );
 }
 
@@ -12885,6 +13040,132 @@ fn the_middle_of_a_capped_job_output_stays_reachable() {
             .expect("the reference resolved to nothing"),
         log,
         "the middle of what the job printed existed nowhere but the sample"
+    );
+}
+
+/// The whole of what the argument is for, through the whole path rather than at the unit that
+/// parses it. One call, made before the job had printed anything, comes back holding what the job
+/// printed two seconds later. Without the wait that same call is answered from an empty snapshot
+/// and learning anything costs another round trip, another reply, and another question.
+#[test]
+fn one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made() {
+    let scratch = Scratch::new("background-waited");
+
+    // Silent for long enough that a snapshot taken when the call is made holds nothing, then
+    // printing, then staying up so the job is still running when it is asked about.
+    let script = scratch.path.join("late");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nsleep 2\necho LATE-MARKER-QUUX\nsleep 30\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./late","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":30}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Vouched for, so what the job printed comes back as text: a reference would say nothing about
+    // whether the wait had waited for it.
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and tell me when it prints"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let after = bodies
+        .last()
+        .expect("the planner was asked nothing after the wait");
+    assert!(
+        after.contains("LATE-MARKER-QUUX"),
+        "one call with a wait was answered from a snapshot taken before the job printed: {after}"
+    );
+    assert!(
+        after.contains("This look waited"),
+        "the answer does not say which window it watched: {after}"
+    );
+    // Nothing was stopped, and a planner told a job it is waiting on was stopped stops asking.
+    assert!(
+        !after.contains("was stopped"),
+        "a job that is still running was reported to the planner as stopped: {after}"
+    );
+}
+
+/// The one sentence the planner gets about a job it waited for has to be about what the job did. A
+/// planner told a build exited 0 reports a red build as green, and where the output is quarantined
+/// there is nothing else for it to go on.
+#[test]
+fn a_job_output_call_reports_the_code_a_finished_job_exited_with() {
+    let scratch = Scratch::new("background-failed");
+
+    // Silent and then failing, so the wait returns on the job ending rather than on a line
+    // arriving: a job that printed and then exited races the print against the exit.
+    let script = scratch.path.join("failing");
+    std::fs::write(&script, "#!/bin/sh\nsleep 1\nexit 3\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./failing","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":30}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and wait for it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let after = bodies
+        .last()
+        .expect("the planner was asked nothing after the wait");
+    assert!(
+        after.contains("step 1 exited 3"),
+        "the code the job exited with never reached the planner: {after}"
+    );
+    assert!(
+        !after.contains("It exited 0"),
+        "a job that failed was reported to the planner as having exited 0: {after}"
     );
 }
 
