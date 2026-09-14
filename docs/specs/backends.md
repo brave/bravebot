@@ -759,6 +759,12 @@ the breakpoints are a part of the request nobody asked for and the service refus
 **Only this backend.** The aichat endpoint and an OpenAI-compatible gateway take a different wire
 format, which has no field for this and asks for nothing.
 
+**A breakpoint carries no label and asks for nothing.** It marks a prefix of a request that has
+already been assembled, after every gate that decided what may be in it. Which bytes the service
+kept from a previous request of the same session cannot put a byte into this one that was not sent,
+so nothing in [labels.md](labels.md) reads differently for a request that carries breakpoints than
+for one that does not.
+
 `verified-by: bravebot_bedrock::protocol::the_system_prompt_carries_a_breakpoint`
 `verified-by: bravebot_bedrock::protocol::the_last_block_of_the_conversation_carries_a_breakpoint`
 `verified-by: bravebot_bedrock::protocol::a_conversation_ending_in_a_tool_result_is_marked_too`
@@ -894,6 +900,7 @@ and a turn that paid a premium on it add up the same. The heading carries no tot
 says which turn it speaks for, the counts beside it being the session's.
 
 `verified-by: bravebot_bedrock::protocol::a_cached_round_is_told_apart_from_one_that_read_the_whole_prompt`
+`verified-by: bravebot_bedrock::lib::both_halves_of_the_cost_survive_the_stream`
 `verified-by: bravebot_aichat::protocol::the_cache_figure_is_read_out_of_the_details_object`
 `verified-by: bravebot_aichat::protocol::a_usage_object_without_cache_figures_still_parses`
 `verified-by: bravebot_aichat::protocol::a_null_cache_figure_reads_as_silence_rather_than_failing_the_reply`
@@ -948,6 +955,21 @@ says which turn it speaks for, the counts beside it being the session's.
   expire during a session, and the tool that holds them is the one the person already signs in
   with. That is a process this code did not write, reading a configuration this code does not
   govern.
+
+- **Compaction throws away everything the cache held.** A summary replaces the messages in front of
+  the last few, which is a rewrite of the very prefix both breakpoints sit in, so the round after a
+  compaction reads nothing back and pays a cache write to establish the new prefix. That is the
+  right way round, the point of compacting being that the old prefix is no longer worth sending at
+  all, but it means the sessions that benefit most from caching are the ones that periodically lose
+  it, and a session compacting often enough could write more than it ever reads. Nothing here
+  measures that: BACKEND-31's figures are per turn, and the turn that compacted is charged for the
+  write in the same figure as the rounds that profited from it.
+
+- **An ephemeral cache entry expires on a few minutes of inactivity, and nothing here tracks it.** A
+  person who thinks between turns misses more often than the token arithmetic suggests, and a miss
+  looks identical to a service that reports nothing: the reply carries a zero read either way.
+  Neither figure says when the last request was, so nothing can distinguish a prefix that expired
+  from one that was never established.
 
 - **The aichat endpoint Brave runs reports nothing about a cache, so BACKEND-31 measures nothing
   there.** That server does not answer `include_usage` with an OpenAI `usage` block at all: it sends
