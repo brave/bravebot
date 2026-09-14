@@ -87,7 +87,8 @@ prompt, and a refusal drops the source.
 absent, and one from a directory nobody vouched for has to be absent. A skill's name and
 description are content that would otherwise go into the prompt verbatim.
 
-`verified-by: bravebot_agent::skills::an_untrusted_skill_is_not_named_in_what_the_user_is_told`
+`verified-by: bravebot_agent::skills::every_source_reaches_the_prompt_through_the_trusted_content_gate`
+`verified-by: by-construction (nothing untrusted reaches the gate, so no test can make it refuse: the home path labels its own text (T,pub), and a workspace file the trust map does not vouch for is dropped by the per-file check before the gate is called)`
 
 <a id="SKILL-6"></a>
 ### SKILL-6: what was skipped is counted, never named
@@ -101,6 +102,8 @@ AGENTS.md was not loaded: this directory is not trusted
 name would be on the user's screen as though the agent had written it.
 
 `verified-by: bravebot_agent::skills::a_skill_that_was_skipped_is_counted_rather_than_passed_over_in_silence`
+`verified-by: bravebot_agent::skills::an_untrusted_skill_is_not_named_in_what_the_user_is_told`
+`verified-by: bravebot_agent::skills::several_untrusted_skills_are_counted_and_none_of_them_is_named`
 
 <a id="SKILL-7"></a>
 ### SKILL-7: withdrawn, the most specific source wins
