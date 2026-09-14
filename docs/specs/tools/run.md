@@ -503,21 +503,31 @@ the window.
 <a id="RUN-18"></a>
 ### RUN-18: the tool's own description routes a request to watch something to one of two techniques
 
-`run`'s description must say that a request to watch something, or to be told when it changes, is a
-decision about how long for, and must name both branches. Bounded and inside the turn is
-`background: true` and then `job_output` with `wait_seconds`, per [RUN-17](#RUN-17). Past the end of
-the turn is a loop, and the description must say that the planner cannot start one, because a
-background job is killed when the turn ends: a loop is a person's to start, by typing `/loop`, which
-is [loop.md](../loop.md). It must also say that a single read is neither, and that where nothing is
-watching, the answer says so.
+`run`'s description must say that a request to watch something, or to be told when it changes, is
+first a question about **what** is being watched, because a file and a program are watched by
+different means. A file takes no command at all: `read_file` hands back a change token and the
+technique is comparing one look's token with the next's, per
+[read-file.md](read-file.md#READ-7). A program's own output is watched here, with `background: true`
+and then `job_output` with `wait_seconds`, per [RUN-17](#RUN-17). Neither reaches past the turn by
+itself: a background job is killed when the turn ends, and comparing a token needs a later look. So
+the description must say that past the end of the turn there is only a loop, which the planner cannot
+start and a person starts by typing `/loop`, which is [loop.md](../loop.md); that outside a loop the
+first look is taken now regardless; and that where nothing is watching, the answer says so.
+
+**Why the file branch names no command.** The recipe this clause first shipped was `tail -f`, and it
+was wrong twice over. It is not in the read-proven table, so every watch of a file cost an approval
+the planner had no reason to expect, and it reports appends only, so a file truncated or replaced
+under it looked untouched. A planner that reached for it anyway wrote its own poller instead, which
+the command-line grammar refused. The token needs no command, no approval, and no program whose
+output would come back quarantined.
 
 **A turn already inside a loop is the third case, and gets a sentence of its own.** There the next
 look is the next tick, so the description has such a turn report what this tick saw and leave the rest
 to the next one. Without that sentence the loop branch reads as an instruction to ask for a loop, which
 in a tick is asking for something the person has already given.
 
-**The window, never a time of day.** The description must have the answer name the window it watched
-rather than date it, and must say why: the planner has no clock. It is told today's date and told not
+**The window, never a time of day.** The description must have the answer name the window it watched,
+or the looks it compared, rather than date either, and must say why: the planner has no clock. It is told today's date and told not
 to ask a program for the time, so an instruction to say when it looked is an invitation to invent an
 hour, which is worse than the sample it was reporting.
 
@@ -532,6 +542,13 @@ about servers, so nothing joined a request to watch to either of them.
 would be describing something it has no way to do, and the failure it invites is worse than doing
 nothing: a turn that reports a watch it never started. What the planner can do is say that, and say
 what the person would type.
+
+**Which is not the same as doing nothing.** Naming the loop is the end of the answer and not the whole
+of it. Wording that offered a bounded branch and a loop branch, with no default for a request that
+named no bound, sent an open-ended one to the branch that requires no work: asked to say when a file
+changed, a session replied that a loop would be needed and made no tool call at all. That is a worse
+answer than the single read this pair of clauses set out to correct, because the person was left
+without even the file. Hence the first look happens in the turn that was asked.
 
 `verified-by: bravebot_agent::tools::the_run_description_routes_a_watch_request_to_one_of_the_two_techniques`
 

@@ -1242,6 +1242,89 @@ fn a_small_file_is_read_whole() {
     assert_eq!(page.long_lines, 0);
 }
 
+/// The comparison the planner is told to make has to survive being made. A token that differed
+/// between two reads of a file nobody touched would report a change on every look, which is the
+/// same uselessness as a token that never differs, arrived at from the other side.
+#[test]
+fn two_reads_of_an_untouched_file_carry_the_same_change_token() {
+    let scratch = Scratch::new("token-same");
+    std::fs::write(scratch.path.join("a.txt"), "one\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let first = workspace.page("a.txt", 1, usize::MAX).expect("first read");
+    let second = workspace.page("a.txt", 1, usize::MAX).expect("second read");
+
+    assert_eq!(
+        first.change_token, second.change_token,
+        "a file nobody wrote changed its token between two reads"
+    );
+    // A window of a file is a window of the same file: a planner watching one and asked for a page
+    // of it would otherwise be told the file changed because it read less of it.
+    let paged = workspace.page("a.txt", 1, 1).expect("paged read");
+    assert_eq!(
+        first.change_token, paged.change_token,
+        "the token describes the window rather than the file"
+    );
+}
+
+/// The whole point. The size moves here as well as the modification time, so this holds on a
+/// filesystem whose timestamps are coarse.
+#[test]
+fn a_written_file_carries_a_different_change_token() {
+    let scratch = Scratch::new("token-differs");
+    let path = scratch.path.join("a.txt");
+    std::fs::write(&path, "one\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let before = workspace.page("a.txt", 1, usize::MAX).expect("first read");
+    std::fs::write(&path, "one\ntwo\n").unwrap();
+    let after = workspace.page("a.txt", 1, usize::MAX).expect("second read");
+
+    assert_ne!(
+        before.change_token, after.change_token,
+        "the token did not move when the file was written"
+    );
+}
+
+/// The planner has no clock: it is given today's date and told not to ask a program for the time,
+/// so a token it could read a time out of is an invitation to date a sample it cannot date. Hex of
+/// a fixed width, and nothing a modification time can be recovered from.
+#[test]
+fn the_change_token_carries_no_time_the_planner_could_read() {
+    let scratch = Scratch::new("token-opaque");
+    let path = scratch.path.join("a.txt");
+    std::fs::write(&path, "one\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let token = workspace
+        .page("a.txt", 1, usize::MAX)
+        .expect("read")
+        .change_token;
+
+    assert_eq!(
+        token.len(),
+        16,
+        "the token is not a fixed-width token: {token}"
+    );
+    assert!(
+        token.chars().all(|c| c.is_ascii_hexdigit()),
+        "the token is not opaque hex: {token}"
+    );
+
+    let modified = std::fs::metadata(&path)
+        .expect("metadata")
+        .modified()
+        .expect("a modification time");
+    let seconds = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a time after the epoch")
+        .as_secs();
+    assert!(
+        !token.contains(&seconds.to_string()),
+        "the token spells out the modification time: {token}"
+    );
+}
+
 /// One enormous line must not defeat the line cap.
 #[test]
 fn an_over_long_line_is_shortened_and_counted() {

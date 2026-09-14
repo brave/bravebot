@@ -58,16 +58,21 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
              offset to continue from. Name the file with path, or with path_ref where a listing \
              gave you a reference instead of a name. \
              \
-             One read is a sample of one moment, and it carries no modification time and no hash. \
-             Two of them cannot tell a file nobody touched from one changed twice and changed \
-             back, and neither says when anything happened, so no pair of reads settles whether \
-             something changed. Where that is the question, watch the file rather than reading it: \
-             run a watcher with background: true and call job_output with wait_seconds to cover a \
-             window inside this turn. Where the question outlives this turn, say so rather than \
-             answering it from a read: only a loop outlives a turn, and a person starts one by \
-             typing /loop with an interval. Either way, report a sample as a sample: say which \
-             window you watched, and where nothing is watching the file, say that too, or no \
-             change reads as a promise to report the next one. \
+             Every read comes back with a change token, an opaque string standing for the file as \
+             it is now. The same token on a later read means nobody wrote the file in between; a \
+             different one means somebody did. So answer a question about whether something \
+             changes by reading it now, keeping the token, and comparing it with the token from \
+             your next look. Take that baseline in this turn rather than describing how one would \
+             be taken. For a file you may not be shown, the size in its reference is what there is \
+             to compare instead. Two things to say when you report a comparison. A change shows up \
+             at the look after it happened rather than when it happened, so say which looks you \
+             compared and never a time of day, which you have no clock for. And a token that moved \
+             says the file was written, not what changed: a rewrite of the same bytes moves it \
+             too, and a change that leaves the file's modification time alone moves nothing. \
+             Looking again past the end of this turn is not yours to start: only a loop outlives \
+             one, a person starts a loop by typing /loop with an interval, and inside a loop the \
+             next tick is the next look. Where nothing is watching the file, say so, or no change \
+             reads as a promise to report the next one. \
              \
              A picture or a PDF (.png, .jpg, .gif, .webp, .pdf) comes back as a reference rather \
              than as anything you can look at, whoever vouched for the directory it is in. Give \
@@ -528,18 +533,20 @@ pub fn available(self_paced: bool) -> Vec<Tool> {
              (300 seconds by default; set deadline_seconds to allow up to 600), so there is \
              no moment at which it is up and you can do anything with it. \
              \
-             Asked to watch something, or to say when it changes, decide first how long for, \
-             because it is one of two things and never a single read. Up to some bound, inside \
-             this turn: start a watcher with background: true, such as tail -f on a file that is \
-             appended to, and then call job_output with wait_seconds, which is one call covering \
-             a window rather than a look per turn. Past the end of this turn: you cannot start \
-             that, because a background job is killed when the turn ends and only a loop outlives \
-             one. Inside a loop the next tick is the next look, so report what this tick saw and \
-             leave the rest to the next one. Outside a loop, say that the watch cannot be started \
-             and that the person starts a loop by typing /loop with an interval, because a watch \
-             you cannot start is not one to report as started. Whichever you did, say which window \
-             you watched rather than a time of day, which you have no clock for, and where nothing \
-             is watching now, say that too.",
+             Asked to watch something, or to say when it changes, decide first what is being \
+             watched, because a file and a program are watched by different means. A file takes no \
+             command at all: read_file hands back a change token, and comparing the token from one \
+             look with the token from the next is the whole of the technique. A program's own \
+             output is watched here: start it with background: true and call job_output with \
+             wait_seconds, which is one call covering a window rather than a look per turn. \
+             Neither reaches past this turn by itself. A background job is killed when the turn \
+             ends, and comparing a token needs a later look, which only a loop will make. Inside a \
+             loop the next tick is the next look, so report what this tick saw and leave the rest \
+             to the next one. Outside a loop, take the first look now and say that nothing will \
+             make the next one unless the person starts a loop by typing /loop with an interval, \
+             because a watch you cannot start is not one to report as started. And say which \
+             window you watched, or which looks you compared, rather than a time of day, which you \
+             have no clock for; where nothing is watching now, say that too.",
             json!({
                 "type": "object",
                 "properties": {
@@ -1885,7 +1892,8 @@ fn read_file<S: Sink, C: Confirmer>(
             let note = note_for(policy, "read_file", &page, |p| {
                 tally(p.lines.len(), "line", "lines")
             });
-            let rendered = policy.render_in_place("read_file", &page, |p| render_page(&p));
+            let rendered =
+                policy.render_in_place("read_file", &page, |p| render_page(&p, ChangeToken::Shown));
             Produced::new(rendered, shown_path, note).of_content()
         }
         Err(e) => problem(format!("error: {e}")),
@@ -1901,7 +1909,7 @@ pub(crate) fn read_into_slot(workspace: &Workspace, path: &str) -> Result<String
     workspace
         .page(path, 1, usize::MAX)
         .map(|page| {
-            let mut text = render_page(&page);
+            let mut text = render_page(&page, ChangeToken::Withheld);
             // A file that went through a slot used to come back a byte shorter than it went in,
             // because the lines are joined with newlines between them and none after. Every
             // processed file lost its last newline, which the next diff anybody reads calls
@@ -2136,22 +2144,10 @@ pub(crate) fn name_references(text: &str, named: &[(SlotId, Label, String)]) -> 
 ///
 /// The counts matter more than they look: a model handed a silent window of a large file
 /// will answer as though it read the whole thing.
-fn render_page(page: &Page) -> String {
-    if page.lines.is_empty() {
-        return if page.total_lines == 0 {
-            "(the file is empty)".to_string()
-        } else {
-            format!(
-                "(no lines at that offset; the file has {} lines)",
-                page.total_lines
-            )
-        };
-    }
-
-    let body = page.lines.join("\n");
+fn render_page(page: &Page, token: ChangeToken) -> String {
     let mut notes = Vec::new();
 
-    if page.first_line > 1 || page.next_line().is_some() {
+    if !page.lines.is_empty() && (page.first_line > 1 || page.next_line().is_some()) {
         notes.push(format!(
             "showing lines {}-{} of {}",
             page.first_line,
@@ -2165,12 +2161,36 @@ fn render_page(page: &Page) -> String {
     if page.long_lines > 0 {
         notes.push(format!("{} long line(s) were shortened", page.long_lines));
     }
+    if token == ChangeToken::Shown {
+        notes.push(format!("change token {}", page.change_token));
+    }
+
+    // An empty file and an offset past the end have no body, and the token belongs on them most of
+    // all: "tell me when the log appears" is asked of a file with nothing in it yet, and a read
+    // that answered it with nothing to compare would leave the next look nothing to compare against.
+    let body = match (page.lines.is_empty(), page.total_lines) {
+        (true, 0) => "(the file is empty)".to_string(),
+        (true, total) => format!("(no lines at that offset; the file has {total} lines)"),
+        (false, _) => page.lines.join("\n"),
+    };
 
     if notes.is_empty() {
         body
     } else {
         format!("{body}\n\n({})", notes.join("; "))
     }
+}
+
+/// Whether a rendered page carries the file's change token.
+///
+/// A read hands it over, which is what makes a question about change answerable at all: the planner
+/// keeps it and compares it with the token from the next look. A slot fill does not, because what a
+/// slot holds is the file's text for a processor to work on or a write to put back, and a note about
+/// the file is not part of the file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChangeToken {
+    Shown,
+    Withheld,
 }
 
 fn list_files<S: Sink>(
@@ -4805,9 +4825,22 @@ mod tests {
                 "the description does not say '{stated}': {described}"
             );
         }
+        // A file is watched by comparing read_file's token, and `tail -f` was the wrong recipe
+        // twice over: it is not in the read-proven table, so every watch of a file cost an
+        // approval, and it sees appends only, so a file truncated or replaced looked untouched.
         assert!(
-            described.contains("never a single read"),
-            "the description leaves one read as an answer about change: {described}"
+            described.contains("read_file hands back a change token"),
+            "the description does not route a file to the token it can compare: {described}"
+        );
+        assert!(
+            !described.contains("tail -f"),
+            "the description still names tail -f as the way to watch a file: {described}"
+        );
+        // The failure that shipped: an open-ended request landed in the loop branch, which asks for
+        // nothing to be done, so the turn made no tool call at all and reported no watch.
+        assert!(
+            described.contains("take the first look now"),
+            "the description lets an unbounded watch request end the turn with no look: {described}"
         );
         assert!(
             described.contains("nothing is watching now"),
@@ -4881,16 +4914,17 @@ mod tests {
         );
     }
 
-    /// Two reads of a file that was changed and changed back are identical, and neither carries a
-    /// time to date an answer from. A planner not told that answers a question about change from a
-    /// snapshot, which is what the description has to head off: what the tool cannot settle, and
-    /// what to reach for instead.
+    /// A read is a sample of one moment, so a planner told nothing else answers a question about
+    /// change from a snapshot: it reads the file, describes what is in it, and leaves nothing to
+    /// compare. The description has to hand it the comparison instead, and say what the comparison
+    /// does not settle.
     ///
     /// What it must not send the planner to is a program that reports a time or a hash. Those are
     /// not in the read-proven table, so their output comes back quarantined, and a planner told to
-    /// compare three values it is handed as references cannot compare anything.
+    /// compare three values it is handed as references cannot compare anything. The token exists
+    /// because the driver can hand over what those programs cannot.
     #[test]
-    fn read_file_says_one_read_cannot_answer_whether_something_changed() {
+    fn read_file_sends_a_question_about_change_to_a_token_it_can_compare() {
         let tool = available(false)
             .into_iter()
             .find(|t| t.function.name == "read_file")
@@ -4898,11 +4932,16 @@ mod tests {
         let description = &tool.function.description;
 
         for stated in [
-            "no modification time and no hash",
-            "no pair of reads settles whether something changed",
-            "job_output with wait_seconds",
+            "change token",
+            "comparing it with the token from",
+            // The baseline is taken in the turn the question is asked, rather than deferred to a
+            // loop that nobody has started: a turn that names /loop and reads nothing answers less
+            // than the single read this clause exists to correct.
+            "Take that baseline in this turn",
+            "not what changed",
+            "no clock for",
             "/loop",
-            "where nothing is watching",
+            "Where nothing is watching",
         ] {
             assert!(
                 description.contains(stated),
@@ -4916,6 +4955,27 @@ mod tests {
                  quarantined and so cannot be compared"
             );
         }
+    }
+
+    /// A read hands the token over and a slot fill does not. What a slot holds is the file's text,
+    /// for a processor to work on or a write to put back, so a note about the file appended there
+    /// would put a line into every file that went through one.
+    #[test]
+    fn a_slot_is_filled_with_the_file_and_a_read_also_carries_its_token() {
+        let page = Page {
+            lines: vec!["alpha".to_string()],
+            ends_with_newline: true,
+            first_line: 1,
+            total_lines: 1,
+            long_lines: 0,
+            change_token: "0123456789abcdef".to_string(),
+        };
+
+        assert_eq!(render_page(&page, ChangeToken::Withheld), "alpha");
+        assert_eq!(
+            render_page(&page, ChangeToken::Shown),
+            "alpha\n\n(change token 0123456789abcdef)"
+        );
     }
 
     /// The same ban across every tool rather than only `run`, because the tool a shell arrives in

@@ -3621,6 +3621,108 @@ fn a_small_read_has_no_paging_notice() {
     );
 }
 
+/// Asked whether a file changes, a planner can only compare what it was given. A token that
+/// reached a screen and stopped there is one it cannot compare, so this asserts on the request
+/// body: the token has to be in the conversation the next round is built from.
+///
+/// Two turns rather than two rounds, because the write has to land between the reads and a turn
+/// runs to the end before this test gets control back.
+#[test]
+fn a_read_hands_the_planner_a_token_that_moves_when_the_file_does() {
+    /// The 16 hex characters after the phrase, or a panic naming what was there instead.
+    fn token_in(body: &str) -> String {
+        let at = body
+            .find("change token ")
+            .unwrap_or_else(|| panic!("no change token reached the planner: {body}"));
+        body[at + "change token ".len()..]
+            .chars()
+            .take(16)
+            .collect()
+    }
+
+    let scratch = Scratch::new("read-token-turn");
+    let path = scratch.path.join("a.txt");
+    std::fs::write(&path, "alpha\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let read_it = || {
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        let task = Task::new("tell me when a.txt changes");
+        turn::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::Unattended,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+
+        let _first = received.recv().expect("first request");
+        received.recv().expect("second request")
+    };
+
+    let before = read_it();
+    let baseline = token_in(&before);
+    assert!(
+        baseline.chars().all(|c| c.is_ascii_hexdigit()),
+        "the token the planner was handed is not opaque hex: {baseline}"
+    );
+
+    std::fs::write(&path, "alpha\nbeta\n").unwrap();
+    let after = read_it();
+    assert_ne!(
+        baseline,
+        token_in(&after),
+        "the planner was handed the same token for a file that had been written"
+    );
+}
+
+/// The file a question about change is asked of is often one with nothing in it yet. A read that
+/// answered with no token would leave the next look nothing to compare against, which is the
+/// original failure with an empty file instead of a full one.
+#[test]
+fn a_read_of_an_empty_file_still_carries_a_token() {
+    let scratch = Scratch::new("read-token-empty");
+    std::fs::write(scratch.path.join("log.txt"), "").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"log.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("tell me when log.txt changes");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("the file is empty") && second.contains("change token"),
+        "an empty file came back with nothing to compare: {second}"
+    );
+}
+
 /// The model must be told the file is binary, not handed a decoding error it cannot act on.
 #[test]
 fn a_binary_read_tells_the_model_it_is_binary() {

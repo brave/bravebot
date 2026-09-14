@@ -108,25 +108,34 @@ either way the extension is what was decided from, and it is part of a path a pe
 `verified-by: bravebot_agent::workspace::a_file_that_names_no_picture_is_not_one`
 
 <a id="READ-6"></a>
-### READ-6: the tool's own description says that a read settles no question about change
+### READ-6: the tool's own description sends a question about change to the token, and says what the token does not settle
 
-`read_file`'s description must say that a read is a sample of one moment, carrying no modification
-time and no hash, so no pair of reads settles whether a file changed: two of them cannot tell a file
-nobody touched from one changed twice and changed back, and neither says when anything happened.
-Where that is the question, the description must send the planner to watching the file rather than
-reading it, and must say what watching is, in both of its lengths. Inside this turn it is a watcher
-started in the background and then one bounded wait covering a window, which is
-[run.md](run.md). Past the end of the turn there is nothing the planner can start, so the description
-must have it say so instead of answering from a read: only a loop outlives a turn, and a loop is a
-person's to start, by typing `/loop`, which is [loop.md](../loop.md). Either way it must say to report
-a sample as a sample: which window was watched, and where nothing is watching the file, that too.
+`read_file`'s description must say that every read comes back with a change token, that the same
+token on a later read means nobody wrote the file in between and a different one means somebody did,
+and that a question about whether something changes is therefore answered by reading the file now,
+keeping the token, and comparing it with the token from the next look. It must say to take that
+baseline **in this turn**, rather than describing how one would be taken. For a file the planner may
+not be shown there is no token, and the description must name the size in the reference as what
+there is to compare instead.
+
+**It must say what a comparison does not settle**, in the two ways it does not. A change shows up at
+the look after it happened rather than when it happened, so the description must have the answer name
+the looks it compared and never a time of day, which the planner has no clock for. And a token that
+moved says the file was written, not what changed: an identical rewrite moves it, and a change that
+leaves the modification time alone moves nothing. Both are [READ-7](#READ-7)'s limits, and an answer
+that reports a moved token as a changed file is claiming more than the token said.
+
+**It must say who can look again.** A later look past the end of this turn is not the planner's to
+arrange: only a loop outlives a turn, a loop is a person's to start by typing `/loop`, which is
+[loop.md](../loop.md), and inside a loop the next tick is the next look. And where nothing is watching
+the file, the description must have it say so, or no change reads as a promise to report the next one.
 
 **And it must not offer a comparison the planner cannot make.** Nothing in the description may have
 the planner read a modification time or a hash in order to compare it with a later one. Neither of
 those programs is among the audited few whose output may be read, so what they print comes back as a
 reference the planner never sees, and a description recommending that comparison describes work that
-cannot be done. The failure it invites is the one this clause exists to stop: a turn that reports a
-comparison it never made.
+cannot be done. That is the whole reason the token is the driver's to compute rather than a program's
+to print: the comparison is one only this side of the boundary can hand over.
 
 **Why a clause about wording.** A tool's description is the only instruction the planner reliably
 reads, so wording that decides what a turn does is behaviour and belongs in a spec;
@@ -136,4 +145,53 @@ watching; asked again, it read again and said nothing had changed. Every step of
 of this tool, which is why the correction has to be in the sentence the planner reads before it picks
 the tool.
 
-`verified-by: bravebot_agent::tools::read_file_says_one_read_cannot_answer_whether_something_changed`
+**And why the baseline is taken now.** Wording that only named the two lengths of a watch, without
+saying what to do about an open-ended request, was worse than the sample it replaced: asked to say
+when a file changed, a session answered that a loop would be needed and made no tool call at all,
+leaving the person with neither a watch nor the file's contents. A description that routes a question
+to a technique has to say which end of it happens in the turn that read it.
+
+`verified-by: bravebot_agent::tools::read_file_sends_a_question_about_change_to_a_token_it_can_compare`
+
+<a id="READ-7"></a>
+### READ-7: a read carries a token that differs once the file has been written
+
+Every read the planner is shown comes back with a change token: the file's size and modification time
+hashed together into fixed-width hex. Of the **whole file** rather than of the window returned, so a
+page and a whole read of the same file carry the same token and asking for less of a file is not
+mistaken for the file changing.
+
+**Opaque, because the planner has no clock.** It is told today's date and told not to ask a program
+for the time, which [run.md](run.md#RUN-18) states, so a token an hour could be read out of would
+invite exactly the invented time that rule exists to prevent. Two tokens can be compared and neither
+can be read.
+
+**Shape rather than content.** Nothing derived from the bytes goes into it, which keeps it in the
+class of fact a byte count already belongs to: something the driver may hand over about a file whether
+or not the planner may see inside it. A digest of the contents would be content, and handing a planner
+content-derived bits about a file the trust map quarantines is the thing that arrangement exists to
+prevent. It is also why no dependency was added for this: a cryptographic digest is the wrong tool
+rather than an unavailable one.
+
+**Taken before the bytes are read.** A file written during the read hands back the new content, and a
+token taken afterwards would describe that same new state: the next look would match it and report
+that nothing had happened, with the planner holding content it had never seen a token for. Taken
+first, the token describes a state at or before the content, so the next look differs and reports a
+change that did happen.
+
+**Not an integrity claim, and it must not be described as one.** A write restoring the same bytes
+moves the token, and a filesystem that leaves a modification time alone hides a change from it. What
+it answers is whether the file looks written-to since the last look, which is the question a planner
+asked to say when something changes actually has. [READ-6](#READ-6) requires the description to say
+both limits.
+
+**A slot fill does not carry it.** What a slot holds is the file's text, for a processor to work on or
+a write to put back, so a note about the file is not part of it. The token is for the planner, which
+is the one component that has to compare one look with another.
+
+`verified-by: bravebot_agent::workspace::two_reads_of_an_untouched_file_carry_the_same_change_token`
+`verified-by: bravebot_agent::workspace::a_written_file_carries_a_different_change_token`
+`verified-by: bravebot_agent::workspace::the_change_token_carries_no_time_the_planner_could_read`
+`verified-by: bravebot_agent::turn::a_read_hands_the_planner_a_token_that_moves_when_the_file_does`
+`verified-by: bravebot_agent::turn::a_read_of_an_empty_file_still_carries_a_token`
+`verified-by: bravebot_agent::tools::a_slot_is_filled_with_the_file_and_a_read_also_carries_its_token`
