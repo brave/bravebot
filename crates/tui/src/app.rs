@@ -1423,7 +1423,8 @@ pub fn handle_paste(session: &mut Session, text: &str) -> Action {
     // the terminal hands over text and there is none. Said before anything else looks at the
     // text, because an empty paste is no more a drop than it is a prompt.
     if text.is_empty() {
-        session.note_once(t!(paste_arrived_empty));
+        let chord = session.bindings().paste_name();
+        session.note_once(t!(paste_arrived_empty, chord = chord));
         return Action::Paste;
     }
     // A drop reaches the terminal as a paste of the path, so this is where one is recognised.
@@ -3539,7 +3540,8 @@ fn aside_animated(
                 answer: Some(answered.shown),
                 kept: answered.kept.is_some(),
             });
-            session.note(t!(btw_answered));
+            let chord = session.bindings().watch_name();
+            session.note(t!(btw_answered, chord = chord));
         }
         Err(message) => {
             session.end_aside(0);

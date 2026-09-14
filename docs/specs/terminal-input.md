@@ -1307,15 +1307,20 @@ them in, which is nothing a person could predict from what they wrote, so neithe
 
 **The screen names the chord that answers.** `?` lists the keys from the one place they are written
 down (INPUT-13), and the seven rows above are asked of the chord in force rather than spelled out
-there, as are the row saying what brings a stashed line back (INPUT-17) and the scroller's way out
-([SCROLL-7](scroller.md#SCROLL-7)). Where a clause of this spec or another names one of the seven, it
-names the default.
+there. So is every other line that names one: the row saying what brings a stashed line back
+(INPUT-17), the border while an older prompt is being walked back to (INPUT-31), the keys under the
+search (INPUT-19), the hint saying there is something to watch, the note left where a picture on the
+clipboard needs a key of its own, and the scroller's way out
+([SCROLL-7](scroller.md#SCROLL-7)). A translated line names the chord by taking it as an argument, so
+no catalog has to be revisited when a default moves. Where a clause of this spec or another names one
+of the seven, it names the default.
 
 **Why.** A list is worth having only where it is right, and a person reads it at the moment a key
 they pressed did nothing. Keeping a second copy for the defaults is the same list twice: the copy
 `?` was drawn from had already stopped saying that Ctrl-S searches as well (INPUT-31), and nothing
 on the screen would have shown it. The scroller's way out named Ctrl-C in the keys and again in the
-meaning beside them, which reads as two different presses.
+meaning beside them, which reads as two different presses. A sentence with the chord written into it
+is worse than either, because the words around it are the reason somebody believes it.
 
 `verified-by: bravebot_tui::keybindings::parses_hyphen_and_plus_delimiters`
 `verified-by: bravebot_tui::keybindings::reserved_keys_are_rejected`
@@ -1334,6 +1339,9 @@ meaning beside them, which reads as two different presses.
 `verified-by: bravebot_tui::render::the_stashed_line_names_the_custom_stash_chord`
 `verified-by: bravebot_tui::render::the_help_names_the_chord_the_scroller_was_opened_with`
 `verified-by: bravebot_tui::render::the_help_names_every_key_that_closes_the_scroller`
-`verified-by: bravebot_tui::render::no_shortcut_row_runs_past_the_edge`
+`verified-by: bravebot_tui::render::how_to_search_the_prompts_is_said_where_somebody_would_look`
+`verified-by: bravebot_tui::history_search::the_keys_under_the_search_name_the_chord_that_narrows_it`
+`verified-by: bravebot_tui::render::the_row_that_says_what_the_turn_is_doing_leaves_the_key_to_the_hint_line`
+`verified-by: bravebot_tui::render::a_picture_on_the_clipboard_says_which_key_carries_it`
 `verified-by: bravebot_tui::app::custom_keybindings_route_actions_and_old_chords_are_ignored`
 `verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`

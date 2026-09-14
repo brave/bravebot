@@ -2336,13 +2336,16 @@ fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
         // prompt is being shown is what only this row says, so it is the part that stays.
         let room = area.width.saturating_sub(2) as usize;
         let taken = wrap::display_width(&position);
+        let search = t!(
+            input_history_search,
+            chord = session.bindings().history_name()
+        );
         let ways_in = [
             format!(
-                " {}  ·  {} ",
-                t!(input_history_search),
-                t!(input_history_scope)
+                " {search}  ·  {} ",
+                t!(input_history_scope, chord = session.bindings().stash_name())
             ),
-            format!(" {} ", t!(input_history_search)),
+            format!(" {search} "),
         ]
         .into_iter()
         .find(|title| taken + wrap::display_width(title) <= room);
@@ -2835,7 +2838,11 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // no delegate has a key that works and, counted the other way, no line saying so.
     let watchable = match session.watchable().len() {
         0 => String::new(),
-        count => t!(watching_hint, count = count).to_string(),
+        count => t!(
+            watching_hint,
+            chord = session.bindings().watch_name(),
+            count = count
+        ),
     };
 
     // Not a list of bindings any more. Every one of them, with what it does, is a `?` away, which
@@ -2941,7 +2948,10 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     if session.image_on_clipboard {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "image on clipboard  ·  ctrl-v to paste  ",
+                format!(
+                    "image on clipboard  ·  {} to paste  ",
+                    session.bindings().paste_name()
+                ),
                 Style::default().fg(theme::brand_primary()),
             )))
             .alignment(Alignment::Right),
@@ -3668,6 +3678,18 @@ mod tests {
             assert!(
                 hint_row_at(&session, 90, 24).contains("ctrl-l"),
                 "the hint line stopped naming the key while a delegate was working"
+            );
+
+            // Once and only once wherever the key has been moved to, since the count is what the
+            // line is for and the chord is what makes it worth reading.
+            let mut moved = std::collections::BTreeMap::new();
+            moved.insert("watch".to_string(), "alt-l".to_string());
+            session.adopt_keybindings(&moved);
+            let screen = rendered(&session);
+            assert_eq!(screen.matches("alt-l").count(), 1, "{screen}");
+            assert!(
+                !screen.contains("ctrl-l"),
+                "the hint went on naming the key nothing answers: {screen}"
             );
         }
 
@@ -5127,6 +5149,13 @@ mod tests {
         let output = rendered(&session);
         assert!(output.contains("image on clipboard"), "no hint shown");
         assert!(output.contains("ctrl-v"), "the hint did not name the key");
+
+        // The key it names is the one that carries a picture here, which a settings file can move.
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("paste".to_string(), "alt-v".to_string());
+        session.adopt_keybindings(&moved);
+        let output = rendered(&session);
+        assert!(output.contains("alt-v"), "the hint named the old key");
     }
 
     /// One line, two things that want it. What a copy took is the answer to something the user did
@@ -5540,8 +5569,25 @@ mod tests {
 
         session.recall_older();
         let browsing = rendered_at(&session, 120, 40);
-        for named in [t!(input_history_search), t!(input_history_scope)] {
-            assert!(browsing.contains(named), "{named} is unsaid: {browsing}");
+        for named in [
+            t!(input_history_search, chord = "ctrl-r"),
+            t!(input_history_scope, chord = "ctrl-s"),
+        ] {
+            assert!(browsing.contains(&named), "{named} is unsaid: {browsing}");
+        }
+
+        // And it says the keys in force rather than the keys it shipped with, since a border naming
+        // a chord that no longer answers is worse than a border naming none.
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("history".to_string(), "alt-r".to_string());
+        moved.insert("stash".to_string(), "alt-s".to_string());
+        session.adopt_keybindings(&moved);
+        let browsing = rendered_at(&session, 120, 40);
+        for named in [
+            t!(input_history_search, chord = "alt-r"),
+            t!(input_history_scope, chord = "alt-s"),
+        ] {
+            assert!(browsing.contains(&named), "{named} is unsaid: {browsing}");
         }
     }
 

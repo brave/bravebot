@@ -212,7 +212,10 @@ pub fn draw(frame: &mut Frame, area: Rect, session: &Session) {
 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            format!(" {}", t!(history_search_keys)),
+            format!(
+                " {}",
+                t!(history_search_keys, scope = session.bindings().stash_name())
+            ),
             Style::default().fg(theme::muted()),
         ))),
         layout[3],
@@ -719,5 +722,27 @@ mod tests {
 
         session.scope_history_search();
         assert!(rendered(&session).contains(t!(history_scope_here)));
+    }
+
+    /// The row of keys under the search names the chord that narrows the scope, which is the stash
+    /// chord and moves with it. A search whose own footer names a key it does not answer is a search
+    /// somebody presses that key in and gets nothing from.
+    #[test]
+    fn the_keys_under_the_search_name_the_chord_that_narrows_it() {
+        let mut session = searching(sent());
+        assert!(
+            rendered(&session).contains(&t!(history_search_keys, scope = "ctrl-s")),
+            "{}",
+            rendered(&session)
+        );
+
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("stash".to_string(), "alt-s".to_string());
+        session.adopt_keybindings(&moved);
+        assert!(
+            rendered(&session).contains(&t!(history_search_keys, scope = "alt-s")),
+            "{}",
+            rendered(&session)
+        );
     }
 }

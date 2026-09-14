@@ -237,7 +237,7 @@ history-scope-everywhere = partout
 history-scope-here = ce projet
 history-search-placeholder = Filtrer l'historique…
 history-search-keys =
-    ↑↓ pour se déplacer  ·  Entrée pour utiliser  ·  ctrl-s pour la portée  ·  Échap pour annuler
+    ↑↓ pour se déplacer  ·  Entrée pour utiliser  ·  { $scope } pour la portée  ·  Échap pour annuler
 history-search-nothing-matches = aucune correspondance
 history-search-more-lines =
     { $count ->
@@ -250,8 +250,8 @@ history-age-hours = il y a { $count } h
 history-age-days = il y a { $count } j
 history-age-months = il y a { $count } mois
 input-history-position = Historique { $index }/{ $total }
-input-history-search = ctrl-r pour rechercher
-input-history-scope = ctrl-s ce projet
+input-history-search = { $chord } pour rechercher
+input-history-scope = { $chord } ce projet
 resume-heading = Reprendre une session
 resume-search-placeholder = Rechercher…
 resume-keys =
@@ -693,7 +693,7 @@ loop-not-armed-under-a-goal =
 
 paste-arrived-empty =
     ce collage est arrivé vide : le terminal ne transmet que du texte, une image demande
-    donc ctrl-v
+    donc { $chord }
 paste-not-a-command = une image n'est pas une commande : quittez le mode shell pour en coller une
 paste-too-large = cette image fait { $size }, et un collage en porte au plus { $limit }
 paste-nothing-on-clipboard = il n'y a rien à coller dans le presse-papiers
@@ -722,7 +722,7 @@ turn-ended-unexpectedly = le tour s'est terminé de façon inattendue
 btw-needs-a-question = /btw prend la question à poser, que la conversation ne lira pas
 btw-uninterruptible = la question ne peut pas être interrompue ; elle prend une requête
 btw-ended-unexpectedly = la question s'est terminée de façon inattendue
-btw-answered = demandé à côté du travail, et répondu là ; ctrl-l l'ouvre à nouveau
+btw-answered = demandé à côté du travail, et répondu là ; { $chord } l'ouvre à nouveau
 btw-failed = la question n'a pas pu recevoir de réponse : { $problem }
 
 
@@ -791,4 +791,4 @@ watching-calls = { $count ->
 # Dit sur la ligne du bas une fois que la vue a quelque chose a ouvrir, la seule ligne qui survit
 # au tour qui l'a dessinee. Le compte y est car une touche sans rien derriere ne vaut pas la
 # peine. Delegues et commandes sont comptes ensemble, une seule touche ouvrant la liste des deux.
-watching-hint = ctrl-l { $count } a ouvrir
+watching-hint = { $chord } { $count } a ouvrir
