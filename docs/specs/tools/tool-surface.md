@@ -23,13 +23,13 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 |---|---|---|---|
 | [`read_file`](read-file.md) | `path`, `path_ref`, `offset`, `limit` | none | the lines, or a reference |
 | [`list_files`](list-files.md) | `directory`, `pattern`, `depth` | none | the paths, or a reference per entry |
-| [`search`](search.md) | `pattern`, `directory`, `include`, `offset` | none | matching lines, or a reference |
-| [`lsp`](lsp.md) | `operation`, `path`, `line`, `character` | none | locations, with their text shown or referenced |
+| [`search`](search.md) | `pattern`, `directory`, `include`, `offset`, `case_sensitive` | none | matching lines, or a reference |
+| [`lsp`](lsp.md) | `operation`, `path`, `line`, `character`, `query` | none | locations, with their text shown or referenced |
 | [`write_file`](write-file.md) | `path`, `path_ref`, `contents_ref` | `contents` | confirmation |
 | [`edit_file`](edit-file.md) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | confirmation |
 | [`spawn_processor`](spawn-processor.md) | `reads`, `about` | `instruction` | a reference |
 | [`spawn_agent`](spawn-agent.md) | `kind` | `task`, `each` | one report per delegate |
-| [`run`](run.md) | every stage's program and arguments, `directory` | standard input | a reference |
+| [`run`](run.md) | every stage's program and arguments, `directory`, `background`, `deadline_seconds` | standard input | a reference |
 | [`read_output`](read-output.md) | the reference naming the result | none | the bytes, if a person allows it |
 | [`job_output`](run.md#RUN-15) | `job`, `kill` | none | what it has printed since the last look |
 | [`fetch_url`](fetch-url.md) | `url` | none | a reference |
@@ -40,6 +40,12 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 
 Reads return content when it is trusted and a reference when it is not. Writes are silent or shown
 according to the trust map.
+
+A flag or a number that shapes a call is routing rather than content: nothing carries it anywhere, so
+it is on the same footing as the fields beside it and must be trusted and public. The driver reads
+one off the call as the JSON literal it is, since a literal names nothing and holds no text, and
+there is nothing in it to promote or to endorse. A routing *string* does name something, and none is
+ever read straight off the call: a gate in the policy layer is what hands it over.
 
 `lsp` is the one tool whose result is split across both footings rather than being one or the other:
 a location is structure and is reported whatever the trust map says, while the text at that location

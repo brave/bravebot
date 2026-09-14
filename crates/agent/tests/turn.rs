@@ -7297,6 +7297,73 @@ fn a_promoted_skill_name_is_recorded_as_the_models_choice() {
     );
 }
 
+/// LSP-1: `workspaceSymbol` names no file, so its query is the whole of what the server is asked
+/// to look for, and a field that decides that is routing. Recording it is what separates the
+/// model's choice from the user's, the same way the operation and the path beside it are recorded.
+/// A call that sends no query records no such choice: the trail holds what was asked of a server,
+/// not whatever the arguments happened to carry.
+#[test]
+fn a_symbol_query_is_recorded_as_the_models_choice() {
+    let scratch = Scratch::new("lsp-query-promotion");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "lsp",
+            r#"{"operation":"workspaceSymbol","query":"Capability"}"#,
+        ),
+        tool_request(
+            "lsp",
+            r#"{"operation":"goToDefinition","path":"notes.txt","line":1,"character":1,"query":"Capability"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find where Capability is declared"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let recorded = sink
+        .events()
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                Event::GatePassed { gate: "promote", detail } if detail.contains("lsp.query")
+            )
+        })
+        .count();
+    assert_eq!(
+        recorded, 1,
+        "the whole-tree question's query is the choice to record, and the positional call's is not"
+    );
+
+    // No server is running in a scratch workspace, so neither question reaches one, and each refusal
+    // names its own call. That is what pins the promotion to the call that sent a query rather than
+    // to the one whose arguments merely held it.
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("no server is running yet"),
+        "not the workspaceSymbol call: {second}"
+    );
+    let third = received.recv().expect("third request");
+    assert!(
+        third.contains("no language server is configured for"),
+        "not the goToDefinition call: {third}"
+    );
+}
+
 /// The property the feature rests on. AGENTS.md is instructions, and instructions from a
 /// directory nobody vouched for are exactly what this design refuses to put in front of the
 /// planner. There is no wrapper that makes it safe, so it is left out.

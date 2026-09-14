@@ -15,8 +15,8 @@ guards:
 ## Scope
 
 Asking a language server where a symbol is defined, what refers to it, and what it is. The
-operation, the file, and the position are routing; there are no content arguments. The result is a
-set of locations, or a refusal.
+operation, the file, the position, and the query a whole-tree question carries are routing; there
+are no content arguments. The result is a set of locations, or a refusal.
 
 Confinement of the server process is [sandboxing.md](../sandboxing.md). Why the built-in tools are
 not MCP servers is [mcp.md](../mcp.md), and this tool is native for exactly that reason: a call
@@ -26,8 +26,9 @@ whose parts must be labelled separately cannot go behind an opaque boundary.
 
 [TOOL-2](tool-surface.md#TOOL-2) asks what a tool's routing field is, and refuses the tool if a
 person could not approve that field alone. An LSP request answers easily: an operation from a fixed
-set, a path, and two integers. There is no payload beside it, so unlike a shell string there is
-nothing in the call that is destination and content at once.
+set, a path, two integers, and a symbol name where the question names no file. There is no payload
+beside it, so unlike a shell string there is nothing in the call that is destination and content at
+once.
 
 The hard part is not the request. It is that the **answer** is a set of paths and line numbers read
 out of files nobody vouched for, and a path is the one thing routing is made of. That is what
@@ -38,11 +39,16 @@ out of files nobody vouched for, and a path is the one thing routing is made of.
 <a id="LSP-1"></a>
 ### LSP-1: the whole request is routing, and the operation is a closed set
 
-`operation`, `path`, `line` and `character` are all `(T,pub)`. The operation is one of a fixed list
-this repository knows: a definition, the references to a symbol, hover text, the symbols in a
-document, the symbols in the workspace, implementations of a trait, and the two directions of a call
-hierarchy. A name not on the list is refused rather than forwarded, so what the server is asked is
-decided here and never by whatever a request happened to contain.
+`operation`, `path`, `line`, `character` and `query` are all `(T,pub)`. The operation is one of a
+fixed list this repository knows: a definition, the references to a symbol, hover text, the symbols
+in a document, the symbols in the workspace, implementations of a trait, and the two directions of a
+call hierarchy. A name not on the list is refused rather than forwarded, so what the server is asked
+is decided here and never by whatever a request happened to contain.
+
+`workspaceSymbol` names no file, and its `query` is the whole of what the server is asked to look
+for. A field that decides that is routing, so it is promoted and recorded the way a path is. It is
+read for that operation alone, since a promotion recorded against a call that sends no query would
+put a choice in the trail that nobody made.
 
 There are no content arguments at all, which makes this the only tool besides `read_file` and
 `list_files` whose call carries nothing untrusted.
@@ -57,6 +63,7 @@ diff.
 `verified-by: bravebot_lsp::protocol::an_operation_outside_the_closed_set_is_refused`
 `verified-by: bravebot_lsp::protocol::every_offered_operation_is_a_read`
 `verified-by: bravebot_agent::lsp::the_position_is_routing_and_must_be_trusted`
+`verified-by: bravebot_agent::turn::a_symbol_query_is_recorded_as_the_models_choice`
 `verified-by: bravebot_core::policy::routing_refuses_untrusted_values`
 
 <a id="LSP-2"></a>

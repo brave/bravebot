@@ -10,9 +10,10 @@ governs:
 
 ## Scope
 
-Finding lines in the workspace that match a pattern. `pattern`, `directory`, `include` and `offset`
-are routing; `case_sensitive` is a property of the call rather than of anything read. There are no
-content arguments. The result is the matching lines, or a reference.
+Finding lines in the workspace that match a pattern. `pattern`, `directory`, `include`, `offset` and
+`case_sensitive` are routing: the first three name where to look and what to look for, the offset
+names which page of the matches to return, and the flag decides which of the lines there match.
+There are no content arguments. The result is the matching lines, or a reference.
 
 ## Clauses
 
