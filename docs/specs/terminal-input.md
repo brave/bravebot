@@ -548,7 +548,8 @@ One key, read against the line rather than remembered. A line in the box is put 
 emptied; an empty box is where a line put away earlier comes back, with the caret at its end, where
 somebody carries on typing. There is one place to put a line, so a second line put away replaces the
 first, and a line that comes back is no longer there to come back again: the next press on the empty
-box it left has nothing to do, and says nothing.
+box it left has nothing to do, and says nothing. A prompt walked back to is the one line the key does
+not put away, and means the search there instead (INPUT-31).
 
 **The words travel and the mode does not.** What is put away is what the user typed, and `!` is a
 mode rather than a character (INPUT-2, [shell-mode.md](shell-mode.md)), so it stays where they left
@@ -652,6 +653,11 @@ flight, which is aimed at something else entirely and costs the answer being wri
   behind a `tmux` or `screen` configured to keep flow control, or an ssh session that does, the key
   can be taken before it arrives, and then it does nothing here. Nothing is lost when that happens,
   since the line stays in the box.
+- **A prompt walked back to is the one line that cannot be put away.** The key opens the search there
+  instead (INPUT-31), so parking a recalled prompt while something else is typed is a thing the stash
+  slot no longer does. What it buys is the search being one key from the walk, which is what makes the
+  prompt cheap to reach again: a word typed into the search rather than the walk over again. Touching
+  the line is the way to the old meaning, an edit being what ends the walk (INPUT-17).
 - **A selection is one stretch of the line and never a column of it.** Vi's block-wise selection,
   which reaches the same columns of several rows, has no equivalent here: what `v` and `V` mark out
   runs from one position to another (INPUT-30). The cost is a person's muscle memory for one chord,
@@ -669,15 +675,17 @@ flight, which is aimed at something else entirely and costs the answer being wri
 
 Ctrl-R opens a search over the prompt history, at rest and while a turn is running, and closes it
 again along with Escape and Ctrl-C. It opens on the newest prompt, seeded with whatever single line
-was in the box. While it is open every letter narrows the list rather than reaching the box, and
-each word typed has to appear somewhere in a prompt for it to be offered; the arrows walk the
-matches, Ctrl-S swaps between every prompt and the ones sent from this workspace, and backspacing
-past the start closes the search as the scroller's does. The chord is on the key list (INPUT-13),
-and in the border of the box while an older prompt is being walked back to, which is the moment
-somebody has shown they want one.
+the person typed into the box, and with nothing where that line is a prompt walked back to: the
+history put that one there whole, and a search looking for it answers with it alone. While it is open
+every letter narrows the list rather than reaching the box, and each word typed has to appear
+somewhere in a prompt for it to be offered; the arrows walk the matches, Ctrl-S swaps between every
+prompt and the ones sent from this workspace, and backspacing past the start closes the search as the
+scroller's does. The chord is on the key list (INPUT-13), and in the border of the box while an older
+prompt is being walked back to, which is the moment somebody has shown they want one, except where
+that border is too narrow to hold it beside which prompt is being shown (INPUT-31).
 
 Enter puts the prompt under the cursor into the box. It does not send it, and it replaces what was
-in the box, that line being what the search was seeded with.
+in the box, that line being what the search was seeded with or the prompt the walk put there.
 
 **Why.** Up walks one prompt at a time, which is the right way in when the wanted prompt is the last
 one and no way in at all when it is the hundredth: what a person remembers of an old prompt is a
@@ -695,6 +703,8 @@ the search before they reach the turn, so the key that closes it leaves the turn
 press that stops the turn is the next one.
 
 `verified-by: bravebot_tui::app::ctrl_r_searches_the_prompts_already_sent`
+`verified-by: bravebot_tui::app::the_search_starts_from_what_was_already_typed`
+`verified-by: bravebot_tui::app::the_search_does_not_start_from_a_prompt_walked_back_to`
 `verified-by: bravebot_tui::render::how_to_search_the_prompts_is_said_where_somebody_would_look`
 `verified-by: bravebot_tui::app::the_prompts_can_be_searched_while_a_turn_is_running`
 `verified-by: bravebot_tui::app::the_search_answers_the_stop_keys_before_the_turn_does`
@@ -1213,3 +1223,34 @@ Block-wise selection is a known cost rather than a clause.
 `verified-by: bravebot_tui::render::the_selection_is_drawn_over_the_whole_stretch`
 `verified-by: bravebot_tui::render::a_selection_across_rows_is_drawn_on_all_of_them`
 `verified-by: bravebot_tui::render::the_ordinary_box_draws_no_selection`
+
+<a id="INPUT-31"></a>
+### INPUT-31: Ctrl-S on a prompt walked back to searches this workspace instead
+
+While the box holds a prompt reached by walking back through the history, Ctrl-S opens the search over
+the prompts sent, with the scope already narrowed to this workspace: the scope the search's own Ctrl-S
+selects (INPUT-19). It is that search in every other respect, opened on the newest match with nothing
+typed into it, closed the same way, and the wide list is one more press of the same key from inside it.
+On any other line the key still puts the line away or brings one back (INPUT-17), and a line put away
+earlier is still there afterwards. The border of the box names this chord beside Ctrl-R while an older
+prompt is being walked back to, and gives the two up one at a time where the row will not hold them
+beside which prompt is being shown: this one first, then the search over every prompt.
+
+**Why.** Pressing Up says the wanted prompt is an old one, and of the old ones the prompts sent from
+the workspace somebody is sitting in are the likelier answer. Up walks one prompt at a time, which is
+no way to reach the hundredth, so a person who has pressed it several times is on a path with no end
+and this is the key that takes them off it. The list it opens on has to be worth reading for any of
+that to hold, which is what nothing being typed into it is for (INPUT-19).
+
+The key means this here without being remembered, which is what makes it one key rather than two: the
+line in the box is one the history put there rather than one the person typed, and the history holds it
+already, so putting it away stores a second copy of something stored.
+
+Which prompt is being shown is what only that row says, so it is what the row keeps, and the narrower
+scope goes before the search it narrows because that search is the one also written down on the key
+list. A title drawn anyway lands on top of the position and cuts it mid-word, which reads as a
+rendering fault rather than as a border with no room for all of it.
+
+`verified-by: bravebot_tui::app::ctrl_s_searches_this_workspace_while_an_older_prompt_is_shown`
+`verified-by: bravebot_tui::render::how_to_search_the_prompts_is_said_where_somebody_would_look`
+`verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`

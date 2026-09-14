@@ -251,6 +251,7 @@ history-age-days = il y a { $count } j
 history-age-months = il y a { $count } mois
 input-history-position = Historique { $index }/{ $total }
 input-history-search = ctrl-r pour rechercher
+input-history-scope = ctrl-s ce projet
 resume-heading = Reprendre une session
 resume-search-placeholder = Rechercher…
 resume-keys =

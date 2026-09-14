@@ -4945,9 +4945,13 @@ impl Session {
 
     /// Open the search over the prompt history.
     ///
-    /// Seeded with whatever is in the box, when that is one line of it: somebody who typed half a
-    /// prompt and then reached for the history has already said what they are looking for, and a
-    /// pasted paragraph is not that. The line stays in the box, so leaving puts nothing back.
+    /// Seeded with whatever is in the box, when that is one line the person typed: somebody who
+    /// typed half a prompt and then reached for the history has already said what they are looking
+    /// for, and a pasted paragraph is not that. The line stays in the box, so leaving puts nothing
+    /// back.
+    ///
+    /// A prompt walked back to is not a line they typed, and seeding with it leaves a search whose
+    /// only match is the prompt already in the box: the walk again, one keystroke wider.
     ///
     /// Nothing to search is nothing to open. A panel over the transcript saying a person has never
     /// sent a prompt is a mode they then have to get out of.
@@ -4955,12 +4959,25 @@ impl Session {
         if self.history.is_empty() {
             return false;
         }
-        let seed = match self.input.contains('\n') {
-            true => String::new(),
-            false => self.input.trim().to_string(),
+        let typed = !self.input.contains('\n') && !self.history.is_browsing();
+        let seed = match typed {
+            true => self.input.trim().to_string(),
+            false => String::new(),
         };
         self.history_search = Some(crate::history_search::Search::looking_for(seed));
         true
+    }
+
+    /// Open it with the scope already narrowed to the prompts sent from this workspace.
+    ///
+    /// The way in from a prompt walked back to. Somebody who has walked back at all has said the
+    /// prompt they want is an old one, and the workspace they are in is the narrower question; the
+    /// wide list is one more press of the same key from there.
+    pub fn open_history_search_here(&mut self) {
+        self.open_history_search();
+        if let Some(search) = &mut self.history_search {
+            search.narrow();
+        }
     }
 
     /// Close it, leaving the box as it was.
