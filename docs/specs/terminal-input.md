@@ -10,6 +10,7 @@ governs:
   - crates/tui/src/history_search.rs
   - crates/tui/src/vim.rs
   - crates/tui/src/config_prompt.rs
+  - crates/tui/src/keybindings.rs
 ---
 
 ## Scope
@@ -1262,3 +1263,36 @@ rendering fault rather than as a border with no room for all of it.
 `verified-by: bravebot_tui::app::ctrl_s_searches_this_workspace_while_an_older_prompt_is_shown`
 `verified-by: bravebot_tui::render::how_to_search_the_prompts_is_said_where_somebody_would_look`
 `verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`
+
+<a id="INPUT-28"></a>
+### INPUT-28: customizable keybindings and non-remappable safety keys
+
+Actions triggered by terminal control chords can be configured in settings. A binding maps an
+action name to a chord specification such as `ctrl-s`, `ctrl-x`, or `alt-o`. Supported configurable
+actions include:
+
+- `editor` (default: `ctrl-g`): open external editor for the current prompt.
+- `watch` (default: `ctrl-l`): watch background delegate or inspect running actions.
+- `scroller` (default: `ctrl-o`): open the transcript scroller.
+- `history` (default: `ctrl-r`): open prompt history search.
+- `stash` (default: `ctrl-s`): stash the current input line or bring it back.
+- `trail` (default: `ctrl-t`): toggle turn execution trail visibility.
+- `paste` (default: `ctrl-v`): paste from clipboard.
+
+Safety invariants: fundamental terminal control keys cannot be remapped. In particular, `ctrl-c`
+(stop and exit), `escape` (cancel/clear), `enter` (submit prompt), and bare typing characters are
+reserved and reject reassignment.
+
+If a configured chord conflicts with a reserved key, an invalid chord format, or another action's
+chord, the conflicting actions fall back to their default bindings.
+
+Dynamic rendering: the shortcut listing (`?`) and prompt stashed indicators dynamically reflect the
+active chord names rather than hardcoded default labels.
+
+`verified-by: bravebot_tui::keybindings::tests::parses_hyphen_and_plus_delimiters`
+`verified-by: bravebot_tui::keybindings::tests::reserved_keys_are_rejected`
+`verified-by: bravebot_tui::keybindings::tests::invalid_chord_falls_back_to_default`
+`verified-by: bravebot_tui::keybindings::tests::conflicting_chords_fall_back_to_defaults`
+`verified-by: bravebot_tui::keybindings::tests::custom_chords_override_defaults`
+`verified-by: bravebot_tui::render::the_shortcut_list_reflects_custom_keybindings`
+`verified-by: bravebot_tui::render::the_stashed_line_names_the_custom_stash_chord`
