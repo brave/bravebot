@@ -640,8 +640,9 @@ nothing until you have opened that file.
 - **A fallback to a real shell when compilation fails.** The single change that voids this spec.
 - **Aliases and profile loading.** A line's meaning must be in the line. Shell mode loads the user's
   syntax because a person typed it; nothing here does.
-- **Confinement of children.** Out of scope and unchanged: programs run with the access the user's
-  own shell would give them. That remains issue #4.
+- **Confinement of children.** Out of scope and unchanged by this spec: programs run with the access
+  the user's own shell would give them, and what one may reach is
+  [../sandboxing.md](../sandboxing.md)'s.
 - **`git` in the audited table.** [CMDLINE-8](#CMDLINE-8).
 
 ## Open questions

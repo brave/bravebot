@@ -123,9 +123,10 @@ mean the server is temporarily unable are treated as retryable.
   requests, and the host rules a `fetch_url` call is held to do not reach them. What stands in front
   of the path is the prompt that asks before a program runs and a `Bash` deny rule
   ([permissions.md](permissions.md)), both of which refuse a command rather than govern its traffic.
-  Operating-system confinement would govern it, and is applied to the stdio servers it exists for
-  rather than to a program somebody asked for ([sandboxing.md](sandboxing.md)); whether to confine
-  those is issue #4.
+  Operating-system confinement can govern traffic, and is applied to the stdio servers it exists for
+  rather than to a program somebody asked for. Confining one is decided in
+  [sandboxing.md](sandboxing.md) as a bound on the paths it may reach and not on its egress, because
+  a profile cannot tell an approved `git push` from an exfiltration, so this cost stands either way.
 
 - **Two pairs of phases share a bound rather than having one each.** The transport gives a phase
   the earliest of its own deadline and those of the phases before it, so a bound tight enough to

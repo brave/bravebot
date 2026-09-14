@@ -12,10 +12,10 @@ governs:
 ## Scope
 
 Operating-system confinement for processes that run code we did not write, which today means the
-stdio servers in [mcp.md](mcp.md). What this is *not* for is the rest of the system: a processor is
-a model call made by our own code, and a program the user asked for runs with the access their own
-shell would give it. Confining our own code would fence in the trusted half and leave the untrusted
-half free.
+stdio servers in [mcp.md](mcp.md). What this is *not* for is our own code: a processor is a model
+call made by our own code, and confining that would fence in the trusted half and leave the
+untrusted half free. A program the user asked for runs with the access their own shell would give
+it, and what confining one would mean is the last section here.
 
 Confinement is an operating-system boundary. Everywhere else in these specs the boundary is the
 capability set and the label on a value, which is a different mechanism answering a different
@@ -100,3 +100,68 @@ road.
 `verified-by: bravebot_cli::main::doctor_names_the_confinement_level_in_force`
 `verified-by: bravebot_cli::main::doctor_says_whether_the_kernel_enforces_network_denial`
 `verified-by: bravebot_cli::main::confinement_that_could_not_be_established_fails_the_run`
+
+## Programs a person asked for
+
+A program `run` ([tools/run.md](tools/run.md)) starts is unconfined: it gets the access the user's
+own shell would give it, and the reason `run` gives is that `git push` needs `~/.ssh` and the
+programs somebody might ask for cannot be listed in advance. The decision is that confinement is
+added, and that what it bounds is the filesystem: a program is held to the paths the plan a person
+endorsed accounts for, and not to whatever else it could open. Nothing in this section is in force.
+A `run` profile is what puts it in force, and the clauses above are what such a profile is then held
+to.
+
+**The grant is the plan, not the prompt.** A command line compiles to a plan carrying its read set,
+its write set and each stage's resolved binary, and that plan is what a person is shown and what an
+endorsement binds to ([tools/command-line.md](tools/command-line.md)). The profile is built from the
+plan, so a line nobody is asked about gets the same one as a line somebody answered: a command
+already answered this session, one a settings rule stops the asking for, and a line under the mode
+that answers every permission question are each held to what their own plan accounts for. Nothing a
+program prints reaches the profile, and no value the model supplied chooses one beyond the plan a
+person could read.
+
+**The base is reviewed as code.** The loader, the system directories and a toolchain are shown by no
+prompt, so they are a fixed part of the profile rather than a grant. That base holds no credential
+directory, which is the whole of what this buys: `~/.ssh/id_rsa` and `~/.aws/credentials` are out of
+reach of a program whose plan never named them.
+
+**A credential is a directory a person names.** A confined `git push` is refused, because no plan
+names `~/.ssh`, and it stays refused until a person names that directory themselves. The surfaces
+for that exist: `/add-dir` in a session, `--add-dir` on the command line, and
+`additionalDirectories` in a settings file, which is put as a question of its own when the session
+opens ([trust-map.md](trust-map.md), [cli.md](cli.md), [permissions.md](permissions.md)). A rule
+about which commands to ask about is not one of them, because such a rule stops a question rather
+than extending reach. The cost is real: `run git push` works today and would not until somebody
+names `~/.ssh` once. What that buys is a key handed over deliberately rather than readable by every
+program that runs. Widening never follows from the refusal itself: the denial reaches this process
+as an exit status, and the account of which path was wanted is in the program's own output, which is
+untrusted content and decides nothing. Nothing grants what a program just failed to reach.
+
+**The network stays open to it.** A profile gates egress as a whole, so it cannot tell an approved
+`git push` or `gh api` from an exfiltration, and the endorsed argv already can. What confinement
+narrows is what a program may read and write, not what it may send: a confined one still sends
+anything inside its grants. The label on what a program prints is untouched, and no grant makes an
+output trusted.
+
+**What has to exist first.**
+
+- A path has to be nameable for a profile without being vouched for. Opening a directory in a
+  session records it as trusted as well as reachable, and the two are deliberately one grant there
+  because either half alone is no use to a tool. A confinement scope wants the reach and not the
+  vouching: naming `~/.ssh` so a push can sign must not make a key file's contents trusted content.
+  The command-line form already separates them and the interactive one does not.
+- The base has to be written down. A profile as generated here denies everything and then names what
+  a program may reach, on both backends, so "everything except this key" is not expressible and the
+  base has to carry what an ordinary build reads.
+- The macOS backend clears the environment of a process it wraps. A stage receives the environment
+  this process holds, less the credentials this agent authenticates with, so a `run` profile needs a
+  backend that leaves the rest of that environment alone.
+- The Linux backend targets the first Landlock ABI, which carries no right for renaming or linking a
+  file into another directory, and a ruleset that does not handle that right denies the operation
+  outright. Writing a temporary file and renaming it into place is what a compiler and a package
+  manager do. The ABI carrying the right raises the oldest kernel this backend runs on from 5.13 to
+  5.19, and asking for it best-effort on an older one drops it again silently, so which kernels are
+  covered is part of this rather than a detail of it.
+- Windows has published binaries and no backend, and [SANDBOX-1](#SANDBOX-1) refuses to run a
+  process it cannot confine, so confinement there refuses every program until that platform has one
+  (issue #88). Running unconfined where no backend exists is the degradation that clause forbids.
