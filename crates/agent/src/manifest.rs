@@ -65,7 +65,7 @@
 //! conversation to resume: the planner is never shown a result, so there is nothing for a second
 //! turn to continue. A manifest run is one run, start to finish.
 
-use bravebot_aichat::protocol::{ChatRequest, Effort, Message};
+use bravebot_aichat::protocol::{Cached, ChatRequest, Effort, Message};
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet};
@@ -594,6 +594,7 @@ struct Planned {
     model: String,
     tokens: u64,
     output_tokens: u64,
+    cached: Cached,
     /// How long the two planning calls kept the run waiting.
     ///
     /// Planning is most of what a short manifest run spends, and a figure that started at
@@ -723,6 +724,7 @@ fn plan<S: Sink, R: Reporter>(
 
     let mut tokens = 0u64;
     let mut output_tokens = 0u64;
+    let mut cached = Cached::default();
     let mut waited = std::time::Duration::ZERO;
     let mut model = String::new();
     let chosen = task.model.as_deref().unwrap_or(&config.default_model);
@@ -742,6 +744,7 @@ fn plan<S: Sink, R: Reporter>(
         &history,
         &mut tokens,
         &mut output_tokens,
+        &mut cached,
         &mut waited,
         &mut model,
     )?;
@@ -771,6 +774,7 @@ fn plan<S: Sink, R: Reporter>(
         &history,
         &mut tokens,
         &mut output_tokens,
+        &mut cached,
         &mut waited,
         &mut model,
     )?;
@@ -800,6 +804,7 @@ fn plan<S: Sink, R: Reporter>(
         model,
         tokens,
         output_tokens,
+        cached,
         inference: waited,
         clean: policy.finish(),
     })
@@ -828,6 +833,7 @@ fn ask<S: Sink, R: Reporter>(
     history: &Conversation,
     tokens: &mut u64,
     output_tokens: &mut u64,
+    cached: &mut Cached,
     waited: &mut std::time::Duration,
     model: &mut String,
 ) -> Result<String, TurnError> {
@@ -859,6 +865,7 @@ fn ask<S: Sink, R: Reporter>(
     *waited += asked_at.elapsed();
     *tokens += completion.usage.total();
     *output_tokens += completion.usage.completion_tokens;
+    cached.add(completion.usage.cached);
     *model = completion.model;
 
     let labelled = policy
@@ -895,6 +902,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         model,
         mut tokens,
         mut output_tokens,
+        mut cached,
         inference: planning_took,
         clean: planning_was_clean,
     } = planned;
@@ -1017,6 +1025,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
             Ok(done) => {
                 tokens += done.tokens;
                 output_tokens += done.output_tokens;
+                cached.add(done.cached);
                 if let Some(answered) = done.answer {
                     shown = answered.shown;
                     answer = Some(answered.value);
@@ -1067,6 +1076,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         programs,
         tokens,
         output_tokens,
+        cached,
         context_tokens: 0,
         premium,
         // A manifest run has no loop to pace and is offered no way to ask for one.
@@ -1084,6 +1094,7 @@ struct Done {
     changes: Vec<crate::diff::Change>,
     tokens: u64,
     output_tokens: u64,
+    cached: Cached,
     /// How long the step waited on the model. Only a transform waits.
     inference: std::time::Duration,
     /// What this step answered the user with, where it was the one that answered.
@@ -1313,6 +1324,7 @@ fn run_step<S: Sink, C: Confirmer>(
                 note,
                 tokens: processed.usage.total(),
                 output_tokens: processed.usage.completion_tokens,
+                cached: processed.usage.cached,
                 inference: waited,
                 ..Done::default()
             })

@@ -249,6 +249,11 @@ pub fn run(
                 // less what the model wrote, is what the requests carried.
                 prompt_tokens: outcome.tokens.saturating_sub(outcome.output_tokens),
                 completion_tokens: outcome.output_tokens,
+                // Carried out so the parent's figure covers what its delegates spent as well as
+                // what it spent itself. A turn that hands most of its work to delegates keeps the
+                // same prefix cached across their rounds, and dropping this would report that as a
+                // turn whose cache never hit.
+                cached: outcome.cached,
             },
             inference: Duration::from_millis(outcome.timing.inference_ms),
         },

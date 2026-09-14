@@ -740,7 +740,9 @@ a cache write and nothing else.
 
 **The reported prompt is what was sent, not what was read.** This API states `inputTokens` net of
 the cache and reports the cached tokens beside it, so the three are added back together on the way
-into a `Usage`. Without that a cached round reads as a conversation that shrank while it grew.
+into a `Usage`. Without that a cached round reads as a conversation that shrank while it grew. They
+are also carried through separately, which is what BACKEND-31 requires and the only way anything can
+say whether this clause is working.
 
 **A model that refuses them is not sent them again.** Prompt caching is not something every model
 this backend can reach offers, and one that does not refuses the whole request rather than reading
@@ -849,6 +851,43 @@ would make a file that mentions the block at all speak for names it never named.
 `verified-by: bravebot_config::settings::an_empty_attribution_is_a_choice_of_nothing`
 `verified-by: bravebot_config::settings::an_attribution_name_no_file_wrote_is_unset`
 
+<a id="BACKEND-31"></a>
+### BACKEND-31: a reply reports how much of the prompt the service did not have to read
+
+A reply's usage carries two figures beside the prompt total: how much of the prompt the service
+answered out of its own cache, and how much this request wrote into that cache for the next one to
+read. Both are counted inside the prompt total rather than beside it, so one figure says what a
+round sent and the other two say what it cost. Bedrock states both. An OpenAI-compatible reply
+states the read alone, in `prompt_tokens_details.cached_tokens`, there being no field in that
+protocol for a write. A service stating neither leaves both at zero.
+
+A turn sums them over its rounds, as it sums the total, and a delegate's are added to the turn that
+spawned it.
+
+**Why.** A cached token is charged at a fraction of a fresh one and a written one above it, so the
+prompt total is the one figure that does not move when caching begins working. Two sessions of the
+same length, one whose every breakpoint hit and one whose every breakpoint missed, send an identical
+prompt and differ about tenfold in money and in latency. Without the split, BACKEND-27 is a
+requirement whose effect nothing can observe, and a regression in it costs an order of magnitude
+while every figure reported stays where it was.
+
+**Summed rather than kept per round.** A turn's first round writes the prefix that its later rounds
+read back, so the round that pays and the rounds that profit are different rounds. One round's
+figure reports one or the other.
+
+**Zero is silence, not a miss.** Both figures at zero says a service that reports nothing about a
+cache exactly as much as it says a round whose cache missed, and nothing here distinguishes them.
+Whatever presents these figures presents nothing when they are zero, rather than presenting a miss
+that may not have happened.
+
+`verified-by: bravebot_bedrock::protocol::a_cached_round_is_told_apart_from_one_that_read_the_whole_prompt`
+`verified-by: bravebot_aichat::protocol::the_cache_figure_is_read_out_of_the_details_object`
+`verified-by: bravebot_aichat::protocol::a_usage_object_without_cache_figures_still_parses`
+`verified-by: bravebot_aichat::protocol::a_null_cache_figure_reads_as_silence_rather_than_failing_the_reply`
+`verified-by: bravebot_agent::turn::a_turn_sums_what_its_rounds_read_out_of_the_cache`
+`verified-by: bravebot_agent::turn::a_turn_against_a_server_that_says_nothing_about_a_cache_reports_nothing`
+`verified-by: bravebot_agent::turn::a_turn_counts_what_its_delegates_read_out_of_the_cache`
+
 ## Known costs
 
 - **The effort level is the one field in a Bedrock request that a single provider defines.** The
@@ -893,6 +932,15 @@ would make a file that mentions the block at all speak for names it never named.
   expire during a session, and the tool that holds them is the one the person already signs in
   with. That is a process this code did not write, reading a configuration this code does not
   govern.
+
+- **The aichat endpoint Brave runs reports nothing about a cache, so BACKEND-31 measures nothing
+  there.** That server does not answer `include_usage` with an OpenAI `usage` block at all: it sends
+  a `brave-chat.contentReceipt` carrying `total_tokens` and `trimmed_tokens`, and neither says
+  whether any of the prompt was served from a cache. Whether the service caches, and whether asking
+  it to would be worth anything, is therefore not a question this code can answer from a reply, and
+  both figures stay at the zero BACKEND-31 defines as silence. The field
+  `prompt_tokens_details.cached_tokens` is read for the gateway case, where a server states it,
+  which costs a field and settles nothing about Brave's own endpoint.
 
 - **A gateway credential may be a plaintext string in the settings file.** The shape this block
   borrows has a field for one, and taking the shape means taking the field. Naming a variable is

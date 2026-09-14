@@ -136,6 +136,27 @@ fn tool_request_with_usage(tool: &str, arguments: &str, prompt: u64, completion:
     )
 }
 
+/// A reply whose usage states how much of the prompt the server answered out of its cache.
+fn reply_with_cache(content: &str, prompt: u64, completion: u64, cached: u64) -> String {
+    format!(
+        r#"{{"model":"test-model","usage":{{"prompt_tokens":{prompt},"completion_tokens":{completion},"prompt_tokens_details":{{"cached_tokens":{cached}}}}},"choices":[{{"message":{{"role":"assistant","content":"{content}"}}}}]}}"#
+    )
+}
+
+/// The same, for a round that asks for a tool.
+fn tool_request_with_cache(
+    tool: &str,
+    arguments: &str,
+    prompt: u64,
+    completion: u64,
+    cached: u64,
+) -> String {
+    let escaped = arguments.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(
+        r#"{{"model":"test-model","usage":{{"prompt_tokens":{prompt},"completion_tokens":{completion},"prompt_tokens_details":{{"cached_tokens":{cached}}}}},"choices":[{{"message":{{"role":"assistant","tool_calls":[{{"id":"c1","type":"function","function":{{"name":"{tool}","arguments":"{escaped}"}}}}]}}}}]}}"#
+    )
+}
+
 /// A response asking for two tool calls in one round.
 fn two_tool_requests(first: (&str, &str), second: (&str, &str)) -> String {
     let escape = |a: &str| a.replace('\\', "\\\\").replace('"', "\\\"");
@@ -4622,6 +4643,70 @@ fn token_usage_accumulates_across_rounds() {
     .expect("turn runs");
 
     assert_eq!(outcome.tokens, 460, "rounds were not summed");
+}
+
+/// The turn's total says what its rounds sent, which is the same figure whether the endpoint read
+/// the prompt or answered it out of its cache. Only the split says which, so the turn has to carry
+/// it, and summed over the rounds for the same reason the total is: the round that establishes a
+/// prefix and the rounds that read it back are different rounds.
+#[test]
+fn a_turn_sums_what_its_rounds_read_out_of_the_cache() {
+    let scratch = Scratch::new("cache-split");
+    std::fs::write(scratch.path.join("a.txt"), "body\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_with_cache("read_file", r#"{"path":"a.txt"}"#, 100, 20, 90),
+        reply_with_cache("done", 300, 40, 280),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("read a.txt");
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        outcome.cached.read_tokens, 370,
+        "the rounds' cache reads were not summed"
+    );
+    assert_eq!(outcome.tokens, 460, "the total counts what was sent");
+}
+
+/// A server reporting no cache figures leaves the split at zero, and must not be made to look as
+/// though it reported one: every backend but Bedrock is currently such a server.
+#[test]
+fn a_turn_against_a_server_that_says_nothing_about_a_cache_reports_nothing() {
+    let scratch = Scratch::new("no-cache-split");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with_usage("done", 300, 40)]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("say done");
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(!outcome.cached.any(), "a cache figure was invented");
 }
 
 /// A server that reports no usage must not break a turn, and must not make it look free either.
@@ -11081,6 +11166,54 @@ fn a_delegates_report_reaches_the_planner_that_asked_for_it() {
         "a report from a clean context was quarantined from the planner"
     );
     assert_eq!(outcome.reply_for_display(), "relayed");
+}
+
+/// A delegate's rounds are the spawning turn's spend, and the cache figure travels with them. A turn
+/// that hands most of its work to delegates keeps one prefix cached across their rounds, and a turn
+/// counting only the requests it made itself would report that as a cache that never hit.
+///
+/// Only the delegate's reply states a figure, so what the turn reports is the delegate's alone
+/// however many rounds the parent took while it was working.
+#[test]
+fn a_turn_counts_what_its_delegates_read_out_of_the_cache() {
+    let scratch = Scratch::new("delegate-cache");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-SOMETHING",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
+                ),
+                reply_with("nothing to add while it works"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "SAY-SOMETHING-SHORT",
+            vec![reply_with_cache("REPORTED BACK", 1200, 30, 1100)],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-SOMETHING"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        outcome.cached.read_tokens, 1100,
+        "what the delegate read out of the cache was not counted in the turn"
+    );
 }
 
 /// A delegate is the spawning turn's own work done elsewhere, so the mode goes with it. A session
