@@ -386,6 +386,8 @@ plan-nothing-yet =
     rien n'a encore été lu ni écrit, donc refuser laisse tout en l'état.
 plan-yes = l'exécuter
 plan-no = ne pas l'exécuter
+plan-answer = l'exécuter ? [o/N]
+plan-answer-yes = o
 
 
 ## Approuver un fichier en quarantaine

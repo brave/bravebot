@@ -433,6 +433,10 @@ plan-nothing-yet =
     nothing has been read or written yet, so declining leaves everything as it is.
 plan-yes = run it
 plan-no = don't
+# Where the question is a line on a terminal rather than a panel: what to type, and the one answer
+# that runs the plan. Any other line, and end of input, declines.
+plan-answer = run it? [y/N]
+plan-answer-yes = y
 
 
 ## Vouching for a quarantined file

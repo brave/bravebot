@@ -182,8 +182,15 @@ each run, so remembering an answer would be approving steps nobody has seen.
 Approving a plan is not approving its writes. This mode widens the scope of the precommitment and
 does not replace the gates inside it, so each write is still put to the person as its step reaches it.
 
-Where nobody can be asked the answer is no, as it is everywhere else, so an unattended run stops
-before its first step unless permissions were skipped outright.
+Where nobody can be asked the answer is no, as it is everywhere else. A command typed at a terminal
+is somebody: the plan goes out beside the progress and the answer is read back, which is the one
+question a one-shot answers ([cli.md](cli.md#CLI-8)). Piped or redirected there is nobody, and the
+run stops before its first step unless permissions were skipped outright.
+
+Bypassing approves it, and that is not the standing form ruled out above. A standing answer would
+outlive the run that gave it and cover a plan written afterwards; this is a mode somebody typed for
+this run, recorded nowhere, and the next run asks again unless the flag is given again
+([permission-modes.md](permission-modes.md#MODE-10)). What the flag costs is its own entry there.
 
 **Why.** The gates the other clauses install are all about what a plan may say. None of them is
 about whether anybody wanted it: a validated, wholly untainted plan is still a model's choice of a
@@ -197,16 +204,16 @@ what makes one question about the whole of it worth more than a question per ste
 `verified-by: bravebot_tui::confirm::the_plan_prompt_says_what_approving_it_does_and_does_not_do`
 `verified-by: bravebot_tui::remote_confirm::a_plan_crosses_with_every_step_and_the_answer_comes_back`
 `verified-by: bravebot_core::manifest::a_described_step_names_every_routing_field_it_fixes`
+`verified-by: bravebot_cli::main::a_plan_is_answered_by_whoever_typed_the_command`
+`verified-by: bravebot_cli::main::a_plan_is_refused_where_nobody_can_be_asked`
 
 ## Known costs
 
-- **While no session can start a manifest run, a plan runs only where permissions were skipped.**
-  MANIFEST-9 keeps every session on the turn loop, so the one place a run starts is the one-shot
-  command, and a one-shot command has nobody to ask. MANIFEST-10's answer where nobody can be asked
-  is no, so the mode walks a plan only under `--dangerously-skip-permissions` until a session can
-  start a run. The prompt a person would answer is written and carried to the terminal already, so
-  what is missing is the way in rather than the question. Refusing is the right side to fail on
-  meanwhile: the alternative is the run this clause exists to stop.
+- **A plan is answered on one line, with no way back to the steps above it.** The terminal question
+  prints the plan and reads a line, so a plan longer than the window is scrolled to in the terminal's
+  own scrollback rather than in anything this tool draws, and there is no going back to re-read a
+  step once the answer is typed. The session prompt is the one that can be scrolled, and no session
+  starts a manifest run yet (MANIFEST-9).
 - **A processing step's instruction is not on the line.** What the person reads is which slots it
   reads and which it fills, and the sentence a processor is given is left off, so a plan that
   transforms text under an instruction nobody read still passes the gate. It routes nothing, which
