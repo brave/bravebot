@@ -2930,6 +2930,9 @@ impl Session {
         }
         if self.at_input_end() {
             self.caret = was.max(self.last_caret_position());
+            // The final character of the input is a newline where the input ends with one, and that
+            // is the column after the line above it rather than a character to land on.
+            self.step_back_off_the_end();
         }
     }
 
@@ -9564,6 +9567,10 @@ mod tests {
         // `e` reaches the end of this word, and from an end the end of the next.
         assert_eq!(after("one two three", 0, "e"), 2);
         assert_eq!(after("one two three", 2, "e"), 6);
+        // The last word of an input ending in a newline has nothing after it, so `e` stays on its
+        // final character rather than on the newline, which is the column after the line.
+        assert_eq!(after("one\ntwo\n", 6, "e"), 6);
+        assert_eq!(after("x\n", 0, "e"), 0);
     }
 
     /// The ends of the line, and the first character that is not a blank. `$` lands on the last
@@ -9575,6 +9582,64 @@ mod tests {
         assert_eq!(after("  indented", 5, "^"), 2);
         assert_eq!(after("hello", 0, "$"), 4);
         assert_eq!(after("one\n  \ntwo", 4, "^"), 5);
+    }
+
+    /// No motion comes to rest in the column after a line, whichever line of a multi-line input the
+    /// caret is on and wherever on it the motion starts.
+    ///
+    /// The tests above pin each key's answer one position at a time, which is what a reader checks a
+    /// key against. This pins the invariant instead, over every key and every position at once,
+    /// because the clamp it rests on is a separate line of code in every motion that needs it: a
+    /// motion added without one reads as correct beside its neighbours and is caught only by asking
+    /// all of them the same question. A caret resting there is drawn as a block over a column holding
+    /// nothing, and the `x` that follows takes the newline and joins two rows.
+    ///
+    /// An empty line is the exception the clause allows, since it holds no character to rest on.
+    #[test]
+    fn no_motion_comes_to_rest_past_the_end_of_its_line() {
+        // Line shapes a clamp can be wrong about: a plain newline, a line of only blanks, an empty
+        // line, a trailing newline that makes the last character of the input one, and an input that
+        // is nothing but newlines.
+        let inputs = [
+            "one\ntwo",
+            "one\n  \ntwo",
+            "\nfoo\n",
+            "a\n\nb",
+            "  \n  ",
+            "one two\nthree four",
+            "x\n",
+            "one\ntwo\n",
+            "\n\n",
+        ];
+        // Every motion of INPUT-26, and the pairs that reach a second line before the motion under
+        // test runs.
+        let runs = [
+            "h", "l", " ", "w", "e", "b", "0", "$", "^", "gg", "G", "fo", "Fo", "to", "To", "fo;",
+            "fo,", "hh", "ll", "ww", "ee", "bb", "$h", "0l", "^h", "Ge", "Gw", "ggw", "gge",
+        ];
+        for input in inputs {
+            for at in 0..=input.len() {
+                let (start, end) = normal(input, at).caret_line();
+                // Only from a position the caret can hold, since a motion is not answerable for
+                // where it leaves one it could never have started from.
+                if at != start && at >= end {
+                    continue;
+                }
+                for run in runs {
+                    let mut s = normal(input, at);
+                    for c in run.chars() {
+                        s.type_char(c);
+                    }
+                    let (start, end) = s.caret_line();
+                    assert!(
+                        s.caret == start || s.caret < end,
+                        "{run} from {at} of {input:?} left the caret at {}, \
+                         the column after the line {start}..{end}",
+                        s.caret
+                    );
+                }
+            }
+        }
     }
 
     /// `gg` and `G` reach the whole input rather than the line, which is what makes them worth having
