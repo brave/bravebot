@@ -8,7 +8,7 @@
 //! else, and anything the parser cannot read, leaves the action on the chord it had.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 /// A parsed keyboard chord (code and modifier set).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -208,41 +208,62 @@ impl Default for Keybindings {
 }
 
 impl Keybindings {
-    /// Build keybindings from a configured action-to-chord string map.
+    /// Every action by the name a settings file calls it, in one list so that resolving one chord
+    /// can see the six it has to differ from.
+    fn slots(&mut self) -> [(&'static str, &mut KeyChord); 7] {
+        [
+            ("editor", &mut self.editor),
+            ("history", &mut self.history),
+            ("paste", &mut self.paste),
+            ("scroller", &mut self.scroller),
+            ("stash", &mut self.stash),
+            ("trail", &mut self.trail),
+            ("watch", &mut self.watch),
+        ]
+    }
+
+    /// Read the chords out of an action-to-chord map, leaving every action on a key of its own.
     ///
-    /// Malformed chords, reserved chords, or chords that conflict with another
-    /// action revert gracefully to their defaults.
+    /// A chord the parser cannot read, or one the box already answers, leaves that action on its
+    /// default. So does a chord two actions would answer, and both of them give it up: neither
+    /// asked for it with any more right than the other, and one of them keeping it would leave the
+    /// other's key dead while the list `?` puts up named the same chord twice.
+    ///
+    /// Swapping two actions works, since a chord is only contested if some *other* action still
+    /// stands on it once that action's own request is counted.
     pub fn from_map(configured: &BTreeMap<String, String>) -> Self {
-        let defaults = Self::default();
-        let mut active = defaults.clone();
-        let mut used = HashSet::new();
+        let mut active = Self::default();
+        let mut slots = active.slots();
+        let defaults: [KeyChord; 7] = std::array::from_fn(|i| *slots[i].1);
+        let mut asked: [Option<KeyChord>; 7] = std::array::from_fn(|i| {
+            configured
+                .get(slots[i].0)
+                .and_then(|spelling| KeyChord::parse(spelling))
+                .filter(|chord| !chord.is_reserved())
+        });
 
-        // Helper to resolve one action binding safely.
-        let mut resolve_action = |name: &str, default_chord: KeyChord, slot: &mut KeyChord| {
-            if let Some(chord) = configured
-                .get(name)
-                .and_then(|spec| KeyChord::parse(spec))
-                .filter(|chord| !chord.is_reserved() && !used.contains(chord))
-            {
-                *slot = chord;
-                used.insert(chord);
-                return;
+        // Giving a chord up puts an action back on its default, which a third action may have been
+        // given, so this settles rather than deciding once. Every round drops at least one request
+        // or is the last, and with no requests left the defaults are what stand, which differ.
+        loop {
+            let standing: [KeyChord; 7] = std::array::from_fn(|i| asked[i].unwrap_or(defaults[i]));
+            let contested =
+                |chord: KeyChord| standing.iter().filter(|on| **on == chord).count() > 1;
+            let mut given_up = false;
+            for i in 0..asked.len() {
+                if asked[i].is_some() && contested(standing[i]) {
+                    asked[i] = None;
+                    given_up = true;
+                }
             }
-            // Retain or fallback to default
-            if !used.contains(&default_chord) {
-                *slot = default_chord;
-                used.insert(default_chord);
+            if !given_up {
+                break;
             }
-        };
+        }
 
-        resolve_action("stash", defaults.stash, &mut active.stash);
-        resolve_action("scroller", defaults.scroller, &mut active.scroller);
-        resolve_action("editor", defaults.editor, &mut active.editor);
-        resolve_action("history", defaults.history, &mut active.history);
-        resolve_action("trail", defaults.trail, &mut active.trail);
-        resolve_action("watch", defaults.watch, &mut active.watch);
-        resolve_action("paste", defaults.paste, &mut active.paste);
-
+        for (i, (_, slot)) in slots.iter_mut().enumerate() {
+            **slot = asked[i].unwrap_or(defaults[i]);
+        }
         active
     }
 
@@ -395,6 +416,8 @@ mod tests {
         assert_eq!(bindings.editor, KeyChord::ctrl('g'));
     }
 
+    /// Two actions asking for one chord both give it up. Neither asked with more right than the
+    /// other, and letting the first win would turn on which action the code happens to read first.
     #[test]
     fn conflicting_chords_fall_back_to_defaults() {
         let mut map = BTreeMap::new();
@@ -402,9 +425,53 @@ mod tests {
         map.insert("scroller".to_string(), "alt-x".to_string());
         let bindings = Keybindings::from_map(&map);
 
-        assert_eq!(bindings.stash, KeyChord::alt('x'));
-        // scroller conflicted with stash so falls back to default ctrl-o
+        assert_eq!(bindings.stash, KeyChord::ctrl('s'));
         assert_eq!(bindings.scroller, KeyChord::ctrl('o'));
+    }
+
+    /// Every action ends up on a key of its own, whatever the file asked for. Two actions on one
+    /// chord means the one the routing reads second can no longer be reached at all, which is the
+    /// dead key falling back to a default exists to avoid.
+    #[test]
+    fn no_two_actions_are_left_on_one_chord() {
+        let taking_anothers_default = [
+            ("stash", "ctrl-o"),   // the scroller's
+            ("watch", "ctrl-t"),   // the trail's
+            ("paste", "ctrl-g"),   // the editor's
+            ("history", "ctrl-s"), // the stash's
+        ];
+        for (action, chord) in taking_anothers_default {
+            let mut map = BTreeMap::new();
+            map.insert(action.to_string(), chord.to_string());
+            let bindings = Keybindings::from_map(&map);
+            assert_eq!(
+                Keybindings::default(),
+                bindings,
+                "{action} took {chord} from the action that already answered it"
+            );
+        }
+
+        // And the chords stay distinct through a request that displaces a default which a third
+        // action was itself given, which one pass over the list would leave doubled up.
+        let mut map = BTreeMap::new();
+        map.insert("stash".to_string(), "ctrl-g".to_string());
+        map.insert("trail".to_string(), "ctrl-g".to_string());
+        map.insert("editor".to_string(), "ctrl-t".to_string());
+        let bindings = Keybindings::from_map(&map);
+        assert_eq!(Keybindings::default(), bindings, "{bindings:?}");
+    }
+
+    /// Two actions trading chords is the reason a request is weighed against where the others end
+    /// up rather than against the defaults: neither of these is contested once both are read.
+    #[test]
+    fn two_actions_can_trade_chords() {
+        let mut map = BTreeMap::new();
+        map.insert("stash".to_string(), "ctrl-o".to_string());
+        map.insert("scroller".to_string(), "ctrl-s".to_string());
+        let bindings = Keybindings::from_map(&map);
+
+        assert_eq!(bindings.stash, KeyChord::ctrl('o'));
+        assert_eq!(bindings.scroller, KeyChord::ctrl('s'));
     }
 
     #[test]

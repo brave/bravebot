@@ -1292,8 +1292,16 @@ alphabet. Refusing the whole unmodified half of the keyboard is one rule a perso
 than a list of the keys that happen to be taken today, and the keys the issue is about, Ctrl-S and
 Ctrl-O, are reachable under it.
 
-If a configured chord conflicts with a reserved key, an invalid chord format, or another action's
-chord, the conflicting actions fall back to their default bindings.
+**Every action is left on a key of its own.** A chord the parser cannot read, or one the box
+already answers, leaves that action on its default. So does a chord two actions would both answer,
+and both of them give it up rather than one keeping it. Two actions trading chords is not a conflict
+and both take what they asked for, since a chord is contested only where some other action still
+stands on it once every request has been read.
+
+**Why.** Two actions on one chord is worse than either falling back: the routing reads one of them
+first, so the other cannot be reached at all, and the list `?` puts up names the same chord twice
+while one of the two lines is a lie. Which action wins would come down to the order the code reads
+them in, which is nothing a person could predict from what they wrote, so neither wins.
 
 Dynamic rendering: the shortcut listing (`?`) and prompt stashed indicators dynamically reflect the
 active chord names rather than hardcoded default labels.
@@ -1305,6 +1313,8 @@ active chord names rather than hardcoded default labels.
 `verified-by: bravebot_tui::app::a_settings_file_cannot_take_a_letter_away_from_typing`
 `verified-by: bravebot_tui::keybindings::invalid_chord_falls_back_to_default`
 `verified-by: bravebot_tui::keybindings::conflicting_chords_fall_back_to_defaults`
+`verified-by: bravebot_tui::keybindings::no_two_actions_are_left_on_one_chord`
+`verified-by: bravebot_tui::keybindings::two_actions_can_trade_chords`
 `verified-by: bravebot_tui::keybindings::custom_chords_override_defaults`
 `verified-by: bravebot_tui::render::the_shortcut_list_reflects_custom_keybindings`
 `verified-by: bravebot_tui::render::the_stashed_line_names_the_custom_stash_chord`
