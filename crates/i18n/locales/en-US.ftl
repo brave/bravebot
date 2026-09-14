@@ -589,6 +589,7 @@ scroller-key-search = search, next/previous match
 scroller-key-editor = open the transcript in $EDITOR
 scroller-key-this-list = this list
 scroller-key-close = close the scroller
+scroller-key-close-list = close this list
 scroller-searching = enter to search  ·  esc to abandon
 scroller-no-matches = no matches
 scroller-match-of = { $at } of { $total }

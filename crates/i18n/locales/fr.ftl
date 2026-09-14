@@ -540,6 +540,7 @@ scroller-key-search = rechercher, correspondance suivante/précédente
 scroller-key-editor = ouvrir la transcription dans $EDITOR
 scroller-key-this-list = cette liste
 scroller-key-close = fermer le défilement
+scroller-key-close-list = fermer cette liste
 scroller-searching = Entrée pour rechercher  ·  Échap pour abandonner
 scroller-no-matches = aucune correspondance
 scroller-match-of = { $at } sur { $total }

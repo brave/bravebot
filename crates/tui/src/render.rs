@@ -1346,7 +1346,7 @@ fn draw_scroller(frame: &mut Frame, session: &Session) -> Laid {
 ///
 /// The way out is last and is never the row that did not fit: a list that scrolled its own exit
 /// off the screen would be a mode nobody could leave.
-fn scroller_keys() -> [(&'static str, &'static str); 8] {
+fn scroller_keys() -> [(&'static str, &'static str); 9] {
     [
         ("up/down, j/k", t!(scroller_key_line)),
         ("ctrl-u / ctrl-d", t!(scroller_key_half_page)),
@@ -1356,12 +1356,13 @@ fn scroller_keys() -> [(&'static str, &'static str); 8] {
         ("/ then n/N", t!(scroller_key_search)),
         ("v", t!(scroller_key_editor)),
         ("?", t!(scroller_key_this_list)),
+        ("any key", t!(scroller_key_close_list)),
     ]
 }
 
 /// What closes the scroller, which is the one row of the key list that is never dropped.
 fn scroller_exit() -> (&'static str, &'static str) {
-    ("q / esc / ctrl-o", t!(scroller_key_close))
+    ("q / esc / ctrl-c / ctrl-o", t!(scroller_key_close))
 }
 
 /// Draw the key list over the transcript.
@@ -2578,7 +2579,7 @@ const SHORTCUTS_HINT: &str = "? for shortcuts";
 /// the one place a binding's meaning is written down: a list that went on saying "clear the line" to
 /// somebody whose Escape takes the letters as commands would advertise a binding that is not there.
 /// Every other row means the same thing either way.
-fn shortcuts(editing: crate::vim::Editing) -> [(&'static str, &'static str); 20] {
+fn shortcuts(editing: crate::vim::Editing) -> [(&'static str, &'static str); 21] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "take letters as commands",
@@ -2599,6 +2600,7 @@ fn shortcuts(editing: crate::vim::Editing) -> [(&'static str, &'static str); 20]
         ("ctrl-d", "exit"),
         ("ctrl-g", "write prompt in $EDITOR"),
         ("ctrl-l", "watch a delegate work"),
+        ("ctrl-o", "open the scroller"),
         ("ctrl-r", "search earlier prompts"),
         ("ctrl-s", "stash, or bring it back"),
         ("ctrl-t", "show what a turn did"),
