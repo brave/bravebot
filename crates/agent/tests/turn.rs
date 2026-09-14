@@ -12722,6 +12722,57 @@ fn a_background_command_must_be_one_pipeline() {
     );
 }
 
+/// Every redirection is refused, the ones that open a file and the one that only renames a
+/// descriptor. Nothing in the background reads a route, so an accepted one runs a line other than
+/// the line the person approved: the prompt and the job's own label both show the redirection, and
+/// the program is started without it.
+#[test]
+fn a_background_line_is_refused_for_any_redirection_it_carries() {
+    let scratch = Scratch::new("background-redirection");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"echo a 2>&1","background":true}"#),
+        tool_request("run", r#"{"command":"echo a > out.txt","background":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("Run the parts separately"),
+        "a stream join was accepted as a background job: {second}"
+    );
+    let third = received.recv().expect("third request");
+    assert!(
+        third.contains("Run the parts separately"),
+        "a file redirection was accepted as a background job: {third}"
+    );
+    assert!(
+        !third.contains("started in the background as"),
+        "a refused line started a job anyway: {third}"
+    );
+}
+
 /// A background job is still a run, so it is put to the person before anything starts. A refusal
 /// starts nothing.
 #[test]
