@@ -2092,9 +2092,7 @@ impl Session {
         // Where vi leaves it. The caret in NORMAL mode sits on a character rather than between two,
         // so the position one past the end of the line is not one it can hold, and Escape at the end
         // of a line somebody has just typed lands on the last character they typed.
-        if self.caret == self.input.len() {
-            self.move_left();
-        }
+        self.step_back_off_the_end();
         true
     }
 
@@ -2787,7 +2785,12 @@ impl Session {
         use crate::vim::Motion;
 
         match motion {
-            Motion::Left => self.move_left(),
+            Motion::Left => {
+                let (start, _) = self.caret_line();
+                if self.caret > start {
+                    self.move_left();
+                }
+            }
             // Stopping on the last character rather than the column after it, which is where the
             // arrows leave the caret in INSERT mode and is not a position NORMAL mode has.
             //
@@ -2865,6 +2868,7 @@ impl Session {
         {
             self.move_right();
         }
+        self.step_back_off_the_end();
     }
 
     /// Move to the start of the next word, which is what `w` asks for.
@@ -9392,6 +9396,18 @@ mod tests {
         s.enter_vi_normal();
 
         assert_eq!(s.caret, 1, "the caret stayed past the end of the line");
+
+        let mut s = vi();
+        for c in "one\ntwo".chars() {
+            s.type_char(c);
+        }
+        s.move_left();
+        s.move_left();
+        s.move_left();
+        s.move_left();
+        assert_eq!(s.caret, 3);
+        s.enter_vi_normal();
+        assert_eq!(s.caret, 2, "the caret stayed on the newline");
     }
 
     /// `!` is one of vi's keys in NORMAL mode, not the way shell mode is armed. Reading it as the
@@ -9534,6 +9550,7 @@ mod tests {
         assert_eq!(after("hello", 2, "h"), 1);
         assert_eq!(after("hello", 2, "l"), 3);
         assert_eq!(after("hello", 2, " "), 3);
+        assert_eq!(after("one\ntwo", 4, "h"), 4);
     }
 
     /// `w` lands on the first character of the next word and `b` on the first of this one or the
@@ -9557,6 +9574,7 @@ mod tests {
         assert_eq!(after("  indented", 5, "0"), 0);
         assert_eq!(after("  indented", 5, "^"), 2);
         assert_eq!(after("hello", 0, "$"), 4);
+        assert_eq!(after("one\n  \ntwo", 4, "^"), 5);
     }
 
     /// `gg` and `G` reach the whole input rather than the line, which is what makes them worth having
