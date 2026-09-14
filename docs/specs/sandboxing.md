@@ -114,11 +114,11 @@ to.
 **The grant is the plan, not the prompt.** A command line compiles to a plan carrying its read set,
 its write set and each stage's resolved binary, and that plan is what a person is shown and what an
 endorsement binds to ([tools/command-line.md](tools/command-line.md)). The profile is built from the
-plan, so a line nobody is asked about gets the same one as a line somebody answered: a command
-already answered this session, one a settings rule stops the asking for, and a line under the mode
-that answers every permission question are each held to what their own plan accounts for. Nothing a
-program prints reaches the profile, and no value the model supplied chooses one beyond the plan a
-person could read.
+plan, so a line nobody is asked about gets the same one as a line somebody answered: a proven line,
+a command already answered this session, one a settings rule stops the asking for, and a line under
+the mode that answers every permission question are each held to what their own plan accounts for.
+Nothing a program prints reaches the profile, and no value the model supplied chooses one beyond the
+plan a person could read.
 
 **The base is reviewed as code.** The loader, the system directories and a toolchain are shown by no
 prompt, so they are a fixed part of the profile rather than a grant. That base holds no credential
@@ -134,8 +134,8 @@ about which commands to ask about is not one of them, because such a rule stops 
 than extending reach. The cost is real: `run git push` works today and would not until somebody
 names `~/.ssh` once. What that buys is a key handed over deliberately rather than readable by every
 program that runs. Widening never follows from the refusal itself: the denial reaches this process
-as an exit status, and the account of which path was wanted is in the program's own output, which is
-untrusted content and decides nothing. Nothing grants what a program just failed to reach.
+as an exit status, and which path a program wanted is only in what it printed, which no profile is
+built from. Nothing grants what a program just failed to reach.
 
 **The network stays open to it.** A profile gates egress as a whole, so it cannot tell an approved
 `git push` or `gh api` from an exfiltration, and the endorsed argv already can. What confinement
@@ -149,7 +149,7 @@ output trusted.
   session records it as trusted as well as reachable, and the two are deliberately one grant there
   because either half alone is no use to a tool. A confinement scope wants the reach and not the
   vouching: naming `~/.ssh` so a push can sign must not make a key file's contents trusted content.
-  The command-line form already separates them and the interactive one does not.
+  The command-line form already separates them, and the two session forms do not.
 - The base has to be written down. A profile as generated here denies everything and then names what
   a program may reach, on both backends, so "everything except this key" is not expressible and the
   base has to carry what an ordinary build reads.
