@@ -20,6 +20,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthChar;
 
 use crate::audit::TrailLine;
+use crate::keybindings::Keybindings;
 use crate::logo;
 use crate::markdown;
 use crate::state::{Delegate, Laid, Output, Session, Speaker, Status, Watched};
@@ -1332,7 +1333,7 @@ fn draw_scroller(frame: &mut Frame, session: &Session) -> Laid {
     // Over the transcript rather than beside it, because a key list is read instead of the
     // transcript and never at the same time.
     if session.scroller().is_some_and(|scroller| scroller.help) {
-        draw_scroller_help(frame, frame.area());
+        draw_scroller_help(frame, frame.area(), session);
     }
 
     if let Some(selection) = &session.selection {
@@ -1361,15 +1362,21 @@ fn scroller_keys() -> [(&'static str, &'static str); 9] {
 }
 
 /// What closes the scroller, which is the one row of the key list that is never dropped.
-fn scroller_exit() -> (&'static str, &'static str) {
-    ("q / esc / ctrl-o", t!(scroller_key_close))
+///
+/// Ctrl-C is named by the meaning rather than here. It closes the scroller wherever the chord that
+/// opened it has been moved to, and naming it in both columns had the row listing it twice.
+fn scroller_exit(bindings: &Keybindings) -> (String, &'static str) {
+    (
+        format!("q / esc / {}", bindings.scroller_name()),
+        t!(scroller_key_close),
+    )
 }
 
 /// Draw the key list over the transcript.
 ///
 /// Short terminals lose rows from the middle of the list rather than the end of it. Every row here
 /// is a convenience except the last, and the last is the only one somebody is stuck without.
-fn draw_scroller_help(frame: &mut Frame, area: Rect) {
+fn draw_scroller_help(frame: &mut Frame, area: Rect, session: &Session) {
     let row = |(key, what): (&str, &str)| {
         Line::from(vec![
             Span::styled(format!(" {key:<18}"), Style::default().fg(Color::Cyan)),
@@ -1393,7 +1400,8 @@ fn draw_scroller_help(frame: &mut Frame, area: Rect) {
         .take(room.saturating_sub(1))
         .map(row)
         .collect();
-    rows.push(row(scroller_exit()));
+    let (exit_chord, exit_desc) = scroller_exit(session.bindings());
+    rows.push(row((&exit_chord, exit_desc)));
 
     let width = area.width.min(58);
     let height = (rows.len() as u16 + if bordered { 2 } else { 0 }).min(area.height);
@@ -2328,13 +2336,16 @@ fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
         // prompt is being shown is what only this row says, so it is the part that stays.
         let room = area.width.saturating_sub(2) as usize;
         let taken = wrap::display_width(&position);
+        let search = t!(
+            input_history_search,
+            chord = session.bindings().history_name()
+        );
         let ways_in = [
             format!(
-                " {}  ·  {} ",
-                t!(input_history_search),
-                t!(input_history_scope)
+                " {search}  ·  {} ",
+                t!(input_history_scope, chord = session.bindings().stash_name())
             ),
-            format!(" {} ", t!(input_history_search)),
+            format!(" {search} "),
         ]
         .into_iter()
         .find(|title| taken + wrap::display_width(title) <= room);
@@ -2407,7 +2418,7 @@ fn stashed_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
     };
 
     let lead = "  stashed ";
-    let trail = "  ctrl-s to bring it back";
+    let trail_string = format!("  {} to bring it back", session.bindings().stash_name());
     let after_lead = (width as usize).saturating_sub(lead.chars().count());
     // Nothing of the line itself would fit, so the row would say only that something is stashed
     // without saying what. A terminal this narrow has no room to spare for that.
@@ -2415,11 +2426,11 @@ fn stashed_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
         return Vec::new();
     }
 
-    let with_trail = after_lead.saturating_sub(trail.chars().count());
+    let with_trail = after_lead.saturating_sub(trail_string.chars().count());
     let (room, trail) = if with_trail >= LEGIBLE {
-        (with_trail, trail)
+        (with_trail, trail_string)
     } else {
-        (after_lead, "")
+        (after_lead, String::new())
     };
 
     vec![Line::from(vec![
@@ -2531,7 +2542,9 @@ fn lines_beneath_the_box(
         crate::state::Offered::Nothing => Vec::new(),
         crate::state::Offered::Commands(commands) => command_lines(session, commands),
         crate::state::Offered::Files(entries) => entry_lines(session, entries),
-        crate::state::Offered::Shortcuts => shortcut_lines(session.editing(), width),
+        crate::state::Offered::Shortcuts => {
+            shortcut_lines(session.editing(), session.bindings(), width)
+        }
     });
     lines
 }
@@ -2591,33 +2604,37 @@ const SHORTCUTS_HINT: &str = "? for shortcuts";
 /// the one place a binding's meaning is written down: a list that went on saying "clear the line" to
 /// somebody whose Escape takes the letters as commands would advertise a binding that is not there.
 /// Every other row means the same thing either way.
-fn shortcuts(editing: crate::vim::Editing) -> [(&'static str, &'static str); 21] {
+///
+/// The chords a settings file can move are asked of the bindings rather than written here, so the
+/// list names the key that answers rather than the key that used to. The seven the file can move are
+/// the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
+fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, &'static str); 21] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "take letters as commands",
     };
     [
-        ("!", "run a shell command"),
-        ("/", "commands"),
-        ("@", "name a file"),
-        ("?", "this list"),
-        ("enter", "send"),
-        ("shift-enter", "new line, or ctrl-j"),
-        ("tab", "take what is offered"),
-        ("shift-tab", "what to ask before acting"),
-        ("esc", escape),
-        ("up / down", "earlier prompts"),
-        ("pgup / pgdn", "scroll the transcript"),
-        ("ctrl-c", "stop, clear, then exit"),
-        ("ctrl-d", "exit"),
-        ("ctrl-g", "write prompt in $EDITOR"),
-        ("ctrl-l", "watch a delegate work"),
-        ("ctrl-o", "open the scroller"),
-        ("ctrl-r", "search earlier prompts"),
-        ("ctrl-s", "stash, bring it back, or search"),
-        ("ctrl-t", "show what a turn did"),
-        ("ctrl-v", "paste, pictures too"),
-        ("drag", "select, copy on release"),
+        ("!".to_string(), "run a shell command"),
+        ("/".to_string(), "commands"),
+        ("@".to_string(), "name a file"),
+        ("?".to_string(), "this list"),
+        ("enter".to_string(), "send"),
+        ("shift-enter".to_string(), "new line, or ctrl-j"),
+        ("tab".to_string(), "take what is offered"),
+        ("shift-tab".to_string(), "what to ask before acting"),
+        ("esc".to_string(), escape),
+        ("up / down".to_string(), "earlier prompts"),
+        ("pgup / pgdn".to_string(), "scroll the transcript"),
+        ("ctrl-c".to_string(), "stop, clear, then exit"),
+        ("ctrl-d".to_string(), "exit"),
+        (bindings.editor_name(), "write prompt in $EDITOR"),
+        (bindings.watch_name(), "watch a delegate work"),
+        (bindings.scroller_name(), "open the scroller"),
+        (bindings.history_name(), "search earlier prompts"),
+        (bindings.stash_name(), "stash, bring it back, or search"),
+        (bindings.trail_name(), "show what a turn did"),
+        (bindings.paste_name(), "paste, pictures too"),
+        ("drag".to_string(), "select, copy on release"),
     ]
 }
 
@@ -2628,7 +2645,11 @@ fn shortcuts(editing: crate::vim::Editing) -> [(&'static str, &'static str); 21]
 /// to be. One column when nothing else fits, and the meanings are cut to the width there rather
 /// than drawn past the edge, where the terminal would wrap them under the keys and put the list one
 /// row over the height the layout reserved for it.
-fn shortcut_lines(editing: crate::vim::Editing, width: u16) -> Vec<Line<'static>> {
+fn shortcut_lines(
+    editing: crate::vim::Editing,
+    bindings: &Keybindings,
+    width: u16,
+) -> Vec<Line<'static>> {
     /// Blank columns between one column of the list and the next.
     const GUTTER: usize = 3;
     /// Where the list starts, matching the other rows drawn beneath the box.
@@ -2641,7 +2662,7 @@ fn shortcut_lines(editing: crate::vim::Editing, width: u16) -> Vec<Line<'static>
         return Vec::new();
     }
 
-    let listed = shortcuts(editing);
+    let listed = shortcuts(editing, bindings);
     let key_column = listed
         .iter()
         .map(|(key, _)| key.chars().count())
@@ -2775,9 +2796,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // under the box inviting a press that changes nothing on screen, and what a person learns from
     // that press is that the key does not work.
     let trail = match (session.has_trail(), session.show_trail) {
-        (false, _) => "",
-        (true, true) => "ctrl-t hide trail",
-        (true, false) => "ctrl-t show trail",
+        (false, _) => String::new(),
+        (true, true) => format!("{} hide trail", session.bindings().trail_name()),
+        (true, false) => format!("{} show trail", session.bindings().trail_name()),
     };
 
     // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a
@@ -2817,7 +2838,11 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // no delegate has a key that works and, counted the other way, no line saying so.
     let watchable = match session.watchable().len() {
         0 => String::new(),
-        count => t!(watching_hint, count = count).to_string(),
+        count => t!(
+            watching_hint,
+            chord = session.bindings().watch_name(),
+            count = count
+        ),
     };
 
     // Not a list of bindings any more. Every one of them, with what it does, is a `?` away, which
@@ -2923,7 +2948,10 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     if session.image_on_clipboard {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "image on clipboard  ·  ctrl-v to paste  ",
+                format!(
+                    "image on clipboard  ·  {} to paste  ",
+                    session.bindings().paste_name()
+                ),
                 Style::default().fg(theme::brand_primary()),
             )))
             .alignment(Alignment::Right),
@@ -3651,6 +3679,18 @@ mod tests {
                 hint_row_at(&session, 90, 24).contains("ctrl-l"),
                 "the hint line stopped naming the key while a delegate was working"
             );
+
+            // Once and only once wherever the key has been moved to, since the count is what the
+            // line is for and the chord is what makes it worth reading.
+            let mut moved = std::collections::BTreeMap::new();
+            moved.insert("watch".to_string(), "alt-l".to_string());
+            session.adopt_keybindings(&moved);
+            let screen = rendered(&session);
+            assert_eq!(screen.matches("alt-l").count(), 1, "{screen}");
+            assert!(
+                !screen.contains("ctrl-l"),
+                "the hint went on naming the key nothing answers: {screen}"
+            );
         }
 
         /// The list of keys is where a binding's meaning lives, and a key absent from it is one
@@ -3658,9 +3698,9 @@ mod tests {
         #[test]
         fn the_shortcut_list_names_the_key_that_watches() {
             assert!(
-                shortcuts(crate::vim::Editing::Ordinary)
+                shortcuts(crate::vim::Editing::Ordinary, &Keybindings::default())
                     .iter()
-                    .any(|(key, _)| *key == "ctrl-l"),
+                    .any(|(key, _)| key == "ctrl-l"),
                 "the shortcut list does not name the key"
             );
         }
@@ -4302,9 +4342,31 @@ mod tests {
                 drawn.contains("q / esc / ctrl-o"),
                 "the way out was not drawn whole: {drawn}"
             );
+            assert_eq!(
+                drawn.matches("ctrl-c").count(),
+                1,
+                "the row listed ctrl-c more than once: {drawn}"
+            );
+        }
+
+        /// The row names the chord that opened the scroller, so a settings file moving it does not
+        /// leave the way out advertising a key that no longer opens or closes anything.
+        #[test]
+        fn the_help_names_the_chord_the_scroller_was_opened_with() {
+            let mut session = reading();
+            let mut moved = std::collections::BTreeMap::new();
+            moved.insert("scroller".to_string(), "alt-o".to_string());
+            session.adopt_keybindings(&moved);
+            session.toggle_scroller_help();
+
+            let (drawn, _) = screen(&session);
             assert!(
-                drawn.contains("ctrl-c"),
-                "ctrl-c closes the scroller and the list left it out: {drawn}"
+                drawn.contains("q / esc / alt-o"),
+                "the way out was not drawn whole: {drawn}"
+            );
+            assert!(
+                !drawn.contains("ctrl-o"),
+                "the way out went on naming the chord nothing answers: {drawn}"
             );
         }
 
@@ -5087,6 +5149,13 @@ mod tests {
         let output = rendered(&session);
         assert!(output.contains("image on clipboard"), "no hint shown");
         assert!(output.contains("ctrl-v"), "the hint did not name the key");
+
+        // The key it names is the one that carries a picture here, which a settings file can move.
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("paste".to_string(), "alt-v".to_string());
+        session.adopt_keybindings(&moved);
+        let output = rendered(&session);
+        assert!(output.contains("alt-v"), "the hint named the old key");
     }
 
     /// One line, two things that want it. What a copy took is the answer to something the user did
@@ -5343,8 +5412,8 @@ mod tests {
         session.type_char('?');
         let output = rendered_at(&session, 120, 40);
 
-        for (key, meaning) in shortcuts(session.editing()) {
-            assert!(output.contains(key), "{key} missing");
+        for (key, meaning) in shortcuts(session.editing(), session.bindings()) {
+            assert!(output.contains(&key), "{key} missing");
             assert!(output.contains(meaning), "{key} has no meaning on screen");
         }
     }
@@ -5399,10 +5468,67 @@ mod tests {
         session.type_char('?');
         let output = rendered_at(&session, 120, 40);
 
-        for (key, meaning) in shortcuts(session.editing()) {
-            assert!(output.contains(key), "{key} missing");
+        for (key, meaning) in shortcuts(session.editing(), session.bindings()) {
+            assert!(output.contains(&key), "{key} missing");
             assert!(output.contains(meaning), "{key} has no meaning on screen");
         }
+    }
+
+    /// When keybindings are customized, the shortcut list reflects the configured chords rather
+    /// than the defaults.
+    #[test]
+    fn the_shortcut_list_reflects_custom_keybindings() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("scroller".to_string(), "ctrl-u".to_string());
+        custom.insert("stash".to_string(), "ctrl-x".to_string());
+        session.adopt_keybindings(&custom);
+
+        session.type_char('?');
+        let output = rendered_at(&session, 120, 40);
+        assert!(
+            output.contains("ctrl-u"),
+            "custom scroller chord missing: {output}"
+        );
+        assert!(
+            output.contains("ctrl-x"),
+            "custom stash chord missing: {output}"
+        );
+        assert!(
+            !output.contains("ctrl-o"),
+            "default scroller chord should not be displayed: {output}"
+        );
+        assert!(
+            !output.contains("ctrl-s"),
+            "default stash chord should not be displayed: {output}"
+        );
+    }
+
+    /// When stash is customized, the stashed line reminder names the customized chord.
+    #[test]
+    fn the_stashed_line_names_the_custom_stash_chord() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("stash".to_string(), "ctrl-x".to_string());
+        session.adopt_keybindings(&custom);
+
+        for c in "hold this for later".chars() {
+            session.type_char(c);
+        }
+        session.stash();
+        assert!(session.stashed().is_some());
+
+        let lines = stashed_lines(&session, 80);
+        assert_eq!(lines.len(), 1);
+        let rendered = lines[0].to_string();
+        assert!(
+            rendered.contains("ctrl-x to bring it back"),
+            "custom stash chord missing from stashed line: {rendered}"
+        );
+        assert!(
+            !rendered.contains("ctrl-s"),
+            "default stash chord should not appear in stashed line: {rendered}"
+        );
     }
 
     /// The transcript stays behind the search, because a prompt is recognised by what it was asked
@@ -5443,8 +5569,25 @@ mod tests {
 
         session.recall_older();
         let browsing = rendered_at(&session, 120, 40);
-        for named in [t!(input_history_search), t!(input_history_scope)] {
-            assert!(browsing.contains(named), "{named} is unsaid: {browsing}");
+        for named in [
+            t!(input_history_search, chord = "ctrl-r"),
+            t!(input_history_scope, chord = "ctrl-s"),
+        ] {
+            assert!(browsing.contains(&named), "{named} is unsaid: {browsing}");
+        }
+
+        // And it says the keys in force rather than the keys it shipped with, since a border naming
+        // a chord that no longer answers is worse than a border naming none.
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("history".to_string(), "alt-r".to_string());
+        moved.insert("stash".to_string(), "alt-s".to_string());
+        session.adopt_keybindings(&moved);
+        let browsing = rendered_at(&session, 120, 40);
+        for named in [
+            t!(input_history_search, chord = "alt-r"),
+            t!(input_history_scope, chord = "alt-s"),
+        ] {
+            assert!(browsing.contains(&named), "{named} is unsaid: {browsing}");
         }
     }
 
@@ -5477,13 +5620,14 @@ mod tests {
     /// one row per binding would.
     #[test]
     fn the_shortcuts_use_fewer_rows_where_the_width_allows() {
+        let bindings = Keybindings::default();
         for editing in crate::vim::Editing::ALL {
-            let wide = shortcut_lines(editing, 200).len();
-            let narrow = shortcut_lines(editing, 40).len();
+            let wide = shortcut_lines(editing, &bindings, 200).len();
+            let narrow = shortcut_lines(editing, &bindings, 40).len();
             assert!(wide < narrow, "{wide} rows wide, {narrow} narrow");
             assert_eq!(
                 narrow,
-                shortcuts(editing).len(),
+                shortcuts(editing, &bindings).len(),
                 "a narrow terminal cut a binding"
             );
         }
@@ -5495,14 +5639,21 @@ mod tests {
     /// go wrong.
     #[test]
     fn no_shortcut_row_runs_past_the_edge() {
-        for editing in crate::vim::Editing::ALL {
-            for width in 0..=200u16 {
-                for line in shortcut_lines(editing, width) {
-                    let drawn = line.to_string();
-                    assert!(
-                        drawn.chars().count() <= width as usize,
-                        "a row ran past {width} editing {editing:?}: {drawn}"
-                    );
+        // Including a settings file's chords, which are the longest names the list ever holds and so
+        // are what the arithmetic fitting the columns has to be measured against.
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("scroller".to_string(), "ctrl-alt-pgdn".to_string());
+        moved.insert("stash".to_string(), "ctrl-alt-f12".to_string());
+        for bindings in [Keybindings::default(), Keybindings::from_map(&moved)] {
+            for editing in crate::vim::Editing::ALL {
+                for width in 0..=200u16 {
+                    for line in shortcut_lines(editing, &bindings, width) {
+                        let drawn = line.to_string();
+                        assert!(
+                            drawn.chars().count() <= width as usize,
+                            "a row ran past {width} editing {editing:?}: {drawn}"
+                        );
+                    }
                 }
             }
         }
@@ -5522,11 +5673,12 @@ mod tests {
     /// strings, so this is what keeps them from disagreeing about which key to press.
     #[test]
     fn the_hint_and_the_list_name_the_same_key() {
-        let key = shortcuts(crate::vim::Editing::Ordinary)
-            .iter()
+        let key = shortcuts(crate::vim::Editing::Ordinary, &Keybindings::default())
+            .into_iter()
             .find(|(_, meaning)| *meaning == "this list")
-            .map(|(key, _)| *key)
+            .map(|(key, _)| key)
             .expect("the list lists itself");
+        let key = key.as_str();
         assert!(
             SHORTCUTS_HINT.starts_with(key),
             "the hint says {SHORTCUTS_HINT:?} and the list says {key:?}"

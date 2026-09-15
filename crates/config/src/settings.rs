@@ -94,6 +94,7 @@ pub struct Settings {
     /// not recognise has to reach the interface to be reported there rather than be dropped here as
     /// though the file had said nothing.
     editor_mode: Option<String>,
+    keybindings: BTreeMap<String, String>,
     attribution: Attribution,
     providers: Vec<crate::provider::Provider>,
     layers: Vec<PathBuf>,
@@ -234,11 +235,19 @@ impl Settings {
             permissions: permission_lists(root),
             model: word(root, "model"),
             editor_mode: word(root, "editorMode"),
+            keybindings: keybindings_block(root),
             attribution: attribution_block(root),
             providers: crate::provider::Provider::all(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
         }
+    }
+
+    /// What the settings in force say about keybindings.
+    ///
+    /// Maps an action name (e.g. "stash", "scroller") to its configured key chord (e.g. "ctrl-s").
+    pub fn keybindings(&self) -> &BTreeMap<String, String> {
+        &self.keybindings
     }
 
     /// What the settings in force say a variable is, if they say anything.
@@ -278,6 +287,7 @@ impl Settings {
             && self.permissions.is_empty()
             && self.model.is_none()
             && self.editor_mode.is_none()
+            && self.keybindings.is_empty()
             && self.attribution.is_empty()
             && self.providers.is_empty()
     }
@@ -331,6 +341,7 @@ impl Settings {
             .then_some("model")
             .into_iter()
             .chain(self.editor_mode.is_some().then_some("editorMode"))
+            .chain((!self.keybindings.is_empty()).then_some("keybindings"))
             .chain(
                 self.attribution
                     .commit
@@ -404,12 +415,17 @@ fn merge(
 ) {
     for (key, value) in over {
         match (base.get_mut(&key), value) {
-            // `env`, `provider` and `attribution`: per-name, one level down. The names under
-            // `attribution` are two unrelated destinations, so a file answering for one must not
-            // answer for the other by omission: a project file naming what a pull request carries
-            // would otherwise hand back the commit trailer a person's own file had turned off.
+            // `env`, `provider`, `attribution` and `keybindings`: per-name, one level down. The
+            // names under `attribution` are two unrelated destinations, so a file answering for one
+            // must not answer for the other by omission: a project file naming what a pull request
+            // carries would otherwise hand back the commit trailer a person's own file had turned
+            // off. The chords are per-name for the same reason, a file moving one action's key
+            // being no statement about the other six.
             (Some(serde_json::Value::Object(under)), serde_json::Value::Object(above))
-                if key == "env" || key == "provider" || key == "attribution" =>
+                if key == "env"
+                    || key == "provider"
+                    || key == "attribution"
+                    || key == "keybindings" =>
             {
                 under.extend(above);
             }
@@ -513,6 +529,25 @@ fn attribution_block(root: &serde_json::Map<String, serde_json::Value>) -> Attri
         commit: text("commit"),
         pr: text("pr"),
     }
+}
+
+/// The `keybindings` block: an action by name, and the chord it is to answer.
+///
+/// Strings only, and an entry that is not one is dropped rather than refused, on the same footing
+/// as the rest of this file. What the chord means is the interface's to decide, so a spelling
+/// nothing can read is carried this far and left on its default there.
+fn keybindings_block(
+    root: &serde_json::Map<String, serde_json::Value>,
+) -> BTreeMap<String, String> {
+    let Some(serde_json::Value::Object(block)) = root.get("keybindings") else {
+        return BTreeMap::new();
+    };
+    block
+        .iter()
+        .filter_map(|(action, chord)| Some((action, chord.as_str()?)))
+        .map(|(action, chord)| (action.trim().to_ascii_lowercase(), chord.trim().to_string()))
+        .filter(|(action, chord)| !action.is_empty() && !chord.is_empty())
+        .collect()
 }
 
 /// The `permissions` block: three lists of rule text, and the directories to open.
@@ -1315,5 +1350,77 @@ mod tests {
         assert!(reported.contains("AWS_PROFILE"));
         assert!(!reported.contains("a-secret-looking-value"));
         assert!(!reported.contains("the-old-value"));
+    }
+
+    #[test]
+    fn a_keybindings_block_is_read_from_settings() {
+        let settings =
+            Settings::parse(r#"{"keybindings": {"stash": "alt-s", "scroller": "alt-o"}}"#);
+        assert_eq!(
+            settings.keybindings().get("stash"),
+            Some(&"alt-s".to_string())
+        );
+        assert_eq!(
+            settings.keybindings().get("scroller"),
+            Some(&"alt-o".to_string())
+        );
+    }
+
+    /// An entry that is not a string is dropped, the way a malformed permission rule is, and the
+    /// block reads as though the file had not named that action.
+    #[test]
+    fn a_keybindings_entry_that_is_not_a_chord_is_dropped() {
+        let settings = Settings::parse(
+            r#"{"keybindings": {"stash": 7, "scroller": "", "trail": " ctrl-x ", "watch": "alt-l"}}"#,
+        );
+        assert_eq!(settings.keybindings().get("stash"), None);
+        assert_eq!(settings.keybindings().get("scroller"), None);
+        assert_eq!(
+            settings.keybindings().get("trail"),
+            Some(&"ctrl-x".to_string())
+        );
+        assert_eq!(
+            settings.keybindings().get("watch"),
+            Some(&"alt-l".to_string())
+        );
+    }
+
+    #[test]
+    fn a_project_layer_overrides_keybindings_per_name() {
+        let settings = Layers::new("keybindings-override")
+            .global(r#"{"keybindings": {"stash": "alt-s", "scroller": "alt-o"}}"#)
+            .project(r#"{"keybindings": {"stash": "ctrl-x"}}"#)
+            .read();
+        assert_eq!(
+            settings.keybindings().get("stash"),
+            Some(&"ctrl-x".to_string())
+        );
+        assert_eq!(
+            settings.keybindings().get("scroller"),
+            Some(&"alt-o".to_string())
+        );
+    }
+
+    #[test]
+    fn a_local_layer_overrides_project_and_global_keybindings() {
+        let settings = Layers::new("keybindings-local-override")
+            .global(
+                r#"{"keybindings": {"stash": "alt-s", "scroller": "alt-o", "editor": "alt-e"}}"#,
+            )
+            .project(r#"{"keybindings": {"stash": "ctrl-x", "scroller": "ctrl-u"}}"#)
+            .local(r#"{"keybindings": {"stash": "ctrl-p"}}"#)
+            .read();
+        assert_eq!(
+            settings.keybindings().get("stash"),
+            Some(&"ctrl-p".to_string())
+        );
+        assert_eq!(
+            settings.keybindings().get("scroller"),
+            Some(&"ctrl-u".to_string())
+        );
+        assert_eq!(
+            settings.keybindings().get("editor"),
+            Some(&"alt-e".to_string())
+        );
     }
 }

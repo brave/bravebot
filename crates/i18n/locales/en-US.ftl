@@ -267,7 +267,7 @@ history-search-title = Search prompts
 history-scope-everywhere = everywhere
 history-scope-here = this project
 history-search-placeholder = Filter history…
-history-search-keys = ↑↓ to move  ·  Enter to use  ·  ctrl-s to scope  ·  Esc to cancel
+history-search-keys = ↑↓ to move  ·  Enter to use  ·  { $scope } to scope  ·  Esc to cancel
 history-search-nothing-matches = nothing matches that
 history-search-more-lines =
     { $count ->
@@ -288,8 +288,8 @@ input-history-position = History { $index }/{ $total }
 # narrowed to the ones sent from this project. The narrower one is dropped where the row will not
 # hold both beside the position, and then the other one is, so a longer wording is one that fewer
 # terminals show at all.
-input-history-search = ctrl-r to search
-input-history-scope = ctrl-s this project
+input-history-search = { $chord } to search
+input-history-scope = { $chord } this project
 resume-heading = Resume session
 resume-search-placeholder = Search…
 resume-keys = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc for a new session
@@ -682,7 +682,7 @@ watching-calls = { $count ->
 # the turn that drew it. The count is there because a key with nothing behind it is not worth
 # pressing. Every kind of row is counted together, since one key opens the list holding all of
 # them and naming one kind here would undercount the rest.
-watching-hint = ctrl-l { $count } to open
+watching-hint = { $chord } { $count } to open
 
 
 ## The commands a line beginning with a slash may be
@@ -846,7 +846,7 @@ goal-replaces-loop =
 ## Pasting, dropping and attaching
 
 paste-arrived-empty =
-    that paste arrived empty: the terminal hands over text only, so a picture needs ctrl-v
+    that paste arrived empty: the terminal hands over text only, so a picture needs { $chord }
 paste-not-a-command = a picture is not a command: leave shell mode to paste one
 paste-too-large = that picture is { $size }, and a paste carries at most { $limit }
 paste-nothing-on-clipboard = there is nothing on the clipboard to paste
@@ -879,7 +879,7 @@ turn-ended-unexpectedly = the turn ended unexpectedly
 btw-needs-a-question = /btw takes the question to ask, which the conversation will not read
 btw-uninterruptible = the question cannot be interrupted; it takes one request
 btw-ended-unexpectedly = the question ended unexpectedly
-btw-answered = asked beside the work, and answered there; ctrl-l opens it again
+btw-answered = asked beside the work, and answered there; { $chord } opens it again
 btw-failed = the question could not be answered: { $problem }
 
 

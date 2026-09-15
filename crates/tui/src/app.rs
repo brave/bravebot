@@ -401,14 +401,12 @@ fn spelled_by_vi(session: &Session, key: KeyEvent) -> Option<KeyEvent> {
         crate::state::Spelled::Down => KeyCode::Down,
         // The chord rather than the action, so the arm that opens the search is the only place it is
         // opened from and the two cannot come to disagree about when it may be.
-        crate::state::Spelled::SearchPrompts => return Some(ctrl_press('r')),
+        crate::state::Spelled::SearchPrompts => {
+            let chord = session.bindings().history;
+            return Some(KeyEvent::new(chord.code, chord.modifiers));
+        }
     };
     Some(KeyEvent::new(code, KeyModifiers::NONE))
-}
-
-/// One key held with Ctrl, as the terminal delivers it.
-fn ctrl_press(c: char) -> KeyEvent {
-    KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
 }
 
 /// Whether a key press asks for the next permission mode.
@@ -492,11 +490,11 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             // typed into a mode that is going away goes with it. Neither is a character, so
             // neither is read as typing, and leaving both to do nothing left a mode whose only
             // way out was Escape.
-            // The two chords that close the mode close it from in here too, and a needle half
-            // typed into a mode that is going away goes with it. Neither is a character, so
-            // neither is read as typing, and leaving both to do nothing left a mode whose only
-            // way out was Escape.
-            KeyCode::Char('o') | KeyCode::Char('c') if ctrl => {
+            KeyCode::Char('c') if ctrl => {
+                session.close_scroller();
+                Action::Redraw
+            }
+            _ if session.bindings().is_scroller(&key) => {
                 session.close_scroller();
                 Action::Redraw
             }
@@ -525,7 +523,11 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             }
             Action::Redraw
         }
-        KeyCode::Char('o') | KeyCode::Char('c') if ctrl => {
+        KeyCode::Char('c') if ctrl => {
+            session.close_scroller();
+            Action::Redraw
+        }
+        _ if session.bindings().is_scroller(&key) => {
             session.close_scroller();
             Action::Redraw
         }
@@ -645,22 +647,25 @@ fn walk_the_matches(session: &mut Session, forwards: bool) {
 fn history_search_key(session: &mut Session, key: KeyEvent) -> Action {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
+    // The two chords first, and read off the bindings rather than off the keyboard. Every character
+    // narrows the list, so one moved onto a letter would otherwise be typed into the needle here
+    // while it opened the search from the box.
+    //
+    // Every prompt, or the ones sent from this workspace. It is the chord that put the line away
+    // out there, which is the same key INPUT-31 opens this search with.
+    if session.bindings().is_stash(&key) {
+        session.scope_history_search();
+        return Action::Redraw;
+    }
+    // The chord that opened it closes it, and so does Ctrl-C: the nearest thing there is to stop is
+    // the search, and the turn behind it goes on running, so the press that reaches it is the next
+    // one.
+    if session.bindings().is_history(&key) || (ctrl && key.code == KeyCode::Char('c')) {
+        session.close_history_search();
+        return Action::Redraw;
+    }
     if ctrl {
-        return match key.code {
-            // Every prompt, or the ones sent from this workspace. The chord Claude Code uses for
-            // it, since somebody arriving from there reaches for that one.
-            KeyCode::Char('s') => {
-                session.scope_history_search();
-                Action::Redraw
-            }
-            // The nearest thing there is to stop is the search, and the turn behind it goes on
-            // running: the press that reaches it is the next one.
-            KeyCode::Char('c') | KeyCode::Char('r') => {
-                session.close_history_search();
-                Action::Redraw
-            }
-            _ => Action::None,
-        };
+        return Action::None;
     }
 
     match key.code {
@@ -714,7 +719,15 @@ fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
         // Out of the mode entirely, from wherever they are. Ctrl-C does nothing else here: the
         // view is the nearest thing there is to stop, and somebody who went to look at what a
         // delegate was doing is not asking for the turn to end when they come back out.
-        KeyCode::Char('l') | KeyCode::Char('c') if ctrl => {
+        //
+        // The chord that opened the view is read off the bindings, and before every other arm: the
+        // keys that walk the list are bare letters matched whatever is held with them, so one moved
+        // onto `j` would walk the list instead of leaving.
+        _ if session.bindings().is_watch(&key) => {
+            session.stop_watching();
+            Action::Redraw
+        }
+        KeyCode::Char('c') if ctrl => {
             session.stop_watching();
             Action::Redraw
         }
@@ -828,7 +841,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
 
     // Before the match, since a key that moves the caret cannot also be one of the keys below:
     // the ones this answers are exactly the ones nothing else claims.
-    if edit_line(session, key) {
+    if !session.bindings().claims(&key) && edit_line(session, key) {
         return Action::Redraw;
     }
 
@@ -869,14 +882,14 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // Reading back through what happened, rather than typing at it. The transcript already
         // scrolls; what needs a mode is everything a person does once they are reading, since the
         // keys for it are letters and the box takes letters.
-        KeyCode::Char('o') if ctrl => {
+        _ if session.bindings().is_scroller(&key) => {
             session.open_scroller();
             Action::Redraw
         }
         // The other way into the history, and the one that scales: Up walks a prompt at a time,
         // which is no way to reach the hundredth. The chord every shell answers with this same
         // question, so the muscle memory is already there.
-        KeyCode::Char('r') if ctrl => {
+        _ if session.bindings().is_history(&key) => {
             session.open_history_search();
             Action::Redraw
         }
@@ -884,11 +897,11 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // pty as text, and therefore drops everything that is not text; this one reads the
         // clipboard directly. Readline's quoted-insert is what the chord costs, and nobody has
         // ever wanted it here.
-        KeyCode::Char('v') if ctrl => Action::Paste,
+        _ if session.bindings().is_paste(&key) => Action::Paste,
         // The box can be moved around in now, but it is still capped at ten rows and has none of
         // what someone reaches for on a long prompt. A paragraph worth thinking about goes
         // somewhere with room instead.
-        KeyCode::Char('g') if ctrl => Action::Edit,
+        _ if session.bindings().is_editor(&key) => Action::Edit,
         // Escape means "stop what is happening" before it means anything else, so a turn in
         // flight is cancelled first. The prompt comes back for editing rather than being lost.
         KeyCode::Esc if session.status == Status::Working => Action::Cancel,
@@ -1116,11 +1129,11 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // there: putting it away stores a second copy of a stored prompt, and the search is what
         // somebody who has walked back at all is looking for. Before the arm below, since that one
         // answers every line.
-        KeyCode::Char('s') if ctrl && session.history.is_browsing() => {
+        _ if session.bindings().is_stash(&key) && session.history.is_browsing() => {
             session.open_history_search_here();
             Action::Redraw
         }
-        KeyCode::Char('s') if ctrl => {
+        _ if session.bindings().is_stash(&key) => {
             session.stash();
             Action::Redraw
         }
@@ -1128,7 +1141,7 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // sets a render flag and sends nothing, and because the trail is *for* watching a turn:
         // refused mid-turn, a person who wanted to see which tools a turn was calling had to wait
         // for it to finish before they were allowed to ask.
-        KeyCode::Char('t') if ctrl => {
+        _ if session.bindings().is_trail(&key) => {
             session.toggle_trail();
             Action::Redraw
         }
@@ -1138,7 +1151,7 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         //
         // Nothing at all where this session has spawned none. A key that does nothing is better
         // than a screen with nothing on it, and the shortcut list is where its meaning lives.
-        KeyCode::Char('l') if ctrl => {
+        _ if session.bindings().is_watch(&key) => {
             if session.watch() {
                 Action::Redraw
             } else {
@@ -1318,7 +1331,7 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // Before the modifier guard, since the readline bindings are how the caret moves on a terminal
     // that sends nothing for the named keys, and a line that can be typed mid-turn has to be
     // editable mid-turn: the alternative is a box that takes words and will not let them be fixed.
-    if edit_line(session, key) {
+    if !session.bindings().claims(&key) && edit_line(session, key) {
         return Action::Redraw;
     }
 
@@ -1331,20 +1344,20 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
 
     // Before the modifier guard, since a line that can be typed mid-turn can be pasted into
     // mid-turn: what is refused while a turn runs is sending, never writing.
-    if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if session.bindings().is_paste(&key) {
         return Action::Paste;
     }
 
     // Before the modifier guard for the same reason, and mid-turn is when it is wanted most: a
     // person reading back through a turn that is going wrong is reading because it is going wrong.
-    if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if session.bindings().is_scroller(&key) {
         session.open_scroller();
         return Action::Redraw;
     }
 
     // Before the modifier guard for the same reason. Searching the history sends nothing, and the
     // prompt somebody wants back mid-turn is the one the turn they are watching came from.
-    if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if session.bindings().is_history(&key) {
         session.open_history_search();
         return Action::Redraw;
     }
@@ -1378,7 +1391,7 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // the line it hands back would be waiting for a box that has moved on. That is a decision about
     // this key, and a key that does nothing by accident reads the same as one that does nothing on
     // purpose.
-    if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if session.bindings().is_editor(&key) {
         return Action::None;
     }
 
@@ -1415,7 +1428,8 @@ pub fn handle_paste(session: &mut Session, text: &str) -> Action {
     // the terminal hands over text and there is none. Said before anything else looks at the
     // text, because an empty paste is no more a drop than it is a prompt.
     if text.is_empty() {
-        session.note_once(t!(paste_arrived_empty));
+        let chord = session.bindings().paste_name();
+        session.note_once(t!(paste_arrived_empty, chord = chord));
         return Action::Paste;
     }
     // A drop reaches the terminal as a paste of the path, so this is where one is recognised.
@@ -1941,6 +1955,7 @@ fn event_loop(
     let settings = bravebot_config::Settings::load();
     // Settled before a key can be pressed, since this is what decides whether a letter is a letter.
     session.adopt_editing(settings.editor_mode());
+    session.adopt_keybindings(settings.keybindings());
     let (permissions, rejected) = bravebot_agent::permissions::from_settings(
         &settings,
         bravebot_agent::home::directory().as_deref(),
@@ -3530,7 +3545,8 @@ fn aside_animated(
                 answer: Some(answered.shown),
                 kept: answered.kept.is_some(),
             });
-            session.note(t!(btw_answered));
+            let chord = session.bindings().watch_name();
+            session.note(t!(btw_answered, chord = chord));
         }
         Err(message) => {
             session.end_aside(0);
@@ -4956,6 +4972,37 @@ mod tests {
             assert!(session.watching().is_none());
         }
 
+        /// The chord that opened the view leaves it, wherever it has been moved to. Bound onto `j`
+        /// on purpose: the keys that walk the list are bare letters matched whatever is held with
+        /// them, so a chord read after them would walk the list instead of leaving.
+        #[test]
+        fn a_moved_chord_leaves_the_view_it_opened() {
+            let mut session = Session::new("kernel-enforced");
+            let mut moved = std::collections::BTreeMap::new();
+            moved.insert("watch".to_string(), "alt-j".to_string());
+            session.adopt_keybindings(&moved);
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+
+            let alt_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::ALT);
+            handle_key(&mut session, alt_j);
+            assert!(session.watching().is_some(), "the chord did not open it");
+
+            session.open_watched();
+            handle_key(&mut session, alt_j);
+            assert!(
+                session.watching().is_none(),
+                "the chord walked the list instead of leaving"
+            );
+
+            // And the chord it was moved off of does neither.
+            handle_key(&mut session, ctrl('l'));
+            assert!(
+                session.watching().is_none(),
+                "the old chord still opened it"
+            );
+        }
+
         /// The way out is read against the nearest level. Somebody who opened a delegate from the
         /// list is going back to the list, and only then out.
         #[test]
@@ -6358,6 +6405,219 @@ mod tests {
 
         handle_key_while_working(&mut session, ctrl('s'));
         assert_eq!(session.input(), "the next thing");
+    }
+
+    /// A settings file naming a key the box already answers does not get it. The arms that read a
+    /// configured chord sit above the one that types, so a letter handed to an action would be a
+    /// letter that can no longer be written.
+    #[test]
+    fn a_settings_file_cannot_take_a_letter_away_from_typing() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("stash".to_string(), "x".to_string());
+        custom.insert("trail".to_string(), "?".to_string());
+        session.adopt_keybindings(&custom);
+
+        for c in "exit".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            session.input(),
+            "exit",
+            "a letter an action was given stopped typing"
+        );
+
+        session.clear_input();
+        handle_key(&mut session, key(KeyCode::Char('?')));
+        assert!(
+            matches!(session.offered(), crate::state::Offered::Shortcuts),
+            "the key list stopped answering the key that opens it"
+        );
+    }
+
+    /// Customizable keybindings route actions to the configured chord, and the default chord
+    /// is ignored once remapped.
+    #[test]
+    fn custom_keybindings_route_actions_and_old_chords_are_ignored() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("stash".to_string(), "alt-s".to_string());
+        custom.insert("scroller".to_string(), "alt-o".to_string());
+        session.adopt_keybindings(&custom);
+
+        for c in "custom key test".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        // Default ctrl-s should be ignored for stashing now
+        handle_key(&mut session, ctrl('s'));
+        assert_eq!(
+            session.input(),
+            "custom key test",
+            "default chord still stashed"
+        );
+
+        // Custom alt-s stashes
+        let alt_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT);
+        assert_eq!(handle_key(&mut session, alt_s), Action::Redraw);
+        assert_eq!(session.input(), "", "custom chord did not stash");
+
+        // Custom alt-s restores the line
+        handle_key(&mut session, alt_s);
+        assert_eq!(
+            session.input(),
+            "custom key test",
+            "custom chord did not restore stash"
+        );
+
+        // Default ctrl-o should not open scroller
+        handle_key(&mut session, ctrl('o'));
+        assert!(
+            !session.scrolling(),
+            "default ctrl-o opened scroller when remapped"
+        );
+
+        // Custom alt-o opens scroller
+        let alt_o = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT);
+        handle_key(&mut session, alt_o);
+        assert!(session.scrolling(), "custom alt-o did not open scroller");
+
+        // Custom alt-o closes scroller
+        handle_key(&mut session, alt_o);
+        assert!(!session.scrolling(), "custom alt-o did not close scroller");
+    }
+
+    /// Custom keybindings function properly mid-turn in handle_key_while_working.
+    #[test]
+    fn custom_keybindings_work_while_a_turn_runs() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("stash".to_string(), "alt-s".to_string());
+        custom.insert("scroller".to_string(), "alt-o".to_string());
+        session.adopt_keybindings(&custom);
+
+        handle_key(&mut session, key(KeyCode::Char('x')));
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.status, Status::Working);
+
+        for c in "working input".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+
+        // Default ctrl-s does not stash
+        handle_key_while_working(&mut session, ctrl('s'));
+        assert_eq!(session.input(), "working input");
+
+        // Custom alt-s stashes mid-turn
+        let alt_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT);
+        assert_eq!(
+            handle_key_while_working(&mut session, alt_s),
+            Action::Redraw
+        );
+        assert_eq!(session.input(), "");
+
+        // Custom alt-o opens scroller mid-turn
+        let alt_o = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT);
+        assert_eq!(
+            handle_key_while_working(&mut session, alt_o),
+            Action::Redraw
+        );
+        assert!(session.scrolling());
+    }
+
+    /// Inside the prompt search every character narrows the list, so a moved chord has to be read
+    /// before the arm that types: bound onto a letter it would otherwise open the search from the
+    /// box and then be typed into it.
+    #[test]
+    fn a_moved_chord_is_read_inside_the_search_it_opened() {
+        let alt = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("history".to_string(), "alt-r".to_string());
+        moved.insert("stash".to_string(), "alt-s".to_string());
+        session.adopt_keybindings(&moved);
+
+        type_line(&mut session, "run the tests");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.complete("ok", Vec::new(), 0);
+
+        handle_key(&mut session, alt('r'));
+        assert!(session.searching_history(), "the chord did not open it");
+
+        handle_key(&mut session, alt('s'));
+        let search = session.history_search().expect("the search closed");
+        assert!(search.here(), "the chord did not narrow the scope");
+        assert_eq!(search.needle(), "", "the chord was typed into the needle");
+
+        handle_key(&mut session, alt('s'));
+        let search = session.history_search().expect("the search closed");
+        assert!(!search.here(), "one more press did not widen it again");
+
+        // The chords they were moved off of do nothing in here, rather than narrowing the list to
+        // prompts holding an `s` or an `r`.
+        for old in [ctrl('s'), ctrl('r')] {
+            handle_key(&mut session, old);
+        }
+        let search = session
+            .history_search()
+            .expect("an old chord closed the search");
+        assert_eq!(
+            search.needle(),
+            "",
+            "an old chord was typed into the needle"
+        );
+
+        handle_key(&mut session, alt('r'));
+        assert!(!session.searching_history(), "the chord did not close it");
+    }
+
+    /// In Vi mode, `/` in NORMAL mode translates to the configured history chord rather than
+    /// hardcoded ctrl-r, opening the prompt history search.
+    #[test]
+    fn vi_mode_search_prompts_uses_configured_history_chord() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("history".to_string(), "alt-r".to_string());
+        session.adopt_keybindings(&custom);
+        session.adopt_editing(Some("vim"));
+
+        type_line(&mut session, "first prompt");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.complete("ok", Vec::new(), 0);
+
+        // Enter vi normal mode via Escape
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert!(session.vi_normal());
+
+        // In Vi NORMAL mode, `/` opens prompt history search
+        handle_key(&mut session, key(KeyCode::Char('/')));
+        assert!(
+            session.searching_history(),
+            "vi / did not open history search with custom chord"
+        );
+    }
+
+    /// A configured chord that collides with a readline line-editing key (such as ctrl-u or alt-b)
+    /// executes the configured action rather than being swallowed by line editing.
+    #[test]
+    fn configured_keybinding_overrides_readline_editing() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        // ctrl-u is readline delete_to_line_start; bound to stash here
+        custom.insert("stash".to_string(), "ctrl-u".to_string());
+        session.adopt_keybindings(&custom);
+
+        type_line(&mut session, "line to stash");
+        let ctrl_u = ctrl('u');
+        assert_eq!(handle_key(&mut session, ctrl_u), Action::Redraw);
+        assert_eq!(session.input(), "", "ctrl-u did not stash the line");
+        assert_eq!(session.stashed(), Some("line to stash"));
+
+        // Unbound readline keys still perform editing normally
+        type_line(&mut session, "hello world");
+        // ctrl-w deletes previous word
+        handle_key(&mut session, ctrl('w'));
+        assert_eq!(session.input(), "hello ");
     }
 
     /// Escape means "stop this" before it means anything else, so a turn in flight is cancelled

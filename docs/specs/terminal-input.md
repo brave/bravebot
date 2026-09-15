@@ -10,6 +10,8 @@ governs:
   - crates/tui/src/history_search.rs
   - crates/tui/src/vim.rs
   - crates/tui/src/config_prompt.rs
+  - crates/tui/src/keybindings.rs
+  - crates/config/src/settings.rs
 ---
 
 ## Scope
@@ -1262,3 +1264,103 @@ rendering fault rather than as a border with no room for all of it.
 `verified-by: bravebot_tui::app::ctrl_s_searches_this_workspace_while_an_older_prompt_is_shown`
 `verified-by: bravebot_tui::render::how_to_search_the_prompts_is_said_where_somebody_would_look`
 `verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`
+
+<a id="INPUT-32"></a>
+### INPUT-32: a settings file can move seven chords, and nothing else
+
+A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
+`ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
+action's key says nothing about the other six. There is no second file and no other spelling of the
+block, so one place answers what a key does. Seven actions can be moved, and nothing else can:
+
+- `editor` (default: `ctrl-g`): open external editor for the current prompt.
+- `watch` (default: `ctrl-l`): watch background delegate or inspect running actions.
+- `scroller` (default: `ctrl-o`): open the transcript scroller.
+- `history` (default: `ctrl-r`): open prompt history search.
+- `stash` (default: `ctrl-s`): stash the current input line or bring it back.
+- `trail` (default: `ctrl-t`): toggle turn execution trail visibility.
+- `paste` (default: `ctrl-v`): paste from clipboard.
+
+**A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is
+typed into the line, Enter sends, Escape clears it, Tab takes what is offered, and the arrows walk
+the caret and the history. Shift over a character is refused as well, because a terminal reports
+Shift-A as `A` with Shift held, so a chord written `shift-a` or `ctrl-shift-a` names an event that
+never arrives. Four chords are refused while carrying Ctrl: Ctrl-C, which stops and then leaves,
+and Ctrl-D, which leaves (INPUT-4), and Ctrl-J and Shift-Enter, which start a line (INPUT-2).
+
+**Why.** The arms that read a configured chord sit above the arm that types, so a letter handed to
+an action is a letter that can no longer be written: a settings file could take `x` out of the
+alphabet. Refusing the whole unmodified half of the keyboard is one rule a person can hold rather
+than a list of the keys that happen to be taken today, and the keys the issue is about, Ctrl-S and
+Ctrl-O, are reachable under it.
+
+**Every action is left on a key of its own.** A chord the parser cannot read, or one the box
+already answers, leaves that action on its default. So does a chord two actions would both answer,
+and both of them give it up rather than one keeping it. Two actions trading chords is not a conflict
+and both take what they asked for, since a chord is contested only where some other action still
+stands on it once every request has been read.
+
+**Why.** Two actions on one chord is worse than either falling back: the routing reads one of them
+first, so the other cannot be reached at all, and the list `?` puts up names the same chord twice
+while one of the two lines is a lie. Which action wins would come down to the order the code reads
+them in, which is nothing a person could predict from what they wrote, so neither wins.
+
+**A mode reads the chord that opened it.** Inside the search over prompts, the chord that puts a line
+away narrows the scope and the one that opened the search closes it (INPUT-19, INPUT-31); inside the
+view of what a delegate is doing, the chord that opened the view leaves it. Ctrl-C keeps its own
+meaning in both, and the chord an action was moved off of does nothing.
+
+**Why.** Every character narrows the prompt search and bare letters walk the delegate list, so a
+chord these modes did not ask the bindings about is not merely unanswered: it is read as the letter
+it carries, and the search a person moved a chord to open narrows itself to prompts holding an `s`.
+
+**A configured chord takes precedence over line editing.** When a chord is moved onto one of the
+readline editing keys (such as `ctrl-u` or `alt-b`), the action answers rather than the line
+editing arm. In vi's normal mode, `/` translates to the chord configured for history search.
+
+**The screen names the chord that answers.** `?` lists the keys from the one place they are written
+down (INPUT-13), and the seven rows above are asked of the chord in force rather than spelled out
+there. So is every other line that names one: the row saying what brings a stashed line back
+(INPUT-17), the border while an older prompt is being walked back to (INPUT-31), the keys under the
+search (INPUT-19), the hint saying there is something to watch, the note left where a picture on the
+clipboard needs a key of its own, and the scroller's way out
+([SCROLL-7](scroller.md#SCROLL-7)). A translated line names the chord by taking it as an argument, so
+no catalog has to be revisited when a default moves. Where a clause of this spec or another names one
+of the seven, it names the default.
+
+**Why.** A list is worth having only where it is right, and a person reads it at the moment a key
+they pressed did nothing. Keeping a second copy for the defaults is the same list twice: the copy
+`?` was drawn from had already stopped saying that Ctrl-S searches as well (INPUT-31), and nothing
+on the screen would have shown it. The scroller's way out named Ctrl-C in the keys and again in the
+meaning beside them, which reads as two different presses. A sentence with the chord written into it
+is worse than either, because the words around it are the reason somebody believes it.
+
+`verified-by: bravebot_tui::keybindings::parses_hyphen_and_plus_delimiters`
+`verified-by: bravebot_tui::keybindings::reserved_keys_are_rejected`
+`verified-by: bravebot_tui::keybindings::a_key_the_box_already_answers_is_not_on_offer`
+`verified-by: bravebot_tui::keybindings::a_chord_carrying_ctrl_or_alt_is_on_offer`
+`verified-by: bravebot_tui::app::a_settings_file_cannot_take_a_letter_away_from_typing`
+`verified-by: bravebot_tui::keybindings::invalid_chord_falls_back_to_default`
+`verified-by: bravebot_tui::keybindings::conflicting_chords_fall_back_to_defaults`
+`verified-by: bravebot_tui::keybindings::no_two_actions_are_left_on_one_chord`
+`verified-by: bravebot_tui::keybindings::two_actions_can_trade_chords`
+`verified-by: bravebot_tui::keybindings::unknown_actions_in_map_are_ignored`
+`verified-by: bravebot_tui::keybindings::custom_chords_override_defaults`
+`verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`
+`verified-by: bravebot_config::settings::a_keybindings_entry_that_is_not_a_chord_is_dropped`
+`verified-by: bravebot_config::settings::a_project_layer_overrides_keybindings_per_name`
+`verified-by: bravebot_config::settings::a_local_layer_overrides_project_and_global_keybindings`
+`verified-by: bravebot_tui::render::the_shortcut_list_reflects_custom_keybindings`
+`verified-by: bravebot_tui::render::the_stashed_line_names_the_custom_stash_chord`
+`verified-by: bravebot_tui::render::the_help_names_the_chord_the_scroller_was_opened_with`
+`verified-by: bravebot_tui::render::the_help_names_every_key_that_closes_the_scroller`
+`verified-by: bravebot_tui::render::how_to_search_the_prompts_is_said_where_somebody_would_look`
+`verified-by: bravebot_tui::history_search::the_keys_under_the_search_name_the_chord_that_narrows_it`
+`verified-by: bravebot_tui::render::the_row_that_says_what_the_turn_is_doing_leaves_the_key_to_the_hint_line`
+`verified-by: bravebot_tui::render::a_picture_on_the_clipboard_says_which_key_carries_it`
+`verified-by: bravebot_tui::app::a_moved_chord_is_read_inside_the_search_it_opened`
+`verified-by: bravebot_tui::app::a_moved_chord_leaves_the_view_it_opened`
+`verified-by: bravebot_tui::app::custom_keybindings_route_actions_and_old_chords_are_ignored`
+`verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`
+`verified-by: bravebot_tui::app::vi_mode_search_prompts_uses_configured_history_chord`
+`verified-by: bravebot_tui::app::configured_keybinding_overrides_readline_editing`
