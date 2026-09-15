@@ -527,7 +527,8 @@ Absent one, a line runs where the last one ran, and the first runs at the worksp
 
 Nothing else carries over. `NAME=value` on one line does not affect the next, because there is no
 shell process between calls to hold it: each stage is spawned fresh with the process environment,
-less this agent's own credentials. A planner that needs a variable set puts it on the line that
+less this agent's own credentials and with the session's own directory named
+([TRUST-17](../trust-map.md#TRUST-17)). A planner that needs a variable set puts it on the line that
 needs it.
 
 **Why the asymmetry.** A directory is a routing field, shown at every prompt and endorsed with the

@@ -108,3 +108,14 @@ pub const SCRUBBED: [&str; 2] = [SIGNING_KEY, KEY_ID];
 ///
 /// Absent from ALL: it describes one installation rather than the build.
 pub const INSTALLED_VIA: &str = "BRAVEBOT_INSTALLED_VIA";
+
+/// Where the directory this session has to itself is, set on every program the agent runs.
+///
+/// Written by this process rather than read by it: a line that wants somewhere to put an
+/// intermediate file names this, and what it wrote is removed when the session ends. Whatever
+/// value this process was started with is replaced, because the directory a program the agent
+/// starts may write in is the one this session was given and not one an outer environment named.
+///
+/// Absent from ALL, since it describes a session rather than the build, and absent from SCRUBBED,
+/// since it holds a path rather than a secret.
+pub const SCRATCH_DIR: &str = "BRAVEBOT_SCRATCH_DIR";

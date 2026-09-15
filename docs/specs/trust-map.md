@@ -586,26 +586,35 @@ says out loud is reach somebody discovers by accident.
 `verified-by: bravebot_core::policy::a_name_climbing_out_of_the_sessions_own_directory_is_not_answered_for_it`
 `verified-by: bravebot_core::policy::a_line_reading_the_sessions_own_directory_still_sees_the_rules_inside_it`
 
-## What the session's directory is still missing
+<a id="TRUST-17"></a>
+### TRUST-17: a program a `run` starts is told where the session's directory is
 
-An incognito session has one as well, and [incognito.md](incognito.md) names it among the things
-that still reach the filesystem in that mode: the name says nothing about which project or which
-session, and nothing in it outlives the session, so what an empty one records is that this program
-ran at this time rather than that a session ran in this project at this time.
+Every stage of a line is spawned with `BRAVEBOT_SCRATCH_DIR` holding the path of the directory this
+session was given (TRUST-14), in the background as in the foreground. An assignment of that name on
+the line wins, as the same assignment in front of a program wins in a shell
+([tools/command-line.md](tools/command-line.md)). A session that has no directory of its own sets
+nothing, so a program finds the name absent rather than pointing at a directory that is not there.
 
-One thing about the directory is decided and not built: its path is in the environment each stage
-of a `run` is spawned with. That is not in force, and until it is nothing tells a turn where the
-directory is. What follows is what it will say.
-
-**Given as the session opens, not asked for by a tool.** The path is put in the environment this
-process holds, which is the environment each stage of a `run` is spawned with
-([tools/command-line.md](tools/command-line.md)), so a line can name it without anything having been
-called first.
+**Given as the session opens, not asked for by a tool.** The directory is there before the first
+line runs and its path is in the environment each stage is spawned with, so a program that wants
+somewhere to write finds it without anything having been called first.
 
 A tool that makes one on demand is the alternative, and is refused. It would cost a description in
 every request whether or not a turn needs a scratch file at all, and the first line that redirects
 would be written before the tool had been called, so a turn pays a refusal and a round trip to learn
 what an environment variable would have told it for nothing.
+
+The line itself expands nothing. A `$` in a line is refused, and quoted it is ordinary text
+([tools/command-line.md](tools/command-line.md)), so what reads the variable is the program the line
+named rather than anything between the two. That is why the name is worth having: an argument a
+person endorsed is the text they were shown, and a program that needs the path reads it where paths
+of that kind are kept.
+
+Set on each stage as it is spawned rather than written into the environment this process holds. This
+process reads its own environment from several threads, so rewriting that in place has no moment at
+which nothing is reading it, and reaching the programs a line starts is the whole of what the
+variable is for. A line the person typed themselves has nothing added to it, keeping their own
+environment as it keeps everything else about their terminal ([RUN-12](tools/run.md#RUN-12)).
 
 `$TMPDIR` for a program a `run` starts stays what it was, since the map governs the operations this
 program performs and the redirection targets a line spells rather than what a program opens for
@@ -615,6 +624,20 @@ the map answers for, which is the known cost about a file another process drops 
 purpose. Whether a confined program reaches a
 temporary directory at all is a question for the base profile [sandboxing.md](sandboxing.md)
 describes.
+
+`verified-by: bravebot_agent::exec::a_stage_is_told_where_the_sessions_own_directory_is`
+`verified-by: bravebot_agent::exec::a_background_stage_is_told_where_the_sessions_own_directory_is`
+`verified-by: bravebot_agent::exec::a_steps_own_assignment_wins_over_the_directory_it_was_given`
+`verified-by: bravebot_agent::exec::a_session_with_no_directory_of_its_own_names_none`
+`verified-by: bravebot_agent::exec::a_stage_keeps_the_temporary_directory_this_process_has`
+`verified-by: bravebot_agent::turn::a_program_a_turn_runs_is_told_where_the_sessions_directory_is`
+
+## What the session's directory is still missing
+
+An incognito session has one as well, and [incognito.md](incognito.md) names it among the things
+that still reach the filesystem in that mode: the name says nothing about which project or which
+session, and nothing in it outlives the session, so what an empty one records is that this program
+ran at this time rather than that a session ran in this project at this time.
 
 **What has to exist first.**
 
