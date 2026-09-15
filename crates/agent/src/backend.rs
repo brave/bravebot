@@ -233,6 +233,19 @@ impl<'a> Backend<'a> {
             })
     }
 
+    /// Whether an imported subscription would be spent on this backend's requests.
+    ///
+    /// Only the aichat endpoint has the notion. Bedrock reaches whatever the AWS account is entitled
+    /// to and a gateway authenticates with a token of its own, so a Leo credential means nothing to
+    /// either and [`Backend::with_subscription`] drops one handed to it.
+    ///
+    /// For a caller deciding whether to look for a subscription at all. The same reasoning as
+    /// [`Backend::needs_sign_in`], in the other direction: a turn served by one backend has no
+    /// business reading, or reporting on, the credentials of another it will never call.
+    pub fn spends_a_subscription(&self) -> bool {
+        matches!(self, Self::Aichat { .. })
+    }
+
     /// Send requests on the premium tier, where the backend has one.
     ///
     /// Ignored by Bedrock, which has no such notion: an AWS account reaches the models it reaches,
@@ -494,6 +507,26 @@ mod tests {
             Backend::sign_in_if_needed(&config, "z-ai/glm-4.6", |line| said.push(line)).is_ok()
         );
         assert!(said.is_empty(), "a gateway asked for a sign-in: {said:?}");
+    }
+
+    /// A Leo credential is only spendable against Brave's endpoint. Deciding otherwise would have a
+    /// turn read the credential store, and report on what it found there, for a request going to a
+    /// service that has never heard of a subscription.
+    #[test]
+    fn only_the_aichat_backend_spends_an_imported_subscription() {
+        let config = with_a_gateway();
+        let egress = Egress::new();
+
+        assert!(
+            Backend::select(&config, &egress, DEFAULT_MODEL).spends_a_subscription(),
+            "a Brave model would not spend a subscription"
+        );
+        for model in ["opus-arn", "z-ai/glm-4.6"] {
+            assert!(
+                !Backend::select(&config, &egress, model).spends_a_subscription(),
+                "{model} was taken to spend a Leo credential"
+            );
+        }
     }
 
     /// A gateway answers under the slug it was asked for, so a name that comes back changed is a

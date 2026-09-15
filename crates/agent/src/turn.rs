@@ -1093,7 +1093,7 @@ pub fn compact<S: Sink, R: Reporter>(
 
     reporter.phase(Phase::Compacting);
 
-    let mut subscription = discover_subscription(config, reporter);
+    let mut subscription = discover_subscription(config, egress, model, reporter);
     let mut chat = crate::processor::Chat {
         config,
         egress,
@@ -1148,7 +1148,7 @@ pub fn aside<S: Sink, R: Reporter>(
         .with_trust(trust)
         .resuming(question.context());
 
-    let mut subscription = discover_subscription(config, reporter);
+    let mut subscription = discover_subscription(config, egress, model, reporter);
     let mut chat = crate::processor::Chat {
         config,
         egress,
@@ -1201,7 +1201,7 @@ pub fn goal<S: Sink, R: Reporter>(
         .with_trust(trust)
         .resuming(check.context());
 
-    let mut subscription = discover_subscription(config, reporter);
+    let mut subscription = discover_subscription(config, egress, model, reporter);
     let mut chat = crate::processor::Chat {
         config,
         egress,
@@ -1229,10 +1229,23 @@ pub fn goal<S: Sink, R: Reporter>(
 /// free tier, the endpoint answers a premium model name with a weaker model rather than an error,
 /// and the only visible symptom is a worse answer. Nothing about that points at the credential
 /// store, so it has to be said outright.
-pub(crate) fn discover_subscription<R: Reporter>(
+///
+/// Asked of the model rather than of the configuration, because the model is what decides the
+/// backend. A turn on Bedrock or on a gateway cannot spend a Leo credential at all, so the store is
+/// not read for one: the line it would produce says the turn fell back to the free tier, which is
+/// not where such a turn went, and it sends somebody to re-import a subscription that would have
+/// changed nothing.
+pub fn discover_subscription<R: Reporter>(
     config: &Config,
+    egress: &Egress,
+    model: Option<&str>,
     reporter: &mut R,
 ) -> Option<crate::ImportedSubscription> {
+    let asked_for = model.unwrap_or(&config.default_model);
+    if !crate::backend::Backend::select(config, egress, asked_for).spends_a_subscription() {
+        return None;
+    }
+
     let discovery = crate::ImportedSubscription::discover(config.premium_endpoint.as_deref()?);
     if let Some(problem) = discovery.complaint() {
         reporter.notice(t!(subscription_unusable, problem = problem));
@@ -1759,7 +1772,8 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // silent, and the only symptom was the endpoint substituting a weaker model for the premium one
     // that was asked for, which reads as the model getting worse for no reason: nobody attributes a
     // worse answer to an unreadable credential file.
-    let mut subscription = discover_subscription(config, &mut reporter);
+    let mut subscription =
+        discover_subscription(config, egress, task.model.as_deref(), &mut reporter);
 
     // The tool that says when this turn is asked again is offered to every turn except a tick the
     // person timed, and describes a different job on either side of that. Nothing else changes.

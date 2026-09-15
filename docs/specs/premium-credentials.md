@@ -8,6 +8,8 @@ governs:
   - crates/skus/src/store.rs
   - crates/aichat/src/lib.rs
   - crates/agent/src/subscription.rs
+  - crates/agent/src/backend.rs
+  - crates/agent/src/turn.rs
   - crates/tui/src/status.rs
   - crates/tui/src/logo.rs
 ---
@@ -156,10 +158,25 @@ request that silently lost its credential still returns something that reads lik
 nothing on screen connects that to the credential store. The downgrade has to be said out loud,
 because its only other symptom is the agent appearing to get worse for no reason.
 
+**Asked by the model, of a turn that could have spent one.** Which service answers is decided by the
+model ([BACKEND-3](backends.md#BACKEND-3)), and only Brave's endpoint has a notion of a subscription
+at all. A turn whose model is served by AWS Bedrock or by a gateway therefore reads the store for
+nothing and is told nothing about it, however unusable what is stored may be.
+
+**Why.** There is no downgrade to report: such a turn ran on the model that was chosen, and the
+credential it did not spend is one that service would not have accepted. The line said otherwise on
+both halves: that the turn fell back to the free tier, which is not where a request signed for AWS
+went, and that re-importing was the remedy, which would have changed nothing about the answer. That
+is the same reasoning [BACKEND-9](backends.md#BACKEND-9) applies to a sign-in, and a turn served
+entirely by one backend has no business acting on, or reporting on, the credentials of another it
+will never call.
+
 `verified-by: bravebot_agent::subscription::an_unreadable_batch_is_reported_and_an_absent_one_is_not`
 `verified-by: bravebot_agent::subscription::an_endpoint_in_no_environment_is_not_a_complaint`
 `verified-by: bravebot_agent::home::a_subscription_imported_for_another_environment_is_reported`
 `verified-by: bravebot_agent::home::an_empty_credentials_file_is_reported_rather_than_read_as_absent`
+`verified-by: bravebot_agent::home::a_turn_on_another_backend_is_not_told_about_an_unusable_batch`
+`verified-by: bravebot_agent::backend::only_the_aichat_backend_spends_an_imported_subscription`
 
 <a id="PREM-9"></a>
 ### PREM-9: the tier reported is the one the last turn ran on, not the one the build was compiled with
