@@ -333,6 +333,8 @@ run-always-output-trusted = ce qu'elle affiche est fiable, et le modèle le lit
 run-always-exact-arguments = ces arguments seulement : git log ne couvrirait pas git push
 run-private-not-remembered =
     une entrée privée est soumise à chaque fois, celle-ci ne peut donc pas être retenue
+run-assignment-not-remembered =
+    une affectation placée devant un programme est soumise à chaque fois, celle-ci ne peut donc pas être retenue
 run-yes = l'exécuter
 run-always = toujours
 run-no = ne pas l'exécuter

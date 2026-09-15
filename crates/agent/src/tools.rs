@@ -3126,12 +3126,14 @@ fn run<S: Sink, C: Confirmer>(
         // Recorded before the run, so a repeat of the same command later in this turn is not
         // asked about again. The policy carries it out of the turn and the session records it.
         //
-        // Not for a line that feeds a file to a program. The prompt does not offer `a` for those,
-        // and this is the same refusal at the layer that would act on it: what an entry records
-        // is a program and its exact argv, and a `<` redirection is in neither, so an entry made
-        // while one file was redirected in would cover the same program fed any other file. A
-        // front end answering `always` anyway must not be able to widen the list that way.
-        if answer.remember && !plan.releases_private() {
+        // Not for a line an entry could not record: one that feeds a file to a program, and one that
+        // writes an assignment in front of a program. The prompt offers `a` for neither, and this is
+        // the same refusal at the layer that would act on it, asked of the same predicate so the two
+        // cannot drift. What an entry records is a program and its exact argv, and a `<` redirection
+        // and an assignment are in neither, so an entry made here would cover the same program fed
+        // any other file, or run under no assignment at all. A front end answering `always` anyway
+        // must not be able to widen the list that way.
+        if answer.remember && plan.can_be_remembered() {
             for command in request.would_vouch_for() {
                 policy.remember_command(command);
             }

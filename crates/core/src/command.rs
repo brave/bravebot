@@ -410,6 +410,31 @@ impl Plan {
                 .any(|route| matches!(route, Route::Stdin { .. }))
     }
 
+    /// Whether any step carries an environment assignment written in front of its program.
+    ///
+    /// An assignment decides what a program loads and reads before its own arguments are looked at,
+    /// and a vouched entry records a program and its exact arguments and nothing else. So a standing
+    /// answer cannot cover a line carrying one, and this is what the gates ask.
+    ///
+    /// Any step, not the first: an assignment in front of a stage in the middle of a pipeline
+    /// decides what that stage loads, and what it prints is what the next stage reads.
+    pub fn carries_an_assignment(&self) -> bool {
+        self.steps().iter().any(|step| !step.environment.is_empty())
+    }
+
+    /// Whether an entry could record this line as the person read it.
+    ///
+    /// An entry holds a resolved program and its arguments, so a line whose behaviour turns on
+    /// anything else cannot be put in one: the entry would come out covering a line nobody was
+    /// shown. The reasons are kept in one place because two layers refuse independently, the prompt
+    /// where it is drawn and the tool where an answer is acted on, and a reason added to one of them
+    /// alone is a prompt offering a key the other honours.
+    ///
+    /// Which reason it is belongs to whoever explains the refusal, not here.
+    pub fn can_be_remembered(&self) -> bool {
+        !self.releases_private() && !self.carries_an_assignment()
+    }
+
     /// The plan as a person should read it before approving.
     ///
     /// Not the line. The line is shown beside this as context, and an endorsement binds here.

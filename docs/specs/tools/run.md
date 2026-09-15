@@ -204,12 +204,40 @@ messages from a repository the person never answered a question about. Widening 
 the directory would grant the shortcut there, and it is not done: it would put a tree into an entry
 the session record and `/status` (RUN-9) describe as a program and its arguments.
 
+An entry says nothing about the **environment** either, because nothing in it records a `NAME=value`
+assignment written in front of a program. So it grants neither of RUN-7's two things for a line
+carrying one: `LD_PRELOAD=./evil.so git log` is asked about however often `git log` was vouched for,
+and what it prints is `(U,priv)`. An assignment decides what a program loads and reads before its own
+arguments are looked at, so the line is a different proposition from the one the person read, and
+what it printed was written by whatever that assignment brought in. `a` is not offered for such a
+line at all, and the refusal is made twice, once where the prompt is drawn and again where an answer
+is acted on: an entry made there would be a bare entry, covering the same program under no
+assignment, so the list would end up holding something nobody was shown. Widening the key to include
+the environment is not done for the reason the directory is not: it would put a set of assignments
+into an entry the session record and `/status` (RUN-9) describe as a program and its arguments. The
+question is put before a rule in a settings file is consulted, as
+[permissions.md](../permissions.md) requires: a rule is matched against the program and its arguments
+run together, a rendering an assignment is not in, so no rule anybody could write tells the two lines
+apart.
+
+**A known cost.** `NO_COLOR=1 cargo test` and `RUST_LOG=debug ./demo` are ordinary work, and they are
+asked about every time, in this session and in the next. The answer is the spelling that puts the
+assignment where a person reads it and an entry can hold it: `env NO_COLOR=1 cargo test` is a program
+called `env` with three arguments, so a vouch for it covers that line and no other, and the person
+approving it saw the assignment in the argv they approved. What this clause refuses is a line whose
+meaning is not in its argv, not the setting of a variable.
+
 `verified-by: bravebot_core::policy::vouching_for_one_command_does_not_cover_another_of_the_same_program`
 `verified-by: bravebot_core::policy::vouching_does_not_follow_a_name_onto_a_different_binary`
 `verified-by: bravebot_core::policy::a_vouched_line_is_asked_about_when_it_runs_outside_the_root`
 `verified-by: bravebot_core::policy::output_of_a_vouched_line_run_outside_the_root_is_untrusted`
 `verified-by: bravebot_core::policy::a_vouched_line_is_asked_about_when_no_root_is_known`
 `verified-by: bravebot_agent::turn::a_vouched_line_is_asked_about_again_when_a_directory_is_named`
+`verified-by: bravebot_core::policy::a_vouched_line_carrying_an_environment_assignment_is_asked_about`
+`verified-by: bravebot_core::policy::output_of_a_vouched_line_carrying_an_environment_assignment_is_untrusted`
+`verified-by: bravebot_tui::confirm::a_run_carrying_an_environment_assignment_offers_no_standing_permission`
+`verified-by: bravebot_tui::confirm::a_run_that_is_private_and_carries_an_assignment_gives_both_reasons`
+`verified-by: bravebot_agent::turn::a_line_carrying_an_environment_assignment_is_not_remembered_however_it_is_answered`
 
 <a id="RUN-9"></a>
 ### RUN-9: the vouched list belongs to the session
@@ -621,11 +649,14 @@ cover the same program with them apart. Setting a variable makes a different lin
 reason. An assignment decides what a program loads and reads before its own arguments are looked at,
 which is why the hand-audited table refuses to prove a line carrying one
 ([command-line.md](command-line.md)), so a record that left it out would cover the line the person
-read with anything at all put in front of it. This is a narrower key than a vouch has. A vouch is
-keyed on the resolved path and the exact arguments and nothing else ([RUN-8](#RUN-8)), so a vouched
-entry covers the same program with an assignment in front of it or its two streams merged; the
-session it was given in is what bounds that, and a record that outlives the session has no such
-bound.
+read with anything at all put in front of it. This is still a narrower key than a vouch has, on the
+streams if no longer on the environment. A vouch is keyed on the resolved path and the exact
+arguments and nothing else ([RUN-8](#RUN-8)), so a vouched entry covers the same program with its
+two streams merged; the session it was given in is what bounds that, and a record that outlives the
+session has no such bound. It does not cover the same program with an assignment in front of it,
+because a key that cannot hold one is a key that cannot answer about one, which is why [RUN-8](#RUN-8)
+asks about such a line however often the bare program was vouched for. A record made here has the
+assignment in it and can answer, which is what a field per assignment buys.
 
 **Why a record rather than a rule in a settings file.** A rule is matched against a rendering of the
 line: one string, the program's name and its arguments run together, in a language where a character
