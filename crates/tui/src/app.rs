@@ -1845,6 +1845,34 @@ fn left_behind(stored: &crate::sessions::Handle) -> Option<crate::sessions::Resu
     stored.to_resume()
 }
 
+/// The session as it stood before the turn now in flight, for `/undo` to rewind to.
+///
+/// The turn's own counts come from [`Session::turn_start`] and not from the session in hand: a
+/// prompt arrives already pushed onto the transcript and already counted as a turn, so the live
+/// figures describe the turn this exists to undo rather than what it replaced.
+fn rewind_point(
+    session: &Session,
+    conversation: &Conversation,
+    trust: &TrustStore,
+    programs: &TrustedPrograms,
+    stored: &crate::sessions::Handle,
+) -> crate::state::TurnSnapshot {
+    let began = session.turn_start();
+    crate::state::TurnSnapshot {
+        conversation: conversation.snapshot(),
+        turns: began.turns,
+        tokens: session.tokens,
+        spend: session.spend_by_turn().clone(),
+        timing: session.timing_by_turn().clone(),
+        cached: session.cached(),
+        trust: trust.clone(),
+        programs: programs.clone(),
+        transcript_len: began.transcript_len,
+        title: stored.title().to_string(),
+        was_wrote: stored.resumable().is_some(),
+    }
+}
+
 /// Returns the session left behind, where there is one to pick up again.
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -2097,7 +2125,7 @@ fn event_loop(
                     stored.truncate_audit(session.turns + 1);
 
                     if snapshot.turns == 0 && !snapshot.was_wrote {
-                        stored.discard_unwritten();
+                        stored.discard_unwritten(&snapshot.title);
                     } else {
                         stored.save(
                             &snapshot.title,
@@ -2346,19 +2374,8 @@ fn event_loop(
                 // carries the work on with is this program's.
                 let mut sending = Some((prompt, Wrote::ThePerson));
                 while let Some((prompt, wrote)) = sending {
-                    session.previous_turn = Some(crate::state::TurnSnapshot {
-                        conversation: conversation.snapshot(),
-                        turns: session.turns,
-                        tokens: session.tokens,
-                        spend: session.spend_by_turn().clone(),
-                        timing: session.timing_by_turn().clone(),
-                        cached: session.cached(),
-                        trust: trust.clone(),
-                        programs: programs.clone(),
-                        transcript_len: session.transcript.len(),
-                        title: stored.title().to_string(),
-                        was_wrote: stored.resumable().is_some(),
-                    });
+                    let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
+                    session.previous_turn = Some(point);
                     let _ = workspace.take_backups();
 
                     // Both are threaded through: a turn that writes untrusted data into a trusted
@@ -10110,6 +10127,52 @@ mod tests {
             ),
             settled => panic!("a resume was answered by the mode instead: {settled:?}"),
         }
+    }
+
+    /// A rewind point read off the live session lands inside the turn it undoes: by the time the
+    /// loop has a prompt in hand it is on the transcript and counted as a turn, so rewinding to
+    /// such a point would leave the prompt in the scrollback and number the next turn one too high.
+    #[test]
+    fn a_rewind_point_excludes_the_turn_it_undoes() {
+        let root = crate::testutil::scratch_dir("bravebot-app-rewind-point");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create");
+
+        let mut session = Session::new("none");
+        let conversation = Conversation::new();
+        let trust = TrustStore::new();
+        let programs = TrustedPrograms::new();
+        let stored = crate::sessions::Handle::begin(&root);
+
+        type_line(&mut session, "delete the tests");
+        session.submit().expect("the prompt is sent");
+
+        let first = rewind_point(&session, &conversation, &trust, &programs, &stored);
+        assert_eq!(
+            first.turns, 0,
+            "the first turn rewinds to a session with no turns in it"
+        );
+        assert_eq!(
+            first.transcript_len, 0,
+            "the prompt is the turn's, and goes back with it"
+        );
+        assert!(
+            !first.was_wrote,
+            "nothing was written before the first turn"
+        );
+
+        session.complete("nothing was deleted", Vec::new(), 10);
+        type_line(&mut session, "delete the docs");
+        session.submit().expect("the prompt is sent");
+
+        let second = rewind_point(&session, &conversation, &trust, &programs, &stored);
+        assert_eq!(second.turns, 1, "the turn that finished stays");
+        assert_eq!(
+            second.transcript_len, 2,
+            "the finished turn's prompt and reply stay"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Both halves of what `/cd` does, together: the working directory moves, and the directory

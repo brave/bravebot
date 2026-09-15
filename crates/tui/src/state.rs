@@ -626,6 +626,20 @@ impl Occupancy {
     }
 }
 
+/// Where the turn in flight began: the counts from before it.
+///
+/// A prompt reaches the event loop already counted, since [`Session::begin_turn`] pushes it onto
+/// the transcript and raises the turn number before handing it back. A snapshot built from the
+/// live figures therefore describes the turn it exists to undo, so these are recorded as the turn
+/// begins and read from here instead.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TurnStart {
+    /// Completed turns before this turn.
+    pub turns: usize,
+    /// Transcript length before this turn's prompt was pushed.
+    pub transcript_len: usize,
+}
+
 /// A checkpoint of session state captured before a turn begins, for `/undo`.
 #[derive(Debug, Clone)]
 pub struct TurnSnapshot {
@@ -910,6 +924,12 @@ pub struct Session {
     /// Captured in memory right before a turn starts, and kept here so `/undo` can rebuild
     /// the session to match it.
     pub previous_turn: Option<TurnSnapshot>,
+    /// Where the turn in flight began, for the snapshot that rewinds to it.
+    ///
+    /// Private, because it records what [`Session::begin_turn`] found rather than a figure anybody
+    /// may set: a caller that could write it could move the rewind point into the middle of the
+    /// turn being undone. Read it with [`Session::turn_start`].
+    turn_start: TurnStart,
     /// The tool call in flight, if one is.
     ///
     /// Also in the transcript, where it stays. Kept here as well because the indicator needs
@@ -1124,6 +1144,7 @@ impl Session {
             goal: None,
             last_turn_backups: Vec::new(),
             previous_turn: None,
+            turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
             streaming: String::new(),
             attributed_to: None,
@@ -1395,6 +1416,9 @@ impl Session {
     pub fn clear(&mut self) {
         self.transcript.clear();
         self.turns = 0;
+        // Counts of a transcript that is gone: kept, they would rewind a later turn to a length the
+        // new conversation has never reached.
+        self.turn_start = TurnStart::default();
         self.tokens = 0;
         self.spend.clear();
         self.timing.clear();
@@ -4678,6 +4702,12 @@ impl Session {
 
     /// Start a turn for a prompt, whether it was sent just now or waited for its turn.
     fn begin_turn(&mut self, prompt: String, taken: (Vec<Attached>, Vec<AttachedImage>)) -> String {
+        // Recorded here because this is the last moment these figures exist: the prompt goes into
+        // the transcript and the count goes up below, and `/undo` rewinds to what they replaced.
+        self.turn_start = TurnStart {
+            turns: self.turns,
+            transcript_len: self.transcript.len(),
+        };
         (self.sent, self.sent_pasted) = taken;
         self.transcript.push(Entry::user(prompt.clone()));
         self.status = Status::Working;
@@ -4694,6 +4724,11 @@ impl Session {
         self.running = None;
         self.started = Some(Instant::now());
         prompt
+    }
+
+    /// Where the turn in flight began, for the snapshot `/undo` rewinds to.
+    pub fn turn_start(&self) -> TurnStart {
+        self.turn_start
     }
 
     /// Record a completed turn, and what it cost.
