@@ -80,6 +80,7 @@ Rather than truncated, since a silently shortened input is one the planner would
 having seen part of.
 
 `verified-by: bravebot_cli::main::input_over_the_cap_is_refused`
+`verified-by: bravebot_cli::main::a_refused_pipe_says_what_to_do_instead`
 
 <a id="CLI-5"></a>
 ### CLI-5: stdout carries the reply and nothing else
