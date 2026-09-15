@@ -141,6 +141,12 @@ The run prompt separates running once from running always, Enter does not approv
 releasing private data offers no standing permission at all. Declining, and Ctrl-C, vouch
 for nothing.
 
+A third answer, whose grant outlives the session, is specified in [tools/run.md](tools/run.md) and
+not yet built. Everything above holds of it: it has a key of its own, Enter does not reach it, a run
+releasing private data does not offer it, and declining or Ctrl-C records nothing. Its row is where the
+two standing lifetimes are told apart, since a key saying only `always` is the one that could be read
+as either.
+
 The plan prompt offers no standing form at all, and Enter does not approve a plan either. A plan is
 written afresh for each run, so remembering an answer to one would be approving steps nobody has
 seen.
@@ -173,10 +179,14 @@ session opens with ends the session and opens nothing, and only Ctrl-C leaves.
 <a id="PROMPT-8"></a>
 ### PROMPT-8: a resume restores standing permissions, and nothing else
 
-Two of these grants are standing: the trust map, and the list of commands a person said to stop
-asking about. Both are written into the session record and come back with `--resume`, because the
-person resuming is the person who gave them. A fresh session in the same directory restores
-neither and asks again.
+Two of these grants are standing, and a third is specified and not yet built. The two, the trust map
+and the list of commands a person said to stop asking about, are written into the session record and
+come back with `--resume`, because the person resuming is the person who gave them; a fresh session
+in the same directory restores neither and asks again. The third is not restored by a resume at all:
+the record of command lines somebody asked to be remembered past the session, which
+[tools/run.md](tools/run.md) governs, is read by every session begun in that directory, resumed or
+fresh. It reaches a fresh session because the key that made it said how long its answer lasts, and
+because what it carries is the asking rather than any trust.
 
 Nothing else survives. A single-use endorsement is created by one approval, is bound to one value,
 and is never written down, so a resumed turn cannot replay a write or a run that an earlier turn

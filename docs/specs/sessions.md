@@ -63,7 +63,7 @@ design exists to close.
 ### SESSION-3: the record carries what a resume needs and nothing more
 
 The conversation, the plan each turn worked to, what the session has spent, the branch it ran on,
-the questions asked beside the work, and the standing permissions its user granted. A session can
+the questions asked beside the work, and the standing permissions a resume restores. A session can
 be named, renaming rewrites the record immediately, a chosen name survives the next turn, and an
 empty name is refused.
 

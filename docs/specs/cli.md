@@ -37,7 +37,9 @@ this and nothing that may lift the second.
 An allow rule is not a guess either, and that is not what disqualifies it. It says which prompts to
 stop raising, which is a decision about a session somebody is sitting in front of; read here it
 would say which effects may happen unwatched, and one line in a file in the home directory would
-do what the flag is named and warned about for.
+do what the flag is named and warned about for. A record of command lines somebody asked to be
+remembered past a session ([tools/run.md](tools/run.md)) is not read here either, and for this same
+reason.
 
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`

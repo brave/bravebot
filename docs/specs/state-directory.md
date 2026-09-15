@@ -22,11 +22,13 @@ guards:
 `~/.bravebot`, the directory holding what outlives a session, and who on the machine may read what
 is written into it. The prompt history, the model, theme, effort and editing choices, the answer to
 the update question, session records, a language server's index of a workspace, skills, standing
-instructions and an imported subscription all live here.
+instructions and an imported subscription all live here, and so do the command lines somebody asked to
+be remembered past a session once the key that records them exists.
 
 What each of those files means belongs to the spec for that subject:
-[sessions.md](sessions.md) for a session record, [skills.md](skills.md) and
-[instructions.md](instructions.md) for what is read out of the directory,
+[sessions.md](sessions.md) for a session record, [tools/run.md](tools/run.md) for the remembered
+command lines, [skills.md](skills.md) and [instructions.md](instructions.md) for what is read out of
+the directory,
 [premium-credentials.md](premium-credentials.md) for the subscription,
 [tools/lsp.md](tools/lsp.md) for the index and why sitting here confers nothing on it, and
 [incognito.md](incognito.md) for the mode that writes none of it. This file covers the directory

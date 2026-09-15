@@ -3069,17 +3069,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// the line runs in, then a rule the user wrote in advance, then the proof road, then the
     /// vouched list.
     ///
-    /// True unless the audited table accounts for **every** step or this session's user has vouched
-    /// for every one of them. There is no read-only category and there is no way to declare one:
+    /// True unless the audited table accounts for **every** step, a rule the user wrote in advance
+    /// covers the line, or this session's user has vouched for every step of it. There is no
+    /// read-only category and there is no way to declare one:
     /// `foo --bar` might write to disk and nothing here can tell, and a step calling itself harmless
     /// would only help if the declaration were honest. So a program nobody has vouched for is always
     /// asked about, however innocuous it looks.
     ///
-    /// Two things may answer the question and nothing else: a person having answered it before, in
-    /// this session, for this program with these exact arguments, and the audited table in
-    /// [`crate::pure`] establishing that these exact arguments write nothing and read only paths the
-    /// user vouched for. The table matches argv, but it is not a property of the argv in the sense
-    /// this rules out: an entry is a claim checked by hand against one program's full option list,
+    /// Three things may answer the question and nothing else: a person having answered it before, in
+    /// this session, for this program with these exact arguments; a rule the person wrote in advance,
+    /// which stops the asking without raising any label; and the audited table in [`crate::pure`]
+    /// establishing that these exact arguments write nothing and read only paths the user vouched
+    /// for. The table matches argv, but it is not a property of the argv in the sense this rules
+    /// out: an entry is a claim checked by hand against one program's full option list,
     /// which is why it may answer at all. Never something a step declares about itself, and never
     /// anything derived from what a program printed, which is `(U,priv)` and could say anything.
     ///

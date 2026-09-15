@@ -81,7 +81,10 @@ hold gate names and paths, which is a record of a session having happened and wh
 ### INCOG-5: reading is unchanged
 
 An incognito session reads the settings, the recorded model and theme, the standing instructions,
-the skills and the imported credentials, exactly as an ordinary one does. Only writing is refused.
+the skills and the imported credentials, exactly as an ordinary one does. Only writing is refused. The
+record of command lines somebody asked to be remembered past a session, which
+[tools/run.md](tools/run.md) specifies and nothing yet builds, is read here on the same terms: a line
+already in it stops the asking as it does anywhere, and the key that would add one is not offered.
 
 **Why.** A session that could not read its own configuration would not be private, it would be
 broken, and one that could not read a credential could not reach a backend at all. This is the same
