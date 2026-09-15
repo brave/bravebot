@@ -123,19 +123,83 @@ plan a person could read.
 **The base is reviewed as code.** The loader, the system directories and a toolchain are shown by no
 prompt, so they are a fixed part of the profile rather than a grant. That base holds no credential
 directory, which is the whole of what this buys: `~/.ssh/id_rsa` and `~/.aws/credentials` are out of
-reach of a program whose plan never named them.
+reach of a program whose plan never named them. It does hold the caches and version manager
+directories a build resolves through, and not the token files beside them: `~/.cargo/registry` and
+`~/.npm/_cacache` are in it, `~/.cargo/credentials.toml` and `~/.npmrc` are not. The configuration
+of the editor `git commit` opens is in it too. Leaving a cache out breaks every build and protects
+nothing, so a cache is part of the base rather than an exception somebody is shown.
 
-**A credential is a directory a person names.** A confined `git push` is refused, because no plan
-names `~/.ssh`, and it stays refused until a person names that directory themselves. The surfaces
-for that exist: `/add-dir` in a session, `--add-dir` on the command line, and
-`additionalDirectories` in a settings file, which is put as a question of its own when the session
-opens ([trust-map.md](trust-map.md), [cli.md](cli.md), [permissions.md](permissions.md)). A rule
-about which commands to ask about is not one of them, because such a rule stops a question rather
-than extending reach. The cost is real: `run git push` works today and would not until somebody
-names `~/.ssh` once. What that buys is a key handed over deliberately rather than readable by every
-program that runs. Widening never follows from the refusal itself: the denial reaches this process
-as an exit status, and which path a program wanted is only in what it printed, which no profile is
-built from. Nothing grants what a program just failed to reach.
+**A credential is a scope the plan carries.** A push is how most sessions end, so a profile that
+refuses one is a profile somebody turns off, and a scope a person has to go and find first is that
+refusal with a step in front of it. A plan therefore carries a third thing beside its read set and
+its write set: the credential scope each stage needs, shown in the prompt with the rest of the plan.
+A scope grants a stage no more than the same stage reaches when it is not confined, no scope grants
+a private key, and what confinement buys on disk is what every other stage in the pipeline loses.
+
+A scope bounds files and nothing else. A stage receives the environment this process holds
+([tools/run.md](tools/run.md)), so a token sitting in it, `CARGO_REGISTRY_TOKEN` or `GITHUB_TOKEN`,
+reaches every stage of a pipeline whatever scope each one carries, and no filesystem grant is what
+put it there or can take it away.
+
+| A stage whose operation | Reaches |
+|---|---|
+| is `git push`, `fetch`, `pull`, `clone` or `ls-remote`, or is `gh` | the remote scope below |
+| is `aws`, `kubectl` or `docker` | that one tool's credential directory |
+| is anything else, a build or a test in the same pipeline included | none of it |
+
+A stage reaches its own row and no other: a `docker` stage reaches neither the remote scope nor
+`~/.aws`, and no row reaches a private key, `~/.ssh` as a directory, or the keychain database on
+disk. The remote scope is the agent socket `$SSH_AUTH_SOCK`, `~/.ssh/config` and
+`~/.ssh/known_hosts` to read with `known_hosts` also to write, the public keys in that directory,
+`~/.gitconfig`, and the stores an https helper reads: `~/.git-credentials`, `~/.netrc`,
+`~/.config/gh`, and the login keychain through the system service that holds it. A push signs
+through the agent and needs no private key, and the public half is in the scope because that is what
+ssh reads to name an identity to the agent where a configuration file pins one. It does need
+`known_hosts`, since a host it cannot verify is a push that fails. Both transports are in one scope
+because which one a remote uses is written in a configuration file, and no file's contents decide a
+scope.
+
+What the scope costs is that a repository's own hooks run under `git`, so a push somebody asked for
+can read a token store while it runs. The agent socket is the narrower shape of the same thing, and
+is why the ssh half of the scope names no private key: a hook that reaches the socket can sign with
+the key for as long as the push lasts, and cannot take it.
+
+**A scope is keyed to the operation, and to no file's contents.** `git` is an arbitrary command
+runner given the right argv, since `-c core.sshCommand=`, `-c alias.x=!`, `-c credential.helper=`
+and `--exec-path` each turn it into a way to run something else. A scope therefore follows the
+operation the endorsed argv names rather than the first word of it: `git status` in a pipeline gets
+none, and an argv carrying one of those overrides gets none either, because what would run is not
+what the plan says would run. Deriving a scope from a configuration file instead would let a cloned
+repository's own `.git/config` choose which secret becomes reachable. The price of reading none of
+them is a scope naming stores a given machine does not use, and an `include.path` in `~/.gitconfig`
+naming a file no scope covers.
+
+**Widening happens before the run, and nothing widens after a refusal.** The compiler adds the
+scope, a person sees it in the plan they endorse, and there is nothing new to trust, because the
+grant is still the plan. Widening in answer to a refusal is rejected: a denial reaches this process
+as an exit status and no backend here hands it a path, so the only place the wanted path appears is
+what the program printed, which is content a repository controls. A build made to fail in a chosen
+way would otherwise become a prompt asking a person for `~/.ssh` with a plausible reason. A backend
+that did report the path would not settle it, since the path it reports is still the one the program
+chose to touch. Nothing grants what a program just failed to reach.
+
+**A person is the other route, and the only route to the key.** A session where no agent holds the
+key, or one wanting a store no scope names, a publish reading `~/.cargo/credentials.toml` or
+`~/.npmrc` among them, still needs somebody to name a directory: `/add-dir` in a session,
+`--add-dir` on the command line, and `additionalDirectories` in a settings file, which is put as a
+question of its own when the session opens ([trust-map.md](trust-map.md), [cli.md](cli.md),
+[permissions.md](permissions.md)). A rule about which commands to ask about is not one of them,
+because such a rule stops a question rather than extending reach. Only this route needs a path to be
+nameable without being vouched for, since a scope the compiler adds is a grant in a profile and
+records nothing about what anybody trusts.
+
+**Turning the scopes off.** `--credential-scopes` takes `planned` or `withheld`, and
+`run.credentialScopes` in a settings file takes the same two values. `withheld` leaves every scope
+out of every plan, so a stage reaches a credential only where a person named its directory. What it
+is for is a machine whose secrets are not this session's to lend: a shared build host, or one an
+administrator sets up for somebody else to work on. `planned` is the default, because almost every
+session needs a scope and a default people cannot work with is one they switch off wholesale. Either
+way the record of the run names each scope and the stage it was added for ([trace.md](trace.md)).
 
 **The network stays open to it.** A profile gates egress as a whole, so it cannot tell an approved
 `git push` or `gh api` from an exfiltration, and the endorsed argv already can. What confinement
@@ -145,17 +209,33 @@ output trusted.
 
 **What has to exist first.**
 
-- A path has to be nameable for a profile without being vouched for. Opening a directory in a
-  session records it as trusted as well as reachable, and the two are deliberately one grant there
-  because either half alone is no use to a tool. A confinement scope wants the reach and not the
-  vouching: naming `~/.ssh` so a push can sign must not make a key file's contents trusted content.
-  The command-line form already separates them, and the two session forms do not.
+- A path has to be nameable for a profile without being vouched for, on the route a person takes.
+  Opening a directory in a session records it as trusted as well as reachable, and the two are
+  deliberately one grant there because either half alone is no use to a tool. A confinement scope
+  wants the reach and not the vouching: naming `~/.ssh` so a push can sign must not make a key
+  file's contents trusted content. The command-line form already separates them, and the two session
+  forms do not. A scope the compiler adds needs none of this, since it grants reach inside a profile
+  and writes nothing to the record of what a person vouched for.
+- A policy names paths, in a list to read and a list to write, and a socket is neither. On macOS a
+  connect to a unix socket is a network operation, so the agent socket is reachable exactly while a
+  `run` profile leaves egress open, and the first profile narrowing egress has to be able to name
+  the socket instead. On Linux the right that governs connecting to a pathname socket arrives many
+  ABI versions after the one this backend targets, so a connect there is neither granted nor
+  deniable, and a profile meaning to bound one needs that ABI and a kernel carrying it.
+- The two backends disagree about a path that does not exist yet. On Linux a path a policy names and
+  cannot open is dropped rather than refused, so a scope naming `~/.ssh/known_hosts` on a fresh
+  account grants nothing and says nothing, and the push meets the refusal the scope existed to
+  prevent. On macOS the same name goes into the profile and the file can then be created. Granting
+  less than a policy asked for without saying so is the same degradation [SANDBOX-1](#SANDBOX-1)
+  forbids of an unavailable backend.
 - The base has to be written down. A profile as generated here denies everything and then names what
   a program may reach, on both backends, so "everything except this key" is not expressible and the
   base has to carry what an ordinary build reads.
 - The macOS backend clears the environment of a process it wraps. A stage receives the environment
   this process holds, less the credentials this agent authenticates with, so a `run` profile needs a
-  backend that leaves the rest of that environment alone.
+  backend that leaves the rest of that environment alone. The ssh half of the remote scope depends
+  on this one: a program that cannot see `$SSH_AUTH_SOCK` cannot use the socket, whatever a profile
+  allows.
 - The Linux backend targets the first Landlock ABI, which carries no right for renaming or linking a
   file into another directory, and a ruleset that does not handle that right denies the operation
   outright. Writing a temporary file and renaming it into place is what a compiler and a package
