@@ -1331,6 +1331,41 @@ fn record_answer<S: Sink>(
     Ok(answer)
 }
 
+/// Put anything the person typed while the round ran in front of the next one.
+///
+/// Called at a round boundary, once everything the round produced has gone into the conversation
+/// and where the turn is not stopping, so the planner reads the round it just did and then what
+/// the person made of it, which is the order the two things happened in.
+///
+/// A delegate does not ask at all. The line was typed at the turn the person is watching, by
+/// somebody who may not know a delegate is running, so handing it to the delegate would answer the
+/// wrong turn with it and leave the parent never told. Asking and then declining the answer is not
+/// the same thing: the queue is shared and what comes off it is off it, so that throws the line
+/// away and leaves the parent's own boundary with nothing waiting. Not asking is what leaves it
+/// there for the parent's next round, which is where it was aimed.
+fn take_interjections<S: Sink, C: Confirmer, R: Reporter>(
+    task: &Task,
+    confirmer: &mut C,
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    reporter: &mut R,
+) {
+    if task.delegate.is_some() {
+        return;
+    }
+    while let Some(said) = confirmer.interjection() {
+        // The one input this whole arrangement takes as trusted, and it stays trusted here for the
+        // reason the opening prompt is: a keystroke has no author but the person at the keyboard.
+        // What it cannot do is route. Nothing here consults it to decide where an effect lands, and
+        // the routing this turn precommitted is untouched, so a line typed mid-turn reaches the
+        // planner as words and every effect it asks for is gated exactly as one asked for by the
+        // opening prompt would be.
+        policy.admit_interjection(said.chars().count());
+        reporter.interjected(said.clone());
+        conversation.push(Message::user(said));
+    }
+}
+
 /// Take back every delegate that has finished, or wait for one where `wait` is set.
 ///
 /// A report reaches the planner as a message of its own rather than as the result of the call
@@ -1980,6 +2015,23 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                         &mut cached,
                         true,
                     )?;
+                    // A round the planner spent waiting is still a round, and the wait is when a
+                    // person watching a turn go somewhere they did not ask for is most likely to
+                    // say so. This is the boundary their line was aimed at. Reaching the next
+                    // request without asking would put the delegate's report to the planner and
+                    // none of what the person made of it, and the turn can end on that request.
+                    //
+                    // Guarded on the stop for the reason the boundary below is: Escape during the
+                    // wait ends this turn, and a line typed after it belongs to the next one.
+                    if !cancel.is_cancelled() {
+                        take_interjections(
+                            task,
+                            &mut confirmer,
+                            &mut policy,
+                            conversation,
+                            &mut reporter,
+                        );
+                    }
                     continue;
                 }
                 break completion;
@@ -2538,9 +2590,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             // Here rather than at the end of the turn, which is where it used to go, and the
             // difference is the whole point: a turn that has gone wrong is one somebody wants to
             // redirect while it is still going, and a prompt that waits for the answer arrives after
-            // the work it was meant to change. Asked after the results rather than before them so the
-            // planner reads the round it just did and then what the person made of it, which is the
-            // order the two things happened in.
+            // the work it was meant to change.
             //
             // Every call in the round has run by now. A line typed halfway through cannot stop the
             // rest, and must not: a round is a set of calls the planner asked for together, and
@@ -2550,22 +2600,13 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             // After the cancel checks above, so a stop that arrived during the round is still what
             // happens: a person who pressed Escape and then typed is starting again, not adding to a
             // turn they have just stopped.
-            //
-            // A delegate takes none of them. The line was typed at the turn the person is watching,
-            // by somebody who may not know a delegate is running at all, so handing it to the
-            // delegate would answer the wrong turn with it and leave the parent never told. Left in
-            // the queue, it reaches the parent's next round, which is where it was aimed.
-            while let Some(said) = confirmer.interjection().filter(|_| task.delegate.is_none()) {
-                // The one input this whole arrangement takes as trusted, and it stays trusted here
-                // for the reason the opening prompt is: a keystroke has no author but the person at
-                // the keyboard. What it cannot do is route. Nothing here consults it to decide where
-                // an effect lands, and the routing this turn precommitted is untouched, so a line
-                // typed mid-turn reaches the planner as words and every effect it asks for is gated
-                // exactly as one asked for by the opening prompt would be.
-                policy.admit_interjection(said.chars().count());
-                reporter.interjected(said.clone());
-                conversation.push(Message::user(said));
-            }
+            take_interjections(
+                task,
+                &mut confirmer,
+                &mut policy,
+                conversation,
+                &mut reporter,
+            );
 
             // Said after the round's results and any interjection, which is where a message from
             // the driver belongs: the planner reads what its calls returned, then what it is being

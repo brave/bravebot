@@ -301,6 +301,16 @@ watching an agent read the wrong file and typing "no, the other one" is talking 
 happening now; delivered after the answer, it arrives after the thing it was meant to prevent, and
 the work it would have redirected has been done. This is what Claude Code does, and for this reason.
 
+**The turn in flight is the one on the screen.** Work handed out to a delegate is a turn of its own,
+and the person typing may not know one is running at all, so what they send waits for the turn they
+are watching rather than going to the delegate. A delegate does not ask for one either: the queue is
+shared and asking is taking, so a delegate that asked and then declined what it was handed would
+throw the line away, leaving the turn it was aimed at to find nothing waiting. A round a turn spends
+waiting for a delegate is a round of that turn, and the boundary it reaches when the delegate is back
+asks like any other: a turn that answered with nothing in order to wait and then went straight on to
+its next request would put the delegate's report to the planner and nothing of what the person made
+of it.
+
 Not mid-round. Every call the planner asked for in a round runs, because a round is a set of calls
 asked for together and answering some while abandoning others leaves calls unanswered. Stopping in
 the middle of one is what the keys in INPUT-4 are for.
@@ -358,6 +368,7 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::app::what_is_still_waiting_stays_in_step_with_what_is_drawn`
 `verified-by: bravebot_agent::turn::a_prompt_typed_mid_turn_reaches_the_planner_on_the_next_round`
 `verified-by: bravebot_agent::turn::a_prompt_typed_mid_turn_is_recorded_as_the_users_own_input`
+`verified-by: bravebot_agent::turn::a_prompt_typed_while_a_delegate_runs_still_reaches_the_turn_that_spawned_it`
 `verified-by: bravebot_tui::state::a_prompt_sent_while_a_turn_runs_waits_for_it`
 `verified-by: bravebot_tui::state::a_waiting_prompt_goes_when_the_turn_ends`
 `verified-by: bravebot_tui::state::waiting_prompts_go_in_the_order_they_were_typed`
