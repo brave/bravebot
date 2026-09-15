@@ -359,6 +359,11 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // A run is a session for this: it is given somewhere of its own to write what is not part of
+    // the project, and the directory goes when the run does. Held in a binding for exactly that
+    // reason, since dropping it is what removes it.
+    let _scratch = scratch_for_this_run();
+
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
@@ -1164,6 +1169,28 @@ fn named(level: bravebot_sandbox::policy::ConfinementLevel) -> String {
         ConfinementLevel::None => t!(confinement_none),
     }
     .to_string()
+}
+
+/// The directory this run writes what is not part of the project into.
+///
+/// Nothing on a machine that cannot give it one, which is not a reason to refuse to run: a full or
+/// read-only temporary directory leaves a turn with nowhere to put an intermediate file and nothing
+/// else. On stderr, beside every other line this run has to say about itself, because a turn told
+/// there is nowhere to write leaves nothing else to read it off.
+fn scratch_for_this_run() -> Option<bravebot_agent::SessionScratch> {
+    match bravebot_agent::SessionScratch::create() {
+        Ok(scratch) => Some(scratch),
+        Err(problem) => {
+            eprintln!(
+                "{}",
+                t!(
+                    cli_notice,
+                    notice = t!(session_scratch_unavailable, problem = problem.to_string())
+                )
+            );
+            None
+        }
+    }
 }
 
 /// The workspace is the current directory: file arguments resolve relative to it, and
