@@ -12982,7 +12982,7 @@ fn a_fetched_page_can_be_processed_and_written_without_being_read() {
         &egress,
         &workspace,
         &Task::new("what version is out"),
-        &mut ApprovesFetchesAndWrites,
+        &mut ApprovesFetchesAndWrites::default(),
         &mut sink,
         trusting_the_workspace(),
     )
@@ -13073,7 +13073,7 @@ fn a_fetched_body_that_is_not_text_is_carried_anyway() {
         &egress,
         &workspace,
         &Task::new("fetch the blob"),
-        &mut ApprovesFetchesAndWrites,
+        &mut ApprovesFetchesAndWrites::default(),
         &mut sink,
         trusting_the_workspace(),
     )
@@ -13168,9 +13168,63 @@ fn a_domain_rule_lets_a_fetch_through_without_asking() {
     );
 }
 
-/// A deny rule holds at the egress gate, so a host it names is unreachable however the request
-/// got there. This is the redirect case made testable: the approval named the first URL, and the
-/// gate is what stops the second.
+/// The clause says a deny rule refuses without asking, and the second half of that is the half
+/// worth pinning: a prompt for a host the settings file has already banned asks a person to
+/// answer a question their own rule closed, and yes gets them a refusal anyway. What that
+/// teaches is to wave prompts through, which is the opposite of what having them is for.
+#[test]
+fn a_denied_host_is_refused_without_asking() {
+    let scratch = Scratch::new("fetch-denied-unasked");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, requests) = serve_pages(vec![page("should never be served")]);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/docs"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Approves everything it is asked, so what it was asked is the whole of what this observes.
+    let mut confirmer = ApprovesFetchesAndWrites::default();
+    let task =
+        Task::new("fetch it").with_permissions(rules(&["WebFetch(domain:127.0.0.1)"], &[], &[]));
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        confirmer.asked.is_empty(),
+        "a person was asked about a host their own rule denies: {:?}",
+        confirmer.asked
+    );
+    assert!(
+        requests
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err(),
+        "a denied host was fetched"
+    );
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("deny rule"),
+        "the planner was not told that a rule refused it: {second}"
+    );
+}
+
+/// A denied host is unreachable from a turn, end to end, whatever a person would have said about
+/// it: the request never goes out and the planner is told the rule refused it. That the gate at
+/// the point of egress holds too, which is what covers a redirect into a denied host, is pinned
+/// where that gate lives.
 #[test]
 fn a_denied_host_is_not_fetched_even_when_approved() {
     let scratch = Scratch::new("fetch-denied");
@@ -13214,8 +13268,15 @@ fn a_denied_host_is_not_fetched_even_when_approved() {
     );
 }
 
-/// Approves fetches and writes, so a page can be fetched, processed and saved in one turn.
-struct ApprovesFetchesAndWrites;
+/// Approves fetches and writes, so a page can be fetched, processed and saved in one turn, and
+/// remembers the URLs it was asked about.
+///
+/// Approving is what makes the record worth having: a double that refused could not tell a prompt
+/// nobody answered from a prompt that was never put.
+#[derive(Default)]
+struct ApprovesFetchesAndWrites {
+    asked: Vec<String>,
+}
 
 impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
     /// Refuses. A test double is not a person agreeing to start a process.
@@ -13250,8 +13311,9 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
 
     fn confirm_fetch(
         &mut self,
-        _request: &bravebot_agent::confirm::FetchRequest,
+        request: &bravebot_agent::confirm::FetchRequest,
     ) -> bravebot_agent::Decision {
+        self.asked.push(request.url.clone());
         bravebot_agent::Decision::Approve
     }
 

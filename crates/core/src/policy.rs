@@ -409,11 +409,36 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(())
     }
 
+    /// Refuse a fetch a `deny` rule covers, before anybody is asked about it.
+    ///
+    /// A rule that refuses is a statement that the fetch does not happen, so there is nothing
+    /// left to show or approve once it has been written: a prompt here would put a question to
+    /// somebody that their own settings file has already closed, and an answer of yes would be
+    /// overruled a moment later at the egress gate. What that teaches a person is to wave prompts
+    /// through, which is the opposite of what every gate here is for.
+    ///
+    /// [`Policy::before_plan_rules`] does this for a command line, in the same position and for
+    /// the same reason. The egress check stays where it is: it covers every redirect hop, and a
+    /// hop is a host nobody was ever shown.
+    ///
+    /// A URL naming no host passes. There is nothing to rule on, and a URL that cannot be parsed
+    /// is refused for being one before it reaches a gate.
+    pub fn before_fetch_rules(&mut self, url: &str) -> Gated<()> {
+        let Some(host) = crate::url::host_of(url) else {
+            return Ok(());
+        };
+        let decision = self.permissions.for_host(&host);
+        self.refuse_if_denied("fetch", decision, &host)
+    }
+
     /// Whether a person has to approve fetching `url`.
     ///
     /// Asked of the host, since that is what a person can answer for: a rule naming one is a
     /// statement about who is being talked to, and the path is where a URL carries the particular
     /// thing being asked for.
+    ///
+    /// A `deny` rule never reaches this. [`Policy::before_fetch_rules`] has refused by then, so
+    /// the only rule that decides anything here is one that answers the prompt.
     pub fn fetch_needs_approval(&mut self, url: &str) -> bool {
         let Some(host) = crate::url::host_of(url) else {
             // Nothing to ask about yet. The fetch fails on the URL itself further down, and
@@ -5810,6 +5835,30 @@ mod tests {
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink);
         assert!(policy.fetch_needs_approval("https://example.com/docs"));
+    }
+
+    /// A rule that refuses is a statement that the fetch does not happen, so there is nothing
+    /// left to put to a person: the prompt would ask them to approve a host their own settings
+    /// file has banned, and yes would be overruled at the egress gate a moment later.
+    #[test]
+    fn a_denied_host_is_refused_rather_than_put_to_a_person() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &["WebFetch(domain:evil.test)"],
+            &[],
+            &[],
+        ));
+
+        policy
+            .before_fetch_rules("https://evil.test/x")
+            .expect_err("a host a deny rule covers must be refused");
+
+        // It refuses; it does not approve. A host nobody has ruled on passes this gate and is put
+        // to a person at the next one, which is the whole of what the prompt is for.
+        policy
+            .before_fetch_rules("https://elsewhere.test/x")
+            .expect("nothing denies this host");
+        assert!(policy.fetch_needs_approval("https://elsewhere.test/x"));
     }
 
     #[test]

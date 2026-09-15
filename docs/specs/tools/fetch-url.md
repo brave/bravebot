@@ -80,6 +80,8 @@ asked for, so a rule matching one would be answering a different question on eve
 
 `verified-by: bravebot_core::policy::a_host_nobody_has_ruled_on_is_put_to_a_person`
 `verified-by: bravebot_core::policy::a_rule_written_in_advance_answers_the_fetch_prompt`
+`verified-by: bravebot_core::policy::a_denied_host_is_refused_rather_than_put_to_a_person`
+`verified-by: bravebot_agent::turn::a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_core::url::userinfo_is_not_mistaken_for_the_host`
 `verified-by: bravebot_agent::turn::a_domain_rule_lets_a_fetch_through_without_asking`
 `verified-by: bravebot_agent::turn::a_refused_fetch_sends_no_request`

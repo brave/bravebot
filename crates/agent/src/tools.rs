@@ -3325,6 +3325,15 @@ fn fetch_url<S: Sink, C: Confirmer>(
         ));
     };
 
+    // Before the person is asked. A rule refusing something is a statement that it does not
+    // happen, and there is nothing to show or approve once it has been made.
+    if let Err(denial) = policy.before_fetch_rules(&url) {
+        return problem(format!(
+            "refused: {denial}. Do not retry this URL and do not look for another route to that \
+             host: say in your reply what you needed from it."
+        ));
+    }
+
     if policy.fetch_needs_approval(&url) {
         let request = crate::confirm::FetchRequest {
             url: url.clone(),
