@@ -6,6 +6,7 @@ governs:
   - crates/tui/src/loops.rs
   - crates/tui/src/app.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/status.rs
 guards:
   - symbol: Session::start_loop
   - symbol: Session::watch_again
