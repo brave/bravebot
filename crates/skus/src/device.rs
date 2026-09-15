@@ -193,46 +193,7 @@ pub fn register(
     let mut credentials = Vec::new();
 
     for batch in batches {
-        // The server states which blinded tokens it signed, and they are matched back to the
-        // tokens held here rather than assumed to be in the same order. A token the server did not
-        // sign is skipped, and one it invented matches nothing.
-        let mut mine: Vec<(usize, &Token)> = Vec::new();
-        let mut signed_for_mine: Vec<SignedToken> = Vec::new();
-        let mut blinded_for_mine: Vec<BlindedToken> = Vec::new();
-
-        for (position, returned) in batch.blinded.iter().enumerate() {
-            let encoded = returned.encode_base64();
-            if let Some(index) = blinded
-                .iter()
-                .position(|b| b.encode_base64() == encoded)
-                .filter(|index| !mine.iter().any(|(taken, _)| taken == index))
-            {
-                let Some(signed) = batch.signed.get(position) else {
-                    continue;
-                };
-                mine.push((index, &tokens[index]));
-                blinded_for_mine.push(*returned);
-                signed_for_mine.push(*signed);
-            }
-        }
-
-        if mine.is_empty() {
-            continue;
-        }
-
-        // The gate on the whole exchange: this fails unless the batch was signed by the key the
-        // server published, over exactly these tokens.
-        let unblinded: Vec<UnblindedToken> = batch
-            .proof
-            .verify_and_unblind::<Sha512, _>(
-                mine.iter().map(|(_, token)| *token),
-                &blinded_for_mine,
-                &signed_for_mine,
-                &batch.public_key,
-            )
-            .map_err(|_| DeviceError::InvalidProof)?;
-
-        for token in unblinded {
+        for token in unblind_ours(&tokens, &blinded, &batch)? {
             credentials.push(SignedCredential {
                 unblinded: token.encode_base64(),
                 valid_from: batch.valid_from.clone(),
@@ -603,6 +564,64 @@ fn parse_batches(body: &str) -> Result<Vec<SignedBatch>, DeviceError> {
     Ok(batches)
 }
 
+/// The credentials in `batch` that belong to the tokens held here.
+///
+/// `blinded[i]` is the blinded form of `tokens[i]`, as the pair `register` submitted.
+///
+/// The server states which blinded tokens it signed, and they are matched back by value rather than
+/// assumed to be in the order they were submitted in, so a reordered response still yields the
+/// credential belonging to each token.
+///
+/// Empty when the batch echoes nothing that was submitted. `register` refuses a registration that
+/// takes nothing from any window, so an empty result here is not by itself a refusal.
+///
+/// Verification runs over the pairs that matched, against the proof the response carries. A response
+/// proved over the whole of what it lists therefore does not verify when it also lists something
+/// this device did not submit, an invented token or a second copy of one, and the pairs that did
+/// match are not kept either. A failure to verify is fatal: the batch does not hold together under
+/// the key it carries, so nothing about it can be relied on.
+fn unblind_ours(
+    tokens: &[Token],
+    blinded: &[BlindedToken],
+    batch: &SignedBatch,
+) -> Result<Vec<UnblindedToken>, DeviceError> {
+    let mut mine: Vec<(usize, &Token)> = Vec::new();
+    let mut signed_for_mine: Vec<SignedToken> = Vec::new();
+    let mut blinded_for_mine: Vec<BlindedToken> = Vec::new();
+
+    for (position, returned) in batch.blinded.iter().enumerate() {
+        let encoded = returned.encode_base64();
+        if let Some(index) = blinded
+            .iter()
+            .position(|b| b.encode_base64() == encoded)
+            .filter(|index| !mine.iter().any(|(taken, _)| taken == index))
+        {
+            let Some(signed) = batch.signed.get(position) else {
+                continue;
+            };
+            mine.push((index, &tokens[index]));
+            blinded_for_mine.push(*returned);
+            signed_for_mine.push(*signed);
+        }
+    }
+
+    if mine.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // The gate on the whole exchange: this fails unless the batch was signed by the key the server
+    // published, over exactly these tokens.
+    batch
+        .proof
+        .verify_and_unblind::<Sha512, _>(
+            mine.iter().map(|(_, token)| *token),
+            &blinded_for_mine,
+            &signed_for_mine,
+            &batch.public_key,
+        )
+        .map_err(|_| DeviceError::InvalidProof)
+}
+
 /// Drop the zone marker the credential service puts on a validity timestamp.
 ///
 /// The service sends `...Z`, but a presentation must not carry it: brave-core parses these into a
@@ -768,10 +787,62 @@ mod tests {
 
     /// Sign a batch the way the service does, so the verifying path can be exercised without one.
     fn sign_batch(blinded: &[BlindedToken]) -> (Vec<SignedToken>, BatchDLEQProof, PublicKey) {
-        let key = SigningKey::random(&mut OsRng);
+        sign_batch_with(&SigningKey::random(&mut OsRng), blinded)
+    }
+
+    /// The same, under a key the caller holds, for two responses from one issuer.
+    ///
+    /// An unblinded token is the token signed by that key, so a batch signed twice under different
+    /// keys yields different credentials and two responses can only be compared under one.
+    fn sign_batch_with(
+        key: &SigningKey,
+        blinded: &[BlindedToken],
+    ) -> (Vec<SignedToken>, BatchDLEQProof, PublicKey) {
         let signed: Vec<SignedToken> = blinded.iter().map(|b| key.sign(b).unwrap()).collect();
-        let proof = BatchDLEQProof::new::<Sha512, _>(&mut OsRng, blinded, &signed, &key).unwrap();
+        let proof = BatchDLEQProof::new::<Sha512, _>(&mut OsRng, blinded, &signed, key).unwrap();
         (signed, proof, key.public_key)
+    }
+
+    /// Tokens as `register` holds them, with the blinded forms it submits.
+    fn submitted(count: usize) -> (Vec<Token>, Vec<BlindedToken>) {
+        let tokens: Vec<Token> = (0..count)
+            .map(|_| Token::random::<Sha512, _>(&mut OsRng))
+            .collect();
+        let blinded = tokens
+            .iter()
+            .map(|t| t.blind_rfc::<Sha512>().unwrap())
+            .collect();
+        (tokens, blinded)
+    }
+
+    /// One decoded batch, as a response carrying these credentials produces.
+    fn signed_batch(
+        blinded: &[BlindedToken],
+        signed: &[SignedToken],
+        proof: &BatchDLEQProof,
+        public_key: &PublicKey,
+    ) -> SignedBatch {
+        parse_batches(&batch_body(blinded, signed, proof, public_key))
+            .unwrap()
+            .remove(0)
+    }
+
+    /// The credentials `unblind_ours` takes from `batch`, in a comparable order.
+    fn ours(tokens: &[Token], blinded: &[BlindedToken], batch: &SignedBatch) -> Vec<String> {
+        let mut credentials: Vec<String> = unblind_ours(tokens, blinded, batch)
+            .unwrap()
+            .iter()
+            .map(UnblindedToken::encode_base64)
+            .collect();
+        credentials.sort();
+        credentials
+    }
+
+    /// The credential one token is issued, taken on its own where there is no order to get wrong.
+    fn credential_for(key: &SigningKey, tokens: &[Token], blinded: &[BlindedToken]) -> String {
+        let (signed, proof, public_key) = sign_batch_with(key, blinded);
+        let batch = signed_batch(blinded, &signed, &proof, &public_key);
+        ours(tokens, blinded, &batch).remove(0)
     }
 
     /// Mint one credential the way a real exchange would, through proof verification.
@@ -830,48 +901,98 @@ mod tests {
     }
 
     /// The proof is the whole point of the exchange: a batch signed by some other key must be
-    /// rejected, not stored.
+    /// rejected, not stored, and not quietly dropped either. A response that yields nothing is a
+    /// window this device has no credentials in, so reporting a foreign key that way would put a
+    /// tampered batch and an empty one on the same footing.
     #[test]
     fn a_batch_signed_by_the_wrong_key_does_not_verify() {
-        let tokens: Vec<Token> = (0..4)
-            .map(|_| Token::random::<Sha512, _>(&mut OsRng))
-            .collect();
-        let blinded: Vec<BlindedToken> = tokens
-            .iter()
-            .map(|t| t.blind_rfc::<Sha512>().unwrap())
-            .collect();
+        let (tokens, blinded) = submitted(4);
         let (signed, proof, _) = sign_batch(&blinded);
         // A different key's public half, as a substituted or tampered response would carry.
         let (_, _, other_public_key) = sign_batch(&blinded);
+        let batch = signed_batch(&blinded, &signed, &proof, &other_public_key);
 
-        let verified = proof.verify_and_unblind::<Sha512, _>(
-            tokens.iter(),
-            &blinded,
-            &signed,
-            &other_public_key,
-        );
-        assert!(verified.is_err(), "a foreign key must not verify");
+        assert!(matches!(
+            unblind_ours(&tokens, &blinded, &batch).unwrap_err(),
+            DeviceError::InvalidProof
+        ));
     }
 
-    /// Tokens are matched back by their blinded form rather than by position, so a reordered
-    /// response still yields the right credentials.
+    /// Tokens are matched back by their blinded form rather than by position, so a response that
+    /// lists them in another order still yields the credential belonging to each token. Unblinding
+    /// by position pairs each signature with the wrong token, and nothing reports it: the batch
+    /// verifies, and the credentials are simply not the ones that were issued.
     #[test]
     fn tokens_are_matched_by_value_not_by_position() {
-        let tokens: Vec<Token> = (0..3)
-            .map(|_| Token::random::<Sha512, _>(&mut OsRng))
-            .collect();
-        let blinded: Vec<BlindedToken> = tokens
-            .iter()
-            .map(|t| t.blind_rfc::<Sha512>().unwrap())
-            .collect();
-        let encoded: Vec<String> = blinded.iter().map(|b| b.encode_base64()).collect();
+        let (tokens, blinded) = submitted(2);
+        let key = SigningKey::random(&mut OsRng);
 
+        // Each token's credential taken one at a time, where a single pair leaves no order to get
+        // wrong. Comparing two multi-token responses would only show that whichever pairing was
+        // used was used consistently.
+        let mut issued = vec![
+            credential_for(&key, &tokens[..1], &blinded[..1]),
+            credential_for(&key, &tokens[1..], &blinded[1..]),
+        ];
+        issued.sort();
+
+        // The same tokens listed the other way round. The pairs stay together and the proof is made
+        // over the order the response carries, which is what a reordering server sends.
         let mut reversed = blinded.clone();
         reversed.reverse();
-        let reencoded: Vec<String> = reversed.iter().map(|b| b.encode_base64()).collect();
+        let (signed, proof, public_key) = sign_batch_with(&key, &reversed);
+        let reordered = signed_batch(&reversed, &signed, &proof, &public_key);
 
-        assert_eq!(reencoded[0], encoded[2]);
-        assert_ne!(reencoded[0], encoded[0]);
+        assert_eq!(ours(&tokens, &blinded, &reordered), issued);
+    }
+
+    /// A response can only be spent for what was submitted: a batch of tokens this device never
+    /// sent matches nothing, rather than being unblinded against whatever was held here.
+    #[test]
+    fn a_batch_echoing_tokens_that_were_never_submitted_matches_nothing() {
+        let (tokens, blinded) = submitted(2);
+        // Well formed, signed and proved. Just not ours.
+        let (_, others) = submitted(2);
+        let (signed, proof, public_key) = sign_batch(&others);
+        let batch = signed_batch(&others, &signed, &proof, &public_key);
+
+        assert!(unblind_ours(&tokens, &blinded, &batch).unwrap().is_empty());
+    }
+
+    /// One token this device never submitted, mixed in with three it did, under a proof over the
+    /// four of them as an issuer signing that response produces. Verification runs over the three
+    /// that matched, which that proof does not cover, so the response yields nothing rather than the
+    /// part that matched.
+    #[test]
+    fn a_batch_proved_over_more_tokens_than_were_submitted_does_not_verify() {
+        let (tokens, blinded) = submitted(3);
+        let (_, other) = submitted(1);
+        let mut returned = blinded.clone();
+        returned.extend(other);
+        let (signed, proof, public_key) = sign_batch(&returned);
+        let batch = signed_batch(&returned, &signed, &proof, &public_key);
+
+        assert!(matches!(
+            unblind_ours(&tokens, &blinded, &batch).unwrap_err(),
+            DeviceError::InvalidProof
+        ));
+    }
+
+    /// A blinded token echoed twice is one token, not two: matching the second copy to it again
+    /// would unblind one token against two signatures and hand out two credentials for a token
+    /// submitted once. The copy is left unmatched, so a response proved over everything it lists
+    /// carries a pair that was not matched and does not verify.
+    #[test]
+    fn a_token_echoed_twice_is_matched_once_so_the_batch_does_not_verify() {
+        let (tokens, blinded) = submitted(2);
+        let returned = vec![blinded[0], blinded[0], blinded[1]];
+        let (signed, proof, public_key) = sign_batch(&returned);
+        let batch = signed_batch(&returned, &signed, &proof, &public_key);
+
+        assert!(matches!(
+            unblind_ours(&tokens, &blinded, &batch).unwrap_err(),
+            DeviceError::InvalidProof
+        ));
     }
 
     #[test]
