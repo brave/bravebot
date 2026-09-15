@@ -757,14 +757,9 @@ impl Handle {
         self.title.clear();
     }
 
-    /// The directory to write into, made on first use.
+    /// This session's own directory, resolved the way every writer resolves one.
     fn directory(&self) -> Option<PathBuf> {
-        // Asked before the directory is resolved, not after: creating it is itself a write, and an
-        // incognito session that left an empty directory behind would have recorded which projects
-        // were worked on and when, which is most of what the record was for.
-        let directory = writable_project_directory(&self.project)?;
-        bravebot_agent::home::create_directory(&directory).ok()?;
-        Some(directory)
+        writable_project_directory(&self.project)
     }
 }
 
@@ -904,17 +899,25 @@ pub fn project_directory(project: &Path) -> Option<PathBuf> {
     )
 }
 
-/// Where a project's sessions live when one may be written, or `None` when none may be.
+/// Where a project's sessions live when one may be written, made and narrowed on the way.
 ///
-/// `None` in an incognito session, and `None` on a machine with no home, which the writers already
-/// treated as "there is nowhere to record this" long before there was a mode that meant it on
-/// purpose.
+/// `None` in an incognito session, `None` on a machine with no home, and `None` when the directory
+/// cannot be made, on a full or read-only home. Every writer already treated the first two as "there
+/// is nowhere to record this" long before there was a mode that meant it on purpose, and the third
+/// is the same answer to the same question: a directory that cannot be made is one nothing can be
+/// written into. The mode is asked before the directory is resolved, not after: creating it is
+/// itself a write, and an incognito session that left an empty directory behind would have recorded
+/// which projects were worked on and when, which is most of what the record was for.
+///
+/// Narrowing an existing directory belongs here rather than at each writer, because SESSION-16
+/// tightens on write and a writer that resolved the location for itself would satisfy the mode on
+/// the file it wrote and leave the directory holding it listable by every other account.
 fn writable_project_directory(project: &Path) -> Option<PathBuf> {
-    Some(
-        bravebot_agent::home::writable()?
-            .join(SESSIONS)
-            .join(key_for(project)),
-    )
+    let directory = bravebot_agent::home::writable()?
+        .join(SESSIONS)
+        .join(key_for(project));
+    bravebot_agent::home::create_directory(&directory).ok()?;
+    Some(directory)
 }
 
 /// The single path segment standing for a working directory.

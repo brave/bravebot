@@ -348,6 +348,7 @@ any local account on multi-user machines and shared hosts.
 
 `verified-by: bravebot_tui::sessions::session_records_and_audit_trails_are_written_mode_0600`
 `verified-by: bravebot_tui::sessions::pre_existing_session_files_and_directories_are_tightened_on_write`
+`verified-by: bravebot_tui::sessions::forking_narrows_the_session_directory_it_writes_into`
 
 <a id="SESSION-17"></a>
 ### SESSION-17: a transcript can be written out as markdown, inside the working directory

@@ -1272,6 +1272,79 @@ fn pre_existing_session_files_and_directories_are_tightened_on_write() {
     );
 }
 
+/// A fork writes a record and a copied trail into the session directory, so it is a write like any
+/// other and tightening it cannot wait for the forked session's first turn: a fork abandoned before
+/// that turn would leave the directory listing readable by every other account on the machine.
+#[cfg(unix)]
+#[test]
+fn forking_narrows_the_session_directory_it_writes_into() {
+    use std::os::unix::fs::PermissionsExt;
+
+    fn mode_of(path: &std::path::Path) -> u32 {
+        std::fs::metadata(path)
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    let scratch = Scratch::new("tighten-on-fork");
+    let mut handle = Handle::begin(&scratch.project);
+    let conversation = a_conversation();
+    let programs = a_program_list();
+    let todos = a_plan();
+    let spend = BTreeMap::new();
+    let timing = BTreeMap::new();
+    let trust = TrustStore::new();
+
+    handle.save(
+        "work to fork",
+        Standing {
+            conversation: &conversation.snapshot(),
+            turns: 1,
+            tokens: 100,
+            spend: &spend,
+            timing: &timing,
+            model: None,
+            todos: &todos,
+            asides: &[],
+            trust: &trust,
+            programs: &programs,
+            directories: &[],
+            manifest: None,
+        },
+    );
+    handle.append_audit(
+        1,
+        &stamped(vec![Event::Observed {
+            capability: Capability::FileRead,
+            label: Label::untrusted_private(),
+        }]),
+    );
+
+    let dir = sessions::project_directory(&scratch.project).expect("project directory");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("chmod dir");
+    assert_eq!(mode_of(&dir), 0o755, "the test seeded nothing to narrow");
+
+    let forked = sessions::fork(&scratch.project, handle.id()).expect("the session forks");
+
+    assert_eq!(
+        mode_of(&dir),
+        0o700,
+        "the directory the fork wrote into was left open"
+    );
+    assert_eq!(
+        mode_of(&dir.join(format!("{}.json", forked.id))),
+        0o600,
+        "the forked record"
+    );
+    assert_eq!(
+        mode_of(&dir.join(format!("{}.audit.jsonl", forked.id))),
+        0o600,
+        "the trail copied to the fork"
+    );
+}
+
 /// A question asked beside the work is the one thing the Ctrl-L view holds that outlives the
 /// session that produced it, and a resume brings it back into that view and into no conversation.
 #[test]
