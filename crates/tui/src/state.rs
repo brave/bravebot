@@ -3947,6 +3947,10 @@ impl Session {
         // [`Session::type_char`]: this is the state the returning text lands in, and it has to be
         // safe whatever left the mode armed.
         self.shell = false;
+        // The words a stopped reply had written are no part of any reply, and nothing recorded
+        // them, so they come down with the stop as they do at every other ending a round has.
+        // Left up they are an answer drawn above a prompt that has gone back to the box.
+        self.streaming.clear();
 
         // Un-sent whole only where nothing was recorded after the prompt and nothing is waiting
         // behind it. Either one means there is something to have second thoughts about.
@@ -8790,7 +8794,9 @@ mod tests {
 
         /// A round that ends with nothing to say still has to take its tail down, and a round
         /// whose reply is the turn's answer does too. Left up, half a sentence sat under the
-        /// finished answer for the rest of the session.
+        /// finished answer for the rest of the session. A stop is the ending where it reads worst:
+        /// the prompt above it goes back to the box, so the half sentence is left on the screen as
+        /// an answer to nothing.
         #[test]
         fn a_reply_that_was_arriving_is_taken_down_however_the_round_ends() {
             let mut s = working();
@@ -8805,6 +8811,22 @@ mod tests {
             s.streaming("half a thought");
             s.fail("error: something went wrong");
             assert!(s.streaming.is_empty(), "a failed turn left its tail up");
+
+            // A session of its own for the stop, because the tail matters most where the prompt
+            // goes back to the box, and that is the branch a transcript still ending at the
+            // user's own line takes. Asserted here too, so the case cannot drift into the other
+            // branch and leave the mutation that clears the tail on one path only.
+            let mut stopped = working();
+            stopped.streaming("half a thought");
+            stopped.restore("what was asked");
+            assert!(
+                stopped.streaming.is_empty(),
+                "a stopped turn left its tail up"
+            );
+            assert_eq!(
+                stopped.input, "what was asked",
+                "the tail was taken down over a prompt that stayed sent, not an un-sent one"
+            );
         }
 
         /// A model with nowhere else to put its working writes it into the reply and closes it
