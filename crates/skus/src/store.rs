@@ -623,11 +623,90 @@ mod tests {
 
     /// A session that spends nothing must never write, so opening the agent and not using premium
     /// leaves the stored batch untouched.
+    ///
+    /// Asserted on a wallet with a real file behind it, and on the file's own bytes: a detached
+    /// wallet has no destination to write to, so nothing about one can tell whether a write was
+    /// declined or merely impossible.
     #[test]
     fn a_session_that_spends_nothing_never_writes() {
-        let mut wallet = Wallet::detached(batch());
-        wallet.flush().expect("flushing nothing is a no-op");
-        assert!(!wallet.dirty);
+        with_temp_home("idle", || {
+            save(&batch()).expect("a write");
+            let path = path().expect("a path");
+
+            // Held in a shape no write here produces, so a needless rewrite shows up as a change
+            // rather than landing on the same bytes.
+            let value: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("a read"))
+                    .expect("what save wrote");
+            let spaced = serde_json::to_string_pretty(&value).expect("a spaced form");
+            std::fs::write(&path, &spaced).expect("a rewrite");
+
+            {
+                let mut wallet = Wallet::open().expect("the batch just written");
+                wallet.flush().expect("flushing nothing is a no-op");
+                assert!(!wallet.dirty);
+            }
+            // Dropped by here, and Drop flushes too.
+
+            assert_eq!(
+                std::fs::read_to_string(&path).expect("a read"),
+                spaced,
+                "an idle session must leave the file exactly as it found it"
+            );
+        });
+    }
+
+    /// A spend reaches the file when the wallet is flushed and not before, which is the whole reason
+    /// the batch is held open: one credential is spent per model request, and writing per spend
+    /// would rewrite hundreds of credentials to change one boolean.
+    #[test]
+    fn a_spend_is_written_back_only_on_a_flush() {
+        with_temp_home("flush", || {
+            save(&batch()).expect("a write");
+            let path = path().expect("a path");
+            let written = std::fs::read_to_string(&path).expect("a read");
+
+            let mut wallet = Wallet::open().expect("the batch just written");
+            wallet
+                .spend("2026-08-22T12:00:00")
+                .expect("a usable credential");
+            assert_eq!(
+                std::fs::read_to_string(&path).expect("a read"),
+                written,
+                "spending alone must not touch the file"
+            );
+
+            wallet.flush().expect("the write back");
+            let stored = load().expect("a read");
+            assert!(
+                stored.credentials[0].spent,
+                "the flush must record which credential was spent"
+            );
+            assert_eq!(stored.remaining(), 1);
+        });
+    }
+
+    /// A session that ends without a flush of its own must still have its spends recorded. The
+    /// credential went out with a request the moment it was spent, so a batch read back next session
+    /// with that credential still unspent would offer it to a second request.
+    #[test]
+    fn a_spend_is_written_back_when_the_session_ends() {
+        with_temp_home("ends", || {
+            save(&batch()).expect("a write");
+
+            {
+                let mut wallet = Wallet::open().expect("the batch just written");
+                wallet
+                    .spend("2026-08-22T12:00:00")
+                    .expect("a usable credential");
+            }
+            // Dropped here, having been asked to flush nothing.
+
+            assert!(
+                load().expect("a read").credentials[0].spent,
+                "a credential spent in a session that ended must not be offered again"
+            );
+        });
     }
 
     /// A detached batch must have no destination at all, which is what lets these tests run

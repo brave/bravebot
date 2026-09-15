@@ -68,12 +68,20 @@ than assumed to be the only one.
 ### PREM-4: a batch is verified against the issuer's key before it is stored
 
 A batch signed by the wrong key does not verify, one without a proof is refused, and one with no
-signed credentials is an error. Tokens are matched by value, never by position.
+signed credentials is an error. Tokens are matched by value, never by position, and a token echoed
+twice is matched once. A response holding only tokens that were never submitted matches nothing.
+
+Verification covers the pairs this device matched, so a response proved over the whole of what it
+lists does not verify when it lists anything that was not submitted, and the pairs that did match are
+not kept.
 
 `verified-by: bravebot_skus::device::a_batch_signed_by_the_wrong_key_does_not_verify`
 `verified-by: bravebot_skus::device::a_batch_without_a_proof_is_refused`
 `verified-by: bravebot_skus::device::a_response_with_no_signed_credentials_is_an_error`
 `verified-by: bravebot_skus::device::tokens_are_matched_by_value_not_by_position`
+`verified-by: bravebot_skus::device::a_batch_echoing_tokens_that_were_never_submitted_matches_nothing`
+`verified-by: bravebot_skus::device::a_batch_proved_over_more_tokens_than_were_submitted_does_not_verify`
+`verified-by: bravebot_skus::device::a_token_echoed_twice_is_matched_once_so_the_batch_does_not_verify`
 `verified-by: bravebot_skus::device::a_well_formed_batch_is_decoded`
 
 <a id="PREM-5"></a>
@@ -93,13 +101,16 @@ of a batch is refused. A moment outside every validity window yields no credenti
 <a id="PREM-6"></a>
 ### PREM-6: nothing is written back unless a credential was actually spent
 
-A session that spends nothing never writes, and a detached batch has nowhere to write.
+A session that spends nothing never writes, and a detached batch has nowhere to write. A spend
+reaches the file when the wallet is flushed and when the session ends, not when the spend is made.
 
 **Why.** A whole batch is hundreds of credentials and one is spent per model request, so writing
 per spend would rewrite the file several times a turn to change one boolean.
 
 `verified-by: bravebot_skus::store::spending_does_not_write_until_asked_to`
 `verified-by: bravebot_skus::store::a_session_that_spends_nothing_never_writes`
+`verified-by: bravebot_skus::store::a_spend_is_written_back_only_on_a_flush`
+`verified-by: bravebot_skus::store::a_spend_is_written_back_when_the_session_ends`
 `verified-by: bravebot_skus::store::a_detached_batch_has_nowhere_to_write`
 
 <a id="PREM-7"></a>
