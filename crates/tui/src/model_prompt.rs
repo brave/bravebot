@@ -416,19 +416,33 @@ fn window<'a>(rows: &[Row<'a>], cursor: usize, visible: usize) -> (Option<&'a st
     // Nothing to hold a heading over on a list two rows tall: the row under the cursor is what a
     // person is there to read, and a heading that displaced it would leave the panel saying only
     // whose models these are and never which.
-    if visible <= 2 || matches!(rows.get(first), Some(Row::Service(_))) {
+    if visible <= 2 {
         return (None, first, visible);
     }
 
+    // Holding one costs a row, so the window it leaves is a row shorter and begins a row further
+    // down than the window drawn without it.
+    let shown = visible.saturating_sub(1).max(1);
+    let held_from = start(rows.len(), cursor, shown);
+
     let heading = rows[..=cursor.min(rows.len().saturating_sub(1))]
         .iter()
+        .enumerate()
         .rev()
-        .find_map(|row| match row {
-            Row::Service(service) => Some(*service),
+        .find_map(|(at, row)| match row {
+            Row::Service(service) => Some((at, *service)),
             _ => None,
         });
-    let shown = visible.saturating_sub(1).max(1);
-    (heading, start(rows.len(), cursor, shown), shown)
+
+    match heading {
+        // Held only while the real one is above the window that will be drawn. Measured against
+        // that window rather than against the wider one drawn without a heading: the two begin a
+        // row apart, so at some offsets the wider one begins on the gap above a heading while the
+        // drawn one begins on the heading itself, and a heading held there is the same name twice
+        // two rows apart.
+        Some((at, service)) if at < held_from => (Some(service), held_from, shown),
+        _ => (None, first, visible),
+    }
 }
 
 /// Where a window of `visible` rows starts with the cursor inside it.
@@ -898,6 +912,36 @@ mod tests {
             "the cursor is off screen: {output}"
         );
         assert!(output.contains("OpenRouter"), "{output}");
+    }
+
+    /// Two headings for one service is "one heading per service" broken, and it spends a row of a
+    /// six-row list saying the same word twice. The count has to hold at every offset, because the
+    /// window a held heading is decided from and the window drawn are a row apart: only some
+    /// offsets put the real heading exactly where the held one goes, which is why a test at one
+    /// offset saw nothing.
+    #[test]
+    fn a_service_is_never_given_two_headings_at_once() {
+        let mut roster = vec![Model::automatic()];
+        for index in 0..40 {
+            roster.push(served_by(
+                "OpenRouter",
+                &format!("openrouter/model-{index}"),
+                &format!("model-{index}"),
+            ));
+        }
+        let mut picker = Picker::new(roster, None);
+
+        // From the first press, which puts the cursor in the gateway's own section, to well past
+        // the offset where the list has started scrolling under it.
+        for presses in 1..=12 {
+            handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+            let output = rendered_at(&picker, 60, 14);
+            let headings = output.matches("OpenRouter").count();
+            assert_eq!(
+                headings, 1,
+                "after {presses} presses the roster has {headings} headings:\n{output}"
+            );
+        }
     }
 
     /// Nothing on screen and no word for it reads as a picker that has broken, rather than as a
