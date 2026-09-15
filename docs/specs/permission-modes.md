@@ -38,6 +38,13 @@ A session with nothing chosen asks about a write, a run, a command's output, and
 vouched for, exactly as one does where no mode can be chosen at all. A one-shot run is in this mode
 unless the flag in MODE-5 was given.
 
+Asking is what the mode does, and not a promise that every one of those questions is reached. The run
+question is not put again where the person answered it earlier in the session, where a rule they wrote
+in advance covers the line ([permissions.md](permissions.md)), or where the audited table proves it
+([tools/command-line.md](tools/command-line.md)); the record [tools/run.md](tools/run.md) specifies,
+which nothing yet builds, is a fourth such road and one a one-shot run does not read. None of them is
+a mode, and choosing this one takes nothing back.
+
 **Why.** The mode nobody selected cannot be one that stops asking. Every other mode here is a
 decision somebody made; this one is what holds when they have made none.
 
