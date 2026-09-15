@@ -51,8 +51,7 @@ const NPM: &str = "npm";
 const NPM_URL: &str = "https://registry.npmjs.org/@brave/bravebot/latest";
 
 /// The newest release of this repository, which answers with the tag it was published under.
-const RELEASES_URL: &str =
-    "https://api.github.com/repos/brave-experiments/bravebot/releases/latest";
+const RELEASES_URL: &str = "https://api.github.com/repos/brave/bravebot/releases/latest";
 
 /// What updates an npm install.
 const NPM_COMMAND: &str = "npm install -g @brave/bravebot@latest";
@@ -60,7 +59,7 @@ const NPM_COMMAND: &str = "npm install -g @brave/bravebot@latest";
 /// What updates a script install: the same line that installed it, which takes the newest release
 /// and puts it where this one already is.
 const SCRIPT_COMMAND: &str =
-    "curl -fsSL https://raw.githubusercontent.com/brave-experiments/bravebot/main/install.sh | sh";
+    "curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | sh";
 
 /// The file the install script writes the installed path into.
 const INSTALLED_BY_FILE: &str = "installed-by";

@@ -64,7 +64,7 @@ inside a `vendor` a person marked untrusted, without that answer leaking to its 
 ### TRUST-3: relative and absolute rules are separate namespaces
 
 Keeping two namespaces is a workaround rather than a preference, and
-[issue #24](https://github.com/brave-experiments/bravebot/issues/24) proposes replacing both with
+[issue #24](https://github.com/brave/bravebot/issues/24) proposes replacing both with
 one map of full paths, which would remove this clause.
 
 A rule under the working directory decides nothing about a directory opened by absolute path, and
@@ -638,7 +638,7 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
 - **A platform that spells its paths from a drive letter cannot open a directory by name.** Every
   rule is keyed under a `/`-spelled name (TRUST-3), so `/add-dir` and `/cd` both refuse a resolved
   path that is not one, which on Windows is every path there is, until whether that platform is
-  supported has an answer ([issue #88](https://github.com/brave-experiments/bravebot/issues/88)).
+  supported has an answer ([issue #88](https://github.com/brave/bravebot/issues/88)).
   Refusing is the closed direction of the two: admitting such a directory puts its rule in the
   relative namespace, where the answer given about the project at startup covers every file in it.
 
@@ -652,5 +652,5 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   ([permissions.md](permissions.md) records that half). So the laundering this closes outside the
   project stays reachable inside it there, and what settles both halves is one canonical key
   spelling, which is the choice reserved between
-  [issue #24](https://github.com/brave-experiments/bravebot/issues/24) and
-  [issue #25](https://github.com/brave-experiments/bravebot/issues/25).
+  [issue #24](https://github.com/brave/bravebot/issues/24) and
+  [issue #25](https://github.com/brave/bravebot/issues/25).
