@@ -132,7 +132,7 @@ no desktop session had no store to open and every such user was silently on the 
 `verified-by: bravebot_skus::store::the_file_lives_in_the_users_own_directory`
 `verified-by: bravebot_skus::store::no_home_directory_is_reported_rather_than_guessed`
 `verified-by: bravebot_skus::store::forgetting_removes_the_file_and_is_repeatable`
-`verified-by: bravebot_skus::store::an_empty_entry_is_reported_as_absent_rather_than_malformed`
+`verified-by: bravebot_skus::store::an_empty_file_is_reported_rather_than_read_as_absent`
 `verified-by: bravebot_skus::store::a_batch_that_is_not_json_is_reported_as_malformed`
 `verified-by: bravebot_skus::store::a_file_that_is_not_json_is_reported_when_loaded`
 `verified-by: bravebot_skus::store::a_credential_without_a_token_is_rejected_on_load`
@@ -145,10 +145,10 @@ no desktop session had no store to open and every such user was silently on the 
 Coming back empty has two causes and they are not the same fact. Nothing imported is the free tier
 working as intended and is said nothing about. A batch that **exists and cannot be spent** is reported
 to the person, with the reason and what to do about it. That covers a file that could not be read,
-one another version wrote, and one imported for an environment this endpoint does not accept, since a
-credential only verifies against the deployment that signed it. An endpoint belonging to no
-environment, such as a local one, is the first case and not the second: no credential belongs near it
-by design.
+one holding nothing, one another version wrote, and one imported for an environment this endpoint
+does not accept, since a credential only verifies against the deployment that signed it. An
+endpoint belonging to no environment, such as a local one, is the first case and not the second: no
+credential belongs near it by design.
 
 **Why.** The request then goes out on the free tier, where the endpoint answers a premium model name
 by **substituting** a weaker model rather than by failing, with a 200 and an ordinary reply. So a
@@ -159,6 +159,7 @@ because its only other symptom is the agent appearing to get worse for no reason
 `verified-by: bravebot_agent::subscription::an_unreadable_batch_is_reported_and_an_absent_one_is_not`
 `verified-by: bravebot_agent::subscription::an_endpoint_in_no_environment_is_not_a_complaint`
 `verified-by: bravebot_agent::home::a_subscription_imported_for_another_environment_is_reported`
+`verified-by: bravebot_agent::home::an_empty_credentials_file_is_reported_rather_than_read_as_absent`
 
 <a id="PREM-9"></a>
 ### PREM-9: the tier reported is the one the last turn ran on, not the one the build was compiled with

@@ -85,6 +85,33 @@ fn an_empty_home_is_treated_as_no_home_at_all() {
     assert_eq!(found, None, "an empty home was joined onto anyway");
 }
 
+/// A file left holding nothing must be reported, not read as never having imported.
+///
+/// A write interrupted partway leaves it that way, since the file is truncated before anything is
+/// put in it. Passing over it quietly is the silent downgrade PREM-8 exists to prevent: the turn
+/// runs on the free tier, the endpoint answers a premium model name with a weaker model rather than
+/// an error, and nothing on screen says the subscription needs importing again.
+#[test]
+fn an_empty_credentials_file_is_reported_rather_than_read_as_absent() {
+    with_temp_home("empty-credentials", |_| {
+        let path = bravebot_skus::store::path().expect("a scratch home");
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the state directory");
+        std::fs::write(&path, "").expect("a file holding nothing");
+
+        let discovery =
+            bravebot_agent::ImportedSubscription::discover("https://ai-chat.bsg.brave.com");
+
+        let complaint = discovery
+            .complaint()
+            .expect("a file that exists and cannot be read must say so");
+        // Which cause and what to do about it. Every refusal names the import, so the cause is
+        // asserted too: reported as corruption instead would send someone looking for a bad file.
+        assert!(complaint.contains("holds nothing"), "{complaint}");
+        assert!(complaint.contains("import-leo-creds"), "{complaint}");
+        assert!(discovery.found().is_none(), "nothing spendable");
+    });
+}
+
 /// A batch imported from the wrong channel must be reported, not passed over in silence.
 ///
 /// A credential only verifies against the deployment that signed it, so a staging batch cannot be
