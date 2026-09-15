@@ -724,10 +724,11 @@ deliberately is not something the picker offers, that entry not being on this pr
 <a id="BACKEND-27"></a>
 ### BACKEND-27: a Bedrock request marks the prefix it will send again
 
-Two cache breakpoints go on every request to Bedrock: one at the end of the system prompt, which
-covers the tool schemas in front of it, and one on the last block of the conversation, which moves
-to the end as the conversation grows. Neither changes what is sent, only what the service has to
-read again.
+Two cache breakpoints go on a request to Bedrock: one at the end of the system prompt, which covers
+the tool schemas in front of it, and one on the last block of the conversation, which moves to the
+end as the conversation grows. The second comes off where the caller says no later request sends that
+conversation again, leaving such a request the system prompt's breakpoint alone. Neither changes what
+is sent, only what the service has to read again.
 
 **Why.** A turn re-sends its whole history every round. One session reached 104,633 tokens over
 twenty-seven rounds and paid for every token of every round at full price, in latency as much as in
@@ -738,7 +739,11 @@ front of the last one are identical to a round ago.
 **Rolling rather than fixed.** Each request writes the round before it into the cache and reads
 back everything older, which is what makes the second breakpoint worth a cache write. A conversation
 ending in an image or a tool call is left with the breakpoint on the system prompt alone, and costs
-a cache write and nothing else.
+a cache write and nothing else. A request whose conversation no later request sends is left the same
+way: the write on the end of that exchange is charged above the tokens it covers and buys a cache
+nothing reads back, while the prompt in front of it is the same bytes every time such a request is
+made. Which requests those are is the caller's to say, and [compaction.md](compaction.md) is where
+one says it.
 
 **The reported prompt is what was sent, not what was read.** This API states `inputTokens` net of
 the cache and reports the cached tokens beside it, so the three are added back together on the way
@@ -771,6 +776,7 @@ for one that does not.
 `verified-by: bravebot_bedrock::protocol::the_system_prompt_carries_a_breakpoint`
 `verified-by: bravebot_bedrock::protocol::the_last_block_of_the_conversation_carries_a_breakpoint`
 `verified-by: bravebot_bedrock::protocol::a_conversation_ending_in_a_tool_result_is_marked_too`
+`verified-by: bravebot_bedrock::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
 `verified-by: bravebot_bedrock::protocol::a_reply_without_a_breakpoint_still_parses`
 `verified-by: bravebot_bedrock::protocol::cached_tokens_are_counted_as_the_prompt_they_were`
 `verified-by: bravebot_bedrock::protocol::a_request_without_breakpoints_keeps_everything_that_was_asked_for`
@@ -924,10 +930,12 @@ says which turn it speaks for, the counts beside it being the session's.
 ### BACKEND-32: an aichat request marks the prefix it will send again
 
 A request in the OpenAI-compatible wire format marks two prefixes: the system prompt, which the tool
-schemas travel in front of, and the last thing the user said. The mark is a `cache_control` of
-`{"type": "ephemeral"}` on the content block the prefix ends at, which is the field the Anthropic API
-defines for this and the field a gateway fronting such a model reads. A marked message carries its
-words as a block rather than as a bare string, that being the only shape the field exists in.
+schemas travel in front of, and the last thing the user said. The second is left off where the caller
+says the conversation is given up once it has been answered, marking the prompt alone. The mark is a
+`cache_control` of `{"type": "ephemeral"}` on the content block the prefix ends at, which is the field
+the Anthropic API defines for this and the field a gateway fronting such a model reads. A marked
+message carries its words as a block rather than as a bare string, that being the only shape the
+field exists in.
 
 **Why.** The arithmetic is BACKEND-27's, and so is the measurement behind it: a turn re-sends its
 whole history every round, the system prompt and the schemas are identical on every round of every
@@ -944,6 +952,13 @@ through the last user turn is written by the first round and read back by every 
 since what a round appends is a call and its result on the end, so what goes unread is only what
 those rounds appended. A turn whose last block is a picture keeps the breakpoint on the system prompt
 alone, because what a service makes of a mark on an image block is not a thing to guess at.
+
+**A conversation nothing sends again is not worth marking.** The mark on the last thing the user said
+is worth a cache write because the request after it sends everything in front of it again. A request
+that gives its conversation up once it has been answered has no request after it, and the write is
+charged above the tokens it covers for a prefix nothing can read back. The prompt keeps its mark,
+being the same bytes every time such a request is made, so what is given up is a write and no read.
+[compaction.md](compaction.md) is where a request says its conversation is not sent again.
 
 **Marked on the way out and nowhere else.** The mark is put on a copy as the body is built, so the
 request a turn assembled does not carry one and neither does anything a session records. A
@@ -977,6 +992,7 @@ sent.
 
 `verified-by: bravebot_aichat::protocol::the_system_prompt_and_the_last_thing_the_user_said_are_marked`
 `verified-by: bravebot_aichat::protocol::a_result_the_assistant_asked_for_is_not_marked`
+`verified-by: bravebot_aichat::protocol::a_request_giving_up_its_conversation_marks_the_prompt_alone`
 `verified-by: bravebot_aichat::protocol::a_turn_ending_in_a_picture_is_left_unmarked`
 `verified-by: bravebot_aichat::protocol::the_words_after_a_picture_carry_the_mark`
 `verified-by: bravebot_aichat::protocol::a_marked_body_changes_nothing_but_the_messages`
@@ -1035,14 +1051,26 @@ sent.
   with. That is a process this code did not write, reading a configuration this code does not
   govern.
 
-- **Compaction throws away everything the cache held.** A summary replaces the messages in front of
-  the last few, which is a rewrite of the very prefix both breakpoints sit in, so the round after a
-  compaction reads nothing back and pays a cache write to establish the new prefix. That is the
-  right way round, the point of compacting being that the old prefix is no longer worth sending at
-  all, but it means the sessions that benefit most from caching are the ones that periodically lose
-  it, and a session compacting often enough could write more than it ever reads. Nothing here
-  measures that: BACKEND-31's figures are per turn, and the turn that compacted is charged for the
-  write in the same figure as the rounds that profited from it.
+- **Not every request whose conversation nothing sends again says so.** Coming off the end of a
+  conversation is the caller's to ask for, and the summariser is the only caller that asks. A judge
+  putting a condition to the model, a question answered beside the work, and a processor reading
+  untrusted content are each sent once and answered once, and each still marks the end of what it
+  carries, so each pays a cache write for a prefix nothing reads back. The judge is the one that adds
+  up, being sent after every turn of a session working towards a condition, and it carries the
+  conversation: see [goal.md](goal.md), [watching.md](watching.md) and [processors.md](processors.md)
+  for what those requests are. A processor given content that ends in a picture is already unmarked,
+  for the reason BACKEND-32 gives.
+
+- **Compaction throws away the cache of the conversation.** A summary replaces the messages in front
+  of the last few, which is a rewrite of the prefix the rolling breakpoint sits in, so the round
+  after a compaction reads none of the conversation back and pays a cache write to establish the
+  shortened one. The prompt's breakpoint covers a prefix a compaction does not touch and survives it,
+  which [compaction.md](compaction.md) is where to read. Giving the rest up is the right way round,
+  the point of compacting being that the old conversation is no longer worth sending at all, but it
+  means the sessions that benefit most from caching are the ones that periodically lose part of it,
+  and a session compacting often enough could write more than it ever reads. Nothing here measures
+  that: BACKEND-31's figures are per turn, and the turn that compacted is charged for the write in
+  the same figure as the rounds that profited from it.
 
 - **An ephemeral cache entry expires on a few minutes of inactivity, and nothing here tracks it.** A
   person who thinks between turns misses more often than the token arithmetic suggests, and a miss
