@@ -149,9 +149,10 @@ line. No shell ever sees either.
 <a id="PERM-7"></a>
 ### PERM-7: a deny rule refuses before anything is opened or started
 
-A denied file is not read, not enumerated, and not written, and a denied program does not run: the
-refusal comes before the file is opened or the program is looked for. A `Read` deny rule also stops
-a write to the path it covers.
+A denied file is not read, not enumerated, and not written, a denied program does not run, and a
+denied host is not fetched: the refusal comes before the file is opened, before the program is
+looked for, and before the request goes out. A `Read` deny rule also stops a write to the path it
+covers.
 
 The rule is about the file, not about the spelling used to ask for it. Naming a path through a
 reference reaches the same refusal, including on the one route that may read quarantined content: a
@@ -171,6 +172,10 @@ rest of the tree reports what it found and nothing more. Saying which entries we
 many, would hand over the names the rule is keeping back, and a planner able to narrow a glob until
 the notice appears has the names either way.
 
+What a `WebFetch` rule reaches is the fetch tool. This program's own connection to its backend is
+egress too and no rule about a website governs it, which [fetch-url.md](tools/fetch-url.md) sets
+out, and a command line that talks to the network is judged as the command line it is.
+
 **Why.** A file whose contents are off limits is not protected if it can be overwritten, so the two
 families are consulted together for a write. Enumerating a directory and searching it both report
 what is in it, so a rule that fences a tree fences those too. A processor is the component allowed
@@ -186,6 +191,7 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_and_its_contents_do_not_reach_the_planner`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_even_where_writes_are_approved`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_by_a_processor_either`
+`verified-by: bravebot_agent::turn::a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_agent::turn::a_deny_rule_holds_against_a_trusted_workspace`
 `verified-by: bravebot_agent::turn::a_deny_rule_holds_where_every_permission_check_is_bypassed`
 `verified-by: bravebot_agent::turn::a_deny_rule_holds_when_a_search_walks_the_directory_above_the_file`

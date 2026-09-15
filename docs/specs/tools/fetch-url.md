@@ -8,6 +8,7 @@ governs:
   - crates/core/src/url.rs
   - crates/net/src/lib.rs
 guards:
+  - symbol: Policy::before_fetch_rules
   - symbol: Policy::before_fetch
   - symbol: Policy::before_network
 ---
@@ -80,6 +81,8 @@ asked for, so a rule matching one would be answering a different question on eve
 
 `verified-by: bravebot_core::policy::a_host_nobody_has_ruled_on_is_put_to_a_person`
 `verified-by: bravebot_core::policy::a_rule_written_in_advance_answers_the_fetch_prompt`
+`verified-by: bravebot_core::policy::a_denied_host_is_refused_rather_than_put_to_a_person`
+`verified-by: bravebot_agent::turn::a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_core::url::userinfo_is_not_mistaken_for_the_host`
 `verified-by: bravebot_agent::turn::a_domain_rule_lets_a_fetch_through_without_asking`
 `verified-by: bravebot_agent::turn::a_refused_fetch_sends_no_request`
@@ -120,9 +123,9 @@ knows because it set it, and which no reply can influence.
 
 `verified-by: bravebot_core::policy::a_fetch_cannot_be_redirected_to_a_host_nobody_approved`
 `verified-by: bravebot_core::policy::a_denied_host_is_refused_at_the_egress_gate_so_a_redirect_cannot_reach_it`
+`verified-by: bravebot_core::policy::a_denied_host_is_refused_at_the_egress_gate_on_its_own_account`
 `verified-by: bravebot_core::policy::a_web_fetch_rule_does_not_govern_this_programs_own_connection`
 `verified-by: bravebot_core::policy::a_finished_fetch_stops_confining_the_turns_other_egress`
-`verified-by: bravebot_agent::turn::a_denied_host_is_not_fetched_even_when_approved`
 
 <a id="FETCH-5"></a>
 ### FETCH-5: what is not text is carried anyway, and a cap is reported
