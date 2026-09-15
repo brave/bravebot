@@ -113,9 +113,12 @@ is named as never transmitted, and a value from a settings file is never printed
 decides whether a backend works, what is reported is that one was found. A configuration error makes
 it fail rather than pass with a warning.
 
-Where there is no state directory, the report says why, names what is not kept without one, and says
-that a checkout's own settings, skills and instructions are read regardless. It is reported rather
-than failed on, and sits outside the configuration section, which a configuration error stops early.
+The state directory is reported with the variable that named it, and on a platform where the files
+under it cannot be restricted to one account the report says which of them carry the permissions of
+the profile directory instead. Where there is no state directory, the report says which variables were
+looked at, points the remedy at those same variables, names what is not kept without one, and says
+that a checkout's own settings, skills and instructions are read regardless. It is reported rather than failed on, and sits outside the
+configuration section, which a configuration error stops early.
 
 **Why.** It exists to answer "what will this actually use", so reporting a default when a choice
 is in force would explain the wrong thing, and naming one backend where two are reachable would
@@ -127,12 +130,25 @@ into issues. Whether one was found still has to be said, because a backend nothi
 is the case this is most often run to explain.
 
 The state directory is the same argument one step further out. What outlives a session is kept in it,
-and [STATE-2](state-directory.md#STATE-2) makes an absent `HOME` a state this program supports rather
-than an error, so every subsystem treats the absence as absence and none of them says a word about
-it. A report that left it unsaid would describe a machine which works once and forgets as a healthy
-one: the `settings` line above says at most that no file was found, which reads as a file nobody has
-written rather than a directory there is nowhere to put. On Windows, where `HOME` is not the variable
-the platform sets, that is every user.
+and [STATE-2](state-directory.md#STATE-2) makes a profile directory nothing names a state this program
+supports rather than an error, so every subsystem treats the absence as absence and none of them says
+a word about it. A report that left it unsaid would describe a machine which works once and forgets as
+a healthy one: the `settings` line above says at most that no file was found, which reads as a file
+nobody has written rather than a directory there is nowhere to put.
+
+Which variable answered is worth a few words for the same reason the settings files are named: more
+than one can state a profile directory, and somebody moving the directory has to change the one in
+force rather than the one they assume. Where none answered, naming every variable that was looked at
+is what makes the remedy actionable, since which variables a platform states a profile directory in is
+not something the reader is expected to know.
+
+Whether the files under it are restricted to one account is a fact about the platform rather than
+about this machine's configuration, and it is still owed. On Unix every file is created with a mode no
+other account can read, and where there is no mode to ask for the same files carry what the profile
+directory grants them; the prompt history is every path, branch name and pasted fragment somebody has
+typed, and a profile on a shared or synced volume is where the difference lands. Nothing else in the
+report distinguishes the two, so somebody about to type a token into a prompt has no other way to
+learn which they have.
 
 Both halves are named because the absence is partial, and which half is which cannot be worked out
 from the report otherwise. A checkout's own settings, skills and `AGENTS.md` are read with no home at
@@ -140,15 +156,17 @@ all; the same files of the user's own, the session records behind `--resume`, th
 the recorded model and theme are not. A report naming only the loss would have somebody looking for
 why the file in front of them is ignored when it is in force.
 
-Failing on it is the wrong answer to the same fact: a container or a daemon with no `HOME` runs as
-designed and wants none of what it is not getting, so what is owed there is a sentence rather than an
-error. The section sits outside the configuration one because a configuration error stops that
+Failing on it is the wrong answer to the same fact: a container or a daemon with no profile directory
+runs as designed and wants none of what it is not getting, so what is owed there is a sentence rather
+than an error. The section sits outside the configuration one because a configuration error stops that
 section before it prints anything, and where state is kept is a fact about the machine either way.
 
 `verified-by: bravebot_cli::main::a_gateway_credential_is_reported_as_found_and_never_printed`
 `verified-by: bravebot_cli::main::a_gateway_with_no_credential_is_reported_as_having_none`
 `verified-by: bravebot_cli::main::doctor_names_the_state_directory_it_resolved`
+`verified-by: bravebot_cli::main::doctor_says_when_the_files_are_left_unrestricted`
 `verified-by: bravebot_cli::main::a_missing_state_directory_is_reported_with_what_it_costs`
+`verified-by: bravebot_cli::main::a_missing_state_directory_names_every_variable_it_looked_at`
 
 <a id="CLI-8"></a>
 ### CLI-8: `--mode` chooses how a one-shot is run; the default is the turn loop

@@ -181,16 +181,47 @@ impl From<Registration> for StoredCredentials {
     }
 }
 
+/// The variables the platform states the user's profile directory in, in the order they answer.
+///
+/// Spelled here as well as in the crates above this one, which is what a crate depending on nothing
+/// costs. What has to hold across the copies is the name of the directory, the variables, and the
+/// refusal to invent one.
+///
+/// `HOME` on either platform: it is the one Unix sets, and a Windows shell environment that sets one
+/// has been told where the profile is. `USERPROFILE` is the one stock Windows sets, and is read there
+/// only, since on Unix it is not a name the platform states anything in.
+#[cfg(windows)]
+const PROFILE_VARIABLES: &[&str] = &["HOME", "USERPROFILE"];
+#[cfg(not(windows))]
+const PROFILE_VARIABLES: &[&str] = &["HOME"];
+
 /// The file holding the imported credentials.
 ///
-/// `HOME` is read directly rather than through a dependency, for the same reason and with the same
-/// absence of a fallback as everywhere else it is resolved: inventing a directory would put a
-/// bearer secret somewhere the user never chose.
+/// The variables are read directly rather than through a dependency, for the same reason and with
+/// the same absence of a fallback as everywhere else the directory is resolved: inventing one would
+/// put a bearer secret somewhere the user never chose.
 pub fn path() -> Result<PathBuf, StoreError> {
-    let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
+    path_named(PROFILE_VARIABLES.iter().map(std::env::var_os))
+}
+
+/// The same answer, from the values rather than from the variables.
+///
+/// Split from the read so the order they answer in is testable without a process-wide variable,
+/// which here also means without the `unsafe` block setting one takes.
+///
+/// The first value that names something wins. An empty one names nothing, so it is passed over
+/// rather than joined onto: joining would put a bearer secret in `/.bravebot`, and stopping there
+/// would lose a profile directory the platform does name to a variable some shell exported empty.
+fn path_named(
+    named: impl IntoIterator<Item = Option<std::ffi::OsString>>,
+) -> Result<PathBuf, StoreError> {
+    let home = named.into_iter().flatten().find(|home| !home.is_empty());
     let Some(home) = home else {
         return Err(StoreError::Unusable {
-            detail: "no HOME is set, so there is nowhere to keep credentials".to_string(),
+            detail: format!(
+                "{} names nothing, so there is nowhere to keep credentials",
+                PROFILE_VARIABLES.join(" or ")
+            ),
         });
     };
     Ok(PathBuf::from(home).join(DIRECTORY).join(FILE))
@@ -557,22 +588,32 @@ mod tests {
             std::fs::create_dir_all(dir).expect("scratch home");
         }
 
-        let previous = std::env::var_os("HOME");
+        // Every variable the platform states a profile directory in, not `HOME` alone: one left set
+        // would answer where `HOME` does not, which would have `with_no_home` asking what happens
+        // when one variable is missing rather than when there is no home at all.
+        let previous: Vec<_> = PROFILE_VARIABLES
+            .iter()
+            .map(|variable| (*variable, std::env::var_os(variable)))
+            .collect();
         // SAFETY: single-threaded within the lock, and restored before returning.
-        match &dir {
+        for (variable, _) in &previous {
             // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-            Some(dir) => unsafe { std::env::set_var("HOME", dir) },
+            unsafe { std::env::remove_var(variable) };
+        }
+        if let Some(dir) = &dir {
             // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-            None => unsafe { std::env::remove_var("HOME") },
+            unsafe { std::env::set_var("HOME", dir) };
         }
 
         let result = body();
 
-        match previous {
-            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-            Some(value) => unsafe { std::env::set_var("HOME", value) },
-            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-            None => unsafe { std::env::remove_var("HOME") },
+        for (variable, value) in previous {
+            match value {
+                // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+                Some(value) => unsafe { std::env::set_var(variable, value) },
+                // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+                None => unsafe { std::env::remove_var(variable) },
+            }
         }
         if let Some(dir) = &dir {
             let _ = std::fs::remove_dir_all(dir);
@@ -930,6 +971,44 @@ mod tests {
             assert!(matches!(path(), Err(StoreError::Unusable { .. })));
             assert!(matches!(load(), Err(StoreError::Unusable { .. })));
         });
+    }
+
+    /// A profile directory as the environment hands one over.
+    fn named(value: &str) -> Option<std::ffi::OsString> {
+        Some(std::ffi::OsString::from(value))
+    }
+
+    /// PREM-7: stock Windows sets no `HOME`, so the batch imported there belongs under the profile
+    /// directory the platform does name. Nowhere to keep it means an import that cannot be kept, and
+    /// a machine paying for a subscription running every turn on the free tier.
+    #[test]
+    fn the_profile_directory_answers_where_no_home_is_named() {
+        let expected = PathBuf::from("C:\\Users\\someone")
+            .join(DIRECTORY)
+            .join(FILE);
+        // In the order `PROFILE_VARIABLES` names them: no `HOME`, then the profile directory stock
+        // Windows names in `USERPROFILE`.
+        assert_eq!(
+            path_named([None, named("C:\\Users\\someone")]).expect("a profile directory"),
+            expected
+        );
+        assert_eq!(
+            path_named([named(""), named("C:\\Users\\someone")]).expect("a profile directory"),
+            expected,
+            "a variable exported empty took away a profile directory the platform names"
+        );
+    }
+
+    /// PREM-7: a shell environment that sets `HOME` has been told where the profile is, and the file
+    /// is read back by whatever is started from that shell next. A secret written somewhere else
+    /// would leave a subscription imported in one session unspendable in the next.
+    #[test]
+    fn a_named_home_answers_before_the_profile_directory() {
+        assert_eq!(
+            path_named([named("/somebody"), named("C:\\Users\\someone")])
+                .expect("a profile directory"),
+            PathBuf::from("/somebody").join(DIRECTORY).join(FILE)
+        );
     }
 
     /// A file holding something another version wrote must be reported, not read as absent: the

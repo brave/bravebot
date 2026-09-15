@@ -585,27 +585,46 @@ fn strings(block: &serde_json::Map<String, serde_json::Value>, name: &str) -> Ve
         .collect()
 }
 
-/// The global state directory, or `None` when there is no home to look in.
+/// The variables the platform states the user's profile directory in, in the order they answer.
+///
+/// Spelled here as well as in the crates above this one, because `docs/specs/layering.md` forbids
+/// this one the dependency on the crate that holds the answer. What has to hold across the copies is
+/// the name of the directory, the variables, and the refusal to invent one.
+///
+/// `HOME` on either platform: it is the one Unix sets, and a Windows shell environment that sets one
+/// has been told where the profile is. `USERPROFILE` is the one stock Windows sets, and is read there
+/// only, since on Unix it is not a name the platform states anything in.
+#[cfg(windows)]
+const PROFILE_VARIABLES: &[&str] = &["HOME", "USERPROFILE"];
+#[cfg(not(windows))]
+const PROFILE_VARIABLES: &[&str] = &["HOME"];
+
+/// The global state directory, or `None` when the platform names no profile directory to look in.
 ///
 /// No fallback to a relative `.bravebot`, which is the project layer and reached deliberately rather
 /// than by a home directory going missing. Resolving the weakest layer to the strongest one's
 /// location would silently read a checkout's file as though a person had put it in their own
 /// directory.
 fn home() -> Option<PathBuf> {
-    home_named(std::env::var_os("HOME"))
+    home_named(PROFILE_VARIABLES.iter().map(std::env::var_os))
 }
 
-/// The same answer, from the value rather than from the variable.
+/// The same answer, from the values rather than from the variables.
 ///
 /// Split from the read so the rule is testable without a process-wide variable. A test that set
 /// `HOME` would have to take a lock against every other test in this binary, restore what was
-/// there, and step outside safe Rust to do it, all to check a rule that is a function of one
-/// string.
-fn home_named(home: Option<std::ffi::OsString>) -> Option<PathBuf> {
-    let home = home?;
-    if home.is_empty() {
-        return None;
-    }
+/// there, and step outside safe Rust to do it, all to check a rule that is a function of a couple
+/// of strings.
+///
+/// The values arrive in the order [`PROFILE_VARIABLES`] names them, and the first that names
+/// something answers. An empty one names nothing: joining onto it would resolve the user's own
+/// settings to `/.bravebot`, and stopping there would lose a profile directory the platform does
+/// name to a variable some shell exported empty.
+fn home_named(named: impl IntoIterator<Item = Option<std::ffi::OsString>>) -> Option<PathBuf> {
+    let home = named
+        .into_iter()
+        .flatten()
+        .find(|value| !value.is_empty())?;
     Some(PathBuf::from(home).join(".bravebot"))
 }
 
@@ -624,7 +643,7 @@ mod tests {
     #[test]
     fn the_state_directory_is_the_home_the_environment_names() {
         assert_eq!(
-            home_named(named("/somebody/else")),
+            home_named([named("/somebody/else")]),
             Some(PathBuf::from("/somebody/else/.bravebot"))
         );
     }
@@ -634,11 +653,41 @@ mod tests {
     /// commands run without being asked about.
     #[test]
     fn an_absent_or_empty_home_yields_no_directory_rather_than_a_guess() {
-        assert_eq!(home_named(None), None);
+        assert_eq!(home_named([None]), None);
         assert_eq!(
-            home_named(named("")),
+            home_named([named("")]),
             None,
             "an empty home was joined onto anyway"
+        );
+    }
+
+    /// STATE-2: stock Windows sets no `HOME`, so the settings a person keeps outside a checkout are
+    /// read from the profile directory the platform does name, or from nowhere at all. The order is
+    /// the same in every resolver, so the layer reading settings and the layer writing history agree
+    /// about which variable won.
+    #[test]
+    fn the_profile_directory_answers_where_no_home_is_named() {
+        // In the order `PROFILE_VARIABLES` names them: no `HOME`, then the profile directory stock
+        // Windows names in `USERPROFILE`.
+        assert_eq!(
+            home_named([None, named("C:\\Users\\someone")]),
+            Some(Path::new("C:\\Users\\someone").join(".bravebot"))
+        );
+        assert_eq!(
+            home_named([named(""), named("C:\\Users\\someone")]),
+            Some(Path::new("C:\\Users\\someone").join(".bravebot")),
+            "a variable exported empty took away a profile directory the platform names"
+        );
+    }
+
+    /// STATE-2: a shell environment that sets `HOME` has been told where the profile is, and every
+    /// other tool run from it reads that. Settings read from somewhere else would be a file the
+    /// person cannot find from the shell they configured.
+    #[test]
+    fn a_named_home_answers_before_the_profile_directory() {
+        assert_eq!(
+            home_named([named("/somebody"), named("C:\\Users\\someone")]),
+            Some(PathBuf::from("/somebody/.bravebot"))
         );
     }
 

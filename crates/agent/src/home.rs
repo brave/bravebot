@@ -4,27 +4,68 @@
 //! standing instructions and skills. One definition of where that is, so the interface and the
 //! agent cannot drift apart about it.
 //!
-//! There is deliberately no fallback. A missing `HOME` yields `None` and every caller does
-//! without, because inventing a directory would mean reading files from somewhere the user never
-//! chose, and this is the one place whose contents are trusted for being the user's own.
+//! It goes under the directory the platform states the user's profile is in, and there is
+//! deliberately no fallback past the variables the platform states that in. A platform naming
+//! nothing yields `None` and every caller does without, because inventing a directory would mean
+//! reading files from somewhere the user never chose, and this is the one place whose contents are
+//! trusted for being the user's own.
 
+use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// The name of the directory inside the user's home.
 const DIRECTORY: &str = ".bravebot";
 
-/// The user's own directory, or `None` when there is no home to put it in.
+/// The variables the platform states the user's profile directory in, in the order they answer.
+///
+/// `HOME` on either platform: it is the one Unix sets, and a Windows shell environment that sets one
+/// has been told where the profile is. `USERPROFILE` is the one stock Windows sets, and is read
+/// there only, since on Unix it is not a name the platform states anything in.
+#[cfg(windows)]
+pub const PROFILE_VARIABLES: &[&str] = &["HOME", "USERPROFILE"];
+#[cfg(not(windows))]
+pub const PROFILE_VARIABLES: &[&str] = &["HOME"];
+
+/// The user's own directory, or `None` when the platform names nowhere to keep it.
 ///
 /// This is the reading answer. Anything about to write wants [`writable`] instead.
 pub fn directory() -> Option<PathBuf> {
-    // Read directly rather than taking a dependency for one variable. Absent in some daemon and
-    // container environments, which is a case that has to be handled anyway.
-    let home = std::env::var_os("HOME")?;
-    if home.is_empty() {
-        return None;
-    }
-    Some(Path::new(&home).join(DIRECTORY))
+    resolved().map(|(_, directory)| directory)
+}
+
+/// The same answer with the variable that gave it, or `None` when none of them did.
+///
+/// `doctor` reports which one answered, because more than one can and the one in force is what
+/// somebody has to change to put the directory elsewhere.
+pub fn resolved() -> Option<(&'static str, PathBuf)> {
+    // Read directly rather than taking a dependency for two variables. Both absent in some daemon
+    // and container environments, which is a case that has to be handled anyway.
+    resolve(
+        PROFILE_VARIABLES
+            .iter()
+            .map(|variable| (*variable, std::env::var_os(variable))),
+    )
+}
+
+/// The same answer from the values rather than from the variables.
+///
+/// Split from the read so the order they answer in is testable without a process-wide variable. A
+/// test that set one would have to take a lock against every other test in the binary, restore what
+/// was there, and step outside safe Rust to do it, all to check a rule that is a function of a
+/// couple of strings.
+///
+/// An empty value names nothing, so it is passed over rather than joined onto: joining would put the
+/// user's own files in `/.bravebot`, and stopping there would lose a profile directory the platform
+/// does name to a variable some shell exported empty.
+fn resolve(
+    named: impl IntoIterator<Item = (&'static str, Option<OsString>)>,
+) -> Option<(&'static str, PathBuf)> {
+    named
+        .into_iter()
+        .filter_map(|(variable, value)| Some((variable, value?)))
+        .find(|(_, value)| !value.is_empty())
+        .map(|(variable, value)| (variable, Path::new(&value).join(DIRECTORY)))
 }
 
 /// The user's own directory when something may be written into it, or `None` when nothing may be.
@@ -151,6 +192,54 @@ fn open_private(options: &mut std::fs::OpenOptions, path: &Path) -> std::io::Res
         let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
     }
     Ok(file)
+}
+
+/// Which of the variables the platform states a profile directory in decides the answer.
+///
+/// A function of the values, so both orders are checked on every platform the resolver is compiled
+/// for rather than only on the one whose variable happens to be set.
+#[cfg(test)]
+mod resolution {
+    use super::*;
+
+    /// A variable as the environment hands one over.
+    fn named(variable: &'static str, value: &str) -> (&'static str, Option<OsString>) {
+        (variable, Some(OsString::from(value)))
+    }
+
+    /// STATE-2: stock Windows sets no `HOME`, so a state directory there is the profile directory the
+    /// platform does name or nothing at all. Nothing at all is a session that works once and forgets:
+    /// no settings of the user's own, no session to resume, no history, and no skills.
+    #[test]
+    fn the_profile_directory_answers_where_no_home_is_named() {
+        let profile = Path::new("C:\\Users\\someone");
+        assert_eq!(
+            resolve([("HOME", None), named("USERPROFILE", "C:\\Users\\someone")]),
+            Some(("USERPROFILE", profile.join(DIRECTORY)))
+        );
+        assert_eq!(
+            resolve([
+                named("HOME", ""),
+                named("USERPROFILE", "C:\\Users\\someone")
+            ]),
+            Some(("USERPROFILE", profile.join(DIRECTORY))),
+            "a variable exported empty took away a profile directory the platform names"
+        );
+    }
+
+    /// STATE-2: a shell environment that sets `HOME` has been told where the profile is, and every
+    /// other tool run from it reads that. A state directory somewhere else would leave the settings
+    /// and history of one session unreachable from the next, in whichever shell it was started from.
+    #[test]
+    fn a_named_home_answers_before_the_profile_directory() {
+        assert_eq!(
+            resolve([
+                named("HOME", "/somebody"),
+                named("USERPROFILE", "C:\\Users\\someone")
+            ]),
+            Some(("HOME", PathBuf::from("/somebody").join(DIRECTORY)))
+        );
+    }
 }
 
 #[cfg(all(test, unix))]

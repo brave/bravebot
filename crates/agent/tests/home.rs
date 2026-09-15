@@ -48,21 +48,41 @@ fn the_home_directory_is_the_one_the_environment_names() {
     });
 }
 
+/// Clear every variable the platform states a profile directory in, run the closure, and put them
+/// back.
+///
+/// Every one of them, not `HOME` alone: the platform decides which it states a profile directory in,
+/// and a test that left another set would be asking what happens when one variable is missing rather
+/// than when there is no home at all.
+fn with_no_home<T>(body: impl FnOnce() -> T) -> T {
+    let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let previous: Vec<_> = bravebot_agent::home::PROFILE_VARIABLES
+        .iter()
+        .map(|variable| (variable, std::env::var_os(variable)))
+        .collect();
+    // SAFETY: single-threaded within the lock, and restored before returning.
+    for (variable, _) in &previous {
+        unsafe { std::env::remove_var(variable) };
+    }
+
+    let result = body();
+
+    for (variable, value) in previous {
+        match value {
+            Some(value) => unsafe { std::env::set_var(variable, value) },
+            None => unsafe { std::env::remove_var(variable) },
+        }
+    }
+    result
+}
+
 /// Daemons and containers run without a home. That is a case to do without, never a reason to
 /// refuse to start, since everything kept there is optional.
 #[test]
 fn an_absent_home_is_not_an_error() {
-    let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let found = with_no_home(bravebot_agent::home::directory);
 
-    let previous = std::env::var_os("HOME");
-    // SAFETY: single-threaded within the lock, and restored before returning.
-    unsafe { std::env::remove_var("HOME") };
-
-    let found = bravebot_agent::home::directory();
-
-    if let Some(value) = previous {
-        unsafe { std::env::set_var("HOME", value) };
-    }
     assert_eq!(found, None, "a missing home invented a directory");
 }
 
@@ -70,18 +90,12 @@ fn an_absent_home_is_not_an_error() {
 /// put the user's own files in `/.bravebot`.
 #[test]
 fn an_empty_home_is_treated_as_no_home_at_all() {
-    let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let found = with_no_home(|| {
+        // SAFETY: `with_no_home` holds the lock, and restores this along with the rest.
+        unsafe { std::env::set_var("HOME", "") };
+        bravebot_agent::home::directory()
+    });
 
-    let previous = std::env::var_os("HOME");
-    // SAFETY: single-threaded within the lock, and restored before returning.
-    unsafe { std::env::set_var("HOME", "") };
-
-    let found = bravebot_agent::home::directory();
-
-    match previous {
-        Some(value) => unsafe { std::env::set_var("HOME", value) },
-        None => unsafe { std::env::remove_var("HOME") },
-    }
     assert_eq!(found, None, "an empty home was joined onto anyway");
 }
 
