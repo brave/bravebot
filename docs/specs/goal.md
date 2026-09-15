@@ -187,6 +187,7 @@ pays for it.
 `verified-by: bravebot_tui::goals::a_goal_stops_sending_the_work_back_once_its_rounds_are_spent`
 `verified-by: bravebot_tui::goals::the_reason_from_the_round_that_gave_up_is_still_kept`
 `verified-by: bravebot_tui::state::a_goal_that_runs_out_of_rounds_stops_rather_than_sending_the_work_back_again`
+`verified-by: bravebot_tui::state::a_goal_that_gives_up_says_what_the_last_check_said`
 
 <a id="GOAL-10"></a>
 ### GOAL-10: four things end a goal besides a verdict, and each of them says so
