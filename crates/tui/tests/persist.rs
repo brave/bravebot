@@ -134,12 +134,21 @@ fn a_corrupt_file_reads_as_no_history() {
 }
 
 /// With nowhere to store anything, every operation is a no-op rather than a failure.
+///
+/// Every variable the platform states a profile directory in is cleared, not `HOME` alone: one left
+/// set would answer, and this would be writing the developer's own history file while asking what
+/// happens when there is nowhere to write.
 #[test]
 fn no_home_directory_is_not_an_error() {
     let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-    let previous = std::env::var_os("HOME");
-    unsafe { std::env::remove_var("HOME") };
+    let previous: Vec<_> = bravebot_agent::home::PROFILE_VARIABLES
+        .iter()
+        .map(|variable| (variable, std::env::var_os(variable)))
+        .collect();
+    for (variable, _) in &previous {
+        unsafe { std::env::remove_var(variable) };
+    }
 
     assert!(store::directory().is_none());
     assert!(store::load_history().is_empty());
@@ -147,8 +156,10 @@ fn no_home_directory_is_not_an_error() {
     store::append_history(&sent("nowhere to go"));
     store::save_history(&[sent("nor here")]);
 
-    if let Some(value) = previous {
-        unsafe { std::env::set_var("HOME", value) };
+    for (variable, value) in previous {
+        if let Some(value) = value {
+            unsafe { std::env::set_var(variable, value) };
+        }
     }
 }
 

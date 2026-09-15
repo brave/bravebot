@@ -35,7 +35,7 @@ itself.
 ## Clauses
 
 <a id="STATE-1"></a>
-### STATE-1: the state directory and everything written into it is readable only by the user
+### STATE-1: on Unix, the state directory and everything written into it is readable only by the user
 
 On Unix, a directory under `~/.bravebot` is created with mode 0700 and a file written into one
 with mode 0600, whichever subsystem is doing the writing. A file's mode is asked for as it is
@@ -98,35 +98,66 @@ the same mode, because what it holds is what the record holds.
 `verified-by: bravebot_lsp::server::narrowing_does_not_follow_a_link_out_of_the_cache`
 
 <a id="STATE-2"></a>
-### STATE-2: a machine with no `HOME` has no state directory rather than a guessed one
+### STATE-2: a machine whose platform names no profile directory has no state directory rather than a guessed one
 
-The directory is `HOME` and one fixed name, and an absent or empty `HOME` yields no directory at
-all. Nothing is read and nothing is written in that case, and each caller does without. Every one of
-them doing without is silent, so `doctor` is where the absence is said out loud, along with what is
-not kept without a directory to keep it in ([CLI-7](cli.md#CLI-7)). The crates
-that sit below the one holding the answer resolve the path themselves, since
-[layering.md](layering.md) forbids them the dependency, and each spells the same name and offers the
-same absence of a fallback.
+The directory is one fixed name under the profile directory the platform states in the environment.
+`HOME` states it on Unix. On Windows `HOME` is read first and `USERPROFILE` second, and the first of
+them holding a value answers; a value that is empty states nothing and is passed over. Where none of
+them holds one there is no directory at all: nothing is read, nothing is written, and each caller does
+without. Every one of them doing without is silent, so `doctor` is where the absence is said out loud,
+along with which variables were looked at and what is not kept without a directory to keep it in
+([CLI-7](cli.md#CLI-7)). The crates that sit below the one holding the answer resolve the path
+themselves, since [layering.md](layering.md) forbids them the dependency, and each spells the same
+name, reads the same variables in the same order, and offers the same absence of a fallback.
 
-**Why.** Inventing a location where `HOME` says nothing is worse than doing without: it would mean
-reading files from somewhere the user never chose, and this is the one directory whose contents are
-trusted for being the user's own. A resolver that fell back to a working directory or a temporary
+**Why.** Inventing a location where the platform states none is worse than doing without: it would
+mean reading files from somewhere the user never chose, and this is the one directory whose contents
+are trusted for being the user's own. A resolver that fell back to a working directory or a temporary
 one would put the prompt history somewhere with none of that standing behind it.
 
-Independent resolvers are the cost of the layering, and what has to hold across them is the name and
-the refusal to guess, which is what each is pinned on. A resolver that answered a different name
-would write a history nothing reads back; one that invented a fallback would be the case above,
-whichever crate it happened in.
+A second variable is not that fallback. `USERPROFILE` is the platform stating where the profile is,
+exactly as `HOME` does on Unix, so reading it answers the question rather than guessing past it. What
+the refusal rules out is a location nobody stated, and a chain ending in a working directory, a
+temporary directory or a compiled-in path would be inventing one however many platform variables came
+before it. Reading `HOME` first on Windows costs nothing and settles the developer running under a
+Unix-like shell there: an environment that sets one has been told where the profile is, and every
+other tool started from it reads that.
+
+A rule naming `HOME` alone is a rule under which no stock Windows install has a state directory at
+all, since Windows does not set it: no settings of the user's own, no session to resume, no history
+and no skills, on a platform this project publishes binaries for.
+
+Independent resolvers are the cost of the layering, and what has to hold across them is the name, the
+variables and the refusal to guess, which is what each is pinned on. A resolver that answered a
+different name would write a history nothing reads back; one that read a different variable, or read
+the same two in the other order, would answer from a directory the next session does not look in; one
+that invented a fallback would be the case above, whichever crate it happened in.
 
 `verified-by: bravebot_agent::home::the_home_directory_is_the_one_the_environment_names`
 `verified-by: bravebot_agent::home::an_absent_home_is_not_an_error`
 `verified-by: bravebot_agent::home::an_empty_home_is_treated_as_no_home_at_all`
+`verified-by: bravebot_agent::home::the_profile_directory_answers_where_no_home_is_named`
+`verified-by: bravebot_agent::home::a_named_home_answers_before_the_profile_directory`
 `verified-by: bravebot_skus::store::no_home_directory_is_reported_rather_than_guessed`
+`verified-by: bravebot_skus::store::the_profile_directory_answers_where_no_home_is_named`
+`verified-by: bravebot_skus::store::a_named_home_answers_before_the_profile_directory`
 `verified-by: bravebot_config::settings::the_state_directory_is_the_home_the_environment_names`
 `verified-by: bravebot_config::settings::an_absent_or_empty_home_yields_no_directory_rather_than_a_guess`
+`verified-by: bravebot_config::settings::the_profile_directory_answers_where_no_home_is_named`
+`verified-by: bravebot_config::settings::a_named_home_answers_before_the_profile_directory`
 
 ## Known costs
 
+- **Where the platform is given no mode to create with, the files carry whatever the profile
+  directory grants them.** STATE-1 is a Unix rule, and the helpers it names compile to a plain
+  directory creation and a plain file open elsewhere: on Windows the prompt history, the session
+  records, the recorded model and theme and a language server's index of a workspace are left with
+  the permissions inherited from the profile directory. A profile on a shared or a synced volume is
+  where that is felt, and the prompt history is the file that matters, since it holds every path,
+  branch name and pasted fragment somebody has typed. `doctor` reports which of the two a machine has, so
+  this is a weakness a user can read rather than one only recorded here. An imported subscription is
+  the exception: it is a bearer token, so a platform whose mode cannot be set has it refused rather
+  than written, which [premium-credentials.md](premium-credentials.md) records.
 - **A file this program only reads keeps whatever mode it arrived with.** STATE-1 reaches a file as
   something here writes it, and `settings.json`, the standing instructions and the skills are put in
   the directory by the user rather than written by this program, so one placed there at the umask

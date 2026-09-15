@@ -1326,7 +1326,8 @@ fn doctor() -> ExitCode {
 
     // Resolved once for the two sections that need it, since two answers to where the state
     // directory is would be two answers to which rules a run reads.
-    let home = bravebot_agent::home::directory();
+    let resolved = bravebot_agent::home::resolved();
+    let home = resolved.as_ref().map(|(_, path)| path.as_path());
 
     match Config::from_env_and_settings(&settings) {
         Ok(config) => {
@@ -1370,7 +1371,7 @@ fn doctor() -> ExitCode {
             // build could not act on, because those are the ones that look like protection and
             // are not.
             let (permissions, rejected) =
-                bravebot_agent::permissions::from_settings(&settings, home.as_deref());
+                bravebot_agent::permissions::from_settings(&settings, home);
             fact(
                 t!(doctor_permissions),
                 match permissions.is_empty() {
@@ -1421,7 +1422,13 @@ fn doctor() -> ExitCode {
     // Outside the block above, which a configuration error stops before it prints anything: where
     // the state is kept is a fact about the machine either way, and a machine with nowhere to keep
     // it is one of the reasons the configuration above it can be wrong.
-    for line in state_directory(home.as_deref()) {
+    for line in state_directory(
+        resolved
+            .as_ref()
+            .map(|(variable, path)| (*variable, path.as_path())),
+        bravebot_agent::home::PROFILE_VARIABLES,
+        RESTRICTED,
+    ) {
         println!("{line}");
     }
 
@@ -1570,6 +1577,14 @@ fn report_subscription() {
     }
 }
 
+/// Whether a file created under the state directory is reachable only by the account that owns it.
+///
+/// [`bravebot_agent::home::create_directory`] and [`bravebot_agent::home::write_file`] ask for that
+/// mode as they create, and on a platform with no mode to ask for they cannot: the files carry
+/// whatever the profile directory grants them instead. Read here and passed in, so a test on either
+/// platform holds what the section says in both cases.
+const RESTRICTED: bool = cfg!(unix);
+
 /// The state directory section of `doctor`: where it is, or that there is none and what that costs.
 ///
 /// Built rather than printed, so what the section says is a value a test can hold.
@@ -1584,10 +1599,25 @@ fn report_subscription() {
 /// its skills and its `AGENTS.md` are read with no home at all, so a report that said only
 /// "settings are not kept" would have somebody looking for why the file in front of them is being
 /// ignored when it is in force.
-fn state_directory(found: Option<&Path>) -> Vec<String> {
-    let Some(path) = found else {
+///
+/// A directory that is there is reported with the variable that named it, since more than one can
+/// and the one that answered is what somebody has to change to put the directory elsewhere. It is
+/// also where `restricted` is spent: a person keeping a shared or synced profile is owed the
+/// difference between files this program narrowed and files carrying whatever they inherited, and
+/// the state directory is the only section that could tell them.
+///
+/// `variables` is passed in for the same reason `restricted` is: the list is the one thing here that
+/// differs by platform, and a host that states a profile directory in one variable could otherwise
+/// not hold what the report says on a host that states it in two.
+fn state_directory(
+    found: Option<(&str, &Path)>,
+    variables: &[&str],
+    restricted: bool,
+) -> Vec<String> {
+    let Some((variable, path)) = found else {
+        let variables = variables.join(" or ");
         return vec![
-            t!(doctor_state_directory_absent).to_string(),
+            t!(doctor_state_directory_absent, variables = &variables).to_string(),
             aligned(
                 t!(doctor_state_directory_not_kept),
                 t!(doctor_state_directory_forgotten),
@@ -1600,12 +1630,27 @@ fn state_directory(found: Option<&Path>) -> Vec<String> {
             ),
             aligned(
                 t!(doctor_state_directory_remedy),
-                t!(doctor_state_directory_set_home),
+                t!(doctor_state_directory_set_profile, variables = &variables),
                 DETAIL,
             ),
         ];
     };
-    vec![t!(doctor_state_directory, path = path.display().to_string()).to_string()]
+    let mut lines = vec![
+        t!(
+            doctor_state_directory,
+            path = path.display().to_string(),
+            variable = variable
+        )
+        .to_string(),
+    ];
+    if !restricted {
+        lines.push(aligned(
+            t!(doctor_state_directory_unprotected),
+            t!(doctor_state_directory_permissions),
+            DETAIL,
+        ));
+    }
+    lines
 }
 
 /// What `doctor` says about confinement: the lines, and whether there was any.
@@ -1822,18 +1867,31 @@ mod tests {
         );
     }
 
-    /// Which directory this is depends on the `HOME` of whoever started the process, so a person
-    /// under `sudo`, or running the same binary from a service manager, has a different one from
-    /// the session they are looking for. Naming it is what settles which of them is in force.
+    /// Which directory this is depends on the environment of whoever started the process, so a
+    /// person under `sudo`, or running the same binary from a service manager, has a different one
+    /// from the session they are looking for. Naming it is what settles which of them is in force.
+    ///
+    /// The variable it came from is named with it, because more than one can name a profile
+    /// directory and only the one that answered is worth changing: told the path alone, somebody
+    /// moving the directory on Windows sets `USERPROFILE` and watches a `HOME` they forgot they had
+    /// go on winning.
     #[test]
     fn doctor_names_the_state_directory_it_resolved() {
-        let lines = state_directory(Some(Path::new("/home/someone/.bravebot")));
+        let lines = state_directory(
+            Some(("HOME", Path::new("/home/someone/.bravebot"))),
+            &["HOME"],
+            true,
+        );
 
         assert!(
             lines
                 .iter()
                 .any(|line| line.contains("/home/someone/.bravebot")),
             "the state directory in use is not in the section that reports it: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("HOME")),
+            "the section does not say which variable named the directory: {lines:?}"
         );
         assert!(
             !lines
@@ -1843,24 +1901,44 @@ mod tests {
         );
     }
 
+    /// The mode `home` asks for as it creates is what keeps a prompt history out of another
+    /// account's reach, and on a platform that is given no mode the same files are written carrying
+    /// whatever the profile directory grants. Somebody typing a token into a prompt on a shared or
+    /// synced profile is entitled to know which of the two they have, and no other line in the
+    /// report distinguishes them: the section reads identically either way.
+    #[test]
+    fn doctor_says_when_the_files_are_left_unrestricted() {
+        let path = Path::new("C:\\Users\\someone\\.bravebot");
+        let named = ["HOME", "USERPROFILE"];
+        let unrestricted = state_directory(Some(("USERPROFILE", path)), &named, false).join("\n");
+
+        assert!(
+            unrestricted.contains(&t!(doctor_state_directory_permissions).to_string()),
+            "a platform that narrows nothing said nothing about it: {unrestricted}"
+        );
+        assert!(
+            !state_directory(Some(("USERPROFILE", path)), &named, true)
+                .join("\n")
+                .contains(&t!(doctor_state_directory_permissions).to_string()),
+            "a platform that narrows every file reported them as unrestricted"
+        );
+    }
+
     /// The loss this reports is silent: the session records behind `--resume`, the prompt history
     /// and the recorded model are neither read nor written, every subsystem treats that as absence
     /// by design, and somebody whose `/model` choice does not survive the session has nothing else
-    /// in the report to explain it. On Windows, where `HOME` is not the variable the platform sets,
-    /// that is every user.
+    /// in the report to explain it. A stripped environment, a service manager and a container all
+    /// reach it.
     ///
     /// What is still read has to be said in the same breath, because the absence is partial: a
     /// checkout's own settings, skills and `AGENTS.md` load with no home at all, and a report that
     /// left that out would send somebody looking for why a file that is in force is ignored.
     #[test]
     fn a_missing_state_directory_is_reported_with_what_it_costs() {
-        let lines = state_directory(None);
+        let variables = bravebot_agent::home::PROFILE_VARIABLES;
+        let lines = state_directory(None, variables, RESTRICTED);
         let section = lines.join("\n");
 
-        assert!(
-            section.contains("HOME"),
-            "the section does not say why there is no state directory: {section}"
-        );
         for lost in ["sessions", "--resume", "prompt history", "model"] {
             assert!(
                 section.contains(lost),
@@ -1873,9 +1951,39 @@ mod tests {
         );
         assert_ne!(
             lines,
-            state_directory(Some(Path::new("/home/someone/.bravebot"))),
+            state_directory(
+                Some(("HOME", Path::new("/home/someone/.bravebot"))),
+                variables,
+                RESTRICTED
+            ),
             "a machine with no state directory reads the same as one with a state directory"
         );
+    }
+
+    /// Which variables a platform states a profile directory in is not something the reader knows,
+    /// so the report names every one that was looked at: told only that `HOME` names nothing,
+    /// somebody on a platform that answers with another variable is being sent to set the one that
+    /// was never going to be consulted. The remedy carries the same list as the line above it, since
+    /// the remedy is the half somebody acts on.
+    ///
+    /// Held against two variables rather than this host's own, which states one. Against a list of
+    /// one, an assertion that the report names `HOME` is satisfied by the remedy's own wording
+    /// whatever the report does with the list, which is a test that passes having pinned nothing.
+    #[test]
+    fn a_missing_state_directory_names_every_variable_it_looked_at() {
+        let lines = state_directory(None, &["HOME", "USERPROFILE"], RESTRICTED);
+        let absent = lines.first().expect("the absence is reported");
+        let remedy = lines
+            .iter()
+            .find(|line| line.contains(&t!(doctor_state_directory_remedy).to_string()))
+            .expect("the report says how to keep them");
+
+        for line in [absent, remedy] {
+            assert!(
+                line.contains("HOME or USERPROFILE"),
+                "a line of the report names fewer than the two variables looked at: {line}"
+            );
+        }
     }
 
     /// The gateway a settings file configured, for the `doctor` tests below.

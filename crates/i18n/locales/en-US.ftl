@@ -148,11 +148,22 @@ doctor-settings-overridden = { $name } from { $path }
 doctor-leo = leo
 doctor-subscription =
     { $environment } subscription imported, { $unspent } of { $total } credentials unspent
-doctor-state-directory = state directory { $path }
+# Which variable answered as well as where the directory is: more than one can name a profile
+# directory, and the one that won is what somebody has to change to put the directory elsewhere.
+doctor-state-directory = state directory { $path }, from { $variable }
+# What this program asks for as each file is created is a mode no other account can read. Where the
+# platform is not told that, the files carry whatever the profile directory grants them instead. A
+# prompt history holds every path, branch name and pasted fragment somebody has typed, so which of
+# the two they have is theirs to know rather than a detail of the build.
+doctor-state-directory-unprotected = not restricted
+doctor-state-directory-permissions =
+    prompt history, session records and saved choices carry your profile directory's permissions
 # What outlives a session is kept in this directory, so a machine without one keeps none of it, and
-# nothing else in the report says so. The absence is partial: a checkout's own files are read as
-# usual, and saying which half is lost is what stops this reading as "your AGENTS.md is ignored".
-doctor-state-directory-absent = no state directory: HOME names nothing
+# nothing else in the report says so. Every variable that was looked at is named, since which ones
+# they are is a fact about the platform rather than something the reader should have to know. The
+# absence is partial: a checkout's own files are read as usual, and saying which half is lost is
+# what stops this reading as "your AGENTS.md is ignored".
+doctor-state-directory-absent = no state directory: { $variables } names nothing
 doctor-state-directory-not-kept = not kept
 doctor-state-directory-forgotten =
     sessions and --resume, prompt history, the model and theme you choose
@@ -160,7 +171,9 @@ doctor-state-directory-not-read = not read
 doctor-state-directory-your-own =
     settings, skills and standing instructions of your own; a checkout's own still apply
 doctor-state-directory-remedy = to keep them
-doctor-state-directory-set-home = set HOME to a directory of your own
+# The remedy names the same variables the line above does. Naming one of them would send somebody on
+# a platform that answers with the other to set the variable that was not going to be consulted.
+doctor-state-directory-set-profile = set { $variables } to a directory of your own
 doctor-confinement = confinement { $level }
 # How much confinement was actually achieved. The sandbox reports which of the three it got and
 # the interface is what names it, because bravebot-sandbox holds no words for a person.
