@@ -3957,9 +3957,9 @@ impl Session {
     /// Settle a turn that was stopped: either un-sent whole, or recorded as having stopped.
     ///
     /// The text returns to the box so a user who changed their mind can adjust it rather than
-    /// retype it, which is the whole point of cancelling rather than waiting. Two things stop
-    /// that, and both mean the prompt stays sent: work that is already on the screen, and prompts
-    /// waiting behind this one.
+    /// retype it, which is the whole point of cancelling rather than waiting. Three things stop
+    /// that, and each means the prompt stays sent: work that is already on the screen, prompts
+    /// waiting behind this one, and a box that is not empty.
     pub fn restore(&mut self, prompt: impl Into<String>) {
         self.status = Status::Idle;
         self.started = None;
@@ -3971,13 +3971,19 @@ impl Session {
         // [`Session::type_char`]: this is the state the returning text lands in, and it has to be
         // safe whatever left the mode armed.
         self.shell = false;
+        // The words a stopped reply had written are no part of any reply, and nothing recorded
+        // them, so they come down with the stop as they do at every other ending a round has.
+        // Left up they are an answer drawn above a prompt that has gone back to the box.
+        self.streaming.clear();
 
-        // Un-sent whole only where nothing was recorded after the prompt and nothing is waiting
-        // behind it. Either one means there is something to have second thoughts about.
+        // Un-sent whole only where nothing was recorded after the prompt, nothing is waiting
+        // behind it, and the box is free to take it. The first two mean there is something to have
+        // second thoughts about; the third is the only place the line can go.
+        let something_was_recorded =
+            !matches!(self.transcript.last(), Some(entry) if entry.speaker == Speaker::User);
         let waiting = !self.queued.is_empty();
-        if waiting
-            || !matches!(self.transcript.last(), Some(entry) if entry.speaker == Speaker::User)
-        {
+        let the_box_is_taken = !self.input.trim().is_empty();
+        if something_was_recorded || waiting || the_box_is_taken {
             // The turn visibly did things, some of which touched the workspace. Putting the
             // prompt back would offer to redo work that is on the screen, and removing what
             // happened would hide it, so both stay and the stop is recorded.
@@ -3985,6 +3991,11 @@ impl Session {
             // Or the person has queued more prompts, and the next of them is about to go. The
             // box belongs to what they type next, not to a line they sent before the two that
             // are still to run, and the conversation has to read in the order it happened.
+            //
+            // Or the box is taken, by a line typed while the turn ran or one walked back to. That
+            // line is what the person is looking at and keeps the box, so the prompt has nowhere
+            // to be put back to, and popping it anyway would leave it in no transcript, no history
+            // and no box, with nothing left to ask for it back with.
             let todos = std::mem::take(&mut self.todos);
             self.transcript
                 .push(Entry::system("stopped").with_todos(todos));
@@ -3999,17 +4010,13 @@ impl Session {
         if self.persist {
             crate::store::save_history(self.history.entries());
         }
-        // Only where the box is empty. A user who typed while the turn ran meant those words,
-        // and putting the old prompt over the top of them would lose the newer of the two.
-        if self.input.trim().is_empty() {
-            // Back the way it was typed. A paste that returned as its words would fill the box
-            // somebody is about to edit with the stack trace they folded away in the first place.
-            let returning = self.folded(&prompt.into());
-            self.set_input(returning);
-            // The pictures come back with the words. A line that returned without them would
-            // return carrying markers that name nothing, and the user has no way to tell.
-            self.pasted = std::mem::take(&mut self.sent_pasted);
-        }
+        // Back the way it was typed. A paste that returned as its words would fill the box
+        // somebody is about to edit with the stack trace they folded away in the first place.
+        let returning = self.folded(&prompt.into());
+        self.set_input(returning);
+        // The pictures come back with the words. A line that returned without them would return
+        // carrying markers that name nothing, and the user has no way to tell.
+        self.pasted = std::mem::take(&mut self.sent_pasted);
         // Discarded rather than kept: the prompt is going back into the box as though it had never
         // been sent, so a plan for a turn that is being un-sent has nothing to describe.
         self.todos.clear();
@@ -7711,10 +7718,12 @@ mod tests {
         assert_eq!(s.input, "second", "a refused send took the line with it");
     }
 
-    /// A cancelled turn puts its prompt back, but not over the top of something the user typed
-    /// while it ran. The newer of the two is the one they meant.
+    /// A stopped turn puts its prompt back, but not over the top of something the user typed
+    /// while it ran: the newer of the two is the one they meant. The older one has nowhere to go
+    /// then, so it stays sent and marked stopped. Un-sent anyway it would be in no transcript, no
+    /// history and no box, and the words would be gone with no way to ask for them back.
     #[test]
-    fn a_cancelled_turn_does_not_overwrite_what_was_typed_meanwhile() {
+    fn a_turn_stopped_over_a_typed_line_keeps_the_line_and_the_prompt() {
         let mut s = session();
         for c in "first".chars() {
             s.type_char(c);
@@ -7728,6 +7737,25 @@ mod tests {
 
         assert_eq!(s.input, "wait", "the restored prompt overwrote the typing");
         assert_eq!(s.status, Status::Idle);
+        assert_eq!(
+            s.transcript.first().map(|entry| entry.text.as_str()),
+            Some("first"),
+            "the prompt was dropped from the transcript with nowhere to go"
+        );
+        assert_eq!(
+            s.transcript.last().map(|entry| entry.text.as_str()),
+            Some("stopped"),
+            "the prompt that stayed sent was not marked stopped"
+        );
+        assert_eq!(
+            s.history
+                .entries()
+                .iter()
+                .map(|entry| entry.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["first"],
+            "the prompt was dropped from history with nowhere to go"
+        );
     }
 
     #[test]
@@ -8867,7 +8895,9 @@ mod tests {
 
         /// A round that ends with nothing to say still has to take its tail down, and a round
         /// whose reply is the turn's answer does too. Left up, half a sentence sat under the
-        /// finished answer for the rest of the session.
+        /// finished answer for the rest of the session. A stop is the ending where it reads worst:
+        /// the prompt above it goes back to the box, so the half sentence is left on the screen as
+        /// an answer to nothing.
         #[test]
         fn a_reply_that_was_arriving_is_taken_down_however_the_round_ends() {
             let mut s = working();
@@ -8882,6 +8912,22 @@ mod tests {
             s.streaming("half a thought");
             s.fail("error: something went wrong");
             assert!(s.streaming.is_empty(), "a failed turn left its tail up");
+
+            // A session of its own for the stop, because the tail matters most where the prompt
+            // goes back to the box, and that is the branch a transcript still ending at the
+            // user's own line takes. Asserted here too, so the case cannot drift into the other
+            // branch and leave the mutation that clears the tail on one path only.
+            let mut stopped = working();
+            stopped.streaming("half a thought");
+            stopped.restore("what was asked");
+            assert!(
+                stopped.streaming.is_empty(),
+                "a stopped turn left its tail up"
+            );
+            assert_eq!(
+                stopped.input, "what was asked",
+                "the tail was taken down over a prompt that stayed sent, not an un-sent one"
+            );
         }
 
         /// A model with nowhere else to put its working writes it into the reply and closes it

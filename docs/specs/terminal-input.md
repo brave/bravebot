@@ -112,9 +112,13 @@ leaves is not one to explain.
 still arriving stops arriving, the prompt that was sent returns to the box for editing, and that
 is the whole of the answer. There is nothing to wait through and so nothing to report waiting on.
 
-The prompt stays sent, marked stopped, where either of two things is true: the turn had already
-done something that is on the screen, or there are prompts waiting behind it. Both mean there is
-an order to keep, and a line put back in the box would be out of it.
+The prompt stays sent, marked stopped, where any of three things is true: the turn had already
+done something that is on the screen, there are prompts waiting behind it, or the box is not empty.
+The first two mean there is an order to keep, and a line put back in the box would be out of it.
+The third is a box that is taken: what is in it is the line the person is looking at, whether they
+typed it during the turn or walked back to it, so the prompt has nowhere to be put back to. Taking
+it out of the transcript and the history anyway would leave nothing to ask for those words back
+with.
 
 **Nothing waits out work that is only being waited on.** A reply stops whether or not it has begun
 arriving, and whether it is the planner's or a processor's; a running command is killed; a pause
@@ -163,6 +167,7 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_the_model_to_start_writing`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_an_endpoint_that_has_not_answered`
 `verified-by: bravebot_tui::state::cancelling_before_anything_happens_still_un_sends_the_prompt`
+`verified-by: bravebot_tui::state::a_turn_stopped_over_a_typed_line_keeps_the_line_and_the_prompt`
 `verified-by: bravebot_tui::app::a_key_that_would_stop_a_turn_is_answered_during_a_summary`
 `verified-by: bravebot_tui::app::escape_stops_the_turn_without_ending_the_session`
 `verified-by: bravebot_tui::app::ctrl_g_asks_for_the_editor`
