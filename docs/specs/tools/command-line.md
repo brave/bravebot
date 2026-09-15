@@ -370,6 +370,20 @@ decides the answer about that project. A path with a `..` component is outside w
 for whatever a rule spelled the same way says, because the map compares names by segment and a
 climbing path names a file through a directory nobody wrote a rule about.
 
+Each path is asked about under every name the map may hold a rule about it by, and answers as the
+weakest of them. A relative name and an absolute one are separate namespaces
+([trust-map.md](../trust-map.md#TRUST-3)), so a file inside the workspace has one of each, and the
+spelling a line happened to use is not a decision anybody made about the file. A directory the
+project sits in is trusted by an answer about that directory
+([TRUST-9](../trust-map.md#TRUST-9)), so an absolute name answered alone would give a project file
+the label of a directory it is merely reachable through, and a relative name answered alone would
+skip the rule a write through a link out of the project left behind. An operand naming a directory
+that holds the workspace is asked about the project as well, since a line reading that directory
+whole reads every file the project's own rules bear on. Nothing here is resolved, only re-spelled, so
+an operand outside the workspace keeps the name the line gave it and the rule about the directory
+holding it decides. Answering under every name can only cost a question and never grant trust, which
+is what makes it the right form for a road with no filesystem to settle a name with.
+
 **This is the proof road, and it is not the assertion road.** A person vouching for a command is a
 person taking responsibility for it. This is a claim about a program, checked against that program's
 option surface by hand, and nothing a user says extends the table.
@@ -417,6 +431,9 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::policy::a_program_named_by_path_is_not_proven`
 `verified-by: bravebot_core::policy::a_line_running_outside_the_project_root_is_not_proven`
 `verified-by: bravebot_core::policy::a_plan_with_no_steps_proves_nothing`
+`verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
+`verified-by: bravebot_core::policy::a_line_reading_a_directory_holding_the_project_answers_for_the_project`
+`verified-by: bravebot_core::policy::a_climbing_operand_is_untrusted_under_a_root_spelled_with_a_climb`
 
 <a id="CMDLINE-9"></a>
 ### CMDLINE-9: a read-proven plan does not prompt
