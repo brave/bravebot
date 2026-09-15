@@ -302,6 +302,7 @@ need searching.
 `verified-by: bravebot_tui::model_prompt::a_search_ignores_case`
 `verified-by: bravebot_tui::model_prompt::backspace_widens_the_list_again`
 `verified-by: bravebot_tui::model_prompt::the_cursor_stays_on_the_model_it_was_on_while_the_search_narrows`
+`verified-by: bravebot_tui::model_prompt::the_cursor_stays_on_the_model_it_was_on_while_the_search_widens`
 `verified-by: bravebot_tui::model_prompt::the_cursor_falls_to_the_first_match_when_what_it_was_on_is_filtered_out`
 `verified-by: bravebot_tui::model_prompt::a_search_matching_nothing_leaves_nothing_to_choose`
 `verified-by: bravebot_tui::model_prompt::a_search_matching_nothing_says_so`

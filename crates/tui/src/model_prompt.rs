@@ -119,22 +119,29 @@ impl Picker {
     }
 
     fn typed(&mut self, c: char) {
-        self.search.push(c);
-        self.follow();
+        self.searching(|search| search.push(c));
     }
 
     fn backspace(&mut self) {
-        self.search.pop();
-        self.follow();
+        self.searching(|search| {
+            search.pop();
+        });
     }
 
-    /// Keep the cursor on the model it was on, and fall to the first match where that model no
-    /// longer matches.
+    /// Change what has been typed, keeping the cursor on the model it was on and falling to the
+    /// first match where that model no longer matches.
     ///
-    /// A cursor that stayed at its index would jump to an unrelated model on every keystroke, and
-    /// one that reset to the top would lose the row somebody had already found by scrolling.
-    fn follow(&mut self) {
+    /// The key is read before the search changes and looked up after it, and that order is the
+    /// whole of the property: read afterwards it is whichever model now sits at the old index, so
+    /// the index survives the keystroke and the model does not. Both callers change the search
+    /// through here rather than each remembering to read first, since remembering is what there is
+    /// to get wrong.
+    ///
+    /// A cursor that stayed at its index would land on an unrelated model with every keystroke,
+    /// and one that reset to the top would lose the row somebody had already found by scrolling.
+    fn searching(&mut self, change: impl FnOnce(&mut String)) {
         let was = self.chosen().map(|model| model.key.clone());
+        change(&mut self.search);
         let found = self
             .matching()
             .iter()
@@ -583,6 +590,18 @@ mod tests {
         ]
     }
 
+    /// A roster where narrowing moves the surviving models up the list rather than only cutting
+    /// its end off. That is what tells a cursor following the model apart from one keeping its
+    /// index: with `qwen-72b` gone, every index below it means a different model than it did.
+    fn one_service_and_a_word_in_common() -> Vec<Model> {
+        vec![
+            served_by("OpenRouter", "openrouter/llama-8b", "llama-8b"),
+            served_by("OpenRouter", "openrouter/qwen-72b", "qwen-72b"),
+            served_by("OpenRouter", "openrouter/llama-70b", "llama-70b"),
+            served_by("OpenRouter", "openrouter/llama-405b", "llama-405b"),
+        ]
+    }
+
     fn typing(picker: &mut Picker, text: &str) {
         for c in text.chars() {
             handle_key(picker, KeyCode::Char(c), KeyModifiers::NONE);
@@ -707,32 +726,68 @@ mod tests {
     }
 
     /// A cursor that stayed at its index would land on an unrelated model with every keystroke,
-    /// which is worst exactly where the list is long enough to need searching.
+    /// which is worst exactly where the list is long enough to need searching. The keystroke here
+    /// leaves the model matching and moves it up one, so an index kept lands on the model below
+    /// it rather than off the end of the list.
     #[test]
     fn the_cursor_stays_on_the_model_it_was_on_while_the_search_narrows() {
-        let mut picker = Picker::new(from_two_services(), None);
-        handle_key(&mut picker, KeyCode::Up, KeyModifiers::NONE);
-        assert_eq!(
-            picker.chosen().expect("a model").display_name,
-            "moonshot/kimi-k2"
+        let mut picker = Picker::new(
+            one_service_and_a_word_in_common(),
+            Some("openrouter/llama-70b"),
         );
+        assert_eq!(picker.chosen().expect("a model").display_name, "llama-70b");
 
-        typing(&mut picker, "moonshot");
+        typing(&mut picker, "llama");
+
         assert_eq!(
             picker.chosen().expect("a model").display_name,
-            "moonshot/kimi-k2"
+            "llama-70b",
+            "the cursor kept its index instead of its model"
+        );
+    }
+
+    /// The same property in the other direction. Backspacing widens the list, which moves the
+    /// surviving models down it, and a cursor keeping its index moves off the row a person is
+    /// looking at just as surely as one that narrowed.
+    #[test]
+    fn the_cursor_stays_on_the_model_it_was_on_while_the_search_widens() {
+        let mut picker = Picker::new(one_service_and_a_word_in_common(), None);
+        typing(&mut picker, "llama");
+        // Reached by moving the cursor rather than by typing, so this test depends on nothing the
+        // narrowing one covers: what it is about is the keystroke that widens the list.
+        handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(picker.chosen().expect("a model").display_name, "llama-70b");
+
+        for _ in 0.."llama".len() {
+            handle_key(&mut picker, KeyCode::Backspace, KeyModifiers::NONE);
+        }
+
+        assert_eq!(picker.matching().len(), 4, "the list did not widen again");
+        assert_eq!(
+            picker.chosen().expect("a model").display_name,
+            "llama-70b",
+            "widening the list moved the cursor off the model it was on"
         );
     }
 
     /// Where what was under the cursor no longer matches, the first thing that does is the one a
-    /// person is looking at, and Enter has to select that rather than nothing.
+    /// person is looking at, and Enter has to select that rather than nothing. The model that goes
+    /// here has others both above and below it, so a cursor that kept its index would land on a
+    /// surviving model and look like it had followed something.
     #[test]
     fn the_cursor_falls_to_the_first_match_when_what_it_was_on_is_filtered_out() {
-        let mut picker = Picker::new(from_two_services(), None);
-        typing(&mut picker, "glm");
+        let mut picker = Picker::new(
+            one_service_and_a_word_in_common(),
+            Some("openrouter/qwen-72b"),
+        );
+        assert_eq!(picker.chosen().expect("a model").display_name, "qwen-72b");
+
+        typing(&mut picker, "llama");
+
         assert_eq!(
             picker.chosen().expect("a model").display_name,
-            "z-ai/glm-4.6"
+            "llama-8b",
+            "the cursor did not fall to the first match"
         );
     }
 
