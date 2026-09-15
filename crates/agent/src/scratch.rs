@@ -61,7 +61,13 @@ impl SessionScratch {
             builder.mode(0o700);
         }
         builder.create(&path)?;
-        Ok(Self { path })
+        // Named the way every test of where a path lands will see it, since those resolve the
+        // symlinks in a name before comparing and the platform's temporary directory is commonly
+        // reached through one. Owned before the name is resolved, so a name that will not resolve
+        // is still removed.
+        let mut scratch = Self { path };
+        scratch.path = scratch.path.canonicalize()?;
+        Ok(scratch)
     }
 }
 
@@ -117,9 +123,17 @@ mod tests {
             0,
             "a session opened onto somebody else's files"
         );
-        // The same call the name was built from, so this compares two spellings of one directory.
+        // The same call the name was built from, resolved as the directory itself is.
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        assert!(scratch.path().starts_with(std::env::temp_dir()));
+        let temporary = std::env::temp_dir()
+            .canonicalize()
+            .expect("the temporary directory");
+        assert!(
+            scratch.path().starts_with(&temporary),
+            "{} is not under {}",
+            scratch.path().display(),
+            temporary.display()
+        );
     }
 
     /// Two sessions on one machine are two directories. A shared one would let either read and

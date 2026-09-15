@@ -164,7 +164,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
 
     // Named for what it is, beside the directories a person opened themselves. The trust lines
     // below cannot report it: it has no rule, which is the whole of what makes it different from
-    // an added directory, so without a line here a session holds a directory of its own that
+    // an added directory, so without a line here a session holds a directory it may write in that
     // nobody asked for and nothing says so.
     if let Some(scratch) = facts.scratch {
         lines.push(
