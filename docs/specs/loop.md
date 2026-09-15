@@ -6,6 +6,7 @@ governs:
   - crates/tui/src/loops.rs
   - crates/tui/src/app.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/status.rs
 guards:
   - symbol: Session::start_loop
   - symbol: Session::watch_again
@@ -161,6 +162,7 @@ can say so in its answer, where somebody reads it, rather than by going quiet fo
 `verified-by: bravebot_tui::loops::an_interval_longer_than_a_loop_may_live_is_capped`
 `verified-by: bravebot_tui::loops::an_interval_within_the_bounds_is_reported_as_unadjusted`
 `verified-by: bravebot_tui::loops::a_wait_a_turn_asked_for_is_held_to_the_bounds`
+`verified-by: bravebot_tui::state::an_interval_outside_the_bounds_is_reported_as_the_one_that_will_happen`
 `verified-by: bravebot_agent::tools::a_wait_outside_the_bounds_is_reported_as_the_one_that_will_happen`
 
 <a id="LOOP-8"></a>

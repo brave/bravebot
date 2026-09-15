@@ -250,7 +250,17 @@ pub fn report(facts: &Facts<'_>) -> Report {
             None if running.ticking() => t!(status_loop_running).to_string(),
             None => t!(status_loop_unpaced).to_string(),
         };
-        lines.push(Line::new(t!(status_loop), pace).with_note(when));
+        // The repeated line is the value, the way the goal line below carries its condition. A
+        // panel saying only how often something happens leaves the reader to remember what they
+        // set going, which is the half of it they cannot get from the pacing.
+        //
+        // Its first line only. A prompt is whatever somebody typed, a turn may arrange a loop over
+        // one they pasted, and this panel spends one row per fact: the rest of a multi-line prompt
+        // would land where the next fact goes.
+        lines.push(
+            Line::new(t!(status_loop), crate::render::one_line(running.prompt()))
+                .with_note(format!("{pace} · {when}")),
+        );
     }
 
     // The other thing that happens without anybody typing. Beside the loop because it answers the
@@ -575,8 +585,58 @@ mod tests {
             .iter()
             .find(|line| line.label.trim() == t!(status_loop))
             .expect("the loop is reported");
-        assert!(line.value.contains("5m"), "{}", line.value);
-        assert!(!line.note.trim().is_empty(), "nothing said when it is next");
+        assert_eq!(
+            line.value, "check the deploy",
+            "the report did not say what repeats"
+        );
+        assert!(
+            line.note.contains(&t!(status_loop_every, every = "5m")),
+            "{}",
+            line.note
+        );
+        // The wording that introduces the countdown rather than the number, which moves while the
+        // test runs.
+        assert!(
+            line.note.contains(t!(status_loop_next, next = "").trim()),
+            "{}",
+            line.note
+        );
+    }
+
+    /// A loop a turn arranged is always self-paced, so its pacing says nothing about the work.
+    /// The line is the only thing on the row that can, and it is the one reached by pasting.
+    #[test]
+    fn the_report_says_what_a_self_paced_loop_is_repeating() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let running = crate::loops::Running::armed(
+            "tell me when a.txt changes\nand say what changed".to_string(),
+            crate::loops::Wakeup::asked(900, false),
+            std::time::Instant::now(),
+        );
+
+        let mut facts = facts(&config, &trust);
+        facts.looping = Some(&running);
+        let report = report(&facts);
+
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_loop))
+            .expect("the loop is reported");
+        // The first line and no more: the panel spends one row per fact, so the rest of a
+        // multi-line prompt would land where the next fact goes.
+        assert_eq!(line.value, "tell me when a.txt changes");
+        assert!(
+            line.note.contains(t!(status_loop_self_paced)),
+            "{}",
+            line.note
+        );
+        assert!(
+            line.note.contains(t!(status_loop_next, next = "").trim()),
+            "{}",
+            line.note
+        );
     }
 
     /// A session nobody asked to repeat anything says nothing about loops, rather than carrying a

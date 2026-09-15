@@ -337,7 +337,7 @@ fn indented(line: Line<'static>) -> Line<'static> {
 ///
 /// A task is a paragraph and a report is several sentences, and either drawn whole would push the
 /// rest of the screen out of the way.
-fn one_line(text: &str) -> String {
+pub(crate) fn one_line(text: &str) -> String {
     text.lines().next().unwrap_or_default().trim().to_string()
 }
 
