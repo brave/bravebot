@@ -529,7 +529,9 @@ fn serve_sequence_losing_the_first(
 
             // The same request gets the same answer. Only a resend can arrive with a body already
             // seen, since every round of a turn carries the rounds before it, so this is what keeps
-            // a retry from being handed the reply the next round was going to get.
+            // a retry from being handed the reply the next round was going to get. A resend that
+            // dropped its cache breakpoints is not byte-identical and so is not matched here: a
+            // script answering a mid-turn request with 400 has to allow for the second request.
             let resent = answered
                 .as_ref()
                 .filter(|(asked, _)| *asked == body)
@@ -575,9 +577,11 @@ fn serve_sequence_losing_the_first(
 
 /// What a request the script has no reply for is told.
 ///
-/// Said in a status rather than by hanging up or by having nothing to connect to. 400 is not a
-/// status the client retries, so the test fails at once, and it fails on the mock having run out of
-/// script rather than on something that reads like the machine the test ran on.
+/// Said in a status rather than by hanging up or by having nothing to connect to, so a test fails on
+/// the mock having run out of script rather than on something that reads like the machine the test
+/// ran on. 400 is how a service refuses a request's contents, so the client sends the same request
+/// once more without its cache breakpoints before giving up; both land here and are told the same
+/// thing.
 fn out_of_script() -> String {
     let body = "the mock server ran out of scripted replies\n";
     format!(
@@ -10584,10 +10588,11 @@ fn dropping_a_text_file_does_not_reach_anything_beside_it() {
     );
 }
 
-/// A turn with nothing attached must send exactly what it always sent, or every conversation
-/// that attaches nothing pays for a feature it is not using.
+/// A turn with nothing attached must send the words and nothing beside them, or every
+/// conversation that attaches nothing pays for a feature it is not using. The block the words
+/// arrive in is the breakpoint's, which BACKEND-32 puts on every request whatever it carries.
 #[test]
-fn a_turn_without_attachments_still_sends_the_prompt_as_a_bare_string() {
+fn a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it() {
     let scratch = Scratch::new("attachment-none");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
@@ -10613,7 +10618,20 @@ fn a_turn_without_attachments_still_sends_the_prompt_as_a_bare_string() {
     let sent: serde_json::Value = serde_json::from_str(&body).expect("json");
     let messages = sent["messages"].as_array().expect("messages");
     let last = messages.last().expect("a last message");
-    assert_eq!(last["content"], "say hello");
+    let blocks = last["content"].as_array().expect("content blocks");
+    assert_eq!(
+        blocks.len(),
+        1,
+        "something arrived beside the words: {last}"
+    );
+    assert_eq!(blocks[0]["type"], "text");
+    assert_eq!(blocks[0]["text"], "say hello");
+    // The one block is the breakpoint's, which is why the words arrive in a block at all.
+    assert_eq!(
+        blocks[0]["cache_control"],
+        serde_json::json!({"type": "ephemeral"}),
+        "the words a turn assembled reached the wire unmarked: {last}"
+    );
 }
 
 /// A config whose conversations are compacted much sooner than a real one's, so a test need not

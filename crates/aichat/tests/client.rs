@@ -454,7 +454,55 @@ fn the_request_body_matches_the_protocol() {
 
     assert_eq!(body["model"], DEFAULT_MODEL);
     assert_eq!(body["messages"][0]["role"], "system");
-    assert_eq!(body["messages"][1]["content"], "hi");
+    // A marked message carries its words as a block rather than as a bare string, which is the
+    // only shape the field a breakpoint goes in exists in.
+    assert_eq!(body["messages"][1]["content"][0]["text"], "hi");
+}
+
+/// The prompt is mostly the same bytes every request: a system prompt with the tool schemas in
+/// front of it, then a conversation that only ever grows on the end. A service that reads a
+/// breakpoint can answer that prefix out of its cache, and one that is sent no breakpoint reads
+/// the whole thing again on every request of every turn and charges for it.
+#[test]
+fn the_request_asks_the_service_to_cache_the_prefix_it_will_be_sent_again() {
+    let (endpoint, received) = serve(REPLY);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut client = AichatClient::new(&config, &egress);
+    let request = ChatRequest::new(
+        DEFAULT_MODEL,
+        vec![
+            Message::system("be brief"),
+            Message::user("hi"),
+            Message::assistant("hello"),
+            Message::user("make a game"),
+        ],
+    );
+    client.complete(&mut policy, &request).expect("completion");
+
+    let captured = received.recv().expect("request captured");
+    let body: serde_json::Value = serde_json::from_str(&captured.body).expect("json body");
+    let ephemeral = serde_json::json!({"type": "ephemeral"});
+
+    assert_eq!(
+        body["messages"][0]["content"][0]["cache_control"], ephemeral,
+        "the system prompt was not marked: {}",
+        captured.body
+    );
+    assert_eq!(
+        body["messages"][3]["content"][0]["cache_control"], ephemeral,
+        "the last thing the user said was not marked: {}",
+        captured.body
+    );
 }
 
 /// Without the fetch capability the request must not leave, and the policy records it.
@@ -1165,10 +1213,13 @@ fn a_request_that_died_in_transit_is_sent_again() {
 }
 
 /// A request that was answered was not a transport failure, and asking again would be asking a
-/// server that already said no.
+/// server that already said no. The one thing worth asking is the same request without the
+/// breakpoints, since a service that has never heard of one refuses the whole request rather than
+/// reading past it. Refused a second time, the answer is no.
 #[test]
-fn a_request_the_server_refused_is_not_sent_again() {
+fn a_request_the_server_refused_is_not_sent_again_unchanged() {
     let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
         Attempt::Status(400),
         Attempt::Frames(vec![frame("[DONE]")]),
     ]);
@@ -1184,17 +1235,210 @@ fn a_request_the_server_refused_is_not_sent_again() {
     .expect("policy");
 
     let mut client = AichatClient::new(&config, &egress);
-    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+    let request = ChatRequest::new("a-model-that-refuses-everything", vec![Message::user("hi")]);
     client
         .complete_streaming(&mut policy, &request, |_| {})
         .expect_err("a refused request stays refused");
 
-    received.recv().expect("a first request");
+    let first = received.recv().expect("a first request");
+    let second = received.recv().expect("a second request");
+    assert!(
+        first.body.contains("cache_control") && !second.body.contains("cache_control"),
+        "the second request was not the first one without its breakpoints: {} then {}",
+        first.body,
+        second.body
+    );
     assert!(
         received
             .recv_timeout(std::time::Duration::from_millis(500))
             .is_err(),
-        "the request was sent a second time"
+        "the request was sent a third time"
+    );
+}
+
+/// Prompt caching is not something every service reading this wire format offers, and a listing
+/// that says which do is not something either backend publishes. So the request asks, and a
+/// service that will not take it is asked again without the breakpoints rather than losing the
+/// turn over a field nobody needed.
+#[test]
+fn a_request_refused_on_its_contents_is_asked_again_without_the_breakpoints() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut client = AichatClient::new(&config, &egress);
+    let request = ChatRequest::new(
+        "a-model-that-refuses-a-breakpoint",
+        vec![Message::user("hi")],
+    );
+    let completion = client
+        .complete_streaming(&mut policy, &request, |_| {})
+        .expect("the turn survives the refusal");
+    assert_eq!(completion.model, "served-model");
+
+    let first = received.recv().expect("a first request");
+    let second = received.recv().expect("a second request");
+    assert!(
+        first
+            .body
+            .contains(r#""cache_control":{"type":"ephemeral"}"#),
+        "the first request asked for nothing to be cached: {}",
+        first.body
+    );
+    assert!(
+        !second.body.contains("cache_control"),
+        "the second request asked again: {}",
+        second.body
+    );
+    // And what the service was asked is otherwise the request it refused, down to the words.
+    assert!(second.body.contains(r#""content":"hi""#), "{}", second.body);
+}
+
+/// What a service refused outlives the client that found out. A client is built per request, so a
+/// refusal remembered only by that client would be re-learned every turn, and the round trip this
+/// spends once would be spent on every request instead.
+#[test]
+fn a_service_that_refused_the_breakpoints_is_not_asked_for_them_again() {
+    let reply = || {
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ])
+    };
+    let (endpoint, received) =
+        serve_attempts(vec![Attempt::Status(400), reply(), reply(), reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let request = ChatRequest::new("a-model-that-remembers-refusing", vec![Message::user("hi")]);
+    for _ in 0..3 {
+        AichatClient::new(&config, &egress)
+            .complete_streaming(&mut policy, &request, |_| {})
+            .expect("each turn is answered");
+    }
+
+    let asked = received.recv().expect("a first request");
+    assert!(asked.body.contains("cache_control"), "{}", asked.body);
+    for turn in 1..=3 {
+        let sent = received.recv().expect("a later request");
+        assert!(
+            !sent.body.contains("cache_control"),
+            "turn {turn} asked a service that had already refused: {}",
+            sent.body
+        );
+    }
+}
+
+/// A model id says nothing about who is serving it: two gateways can offer the same name, and one
+/// of them can be the name Brave's own endpoint answers to. A refusal recorded against the id alone
+/// would stop the asking everywhere, so what is remembered is the service as well.
+#[test]
+fn a_refusal_on_one_service_does_not_stop_the_asking_on_another() {
+    let reply = || {
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ])
+    };
+    let (refuser, refuser_received) = serve_attempts(vec![Attempt::Status(400), reply()]);
+    let (accepter, accepter_received) = serve_attempts(vec![reply()]);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let request = ChatRequest::new("a-model-two-services-serve", vec![Message::user("hi")]);
+    AichatClient::new(&config_for(&refuser), &egress)
+        .complete_streaming(&mut policy, &request, |_| {})
+        .expect("the refusing service answers the second request");
+    AichatClient::new(&config_for(&accepter), &egress)
+        .complete_streaming(&mut policy, &request, |_| {})
+        .expect("the other service answers");
+
+    refuser_received.recv().expect("the request it refused");
+    refuser_received.recv().expect("the request it took");
+    let elsewhere = accepter_received
+        .recv()
+        .expect("the other service's request");
+    assert!(
+        elsewhere.body.contains("cache_control"),
+        "one service's refusal was read as every service's: {}",
+        elsewhere.body
+    );
+}
+
+/// The status a service refuses a breakpoint with is also the status a prompt too long for the
+/// model comes back as, so a request refused twice says nothing about breakpoints. Reading a
+/// refusal into one would give up caching for the rest of the process against a service that would
+/// have cached every round of it.
+#[test]
+fn a_refusal_the_retry_did_not_fix_is_not_remembered() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let request = ChatRequest::new(
+        "a-model-that-refuses-for-its-own-reasons",
+        vec![Message::user("hi")],
+    );
+    AichatClient::new(&config, &egress)
+        .complete_streaming(&mut policy, &request, |_| {})
+        .expect_err("a request refused without its breakpoints too stays refused");
+    AichatClient::new(&config, &egress)
+        .complete_streaming(&mut policy, &request, |_| {})
+        .expect("the next turn is answered");
+
+    received.recv().expect("the request that was refused");
+    received
+        .recv()
+        .expect("the same request without breakpoints");
+    let asked_again = received.recv().expect("the next turn's request");
+    assert!(
+        asked_again.body.contains("cache_control"),
+        "a refusal that proved nothing stopped the asking: {}",
+        asked_again.body
     );
 }
 

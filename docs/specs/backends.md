@@ -757,8 +757,10 @@ is the same fact that makes one figure stand in for every tier's context window.
 extra round trip the first time such a model is used; not asking costs every request to it, since
 the breakpoints are a part of the request nobody asked for and the service refuses the lot.
 
-**Only this backend.** The aichat endpoint and an OpenAI-compatible gateway take a different wire
-format, which has no field for this and asks for nothing.
+**Not only this backend.** The aichat endpoint and an OpenAI-compatible gateway take a different
+wire format, which marks a prefix a different way and marks less of one: the system prompt and the
+last thing the user said, never a result. That is BACKEND-32, and it turns on the same trade, that
+asking a service which refuses costs one round trip while not asking costs every request.
 
 **A breakpoint carries no label and asks for nothing.** It marks a prefix of a request that has
 already been assembled, after every gate that decided what may be in it. Which bytes the service
@@ -918,6 +920,76 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_tui::state::clearing_forgets_what_the_last_turn_read_out_of_the_cache`
 `verified-by: bravebot_tui::state::the_cache_figure_follows_which_turn_is_the_last_one`
 
+<a id="BACKEND-32"></a>
+### BACKEND-32: an aichat request marks the prefix it will send again
+
+A request in the OpenAI-compatible wire format marks two prefixes: the system prompt, which the tool
+schemas travel in front of, and the last thing the user said. The mark is a `cache_control` of
+`{"type": "ephemeral"}` on the content block the prefix ends at, which is the field the Anthropic API
+defines for this and the field a gateway fronting such a model reads. A marked message carries its
+words as a block rather than as a bare string, that being the only shape the field exists in.
+
+**Why.** The arithmetic is BACKEND-27's, and so is the measurement behind it: a turn re-sends its
+whole history every round, the system prompt and the schemas are identical on every round of every
+session, and a cached token is charged at a fraction of a fresh one. None of that is a property of
+Bedrock. What differs is the shape the request states it in, and how much of the conversation it
+dares state it about.
+
+**Less than BACKEND-27 marks, and deliberately.** That clause's second breakpoint rolls to the end
+of the conversation whatever the last block is, a result included. Here a result is never marked. To
+carry a mark, a `tool` message's content would have to go out as a list of blocks, which is a shape
+not every service reading this format accepts, and a service that rejects the request loses the
+system prompt's breakpoint with it. What that costs is the rounds within one turn: the prefix
+through the last user turn is written by the first round and read back by every round after it,
+since what a round appends is a call and its result on the end, so what goes unread is only what
+those rounds appended. A turn whose last block is a picture keeps the breakpoint on the system prompt
+alone, because what a service makes of a mark on an image block is not a thing to guess at.
+
+**Marked on the way out and nowhere else.** The mark is put on a copy as the body is built, so the
+request a turn assembled does not carry one and neither does anything a session records. A
+breakpoint belongs to the request that sends it: one read back out of a session file would be sent
+again by a request that never asked for it, and against a service that had already refused.
+
+**A service that refuses it is asked again without it, and not asked again after that.** Neither
+this endpoint's roster nor a gateway's says whether a model's service reads a breakpoint, so the
+request asks. A service that will not take the body answers an invalid-request status, and that
+request is sent once more with no breakpoints on it; where that answers, no later request in the
+process marks anything for that model on that service. A retry that failed too proves nothing, an
+invalid-request status being also what a prompt too long for the model is answered with, so nothing
+is remembered and the next request asks again. This is BACKEND-27's rule and its reason, in the
+statuses this protocol says it with.
+
+**Remembered against the service as well as the model.** A model id says nothing about who serves
+it: two gateways can offer the same name, and one of them can be the name Brave's own endpoint
+answers to. A refusal recorded against the id alone would stop the asking everywhere one appeared.
+
+**Nothing here claims a service reads it.** What is established is that the request asks and that a
+service refusing it with an invalid-request status does not cost the turn. A service that objects
+some other way refuses the request as it would refuse any other, and the breakpoints are not what
+gets dropped. Brave's endpoint reports no cache figure at all, so an accepted breakpoint cannot be
+told there from an ignored one, and BACKEND-31 is what would say otherwise for a service that states
+one.
+
+**A breakpoint carries no label and asks for nothing.** BACKEND-27's argument holds here unchanged:
+it marks a prefix of a request already assembled, after every gate that decided what may be in it,
+and which bytes a service kept from an earlier request cannot put a byte into this one that was not
+sent.
+
+`verified-by: bravebot_aichat::protocol::the_system_prompt_and_the_last_thing_the_user_said_are_marked`
+`verified-by: bravebot_aichat::protocol::a_result_the_assistant_asked_for_is_not_marked`
+`verified-by: bravebot_aichat::protocol::a_turn_ending_in_a_picture_is_left_unmarked`
+`verified-by: bravebot_aichat::protocol::the_words_after_a_picture_carry_the_mark`
+`verified-by: bravebot_aichat::protocol::a_marked_body_changes_nothing_but_the_messages`
+`verified-by: bravebot_aichat::protocol::a_marked_block_is_the_block_it_came_from_and_the_mark`
+`verified-by: bravebot_aichat::protocol::an_empty_turn_is_left_alone`
+`verified-by: bravebot_aichat::client::the_request_asks_the_service_to_cache_the_prefix_it_will_be_sent_again`
+`verified-by: bravebot_aichat::client::a_request_refused_on_its_contents_is_asked_again_without_the_breakpoints`
+`verified-by: bravebot_aichat::client::a_service_that_refused_the_breakpoints_is_not_asked_for_them_again`
+`verified-by: bravebot_aichat::client::a_refusal_on_one_service_does_not_stop_the_asking_on_another`
+`verified-by: bravebot_aichat::client::a_refusal_the_retry_did_not_fix_is_not_remembered`
+`verified-by: bravebot_aichat::client::a_request_the_server_refused_is_not_sent_again_unchanged`
+`verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
+
 ## Known costs
 
 - **The effort level is the one field in a Bedrock request that a single provider defines.** The
@@ -985,7 +1057,30 @@ says which turn it speaks for, the counts beside it being the session's.
   it to would be worth anything, is therefore not a question this code can answer from a reply, and
   both figures stay at the zero BACKEND-31 defines as silence. The field
   `prompt_tokens_details.cached_tokens` is read for the gateway case, where a server states it,
-  which costs a field and settles nothing about Brave's own endpoint.
+  which costs a field and settles nothing about Brave's own endpoint. What BACKEND-32 sends that
+  endpoint is inert rather than merely unmeasurable: its request model declares no `cache_control`
+  field and it rebuilds every message from the one it parsed, so a breakpoint arrives and is dropped
+  before anything upstream could read it, and the service places checkpoints of its own on the
+  prefix instead. Observed in `brave/aichat` at `ca969f7d` and asked about there in issue 1806. What
+  the mark costs that endpoint is its own bytes and nothing else, both tiers answering a marked body
+  exactly as they answer an unmarked one. Nothing in BACKEND-32 rests on this holding: a service
+  that begins reading the field gets what it asks for, and one that refuses it is the paragraph
+  above.
+
+- **A refusal remembered from one status may not have been about the breakpoints.** A gateway
+  answers an invalid-request status for reasons of its own, an upstream failure it reports as one
+  among them, and a retry that succeeds makes that indistinguishable from a service refusing the
+  shape BACKEND-32 sends. What a wrong reading costs is caching for the rest of the process against
+  a service that would have cached, which is the cost of not asking rather than a failed request.
+  The alternative is asking again after every such status, which is the round trip the memory
+  exists to spend once.
+
+- **The request BACKEND-32 sends again is outside the retry budget, and spends a credential.** It is
+  not a retry: nothing failed in transit, and the same body with a field removed is a different
+  request. So it does not count against the three attempts a failure gets, which means the worst case
+  is four requests rather than three. On a premium subscription it also costs one more single-use
+  credential, each request presenting its own. That is once per service and model per process, and
+  the alternative is paying for the whole prompt on every request instead.
 
 - **A gateway credential may be a plaintext string in the settings file.** The shape this block
   borrows has a field for one, and taking the shape means taking the field. Naming a variable is
