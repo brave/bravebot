@@ -34,6 +34,7 @@ help:
 	@echo "  make check-npm             Install from the lockfile and lint it, as CI does"
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
+	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
 	@echo "  make check-all             Every check any CI enforces, including the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
@@ -189,12 +190,30 @@ check-msrv:
 		cp -r /src/. /work && \
 		cargo build --all --locked'
 
+# The windows job. Nothing else compiles the `#[cfg(windows)]` arms of this tree for a check:
+# the cross-build produces the shipped binary and lints nothing, and never compiles a test target
+# at all. Cross-compiled rather than run on a Windows host, which clippy allows because it stops
+# before linking, and in a container for the reason check-msrv is in one: rustup is not a given
+# here, and the C compiler ring wants for the target is a package rather than a toolchain
+# component.
+.PHONY: check-windows
+check-windows:
+	docker run --rm --platform linux/amd64 -e BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 \
+		-v "$(PWD):/src:ro" -w /work rust:slim sh -c '\
+		cp -r /src/. /work && \
+		apt-get update >/dev/null && \
+		apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 >/dev/null && \
+		rustup component add clippy >/dev/null && \
+		rustup target add x86_64-pc-windows-gnu >/dev/null && \
+		cargo clippy --target x86_64-pc-windows-gnu --all-targets --all-features --locked \
+			-- -D warnings'
+
 # Everything any CI enforces, in one target: the jobs in ci.yml plus the security
 # scan the organization-level workflow runs. Slower than `check` by a lot -- two
 # container builds and a scan -- so `check` stays the inner loop and this is the
 # before-you-push pass.
 .PHONY: check-all
-check-all: check check-spec check-npm check-deps check-msrv check-reviewdog
+check-all: check check-spec check-npm check-deps check-msrv check-windows check-reviewdog
 
 .PHONY: locales
 locales:

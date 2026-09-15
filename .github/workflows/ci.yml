@@ -76,6 +76,52 @@ jobs:
       - name: Test
         run: cargo test --all --locked
 
+  # Windows is a platform this project publishes binaries for, and nothing else here compiles its
+  # arms of the tree for a check. cross-build produces the shipped binary and stops there: no
+  # clippy, and no test target, so a `#[cfg(windows)]` block in a test is compiled nowhere and a
+  # lint on one is reported nowhere. Same reason the macos job exists, for the platform with no
+  # runner here.
+  #
+  # The target is the one that ships. A windows-latest runner defaults to -msvc, which is not what
+  # npm/scripts/postinstall.js hands anybody, while -gnu is reachable from this ubuntu runner for
+  # the price of a linker package. The aarch64 Windows build shares what is checked here, since
+  # what these arms are gated on is `windows` rather than the architecture.
+  #
+  # Linting, not running. The suite needs a Windows host, and it spawns a POSIX shell, drives a pty
+  # and exercises a confinement backend Windows has none of; whether those are made to work is the
+  # question of whether Windows is supported at all, which is #88.
+  windows:
+    name: Lint the Windows target
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        # Pinned to a full commit SHA; see the note in the `check` job above.
+        # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-gnu
+          components: clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # ring compiles C for whichever target it is built for, so the C half needs a cross compiler
+      # even though the Rust half needs none. Nothing is linked: clippy stops before that, which is
+      # what makes a Windows host unnecessary.
+      - name: Install the cross compiler ring builds with
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Clippy
+        # --locked where the two sibling clippy jobs do without it: they each run a locked
+        # command afterwards, and this job is the only check the Windows target has, so a
+        # manifest and a lockfile that disagree would go unreported here.
+        run: cargo clippy --target x86_64-pc-windows-gnu --all-targets --all-features --locked -- -D warnings
+
   npm-lockfile:
     name: npm lockfile
     runs-on: ubuntu-latest

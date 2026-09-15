@@ -32,6 +32,15 @@ build compiles at two versions without a recorded reason, and a dependency from 
 crates.io. CI runs this same target on every pull request, on main, and once a day, since an
 advisory arrives without a commit. `make check-reviewdog` is the [security scan](security-scan.md).
 
+`make check-windows` lints the target that ships to Windows, `x86_64-pc-windows-gnu`, over every
+target including the tests. Nothing else compiles the `#[cfg(windows)]` arms of this tree for a
+check: the cross-build produces the shipped binary and lints nothing, and compiles no test target
+at all, so a Windows arm that does not build or that trips a lint reaches main with CI green. It
+cross-compiles, which clippy allows because it stops before linking, so no Windows host is
+involved and the suite is not run on one. Worth running for anything with a platform branch in it,
+and for any test that has one: a `#[cfg(unix)]` left off a test is invisible from every platform
+that has `unix`.
+
 `make check-linux` runs fmt, clippy and the tests on Linux under the current stable toolchain.
 Worth doing before pushing platform-specific code, since a macOS host never compiles the Linux
 backend. Its one gap is the Landlock tests: the kernel in play is Docker's, and Docker Desktop's

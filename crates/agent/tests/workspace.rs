@@ -190,6 +190,7 @@ fn a_project_file_named_absolutely_is_read_under_its_relative_rule() {
 /// would hand back the project's own rule for a file the project does not hold, and the relative
 /// spelling of that name is one confinement refuses outright. What answers is the page's own rule,
 /// written where the page landed.
+#[cfg(unix)]
 #[test]
 fn a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule() {
     let scratch = Scratch::new("absolute-through-a-link");
@@ -252,6 +253,7 @@ fn a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule() {
 /// rather than a corner: `/tmp` is a link to `/private/tmp` and `$TMPDIR` one to `/private/var`,
 /// so the path a person types and the path the map holds are two strings for one place, and
 /// without the substitution the second read of a file they just opened is quarantined.
+#[cfg(unix)]
 #[test]
 fn a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rule() {
     let scratch = Scratch::new("added-through-a-linked-ancestor");
@@ -307,6 +309,7 @@ fn a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rul
 /// rule only for the spellings that already match that canonical form: a name through a symlinked
 /// ancestor lands in the project and is answered by nothing, which is the startup answer covering
 /// half of what it named (TRUST-3).
+#[cfg(unix)]
 #[test]
 fn a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule() {
     let scratch = Scratch::new("project-through-a-linked-ancestor");
@@ -356,6 +359,7 @@ fn a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_
 /// to replace and no spelling under the recorded name. Answering from where the path ends instead
 /// would be keying on the destination, which is what would let a link hand back the rule for a
 /// different name (TRUST-3), so the name stands as written and nothing covers it.
+#[cfg(unix)]
 #[test]
 fn a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule() {
     let scratch = Scratch::new("link-into-the-middle");
