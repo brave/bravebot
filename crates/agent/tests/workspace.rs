@@ -183,12 +183,13 @@ fn a_project_file_named_absolutely_is_read_under_its_relative_rule() {
     assert_eq!(relative.label().integrity, Integrity::Trusted);
 }
 
-/// The limit of that reduction, which is where it would otherwise launder. Spelling a path inside
-/// the project is not landing inside it: a link in the project pointing at an added directory makes
-/// `<root>/shared/fetched.json` resolve out of the project, and an absolute name is admitted on
-/// where it lands (TRUST-10), so that name opens. Reducing it to `shared/fetched.json` would hand
-/// back the project's own rule for a file the project does not hold, and the relative spelling of
-/// that name is one confinement refuses outright.
+/// The limit of that substitution, which is where it would otherwise launder. Spelling a path
+/// inside the project is not landing inside it: a link in the project pointing at an added
+/// directory makes `<root>/shared/fetched.json` resolve out of the project, and an absolute name is
+/// admitted on where it lands (TRUST-10), so that name opens. Reducing it to `shared/fetched.json`
+/// would hand back the project's own rule for a file the project does not hold, and the relative
+/// spelling of that name is one confinement refuses outright. What answers is the page's own rule,
+/// written where the page landed.
 #[test]
 fn a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule() {
     let scratch = Scratch::new("absolute-through-a-link");
@@ -200,11 +201,14 @@ fn a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule() {
     std::os::unix::fs::symlink(&shared, project.join("shared")).unwrap();
 
     let mut workspace = Workspace::new(&project).expect("workspace");
-    workspace
+    let added = workspace
         .add_directory(shared.to_str().expect("utf-8 path"))
         .expect("a directory beside the project is added");
 
-    // The startup answer about the workspace, and the page that landed in the added directory.
+    // The startup answer about the workspace, the answer that opened the directory beside it, and
+    // the page that landed there, marked under that directory's own name as a write there marks it.
+    // The page's own rule is the longest that matches, so only reaching it answers untrusted: a
+    // name reduced to the project's would be covered by the startup answer instead.
     let named = workspace
         .root()
         .join("shared/fetched.json")
@@ -212,7 +216,8 @@ fn a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule() {
         .to_string();
     let mut trust = TrustStore::new();
     trust.trust(".");
-    trust.distrust(&named);
+    trust.trust(&added.display().to_string());
+    trust.distrust(&added.join("fetched.json").display().to_string());
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -239,6 +244,165 @@ fn a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule() {
         through_the_link.label().integrity,
         Integrity::Untrusted,
         "a link inside the project read the added directory's file under the project's rule"
+    );
+}
+
+/// The rule `/add-dir` writes is about the directory that was opened, so a name for a file in it
+/// has to reach that rule whichever ancestor spelling it took. macOS makes this the ordinary case
+/// rather than a corner: `/tmp` is a link to `/private/tmp` and `$TMPDIR` one to `/private/var`,
+/// so the path a person types and the path the map holds are two strings for one place, and
+/// without the substitution the second read of a file they just opened is quarantined.
+#[test]
+fn a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rule() {
+    let scratch = Scratch::new("added-through-a-linked-ancestor");
+    let base = scratch.path.canonicalize().expect("canonical scratch");
+    let holder = base.join("holder");
+    std::fs::create_dir_all(holder.join("project")).unwrap();
+    std::fs::write(holder.join("notes.txt"), "a note").unwrap();
+    std::os::unix::fs::symlink(&holder, base.join("link")).unwrap();
+
+    let mut workspace = Workspace::new(holder.join("project")).expect("workspace");
+    let added = workspace
+        .add_directory(base.join("link").to_str().expect("utf-8 path"))
+        .expect("a directory named through a link is added");
+
+    // Only the answer that opened the holder, so the project's rule cannot stand in for it: a name
+    // wrongly reduced to a relative one would be covered by nothing and read untrusted.
+    let mut trust = TrustStore::new();
+    trust.trust(&added.display().to_string());
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let recorded = workspace
+        .read(
+            &mut policy,
+            &Labelled::trusted(added.join("notes.txt").display().to_string()),
+        )
+        .expect("the recorded spelling reads");
+    let through_the_link = workspace
+        .read(
+            &mut policy,
+            &Labelled::trusted(base.join("link/notes.txt").display().to_string()),
+        )
+        .expect("the linked spelling names the same file in the added directory");
+
+    assert_eq!(recorded.label().integrity, Integrity::Trusted);
+    assert_eq!(
+        through_the_link.label().integrity,
+        recorded.label().integrity,
+        "the name that opened the directory is not covered by the rule opening it wrote"
+    );
+}
+
+/// The same substitution where the name lands in the project instead of beside it. The workspace
+/// canonicalises its root, so reducing an absolute name by string prefix reaches the project's own
+/// rule only for the spellings that already match that canonical form: a name through a symlinked
+/// ancestor lands in the project and is answered by nothing, which is the startup answer covering
+/// half of what it named (TRUST-3).
+#[test]
+fn a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule() {
+    let scratch = Scratch::new("project-through-a-linked-ancestor");
+    let base = scratch.path.canonicalize().expect("canonical scratch");
+    let holder = base.join("holder");
+    let project = holder.join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/main.rs"), "fn main() {}").unwrap();
+    std::os::unix::fs::symlink(&holder, base.join("link")).unwrap();
+
+    // What makes the absolute spelling reach the file at all: confinement refuses one otherwise.
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace
+        .add_directory(holder.to_str().expect("utf-8 path"))
+        .expect("a directory the project sits inside is added");
+
+    // The startup answer, and nothing about the holder, so only the project's rule can answer.
+    let mut trust = TrustStore::new();
+    trust.trust(".");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let through_the_link = workspace
+        .read(
+            &mut policy,
+            &Labelled::trusted(base.join("link/project/src/main.rs").display().to_string()),
+        )
+        .expect("the linked spelling names a project file");
+
+    assert_eq!(
+        through_the_link.label().integrity,
+        Integrity::Trusted,
+        "a project file spelled through a link above the root missed the project's own rule"
+    );
+}
+
+/// Where the substitution stops, and the reason it is a substitution rather than a resolution. A
+/// link into the middle of an open directory reaches it without naming it, so there is no ancestor
+/// to replace and no spelling under the recorded name. Answering from where the path ends instead
+/// would be keying on the destination, which is what would let a link hand back the rule for a
+/// different name (TRUST-3), so the name stands as written and nothing covers it.
+#[test]
+fn a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule() {
+    let scratch = Scratch::new("link-into-the-middle");
+    let base = scratch.path.canonicalize().expect("canonical scratch");
+    let holder = base.join("holder");
+    std::fs::create_dir_all(holder.join("inner")).unwrap();
+    std::fs::create_dir_all(base.join("project")).unwrap();
+    std::fs::write(holder.join("inner/notes.txt"), "a note").unwrap();
+    std::os::unix::fs::symlink(holder.join("inner"), base.join("shortcut")).unwrap();
+
+    let mut workspace = Workspace::new(base.join("project")).expect("workspace");
+    let added = workspace
+        .add_directory(holder.to_str().expect("utf-8 path"))
+        .expect("a directory beside the project is added");
+
+    let mut trust = TrustStore::new();
+    trust.trust(".");
+    trust.trust(&added.display().to_string());
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let named = workspace
+        .read(
+            &mut policy,
+            &Labelled::trusted(added.join("inner/notes.txt").display().to_string()),
+        )
+        .expect("the name under the added directory reads");
+    let through_the_link = workspace
+        .read(
+            &mut policy,
+            &Labelled::trusted(base.join("shortcut/notes.txt").display().to_string()),
+        )
+        .expect("a link beside the project reaches the same file");
+
+    assert_eq!(named.label().integrity, Integrity::Trusted);
+    assert_eq!(
+        through_the_link.label().integrity,
+        Integrity::Untrusted,
+        "a name that never spelled the added directory was answered by its rule anyway"
     );
 }
 

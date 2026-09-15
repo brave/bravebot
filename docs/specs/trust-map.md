@@ -73,9 +73,19 @@ the reverse. `/` is never treated as the empty prefix.
 An absolute path that names and resolves inside the working directory is not in the absolute
 namespace at all: reading, writing, vouching for or quarantining a file the workspace reaches that
 way asks about its relative name, so those operations answer the same for a project file whichever
-way it was spelled. The name is reduced by spelling, so a `..` component or a link out of the
-project keeps the name it was given, and an absolute rule covering the project decides nothing about
-the files inside it.
+way it was spelled. A `..` component keeps the name it was given, and an absolute rule covering the
+project decides nothing about the files inside it.
+
+Which name a path is asked about follows from what a rule is about. Every rule is written about a
+directory somebody opened, under the name that directory was opened as: the empty prefix for the
+working directory, and the path it resolved to for one opened by name (TRUST-9). A path is therefore
+reduced to the open directory it lands in, taking that directory's recorded name with the rest of
+the path as it was spelled. This is the rule that two spellings of a path are one rule (TRUST-2),
+extended to the spellings only a filesystem can tell apart: a directory named through a link is the
+same directory, and `/tmp` being a link to `/private/tmp` is what a person types rather than a
+corner. A path landing in no open directory is asked about as written, and so is one that reaches an
+open directory by a link straight into the middle of it rather than through that directory's own
+name: neither has a spelling under a recorded name, and nothing covers either.
 
 **Why.** The working directory's own rule is the **empty** prefix, since every path in the project
 is named relative to it. Match absolute paths against that same map and the empty prefix covers
@@ -95,14 +105,15 @@ nothing about the other. Which way round the two are reconciled follows from the
 absolute rule reaching inside the project is an answer given about a directory and not about the
 work, so the project's own rules decide its files and a directory added above it does not.
 
-Where the path lands decides whether it is reduced and the spelling decides the name, and each half
-answers a different question. A name spelled inside the project that resolves out of it is left
-alone, because the project has no rules about a file it does not hold and confinement refuses that
-name's relative spelling outright. Keying on the spelling rather than on the destination is what
-keeps the reduction from being a laundering step of its own: resolving the tail would return the
-rule for a *different* name, so a file in an untrusted subtree would be readable as trusted through
-a link inside the project. A file with two names of its own therefore still has two rules, which is
-a cost of keying on the name and is written down below.
+Where the path lands decides which directory's name it takes and the spelling decides the rest, and
+each half answers a different question. A name spelled inside the project that lands out of it takes
+the name of the directory it lands in and not the project's, because the project has no rules about
+a file it does not hold and confinement refuses that name's relative spelling outright. Taking only
+the ancestor that reaches an open directory, rather than the whole destination, is what keeps the
+reduction from being a laundering step of its own: resolving the rest would return the rule for a
+*different* name, so a file in an untrusted subtree would be readable as trusted through a link
+inside that subtree. A file with two names of its own therefore still has two rules, which is a cost
+of keying on the name and is written down below.
 
 The reduction is the workspace's, so it holds for what the workspace does: the reads, writes,
 listings, vouches and quarantines that go through it. A proven `run` line has no reduction to make,
@@ -124,6 +135,9 @@ matched on the path as written, so it asks where a reduced name would not have.
 `verified-by: bravebot_agent::workspace::a_project_file_named_absolutely_is_read_under_its_relative_rule`
 `verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
 `verified-by: bravebot_agent::workspace::a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule`
+`verified-by: bravebot_agent::workspace::a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rule`
+`verified-by: bravebot_agent::workspace::a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule`
+`verified-by: bravebot_agent::workspace::a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule`
 `verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
 
 ## What a write does
@@ -433,7 +447,8 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   refused; one rearranged inside that window is not.
 - **A rule is keyed on the name, so one file inside the workspace can have two.** Confinement
   resolves a path to where it lands, but the record is written and read under the name the
-  operation used. A symlink inside the workspace therefore gives one file two spellings and two
-  rules: content written as untrusted through one is read back as trusted under the other, which
-  is the round trip TRUST-4 exists to close. Keying the record on the destination instead is what
-  closes it, and that is a change to every rule the map holds rather than to confinement.
+  operation used below the open directory that name reaches. A symlink under that directory
+  therefore gives one file two spellings and two rules: content written as untrusted through one is
+  read back as trusted under the other, which is the round trip TRUST-4 exists to close. Keying the
+  record on the destination instead is what closes it, and that is a change to every rule the map
+  holds rather than to confinement.
