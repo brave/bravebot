@@ -1061,14 +1061,16 @@ sent.
   for what those requests are. A processor given content that ends in a picture is already unmarked,
   for the reason BACKEND-32 gives.
 
-- **Compaction throws away everything the cache held.** A summary replaces the messages in front of
-  the last few, which is a rewrite of the very prefix both breakpoints sit in, so the round after a
-  compaction reads nothing back and pays a cache write to establish the new prefix. That is the
-  right way round, the point of compacting being that the old prefix is no longer worth sending at
-  all, but it means the sessions that benefit most from caching are the ones that periodically lose
-  it, and a session compacting often enough could write more than it ever reads. Nothing here
-  measures that: BACKEND-31's figures are per turn, and the turn that compacted is charged for the
-  write in the same figure as the rounds that profited from it.
+- **Compaction throws away the cache of the conversation.** A summary replaces the messages in front
+  of the last few, which is a rewrite of the prefix the rolling breakpoint sits in, so the round
+  after a compaction reads none of the conversation back and pays a cache write to establish the
+  shortened one. The prompt's breakpoint covers a prefix a compaction does not touch and survives it,
+  which [compaction.md](compaction.md) is where to read. Giving the rest up is the right way round,
+  the point of compacting being that the old conversation is no longer worth sending at all, but it
+  means the sessions that benefit most from caching are the ones that periodically lose part of it,
+  and a session compacting often enough could write more than it ever reads. Nothing here measures
+  that: BACKEND-31's figures are per turn, and the turn that compacted is charged for the write in
+  the same figure as the rounds that profited from it.
 
 - **An ephemeral cache entry expires on a few minutes of inactivity, and nothing here tracks it.** A
   person who thinks between turns misses more often than the token arithmetic suggests, and a miss

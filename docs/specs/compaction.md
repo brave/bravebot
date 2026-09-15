@@ -243,3 +243,28 @@ is written for. This is a request that says otherwise.
 `verified-by: bravebot_aichat::protocol::a_request_giving_up_its_conversation_marks_the_prompt_alone`
 `verified-by: bravebot_bedrock::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
 
+<a id="COMPACT-12"></a>
+### COMPACT-12: what a compaction costs the cache is the conversation
+
+A compaction rewrites the conversation and rewrites nothing of the system prompt or the tool schemas,
+so the round that follows one inside the same turn sends that prefix byte for byte and reads it back.
+Nothing of the conversation is read back, and that round pays a write to establish the shortened one.
+When a compaction happens is COMPACT-8's: the figure it compares is what the last request measured,
+and what a cache holds is no part of it.
+
+**Inside the turn, and nothing claimed past it.** A turn assembles its prompt and its tool schemas
+once and every round of it sends the same ones, which is what makes the round after a compaction
+comparable with the round before. A prompt assembled for a later turn can differ for reasons a
+compaction has no part in, among them the date, a tick's number under a loop, and an instruction file
+re-read from disk; and a turn that has spent its tool budget sends no schemas at all from then on.
+
+**Why it is stated rather than worked out.** A request marks two prefixes and a compaction rewrites
+one of them, so taking the pair as a unit gives the wrong answer twice: it reads as though a
+compaction cost the prompt's cache as well, which makes compacting look more expensive than it is,
+and it leaves a reader expecting the conversation's cache to survive a rewrite of the conversation.
+
+**Why the write is paid rather than avoided.** The alternative is holding a compaction back to keep a
+prefix warm, which trades a request the server will refuse for one cache read. A conversation that
+cannot be shortened stays long, and that is the outcome this document is here to prevent.
+
+`verified-by: bravebot_agent::turn::a_compaction_leaves_the_prompt_a_breakpoint_covers_alone`

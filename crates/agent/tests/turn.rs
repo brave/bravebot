@@ -10845,6 +10845,68 @@ fn the_summariser_asks_for_no_cache_of_the_exchange_it_gives_up() {
     );
 }
 
+/// Compaction rewrites the conversation and leaves the prompt where it was, so the prefix the
+/// prompt's breakpoint covers, the tool schemas in front of it included, is the same bytes after a
+/// compaction as before one and the round after one reads it back. A summary written into the prompt
+/// instead would give that prefix up as well as the exchange it replaced.
+///
+/// The two turns differ in the budget alone, which is what leaves the compaction as the only thing
+/// that could have rewritten the prefix.
+#[test]
+fn a_compaction_leaves_the_prompt_a_breakpoint_covers_alone() {
+    let scratch = Scratch::new("compact-keeps-the-prompt");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("carrying on"),
+        reply_with("they are porting the parser"),
+        reply_with("done"),
+    ]);
+    let roomy = config_with_budget(&endpoint, 1_000_000);
+    let tight = config_with_budget(&endpoint, 1_000);
+    let mut conversation = a_long_conversation();
+
+    take_a_turn(
+        &roomy,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new(),
+        Task::new("keep going"),
+    )
+    .expect("turn runs");
+    let before = received.recv().expect("the first request");
+
+    // Measured again because the reply above carried no usage, and a turn with no figure to compare
+    // against the budget compacts nothing.
+    conversation.measured(50_000);
+    take_a_turn(
+        &tight,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new(),
+        Task::new("finish it"),
+    )
+    .expect("turn runs");
+    let _summarising = received.recv().expect("the summariser's request");
+    let after = received.recv().expect("the request after the compaction");
+
+    // The schemas travel in front of the prompt, so the breakpoint on the end of the prompt covers
+    // both and a compaction has to leave both alone.
+    let prefix_of = |body: &str| {
+        let sent: serde_json::Value = serde_json::from_str(body).expect("json");
+        serde_json::json!([sent["tools"].clone(), sent["messages"][0].clone()])
+    };
+    assert!(
+        prefix_of(&before).to_string().contains("cache_control"),
+        "the prompt carried no breakpoint for a compaction to keep: {before}"
+    );
+    assert_eq!(
+        prefix_of(&before),
+        prefix_of(&after),
+        "a compaction rewrote the prefix the prompt's breakpoint covers"
+    );
+}
+
 /// A summariser with a tool would be a second planner, which is a second thing to reason about
 /// rather than a shorter conversation. The request carries none, and nothing may add one.
 #[test]
