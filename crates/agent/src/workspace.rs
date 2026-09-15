@@ -1959,22 +1959,24 @@ impl Workspace {
 
     /// The name the trust map holds a rule about `named` under.
     ///
-    /// The same rule [`Workspace::relative_display`] applies to a path this crate resolved, applied
-    /// to one a caller was given: an absolute path naming something inside the primary root is the
-    /// same file as its relative spelling, so it is reduced to that spelling before the map is
-    /// consulted or a rule is written. Without it one file has a key in each namespace and two
-    /// answers, and the absolute one is covered by nothing, so a file the user vouched for at
-    /// startup is quarantined under half its names (TRUST-3).
+    /// Every rule is recorded about a directory a person opened, under the name that directory was
+    /// opened as: the empty prefix for the primary root, which is what the startup answer covers
+    /// (TRUST-7), and the canonical path for one added by name (TRUST-9). An absolute name is
+    /// therefore spelled under the open directory it lands in, taking that directory's recorded
+    /// name with the rest of the name as it was written. Without that a directory reached by
+    /// a second spelling of its own name is covered by nothing, so a file the user vouched for is
+    /// quarantined under half its names (TRUST-3); on macOS that is the ordinary case rather than a
+    /// corner, since `/tmp` and `$TMPDIR` are both links.
     ///
-    /// Where the path lands decides *whether* it is reduced, and the spelling decides *what to*.
-    /// Both halves are load bearing. A name spelled inside the root that resolves outside it is
-    /// left as it is, because the project's own rules have nothing to say about a file the project
-    /// does not hold, and its relative spelling is not another way of naming that file but a name
-    /// confinement refuses. And the name it reduces to is the one the caller wrote rather than the
-    /// one it resolves to, because keying on the destination hands back the rule for a *different*
-    /// name: a file in an untrusted subtree would be readable as trusted through a link inside the
-    /// project. One file with two names of its own therefore still has two rules, which is a cost
-    /// of keying on the name that the spec records rather than one this closes.
+    /// Where the path lands decides *which* name is substituted, and the spelling decides the rest.
+    /// Both halves are load bearing. A name spelled inside the root that lands outside it is named
+    /// under the added directory it lands in and not under the project, because the project's own
+    /// rules have nothing to say about a file the project does not hold. And what is substituted is
+    /// the ancestor that reaches that directory rather than the whole destination, since keying on
+    /// the destination hands back the rule for a *different* name: a file in an untrusted subtree
+    /// would be readable as trusted through a link inside it. One file with two names of its own
+    /// therefore still has two rules, which is a cost of keying on the name that the spec records
+    /// rather than one this closes.
     ///
     /// A `..` component leaves the name alone, for the same reason the kernel's own normalisation
     /// leaves one as written: confinement refuses such a path rather than resolving it (TRUST-10),
@@ -1989,21 +1991,74 @@ impl Workspace {
             return named.to_string();
         }
 
-        // Spelling it inside the project is not landing in it. An added directory can admit an
-        // absolute path that leaves the root through a link, where `resolve` refuses the relative
-        // spelling of that same name for going outside.
-        match destination(candidate) {
-            Some(resolved) if resolved.starts_with(&self.root) => {}
-            _ => return named.to_string(),
-        }
-        let reduced = self.relative_display(candidate);
-
-        // The root named as itself is left alone. Its relative name is the empty prefix, which is
-        // the rule covering the whole project, and that rule is the startup question's to write
-        // (TRUST-7) rather than something a spelling of one path can reach.
-        if reduced.is_empty() {
-            return named.to_string();
-        }
-        reduced
+        self.recorded_name(candidate)
+            .unwrap_or_else(|| named.to_string())
     }
+
+    /// `named` spelled under the open directory it lands in, or `None` where it has no such
+    /// spelling and the name it was given stands.
+    ///
+    /// That is a name landing in no open directory, one reaching an open directory other than
+    /// through an ancestor of its own, and the root named as itself. The first two are the same
+    /// answer confinement gives: nothing is trusted that no rule covers. The last is the root's
+    /// alone: its relative name is the empty prefix, which is the rule covering the whole project,
+    /// and that rule is the startup question's to write (TRUST-7) rather than something one path's
+    /// spelling can reach. An added directory named as itself has a recorded name to be asked
+    /// about, so it gets one.
+    fn recorded_name(&self, candidate: &Path) -> Option<String> {
+        let opened = self.landed_in(&destination(candidate)?)?;
+        let below = written_below(candidate, opened)?;
+        if opened == self.root {
+            return (!below.as_os_str().is_empty()).then(|| below.to_string_lossy().to_string());
+        }
+        if below.as_os_str().is_empty() {
+            return Some(opened.to_string_lossy().to_string());
+        }
+        Some(opened.join(below).to_string_lossy().to_string())
+    }
+
+    /// The open directory a resolved path lands in: the primary root, or the deepest directory
+    /// added by name that holds it.
+    ///
+    /// The root before any added directory, rather than whichever of them is deepest. An added
+    /// directory may hold the project, and an absolute rule reaching inside the project is an
+    /// answer given about a directory rather than about the work, so the project's own rules decide
+    /// its files (TRUST-3).
+    fn landed_in(&self, resolved: &Path) -> Option<&Path> {
+        if resolved.starts_with(&self.root) {
+            return Some(&self.root);
+        }
+        self.added
+            .iter()
+            .filter(|dir| resolved.starts_with(dir))
+            .max_by_key(|dir| dir.components().count())
+            .map(PathBuf::as_path)
+    }
+}
+
+/// The part of `named` written below `opened`, for a name that reaches it through an ancestor.
+///
+/// The ancestor is matched on where it lands, so any spelling of the open directory is found, and
+/// the shallowest one is taken: as much of the name as possible is left as it was written, since
+/// what is under it is a name the map may hold a rule of its own about. Walking `ancestors` rather
+/// than counted components is what keeps a Windows prefix whole, since `C:` alone names the current
+/// directory on that drive and not its root.
+///
+/// `None` where no ancestor lands there, which is a link straight into the middle of the tree. Such
+/// a name has no spelling under the recorded one, and taking the destination's instead is the
+/// resolution [`Workspace::trust_key`] rules out.
+fn written_below(named: &Path, opened: &Path) -> Option<PathBuf> {
+    let mut ancestors: Vec<&Path> = named.ancestors().collect();
+    ancestors.reverse();
+    for walked in ancestors {
+        // A prefix that cannot be resolved is skipped rather than ending the search, since it is
+        // this walk's own question and not the caller's.
+        let Some(reached) = destination(walked) else {
+            continue;
+        };
+        if reached == opened {
+            return named.strip_prefix(walked).ok().map(PathBuf::from);
+        }
+    }
+    None
 }
