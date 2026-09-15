@@ -7143,9 +7143,15 @@ fn calls_made_after_the_budget_is_spent_are_not_run() {
     std::fs::write(scratch.path.join("marker.txt"), "before").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    // Every round asks to overwrite the file, including the round after the tools are gone.
+    // Every round asks to overwrite the file, including the round after the tools are gone, and
+    // each round writes its own number: what the file says afterwards is the last call that ran.
     let replies: Vec<String> = (0..ROUNDS + 1)
-        .map(|_| tool_request("write_file", r#"{"path":"marker.txt","contents":"after"}"#))
+        .map(|round| {
+            tool_request(
+                "write_file",
+                &format!(r#"{{"path":"marker.txt","contents":"round {round}"}}"#),
+            )
+        })
         .collect();
 
     let (endpoint, received) = serve_sequence(replies);
@@ -7172,7 +7178,16 @@ fn calls_made_after_the_budget_is_spent_are_not_run() {
     );
     assert_eq!(
         outcome.steps, ROUNDS,
-        "the round after the budget was spent ran its calls anyway"
+        "the round after the budget was spent was counted as one"
+    );
+
+    // What the last call would have done, rather than what the driver counted: a round that ran
+    // its calls without counting itself leaves both of the figures above unchanged, and the file
+    // is the only place the difference shows.
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("marker.txt")).unwrap(),
+        format!("round {}", ROUNDS - 1),
+        "the write asked for after the budget was spent was run"
     );
 }
 
