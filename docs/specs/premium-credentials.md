@@ -99,13 +99,16 @@ of a batch is refused. A moment outside every validity window yields no credenti
 <a id="PREM-6"></a>
 ### PREM-6: nothing is written back unless a credential was actually spent
 
-A session that spends nothing never writes, and a detached batch has nowhere to write.
+A session that spends nothing never writes, and a detached batch has nowhere to write. A spend
+reaches the file when the wallet is flushed and when the session ends, not when the spend is made.
 
 **Why.** A whole batch is hundreds of credentials and one is spent per model request, so writing
 per spend would rewrite the file several times a turn to change one boolean.
 
 `verified-by: bravebot_skus::store::spending_does_not_write_until_asked_to`
 `verified-by: bravebot_skus::store::a_session_that_spends_nothing_never_writes`
+`verified-by: bravebot_skus::store::a_spend_is_written_back_only_on_a_flush`
+`verified-by: bravebot_skus::store::a_spend_is_written_back_when_the_session_ends`
 `verified-by: bravebot_skus::store::a_detached_batch_has_nowhere_to_write`
 
 <a id="PREM-7"></a>
