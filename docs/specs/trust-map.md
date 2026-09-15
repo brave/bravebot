@@ -70,6 +70,16 @@ one map of full paths, which would remove this clause.
 A rule under the working directory decides nothing about a directory opened by absolute path, and
 the reverse. `/` is never treated as the empty prefix.
 
+**A key is `/`-spelled, and a leading slash is the whole of what makes one absolute.** A drive letter
+is not a root here and a backslash is not a separator: a key arrives spelled from `/`, and a
+backslash is a legal filename byte where paths are, so a file called `C:\notes` is a file in the
+project and its name has to reach the project's rules. Resolving a platform's path into a key
+therefore belongs to the workspace and not to the map, and every door that opens a directory by
+name, `/cd` as much as `/add-dir`, refuses a resolved name it cannot spell that way rather than
+handing over one that would be read as relative. Such a rule falls under the primary root's own
+empty prefix, which is the collapse this clause exists to prevent, reached by a name that never had
+a slash to strip.
+
 An absolute path that names and resolves inside the working directory is not in the absolute
 namespace at all: reading, writing, vouching for or quarantining a file the workspace reaches that
 way asks about its relative name, so those operations answer the same for a project file whichever
@@ -126,6 +136,8 @@ spelling it was given, since it also matches the rules a person wrote in advance
 matched on the path as written, so it asks where a reduced name would not have.
 
 `verified-by: bravebot_core::trust::an_absolute_rule_does_not_decide_a_relative_path`
+`verified-by: bravebot_core::trust::a_name_that_is_a_root_on_another_platform_is_a_relative_key`
+`verified-by: bravebot_agent::workspace::a_directory_the_trust_map_cannot_key_is_refused`
 `verified-by: bravebot_core::trust::trusting_the_workspace_says_nothing_about_an_added_directory`
 `verified-by: bravebot_core::trust::trusting_the_filesystem_root_does_not_trust_the_workspace`
 `verified-by: bravebot_core::trust::one_added_directory_does_not_cover_a_sibling`
@@ -623,3 +635,22 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   read back as trusted under the other, which is the round trip TRUST-4 exists to close. Keying the
   record on the destination instead is what closes it, and that is a change to every rule the map
   holds rather than to confinement.
+- **A platform that spells its paths from a drive letter cannot open a directory by name.** Every
+  rule is keyed under a `/`-spelled name (TRUST-3), so `/add-dir` and `/cd` both refuse a resolved
+  path that is not one, which on Windows is every path there is, until whether that platform is
+  supported has an answer ([issue #88](https://github.com/brave-experiments/bravebot/issues/88)).
+  Refusing is the closed direction of the two: admitting such a directory puts its rule in the
+  relative namespace, where the answer given about the project at startup covers every file in it.
+
+  A file inside the project on that platform has the same problem and no refusal to fall back on,
+  since a name the workspace hands back below the root carries that platform's separator, and a name
+  split on `/` alone is then one opaque segment: a rule about a directory does not cover the files
+  under it, and the project's own broader answer decides them instead. Those names reach the map
+  without anybody having spelled one, because what a run reports opening is recorded under them, and
+  they reach a permission rule the same way, which is matched segment by segment as well, so one
+  opaque segment matches nothing a rule a person wrote says about the path they wrote it for
+  ([permissions.md](permissions.md) records that half). So the laundering this closes outside the
+  project stays reachable inside it there, and what settles both halves is one canonical key
+  spelling, which is the choice reserved between
+  [issue #24](https://github.com/brave-experiments/bravebot/issues/24) and
+  [issue #25](https://github.com/brave-experiments/bravebot/issues/25).

@@ -33,6 +33,7 @@
 //! it back: `additionalDirectories` is a separate statement, and one that asks for a directory
 //! rather than opening it.
 
+use crate::trust::is_absolute_key;
 use std::fmt;
 
 /// The family of tools a rule names.
@@ -257,10 +258,10 @@ impl Rule {
             Pattern::Everything => true,
             Pattern::Command(_) | Pattern::Domain(_) => false,
             Pattern::Relative(pattern) => {
-                !is_absolute(path) && pattern.matches(&segments_of(path), restricting)
+                !is_absolute_key(path) && pattern.matches(&segments_of(path), restricting)
             }
             Pattern::Absolute(pattern) => {
-                is_absolute(path) && pattern.matches(&segments_of(path), restricting)
+                is_absolute_key(path) && pattern.matches(&segments_of(path), restricting)
             }
         }
     }
@@ -541,10 +542,6 @@ fn segments_of(path: &str) -> Vec<&str> {
     path.split('/')
         .filter(|segment| !segment.is_empty() && *segment != ".")
         .collect()
-}
-
-fn is_absolute(path: &str) -> bool {
-    path.starts_with('/')
 }
 
 /// Whether a pattern's segments cover a path's, with `**` crossing directories and `*` not.
