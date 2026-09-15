@@ -206,7 +206,9 @@ anywhere else. `q` and Escape go back to the
 list from a delegate, and close the mode from the list or where there is no list behind it.
 Ctrl-L and Ctrl-C close it from either level and do nothing else. Escape and Ctrl-C reach the mode
 before they reach the turn: the turn in flight goes on, and the press that reaches it is the next
-one.
+one. A summary, an aside and a goal check are read the same way, each being a request the view can
+be open over. A goal armed behind a check is not touched either, since the press that closes the
+view is not a press about it.
 
 There is no key for talking to a delegate and no box for it. A delegate is given one task, has
 nobody to ask, and takes no line typed mid-turn.
@@ -220,7 +222,10 @@ watching is also the mode most likely to be open while something is going wrong.
 `verified-by: bravebot_tui::app::q_goes_back_to_the_list_before_it_closes`
 `verified-by: bravebot_tui::app::q_closes_outright_where_there_is_no_list_to_go_back_to`
 `verified-by: bravebot_tui::app::escape_leaves_the_view_the_way_q_does`
+`verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_a_single_request_does`
+`verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_goal_check_does`
 `verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_turn_does`
+`verified-by: bravebot_tui::app::the_release_of_the_press_that_closed_the_view_is_not_a_second_press`
 
 <a id="WATCH-10"></a>
 ### WATCH-10: what is on the screen changes when a person asks, and not otherwise

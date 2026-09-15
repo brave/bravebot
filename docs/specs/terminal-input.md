@@ -98,7 +98,10 @@ read against what is happening, in this order:
 
 Escape only ever stops, and never leaves. A summary is the one exception to the table: it is a
 single request with no round for a stop to land between, so nothing there can stop it and Ctrl-C
-leaves once it comes back.
+leaves once it comes back. An aside is such a request too, and so is the check a goal is judged by,
+which [goal.md](goal.md) governs. What the table leaves out of all three is a mode: a scroller, a
+delegate's view or a prompt search open over the request answers both keys itself, exactly as it
+does over a turn, and the press that reaches the request is the one after the mode has closed.
 
 Taking the line says so, on the line beneath the box, and says which key ends the session. The
 offer lives for exactly one press, since it answers the press just made and the next press is the
@@ -153,6 +156,7 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::app::the_way_out_stops_being_offered_at_the_next_press`
 `verified-by: bravebot_tui::render::the_way_out_is_offered_where_the_line_went`
 `verified-by: bravebot_tui::app::escape_only_stops_and_ctrl_c_is_read_against_what_is_happening`
+`verified-by: bravebot_tui::app::a_single_request_says_it_cannot_be_stopped_and_leaves_on_ctrl_c`
 `verified-by: bravebot_aichat::client::a_stopped_stream_stops_before_the_reply_is_over`
 `verified-by: bravebot_aichat::client::a_stream_stopped_before_it_starts_reports_nothing`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_between_attempts`
@@ -724,7 +728,9 @@ the person's own, after they have read it, exactly as if they had typed it
 Mid-turn is when the wanted prompt is most likely to be one that has scrolled away, and searching
 sends nothing, which is the whole of what a running turn refuses (INPUT-9). Escape and Ctrl-C reach
 the search before they reach the turn, so the key that closes it leaves the turn running and the
-press that stops the turn is the next one.
+press that stops the turn is the next one. A turn is not the only thing they reach it before: the
+summary, the aside and the goal check each hold a request of their own, and the search is open over
+those the same way.
 
 `verified-by: bravebot_tui::app::ctrl_r_searches_the_prompts_already_sent`
 `verified-by: bravebot_tui::app::the_search_starts_from_what_was_already_typed`
@@ -732,6 +738,8 @@ press that stops the turn is the next one.
 `verified-by: bravebot_tui::render::how_to_search_the_prompts_is_said_where_somebody_would_look`
 `verified-by: bravebot_tui::app::the_prompts_can_be_searched_while_a_turn_is_running`
 `verified-by: bravebot_tui::app::the_search_answers_the_stop_keys_before_the_turn_does`
+`verified-by: bravebot_tui::app::the_search_answers_the_stop_keys_before_a_single_request_does`
+`verified-by: bravebot_tui::app::the_search_answers_the_stop_keys_before_the_goal_check_does`
 `verified-by: bravebot_tui::app::ctrl_r_with_nothing_sent_yet_opens_nothing`
 `verified-by: bravebot_tui::app::the_search_starts_from_what_was_already_typed`
 `verified-by: bravebot_tui::app::a_letter_narrows_the_search_rather_than_reaching_the_box`

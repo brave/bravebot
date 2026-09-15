@@ -3308,6 +3308,37 @@ fn run_command(
     Ok(sink.events().to_vec())
 }
 
+/// Interpret a key press while a single request is out.
+///
+/// A summary and an aside are one request each, with no round for a stop to land between, so
+/// nothing here can stop the work: Ctrl-C leaves, since leaving is all the press can mean, and
+/// Escape says so in the words the caller passes. Said once, because a key that does nothing and
+/// says nothing reads as the interface having hung at the one moment it is working hardest.
+///
+/// Both keys are read against [`stops_the_turn`], as the turn's own loop reads them, so a scroller,
+/// a view or a search opened while the request was out answers the press and the press that reaches
+/// the request behind it is the next one. Without that, the key that closes those modes everywhere
+/// else ended the session from inside them.
+fn one_request_key(session: &mut Session, key: KeyEvent, uninterruptible: &str) {
+    // Presses only, for the reason the outer loop ignores releases, and for one this function
+    // brings with it: the press that closes a mode leaves nothing open, so its own release would
+    // read as a second press with the way out ahead of it and end the session on the way up.
+    if key.kind == KeyEventKind::Release {
+        return;
+    }
+
+    if !stops_the_turn(session, key) {
+        handle_key_while_working(session, key);
+        return;
+    }
+
+    if is_ctrl_c(key) {
+        session.quit();
+    } else {
+        session.note_once(uninterruptible);
+    }
+}
+
 /// Summarise the conversation, showing the spinner while it happens.
 ///
 /// A smaller relative of [`run_turn_animated`], and smaller because there is less to do: a
@@ -3366,21 +3397,10 @@ fn compact_animated(
         if event::poll(FRAME)? {
             while event::poll(Duration::ZERO)? {
                 match event::read()? {
-                    // A summary is one request, so there is no round for a cancel to land between and
-                    // nothing here can stop it. Said once, because the alternative is a key that does
-                    // nothing and says nothing, which reads as the interface having hung at the one
-                    // moment it is working hardest.
-                    TermEvent::Key(key) if is_ctrl_c(key) && !session.scrolling() => {
-                        // The one place Ctrl-C still leaves with something in flight: a summary is
-                        // one request with no round for a stop to land between, so there is
-                        // nothing here for the press to stop and leaving is all it can mean.
-                        session.quit();
-                    }
-                    TermEvent::Key(key) if wants_cancel(key) && !session.scrolling() => {
-                        session.note_once(t!(compact_uninterruptible));
-                    }
+                    // The one place Ctrl-C still leaves with something in flight, and what a mode
+                    // standing over the session takes ahead of it, are both that function's.
                     TermEvent::Key(key) => {
-                        handle_key_while_working(session, key);
+                        one_request_key(session, key, t!(compact_uninterruptible));
                     }
                     TermEvent::Paste(text) => handle_paste_while_working(session, &text),
                     TermEvent::Mouse(mouse) => {
@@ -3510,17 +3530,9 @@ fn aside_animated(
         if event::poll(FRAME)? {
             while event::poll(Duration::ZERO)? {
                 match event::read()? {
-                    // One request, so there is no round for a cancel to land between and nothing
-                    // here can stop it. The one press that still means something is the one that
-                    // leaves, since leaving is all it can mean.
-                    TermEvent::Key(key) if is_ctrl_c(key) && !session.scrolling() => {
-                        session.quit();
-                    }
-                    TermEvent::Key(key) if wants_cancel(key) && !session.scrolling() => {
-                        session.note_once(t!(btw_uninterruptible));
-                    }
+                    // The same shape as a summary's keys, and the same function reads them.
                     TermEvent::Key(key) => {
-                        handle_key_while_working(session, key);
+                        one_request_key(session, key, t!(btw_uninterruptible));
                     }
                     TermEvent::Paste(text) => handle_paste_while_working(session, &text),
                     TermEvent::Mouse(mouse) => {
@@ -3572,6 +3584,37 @@ fn aside_animated(
     }
 
     Ok(sink.events().to_vec())
+}
+
+/// Interpret a key press while the goal check is out.
+///
+/// Read against [`stops_the_turn`] first, for the reason a summary reads it, and here the mode is
+/// the likelier of the two to be open: nothing closes a view when a turn ends, so one opened while
+/// the turn ran is still standing over the session when the goal goes to the judge.
+///
+/// Past that, both keys mean stop and there is something here to stop. The request in flight is one
+/// round with nothing to cancel between, but the goal behind it is the thing a person watching this
+/// actually wants off: without that, the key pressed at the ninth round would leave the session
+/// rather than end the goal, and the tenth would go out anyway. With the goal already off Ctrl-C
+/// means what it means everywhere else, and Escape has nothing left to ask for.
+fn goal_check_key(session: &mut Session, key: KeyEvent) {
+    // Presses only, as in [`one_request_key`]: the release of the press that closed a mode arrives
+    // with nothing open and would clear the goal the press was never about.
+    if key.kind == KeyEventKind::Release {
+        return;
+    }
+
+    if !stops_the_turn(session, key) {
+        handle_key_while_working(session, key);
+        return;
+    }
+
+    if session.goal().is_some() {
+        session.clear_goal();
+        session.note_once(t!(goal_uninterruptible));
+    } else if is_ctrl_c(key) {
+        session.quit();
+    }
 }
 
 /// Put the session's stopping condition to a judge, and give back the prompt that carries the work
@@ -3653,29 +3696,9 @@ fn goal_check_animated(
         if event::poll(FRAME)? {
             while event::poll(Duration::ZERO)? {
                 match event::read()? {
-                    // Both keys mean stop, and there is something here to stop. The request in
-                    // flight is one round with nothing to cancel between, but the goal behind it
-                    // is the thing a person watching this actually wants off: without this, the
-                    // key pressed at the ninth round would leave the session rather than end the
-                    // goal, and the tenth would go out anyway.
-                    TermEvent::Key(key)
-                        if (is_ctrl_c(key) || wants_cancel(key))
-                            && !session.scrolling()
-                            && session.goal().is_some() =>
-                    {
-                        session.clear_goal();
-                        session.note_once(t!(goal_uninterruptible));
-                    }
-                    // With the goal already off, Ctrl-C means what it means everywhere else.
-                    TermEvent::Key(key) if is_ctrl_c(key) && !session.scrolling() => {
-                        session.quit();
-                    }
-                    // Escape with the goal already off has nothing left to ask for, and the
-                    // request in flight is not something it can reach.
-                    TermEvent::Key(key) if wants_cancel(key) && !session.scrolling() => {}
-                    TermEvent::Key(key) => {
-                        handle_key_while_working(session, key);
-                    }
+                    // Which of the goal, a mode over the session, and the session itself a stop
+                    // key is asking about is that function's to say.
+                    TermEvent::Key(key) => goal_check_key(session, key),
                     TermEvent::Paste(text) => handle_paste_while_working(session, &text),
                     TermEvent::Mouse(mouse) => {
                         let action = handle_mouse(session, mouse);
@@ -4942,6 +4965,15 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::CONTROL)
     }
 
+    /// The same chord on the way up. A terminal asked for disambiguated keys sends these as well as
+    /// presses, so every loop that reads a key has to tell them apart.
+    fn released(key: KeyEvent) -> KeyEvent {
+        KeyEvent {
+            kind: KeyEventKind::Release,
+            ..key
+        }
+    }
+
     mod watching {
         use super::*;
         use bravebot_agent::report::{DelegateId, Delegation};
@@ -5090,6 +5122,102 @@ mod tests {
             );
             assert!(session.watching().is_none(), "the view did not close");
             assert_eq!(session.status, Status::Working, "the turn was stopped");
+        }
+
+        /// A summary and an aside read the stop keys themselves rather than through the turn's
+        /// loop, and the view is open across them: it is opened mid-turn and nothing closes it when
+        /// the turn ends. Answered by the request instead, Ctrl-C ended the session from inside the
+        /// view and Escape wrote a notice into the transcript behind it.
+        #[test]
+        fn the_view_answers_the_stop_keys_before_a_single_request_does() {
+            for stopping in [ctrl('c'), key(KeyCode::Esc)] {
+                let mut session = Session::new("kernel-enforced");
+                spawn(&mut session, "checker", "run the build");
+                session.begin_aside();
+
+                one_request_key(&mut session, ctrl('l'), "nothing to interrupt");
+                assert!(session.watching().is_some(), "the view did not open");
+                let said = session.transcript.len();
+
+                one_request_key(&mut session, stopping, "nothing to interrupt");
+
+                assert!(
+                    session.watching().is_none(),
+                    "{stopping:?} left the view open"
+                );
+                assert!(!session.is_quitting(), "{stopping:?} ended the session");
+                assert_eq!(
+                    session.transcript.len(),
+                    said,
+                    "{stopping:?} reported the request from inside the view"
+                );
+            }
+        }
+
+        /// The goal check goes out as a turn ends, which is exactly when a view opened during that
+        /// turn is still standing over the session, so it is the loop most likely to be asked one
+        /// of these keys with the view open. The goal is not what the press is about there, and
+        /// Ctrl-C is not a request to leave.
+        #[test]
+        fn the_view_answers_the_stop_keys_before_the_goal_check_does() {
+            for stopping in [ctrl('c'), key(KeyCode::Esc)] {
+                let mut session = Session::new("kernel-enforced");
+                spawn(&mut session, "checker", "run the build");
+                session.begin_aside();
+                session.start_goal("cargo test exits 0".to_string());
+
+                goal_check_key(&mut session, ctrl('l'));
+                assert!(session.watching().is_some(), "the view did not open");
+                let said = session.transcript.len();
+
+                goal_check_key(&mut session, stopping);
+
+                assert!(
+                    session.watching().is_none(),
+                    "{stopping:?} left the view open"
+                );
+                assert!(
+                    session.goal().is_some(),
+                    "{stopping:?} cleared the goal from inside the view"
+                );
+                assert!(!session.is_quitting(), "{stopping:?} ended the session");
+                assert_eq!(
+                    session.transcript.len(),
+                    said,
+                    "{stopping:?} reported the goal from inside the view"
+                );
+            }
+        }
+
+        /// Reading the mode first is what makes a release worth telling from a press here: the press
+        /// closes the view, so the release of that same chord arrives with nothing open and reaches
+        /// the request behind it. Handled as a press it ends the session, or takes the goal off, on
+        /// the way up from the press that did neither.
+        #[test]
+        fn the_release_of_the_press_that_closed_the_view_is_not_a_second_press() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "checker", "run the build");
+            session.begin_aside();
+
+            one_request_key(&mut session, ctrl('l'), "nothing to interrupt");
+            one_request_key(&mut session, ctrl('c'), "nothing to interrupt");
+            assert!(session.watching().is_none(), "the view did not close");
+
+            one_request_key(&mut session, released(ctrl('c')), "nothing to interrupt");
+            assert!(!session.is_quitting(), "the release ended the session");
+
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "checker", "run the build");
+            session.begin_aside();
+            session.start_goal("cargo test exits 0".to_string());
+
+            goal_check_key(&mut session, ctrl('l'));
+            goal_check_key(&mut session, ctrl('c'));
+            assert!(session.watching().is_none(), "the view did not close");
+
+            goal_check_key(&mut session, released(ctrl('c')));
+            assert!(session.goal().is_some(), "the release took the goal off");
+            assert!(!session.is_quitting(), "the release ended the session");
         }
 
         /// Both keys close, and a person who reached for the one they close every other panel
@@ -9205,6 +9333,149 @@ mod tests {
         handle_key_while_working(&mut session, key(KeyCode::Esc));
         assert!(!session.searching_history(), "the search did not close");
         assert_eq!(session.status, Status::Working, "the turn was stopped");
+    }
+
+    /// A summary and an aside answer the stop keys themselves, so the search opened while one of
+    /// them was out has to be asked before the request is: answered by the request instead, Escape
+    /// reported work that cannot be interrupted and Ctrl-C ended the session, and the search a
+    /// person was trying to leave was still open behind both.
+    #[test]
+    fn the_search_answers_the_stop_keys_before_a_single_request_does() {
+        for stopping in [ctrl('c'), key(KeyCode::Esc)] {
+            let mut session = having_sent(&["first question"]);
+            session.begin_aside();
+
+            one_request_key(&mut session, ctrl('r'), "nothing to interrupt");
+            assert!(session.searching_history(), "the search did not open");
+            let said = session.transcript.len();
+
+            one_request_key(&mut session, stopping, "nothing to interrupt");
+
+            assert!(
+                !session.searching_history(),
+                "{stopping:?} left the search open"
+            );
+            assert!(!session.is_quitting(), "{stopping:?} ended the session");
+            assert_eq!(
+                session.transcript.len(),
+                said,
+                "{stopping:?} reported the request from inside the search"
+            );
+        }
+    }
+
+    /// The goal check is one request too, and the goal behind it is what its stop keys are for.
+    /// Neither key is about the goal while the search is open, and Ctrl-C there took the session
+    /// with it.
+    #[test]
+    fn the_search_answers_the_stop_keys_before_the_goal_check_does() {
+        for stopping in [ctrl('c'), key(KeyCode::Esc)] {
+            let mut session = having_sent(&["first question"]);
+            session.begin_aside();
+            session.start_goal("cargo test exits 0".to_string());
+
+            goal_check_key(&mut session, ctrl('r'));
+            assert!(session.searching_history(), "the search did not open");
+            let said = session.transcript.len();
+
+            goal_check_key(&mut session, stopping);
+
+            assert!(
+                !session.searching_history(),
+                "{stopping:?} left the search open"
+            );
+            assert!(
+                session.goal().is_some(),
+                "{stopping:?} cleared the goal from inside the search"
+            );
+            assert!(!session.is_quitting(), "{stopping:?} ended the session");
+            assert_eq!(
+                session.transcript.len(),
+                said,
+                "{stopping:?} reported the goal from inside the search"
+            );
+        }
+    }
+
+    /// What the same keys mean with nothing standing over the request. There is no round for a stop
+    /// to land between, so Escape can only report that and Ctrl-C can only be about leaving. The
+    /// report is made once: pressing again is asking the same question, and answering it every time
+    /// fills the transcript with the news that nothing happened.
+    #[test]
+    fn a_single_request_says_it_cannot_be_stopped_and_leaves_on_ctrl_c() {
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        let said = session.transcript.len();
+
+        one_request_key(&mut session, key(KeyCode::Esc), "nothing to interrupt");
+
+        assert_eq!(
+            session.transcript.len(),
+            said + 1,
+            "escape said nothing about a request that cannot be stopped"
+        );
+        assert!(!session.is_quitting(), "escape ended the session");
+
+        one_request_key(&mut session, key(KeyCode::Esc), "nothing to interrupt");
+        assert_eq!(
+            session.transcript.len(),
+            said + 1,
+            "pressing again said it a second time"
+        );
+
+        one_request_key(&mut session, ctrl('c'), "nothing to interrupt");
+        assert!(session.is_quitting(), "ctrl-c did not leave");
+    }
+
+    /// The goal check is one request as well, but there is something behind it worth stopping: the
+    /// goal that keeps putting turns out. Both keys take it off and say so, since a person pressing
+    /// either at the ninth round is asking for the tenth not to go. Only with the goal already off
+    /// does Ctrl-C mean leaving, and Escape has nothing left to ask for.
+    #[test]
+    fn the_goal_check_takes_the_goal_off_before_ctrl_c_means_leaving() {
+        for stopping in [ctrl('c'), key(KeyCode::Esc)] {
+            let mut session = having_sent(&["first question"]);
+            session.begin_aside();
+            session.start_goal("cargo test exits 0".to_string());
+            let said = session.transcript.len();
+
+            goal_check_key(&mut session, stopping);
+
+            assert!(session.goal().is_none(), "{stopping:?} left the goal armed");
+            let after = session.transcript[said..]
+                .iter()
+                .map(|entry| entry.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                after.contains(t!(goal_cleared)),
+                "{stopping:?} took the goal off without saying so: {after}"
+            );
+            assert!(
+                after.contains(t!(goal_uninterruptible)),
+                "{stopping:?} said nothing of the check still in flight: {after}"
+            );
+            assert!(!session.is_quitting(), "{stopping:?} ended the session");
+        }
+
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        let said = session.transcript.len();
+
+        goal_check_key(&mut session, key(KeyCode::Esc));
+
+        assert_eq!(
+            session.transcript.len(),
+            said,
+            "escape reported something with no goal to take off"
+        );
+        assert!(!session.is_quitting(), "escape ended the session");
+
+        goal_check_key(&mut session, ctrl('c'));
+        assert!(
+            session.is_quitting(),
+            "ctrl-c did not leave with the goal already off"
+        );
     }
 
     /// With nothing sent there is nothing to search, and a panel saying so is a mode a person then
