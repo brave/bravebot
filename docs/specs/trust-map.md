@@ -395,6 +395,170 @@ apart (TRUST-3) precisely so that one file has one answer.
 `verified-by: bravebot_tui::app::changing_directory_leaves_the_previous_answer_where_it_was_given`
 `verified-by: bravebot_tui::app::moving_into_a_directory_keeps_the_answers_given_inside_it`
 
+## A scratch directory outside the workspace
+
+An intermediate file has nowhere to go. TRUST-10 confines reading, writing, editing, listing and
+searching to the working directory and to whatever was opened beside it, and decides confinement by
+where an operation lands rather than by how a path is spelled. A redirection target on a command
+line is a write destination held to that same confinement
+([tools/command-line.md](tools/command-line.md)), so `cargo metadata > /tmp/meta.json` is refused
+before the map is consulted at all. That is not a missing grant. The map decides which reachable
+paths prompt, an unreachable path never reaches that question, and so no answer to that question,
+however wide, makes `/tmp` writable. Only making the path reachable would, and the one route a
+person has to that is `/add-dir /tmp`, which under TRUST-9 marks whatever every other process on the
+machine has left in a world-writable directory as trusted input in the same action. What is left is
+writing into the project, where the file is untracked and a build, a test run, a `git add -A` and a
+reviewer each have to deal with it, and somebody has to remember to delete it.
+
+The decision is that a session is given a directory of its own in the system temporary directory,
+that its reach is granted without asking while the label on it is the workspace's own, and that
+nothing in it outlives the session. Nothing in this section is in force, and no session has such a
+directory. The clauses above are what one is held to once a session has it.
+
+**Where it lives.** In the system temporary directory, under a name carrying this program's own
+prefix and enough besides to tell two apart, created rather than opened so that a name already taken
+is refused. This is what the editor hand-off already does with the one file it has to write
+([incognito.md](incognito.md#INCOG-8)), and the reasoning there carries over unchanged: on a shared
+temporary directory an existing name may be something another account left pointing at a file of
+theirs, and refusing to reuse one is what keeps a write from going through it. On Unix the directory
+is created with mode `0700`, which is the other half of that, and is what keeps another account away
+from what lands inside, because a file arriving there comes in at a umask whether this program
+opened it for a redirection or a program wrote it itself.
+
+Which directory that is, on every platform, is a question the standard library already answers: it
+reads `TMPDIR` on Unix and falls back to `/tmp`, and on Windows it asks the operating system, which
+resolves `TMP`, then `TEMP`, then the profile directory. An undefined `TMPDIR` therefore needs no
+handling of this program's own and no platform call written here. What does not carry across is the
+mode, which is Unix's: the Windows temporary path is ordinarily the account's own and takes its
+permissions from that, and the refusal to reuse a name is what covers the rest.
+
+Not a fixed name, and not a fixed name with the session's identifier inside it. On macOS the system
+temporary directory is the account's own, but on Linux it is ordinarily the world-writable `/tmp`,
+where any name this program would compose is one another account can create, or point somewhere
+else, before this program gets there.
+
+Not under the working directory, which is how this section first read. A directory in the project is
+one that several walks have to be taught to skip, each keeping its own list and none of them reading
+a project's ignore file, on the ground that a tree that can hide its files from a search can hide
+them from review ([tools/search.md](tools/search.md)): a search and a glob expansion, a listing, and
+the picker `@` reads from ([naming-files.md](naming-files.md)). It is reported by a repository until
+an ignore file is written to hide it, its name has to be one no project uses for its own sources,
+and even empty it says a session ran in this project at this time, which is most of what an
+incognito session declines to write ([incognito.md](incognito.md)). Out here none of that holds, and
+none of it has to be built.
+
+**Its reach is granted, its trust is not.** The directory is outside the working directory, so
+nothing reaches it unless something says so, and what says so here is this program rather than a
+person. The grounds are that the directory was created here, empty, owned by this account and
+readable by nobody else, so there is no content in it anybody could be asked to vouch for. Those are
+grounds about reach and they do not extend to trust: TRUST-1 is that nothing is trusted until it is
+granted, and a directory this program created is not a person's answer. Emptiness is also true only
+for an instant, and what keeps it true afterwards is the ownership and the mode rather than anything
+the map records.
+
+So no label is granted with the reach, and the directory carries no rule of its own. A path under it
+is answered the way a path in the workspace is: by what was said at startup (TRUST-7), which trusts
+nothing when it was declined, and then per file by reconciliation, which marks the exact path a
+write went to (TRUST-4, TRUST-5). A line whose output is untrusted therefore distrusts the scratch
+file it redirected into, under the name the line spelled
+([tools/command-line.md](tools/command-line.md)), which is the case worth having right in a
+directory of intermediate files.
+
+This is deliberately not what `/add-dir` does. TRUST-9 grants reach and trust together and says
+either half alone is no use, one leaving a rule about files nothing can open and the other a
+directory that prompts on every edit. Neither is what happens here, because the reach comes from
+this program while the label comes from the workspace's own answer, so the directory prompts exactly
+when the workspace prompts and no more. What `/add-dir` would add on top of that is trust the
+startup answer withheld, over a directory nobody looked at.
+
+A standing quarantine is refused for what it costs at the other end. A line a person vouched for
+prints trusted output, and a redirection on such a line leaves the map as it was, so a standing
+quarantine would make a plan pay a prompt to read back the file it just asked for. A default every
+session works around is not a default.
+
+**It is a place to write, not a place writes stop being asked about.** A path under it appears in a
+plan's write set, is shown in the prompt, and takes every write gate exactly as a path in the
+project does ([tools/command-line.md](tools/command-line.md)). What it buys is a fixed place that
+needs no name invented for it, that a repository does not report, that no walk has to skip, and that
+goes when the session does. It buys no prompt anybody would otherwise see.
+
+**Given as the session opens, not asked for by a tool.** The directory is created as the session
+opens and its path is put in the environment this process holds, which is the environment each stage
+of a `run` is spawned with ([tools/command-line.md](tools/command-line.md)), so a line can name it
+without anything having been called first.
+
+A tool that makes one on demand is the alternative, and is refused. It would cost a description in
+every request whether or not a turn needs a scratch file at all, and the first line that redirects
+would be written before the tool had been called, so a turn pays a refusal and a round trip to learn
+what an environment variable would have told it for nothing. On-demand creation was worth weighing
+only while the directory was in the project, where one belonging to a session that never writes a
+file is litter somebody has to look at; out here an unused empty directory costs what the sweep
+below costs and nothing more.
+
+**Nothing in it outlives the session.** The session removes its directory as it closes. A resumed
+session is given a new one rather than the one it had, because the name carries what told it apart
+from its neighbours rather than the session's own identifier, so there is nothing to reconstruct,
+and a resume can come days later where bytes surviving that gap are a cache nothing evicts. A fork
+is a new session and is given its own. `/clear` begins a session as well as closing one, so it
+removes the directory of the session it closed and opens another.
+
+A `/cd` needs nothing done to the directory, which is the one lifetime rule this location removes
+rather than restates: the directory is not under the working directory, so a move does not leave it
+behind and there is no ordering to get right between removing it and still being able to reach it
+(TRUST-13). What a path under it is labelled after a move follows from whatever the map says then,
+exactly as for any path the startup answer covers.
+
+**The system temporary directory itself stays unreachable.** One directory inside it is reached, not
+the directory that one sits in, so `/tmp` is no more writable than it was and the reason
+`/add-dir /tmp` is the wrong answer is untouched. `$TMPDIR` for a program a `run` starts also stays
+what it was, since the map governs the operations this program performs and the redirection targets
+a line spells rather than what a program opens for itself. A program's own temporary file is named
+in no plan and read back by nothing, so pointing that variable at the session's directory would put
+files nobody decided anything about inside a directory the map answers for, which is the known cost
+about a file another process drops in, arrived at on purpose. Whether a confined program reaches a
+temporary directory at all is a question for the base profile [sandboxing.md](sandboxing.md)
+describes.
+
+**What has to exist first.**
+
+- A confined program cannot write there yet. A profile as generated denies everything and then names
+  what a program may reach ([sandboxing.md](sandboxing.md)), and the base names no temporary
+  directory today, so a redirection into the session's directory would be refused by the profile
+  after the map had allowed it. The base has to name that one directory, and name it per session,
+  since which directory it is cannot be known when the base is written. This is the price of being
+  outside the workspace and the one thing the in-project version had for free.
+- The map has no rule that grants reach and says nothing about trust. Every rule it holds is a
+  label, and TRUST-9 is the only thing that makes an absolute path reachable at all. What this needs
+  is the reach half alone, with the label left to TRUST-7 and to reconciliation, and `/status` has
+  to show such a rule for what it is (TRUST-12) rather than list the directory as trusted or as
+  quarantined when it is neither.
+- A leftover cannot be told from a live one without a claim. Removal as a session closes covers a
+  session that closes, but a killed process leaves its directory, and the names are unrelated to
+  each other precisely so that concurrent sessions cannot collide, so a later session cannot tell a
+  leftover from the directory of a session running beside it. Out here it can be given the claim the
+  in-project version could not have, because every session's directory sits in one place any session
+  can read: a lock file each session holds open for its life makes the sweep a matter of trying the
+  lock on each directory found and removing the ones nothing holds, after checking each is this
+  account's own at the mode it should have. `flock` is reached through `rustix`, which is already a
+  dependency; the Windows equivalent is `LockFileEx` and nothing here offers it today, so the sweep
+  begins as Unix's and Windows leans on its own cleaner until it does.
+- A write into it through the file tools is one the turn can rewind, and the bytes kept to do that
+  come out of a single bounded per-turn budget shared with every other file the turn wrote
+  ([sessions.md](sessions.md)). An intermediate file is the size of thing that budget is set to stay
+  clear of, so a large one written there spends what a source file's own backup needed and leaves
+  that file unable to go back. Being outside the workspace makes the answer the ordinary one rather
+  than a carve-out: what a rewind keeps is what is in the project.
+- An incognito session may have one, and [incognito.md](incognito.md) has to add it to the short
+  list of things that still reach the filesystem in that mode. The name says nothing about which
+  project or which session and the directory is not in the project, so what an empty one records is
+  that this program ran at this time, rather than that a session ran in this project at this time,
+  which is the record that mode refuses to leave. That puts it beside the editor hand-off the same
+  list already carries, so the list grows by an entry rather than the mode growing an exception.
+- The security scan flags a name composed under the system temporary directory, and the editor
+  hand-off carries an annotation and a justification for exactly that. This directory needs the same
+  ones, and the justification is the same: created and not opened, a taken name refused rather than
+  reused, and mode `0700` where a mode means anything.
+
 ## Known costs
 
 Accepted deliberately. Do not "fix" one without changing this spec first.
@@ -425,6 +589,13 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   The practical consequence is worth saying plainly: trusting a directory trusts what lands in it,
   so a tree that a build or a dependency manager writes into is a tree you are vouching for
   ahead of time.
+
+  A scratch directory raises how often this runs without changing what it is. Writing a file and
+  reading it back is incidental in a project and is the whole purpose of the directory above, and
+  `cmd -o` into it is the ordinary case there rather than the odd one, so the exception in the
+  second paragraph covers less of the traffic than it does elsewhere. No rule about that would
+  help, since the same writes to the same effect are available one directory up: it is the standing
+  statement about the place, met more often.
 - **Confinement is decided before an operation runs, not while it runs.** Where a path lands is
   worked out by resolving it, and the operation happens after that, so a component that is a
   directory when it is resolved and a symlink when the file is opened carries the bytes with it.
