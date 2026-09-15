@@ -6,7 +6,7 @@ unlikely, by enforcing information-flow labels at every boundary and separating 
 content so untrusted text cannot redirect an action.
 
 Everyone who has worked on it is listed under
-[contributors](https://github.com/brave-experiments/bravebot/graphs/contributors).
+[contributors](https://github.com/brave/bravebot/graphs/contributors).
 
 [SafeHouse](https://github.com/brave-experiments/safehouse) is the research driver and proof of
 concept behind the product, bravebot, this repository.

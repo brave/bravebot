@@ -13,7 +13,7 @@ const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 
 const SKIP_ENV = "BRAVEBOT_INSTALL_SKIP_DOWNLOAD";
-const DEFAULT_REPO = "brave-experiments/bravebot";
+const DEFAULT_REPO = "brave/bravebot";
 const MAX_REDIRECTS = 5;
 
 const repo = process.env.BRAVEBOT_REPO || DEFAULT_REPO;

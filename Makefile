@@ -405,7 +405,7 @@ github-release:
 	echo "pushed $(TAG) to $(RELEASE_REMOTE); GitHub Actions will run CI on the tag"; \
 	echo "publish signed assets later with Jenkins job bravebot-build (UPLOAD and RELEASE)"; \
 	echo "then publish npm: gh workflow run publish-npm.yml --ref $(TAG) -f tag=$(TAG)"; \
-	echo "watch CI with: gh run watch --repo brave-experiments/bravebot"
+	echo "watch CI with: gh run watch --repo brave/bravebot"
 
 .PHONY: clean
 clean:

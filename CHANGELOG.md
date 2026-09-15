@@ -1,37 +1,37 @@
-## [0.7.0](https://github.com/brave-experiments/bravebot/releases/tag/v0.7.0)
+## [0.7.0](https://github.com/brave/bravebot/releases/tag/v0.7.0)
 
  - Added `/goal`, which keeps a session working towards a condition you set. Each turn is judged against it, and where it does not hold the work goes back with the reason, up to ten rounds. `/goal clear` takes it off, and so does Ctrl-C with nothing running.
- - Added every model your AWS account can reach on Bedrock, not just Claude. A `provider` block naming `amazon-bedrock` states a region and lists as many models as you like, each shown under the name you give it, alongside the three tier variables. ([#202](https://github.com/brave-experiments/bravebot/issues/202))
- - Added `--model` and `--add-dir` to a one-shot run, so a script can name the model it wants and reach a directory beside the one it runs in. With no flag, a run takes the model `/model` recorded, the same one a session opening there would. ([#95](https://github.com/brave-experiments/bravebot/issues/95))
- - Improved `run` for a line that only reads: where every step is a known reading command over paths you have vouched for, it runs without asking and its output comes back as text rather than quarantined. ([#70](https://github.com/brave-experiments/bravebot/issues/70))
- - Changed a run nobody is watching to ignore the `allow` rules in your settings file, so a script that writes a file, runs a program or fetches a URL now needs `--dangerously-skip-permissions` to do it. The `deny` and `ask` rules still decide as they did. ([#145](https://github.com/brave-experiments/bravebot/issues/145))
- - Changed `permissions.additionalDirectories` to ask about each directory it names as a session opens, and to open and vouch for only the ones you accept. A settings file a checkout carries no longer opens a path elsewhere on your machine with nobody asked. ([#140](https://github.com/brave-experiments/bravebot/issues/140))
- - Changed hover text from a language server to come back quarantined. Nothing in an answer says which file the prose was written in, so it cannot be labelled by the file you asked about. ([#154](https://github.com/brave-experiments/bravebot/issues/154))
- - Changed the repository name to `bravebot`, so the install script and the line the update notice prints now name `github.com/brave-experiments/bravebot`. A copy already installed still finds its update, through a redirect. ([#133](https://github.com/brave-experiments/bravebot/issues/133))
- - Changed a processor's reply so that no word in it means leave this file alone: `UNCHANGED` is gone, and an answer that marks no document now writes nothing and reports which file stands as it was. A document whose whole content was that word could not be written before, because the reply was read as a verdict instead of as content. ([#28](https://github.com/brave-experiments/bravebot/issues/28))
- - Fixed a crash while editing the prompt in vi mode: marking a stretch in VISUAL mode and then shortening the line, with Backspace or Ctrl-W, panicked and left the terminal unusable. Every key that shortens the line now ends the selection. ([#175](https://github.com/brave-experiments/bravebot/issues/175))
- - Fixed `~/.bravebot` and the files under it being readable by every account on the machine, which included your prompt history and a stored credential. A directory an older build left open is narrowed, and a language server index an earlier build wrote one level too deep is removed. ([#114](https://github.com/brave-experiments/bravebot/issues/114))
- - Fixed the middle of a long command's output being lost. What `run` and `job_output` printed is kept whole now, so a capped result comes back with a reference to the rest instead of the command having to be run again. ([#200](https://github.com/brave-experiments/bravebot/issues/200))
- - Fixed a `deny` rule being ignored by a search or a listing that reached the file from a directory above it. A file a rule covers is left out before it is opened or named. ([#143](https://github.com/brave-experiments/bravebot/issues/143))
- - Fixed `run` not asking before a redirection feeds a file to a program, so `cat < ~/.ssh/id_rsa` no longer goes through on an earlier answer about `cat`. Such a run asks every time, and the answer cannot be remembered. ([#146](https://github.com/brave-experiments/bravebot/issues/146))
- - Fixed a delegate being offered `fetch_url`, and being able to put a question on your screen or replace your task list. ([#147](https://github.com/brave-experiments/bravebot/issues/147))
- - Fixed a write through a symlinked directory inside your working directory landing outside it, so the bytes go where the path you approved said. ([#214](https://github.com/brave-experiments/bravebot/issues/214))
- - Fixed a slow endpoint being given up on after 60 seconds and asked again, when the wait for a reply to begin is allowed to be ten times that. ([#158](https://github.com/brave-experiments/bravebot/issues/158))
- - Fixed a release being published without its Windows binary, which left every Windows install failing on a missing download. ([#195](https://github.com/brave-experiments/bravebot/issues/195))
+ - Added every model your AWS account can reach on Bedrock, not just Claude. A `provider` block naming `amazon-bedrock` states a region and lists as many models as you like, each shown under the name you give it, alongside the three tier variables. ([#202](https://github.com/brave/bravebot/issues/202))
+ - Added `--model` and `--add-dir` to a one-shot run, so a script can name the model it wants and reach a directory beside the one it runs in. With no flag, a run takes the model `/model` recorded, the same one a session opening there would. ([#95](https://github.com/brave/bravebot/issues/95))
+ - Improved `run` for a line that only reads: where every step is a known reading command over paths you have vouched for, it runs without asking and its output comes back as text rather than quarantined. ([#70](https://github.com/brave/bravebot/issues/70))
+ - Changed a run nobody is watching to ignore the `allow` rules in your settings file, so a script that writes a file, runs a program or fetches a URL now needs `--dangerously-skip-permissions` to do it. The `deny` and `ask` rules still decide as they did. ([#145](https://github.com/brave/bravebot/issues/145))
+ - Changed `permissions.additionalDirectories` to ask about each directory it names as a session opens, and to open and vouch for only the ones you accept. A settings file a checkout carries no longer opens a path elsewhere on your machine with nobody asked. ([#140](https://github.com/brave/bravebot/issues/140))
+ - Changed hover text from a language server to come back quarantined. Nothing in an answer says which file the prose was written in, so it cannot be labelled by the file you asked about. ([#154](https://github.com/brave/bravebot/issues/154))
+ - Changed the repository name to `bravebot`, so the install script and the line the update notice prints now name `github.com/brave-experiments/bravebot`. A copy already installed still finds its update, through a redirect. ([#133](https://github.com/brave/bravebot/issues/133))
+ - Changed a processor's reply so that no word in it means leave this file alone: `UNCHANGED` is gone, and an answer that marks no document now writes nothing and reports which file stands as it was. A document whose whole content was that word could not be written before, because the reply was read as a verdict instead of as content. ([#28](https://github.com/brave/bravebot/issues/28))
+ - Fixed a crash while editing the prompt in vi mode: marking a stretch in VISUAL mode and then shortening the line, with Backspace or Ctrl-W, panicked and left the terminal unusable. Every key that shortens the line now ends the selection. ([#175](https://github.com/brave/bravebot/issues/175))
+ - Fixed `~/.bravebot` and the files under it being readable by every account on the machine, which included your prompt history and a stored credential. A directory an older build left open is narrowed, and a language server index an earlier build wrote one level too deep is removed. ([#114](https://github.com/brave/bravebot/issues/114))
+ - Fixed the middle of a long command's output being lost. What `run` and `job_output` printed is kept whole now, so a capped result comes back with a reference to the rest instead of the command having to be run again. ([#200](https://github.com/brave/bravebot/issues/200))
+ - Fixed a `deny` rule being ignored by a search or a listing that reached the file from a directory above it. A file a rule covers is left out before it is opened or named. ([#143](https://github.com/brave/bravebot/issues/143))
+ - Fixed `run` not asking before a redirection feeds a file to a program, so `cat < ~/.ssh/id_rsa` no longer goes through on an earlier answer about `cat`. Such a run asks every time, and the answer cannot be remembered. ([#146](https://github.com/brave/bravebot/issues/146))
+ - Fixed a delegate being offered `fetch_url`, and being able to put a question on your screen or replace your task list. ([#147](https://github.com/brave/bravebot/issues/147))
+ - Fixed a write through a symlinked directory inside your working directory landing outside it, so the bytes go where the path you approved said. ([#214](https://github.com/brave/bravebot/issues/214))
+ - Fixed a slow endpoint being given up on after 60 seconds and asked again, when the wait for a reply to begin is allowed to be ten times that. ([#158](https://github.com/brave/bravebot/issues/158))
+ - Fixed a release being published without its Windows binary, which left every Windows install failing on a missing download. ([#195](https://github.com/brave/bravebot/issues/195))
  - Fixed a background job being reported as ended with the last of its output still unread.
- - Fixed reading an image or a PDF reaching a file outside your working directory and the directories you added. ([#141](https://github.com/brave-experiments/bravebot/issues/141))
- - Fixed a file a command's output was redirected into staying recorded as trusted, so reading it back no longer returns an unvouched program's output as trusted text. ([#142](https://github.com/brave-experiments/bravebot/issues/142))
+ - Fixed reading an image or a PDF reaching a file outside your working directory and the directories you added. ([#141](https://github.com/brave/bravebot/issues/141))
+ - Fixed a file a command's output was redirected into staying recorded as trusted, so reading it back no longer returns an unvouched program's output as trusted text. ([#142](https://github.com/brave/bravebot/issues/142))
 
-## [0.6.0](https://github.com/brave-experiments/brave-bot/releases/tag/v0.6.0)
+## [0.6.0](https://github.com/brave/bravebot/releases/tag/v0.6.0)
 
  - Added `/btw`, which asks a question beside the work. It sends a copy of the conversation with your question on the end and puts neither half back, so the digression is not in front of the agent for the rest of the session. The answer opens under Ctrl-L as a row of its own, and a resume brings it back there.
 
-## [0.5.1](https://github.com/brave-experiments/brave-bot/releases/tag/v0.5.1)
+## [0.5.1](https://github.com/brave/bravebot/releases/tag/v0.5.1)
 
- - Added an install script for macOS and Linux, so a machine without npm can install bravebot without building it: `curl -fsSL https://raw.githubusercontent.com/brave-experiments/brave-bot/main/install.sh | sh`. It lands in `/usr/local/bin` unless `INSTALL_DIR` says otherwise, and the download is checked against its published checksum.
+ - Added an install script for macOS and Linux, so a machine without npm can install bravebot without building it: `curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | sh`. It lands in `/usr/local/bin` unless `INSTALL_DIR` says otherwise, and the download is checked against its published checksum.
  - Added a notice at startup when a newer version has been published, giving the line that updates the copy you are running: the npm command where npm installed it, the install script where that did. The check runs in the background at most once a day, so nothing waits on it, and a build from source is left quiet.
 
-## [0.5.0](https://github.com/brave-experiments/brave-bot/releases/tag/v0.5.0)
+## [0.5.0](https://github.com/brave/bravebot/releases/tag/v0.5.0)
 
  - Added code navigation through a language server: jump to a definition, find references, read a hover, list the symbols in a file or the workspace, and follow a call in either direction. The server runs with your access once you allow it, and its index is cached so later sessions start fast.
  - Added fetching a URL, so an agent can read a doc page or the issue behind an error. It asks before each one, and the page is quarantined: a page telling it to ignore its instructions is talking to nobody.
@@ -45,35 +45,35 @@
  - Added the changed lines to what an edit reports, so an agent can see what it wrote instead of a count of replacements.
  - Added a warning when a turn edited files and ran nothing, so an unbuilt diff is not mistaken for a checked one. The agent is also asked once whether any of it runs.
  - Added a nudge to an agent that has read for eight rounds without writing anything, so settled work lands while the turn is still going.
- - Changed the model list to the ones this agent is offered, and the default to `automatic-brave-bot`. `automatic` still resolves to it. ([#129](https://github.com/brave-experiments/brave-bot/issues/129))
+ - Changed the model list to the ones this agent is offered, and the default to `automatic-brave-bot`. `automatic` still resolves to it. ([#129](https://github.com/brave/bravebot/issues/129))
  - Changed the prompt to state the working directory, platform, shell, whether the tree is a checkout, and the date, so an agent stops running `pwd` to find out.
  - Improved speed on Bedrock by telling the service which part of a request it has already read, instead of paying full price for the whole conversation every round.
  - Improved how much gets done per round: independent calls go out together, and a read with no line range returns the file up to a page instead of thirty lines at a time.
  - Fixed quarantined command output looking like a dead end, which left agents reading files one at a time. It now says how to see the output, vouch for the command, or read the file directly.
 
-## [0.4.0](https://github.com/brave-experiments/brave-bot/releases/tag/v0.4.0)
+## [0.4.0](https://github.com/brave/bravebot/releases/tag/v0.4.0)
 
  - Added a command line to `run`, with pipes, `&&`, `||`, `;`, redirections and brace, glob and tilde expansion, compiled here rather than handed to a shell and put in front of you as a plan naming every file it would write.
  - Added shift-tab, which cycles a session between asking about every write, accepting edits, planning, and bypassing, and draws the mode in force under the prompt.
  - Added `--dangerously-skip-permissions`, which answers a write, a run, a command's output and vouching for a quarantined file without asking, while deny rules from the settings file still refuse.
- - Added `/undo`, which puts the session back where it stood before the most recent turn: the files that turn wrote, the conversation, and the turn count, spend and trust map that went with it. ([#91](https://github.com/brave-experiments/brave-bot/issues/91))
- - Added `bravebot --fork <id>`, which copies a session into one with its own id and opens it, so a second approach starts from the part of the conversation worth keeping. ([#98](https://github.com/brave-experiments/brave-bot/issues/98))
- - Added `/export`, which writes the conversation out as a markdown file under the working directory, named on the line or after the session id. ([#98](https://github.com/brave-experiments/brave-bot/issues/98))
+ - Added `/undo`, which puts the session back where it stood before the most recent turn: the files that turn wrote, the conversation, and the turn count, spend and trust map that went with it. ([#91](https://github.com/brave/bravebot/issues/91))
+ - Added `bravebot --fork <id>`, which copies a session into one with its own id and opens it, so a second approach starts from the part of the conversation worth keeping. ([#98](https://github.com/brave/bravebot/issues/98))
+ - Added `/export`, which writes the conversation out as a markdown file under the working directory, named on the line or after the session id. ([#98](https://github.com/brave/bravebot/issues/98))
  - Added every command a turn ran to the ctrl-l list, after the delegates, so what a program printed is readable even where the planner was kept from it.
  - Added `CLAUDE.md` and `.claude/CLAUDE.md` as places a project's instructions are read from where `AGENTS.md` is absent, with a file short enough to be nothing but a pointer followed to the document it names.
  - Changed search to reach a hundred thousand files rather than two thousand, skip vendored dependencies, and accept several patterns at once along with a case-insensitive flag.
- - Fixed session records, temporary files and audit trails under `~/.bravebot` being created with the process umask, which left whole conversations readable by anyone with an account on the machine. ([#86](https://github.com/brave-experiments/brave-bot/issues/86))
+ - Fixed session records, temporary files and audit trails under `~/.bravebot` being created with the process umask, which left whole conversations readable by anyone with an account on the machine. ([#86](https://github.com/brave/bravebot/issues/86))
  - Fixed switching to a model the endpoint does not describe raising the context budget back to the default, which left it above the window actually in force so compaction never ran.
- - Fixed the Windows builds, which failed to compile the credential store; saving a credential there is refused rather than done without the file protection Unix gets. ([#115](https://github.com/brave-experiments/brave-bot/issues/115))
+ - Fixed the Windows builds, which failed to compile the credential store; saving a credential there is refused rather than done without the file protection Unix gets. ([#115](https://github.com/brave/bravebot/issues/115))
  - Fixed Escape and ctrl-c cancelling the turn behind the delegate view or the prompt search instead of closing the view they were pressed in.
- - Fixed the context reading on the hint line going blank after a resume, a compaction or a failed turn, and marked a reading as approximate where the budget is one no model advertised. ([#69](https://github.com/brave-experiments/brave-bot/issues/69))
+ - Fixed the context reading on the hint line going blank after a resume, a compaction or a failed turn, and marked a reading as approximate where the budget is one no model advertised. ([#69](https://github.com/brave/bravebot/issues/69))
  - Fixed brace groups in a search pattern being matched literally rather than expanded, which returned no matches in the same words as a search that read the whole tree and found nothing.
 
-## [0.3.0](https://github.com/brave-experiments/brave-bot/releases/tag/v0.3.0)
+## [0.3.0](https://github.com/brave/bravebot/releases/tag/v0.3.0)
 
  - Added ctrl-l, which opens the list of delegates a session has run, so you can watch one working or read what it did afterwards.
  - Added a block under each delegate holding the last few things it did and the report it ends with, so work a delegate was sent off to do is readable where it was started.
- - Added `/effort`, which picks how hard a model thinks from low, medium, high, xhigh and max, keeps the choice beside the model and the theme, and sends no level to a model whose listing says it does not read one. ([#109](https://github.com/brave-experiments/brave-bot/issues/109))
+ - Added `/effort`, which picks how hard a model thinks from low, medium, high, xhigh and max, keeps the choice beside the model and the theme, and sends no level to a model whose listing says it does not read one. ([#109](https://github.com/brave/bravebot/issues/109))
  - Added `bravebot --incognito`, a session that writes nothing to `~/.bravebot`: no prompt history, no session record, no title, and no audit trail.
  - Added a pair of colours to a theme file, `{"dark": ..., "light": ...}`, resolving to the arm matching the terminal background sensed at startup.
  - Changed delegates to run alongside the turn and each other, so a turn waits for the slowest piece of work rather than the sum of it, and one call can start up to eight of them.
@@ -81,14 +81,14 @@
  - Changed where the confinement is reported, from a row on every frame to the mark printed at startup and `/status` on request.
  - Fixed an answer given to a prompt inside a delegate overwriting the session's whole record of what you had vouched for, which put back rules that later answers had replaced.
  - Fixed a delegate that could not finish being reported as having answered.
- - Fixed a build with no Brave credentials refusing to load its configuration when only a gateway was configured, though the gateway uses its own key. ([#106](https://github.com/brave-experiments/brave-bot/issues/106))
+ - Fixed a build with no Brave credentials refusing to load its configuration when only a gateway was configured, though the gateway uses its own key. ([#106](https://github.com/brave/bravebot/issues/106))
  - Fixed a model that writes its reasoning in `<think>` tags having that working drawn above every reply, kept in the session record and drawn again on every resume.
  - Fixed a Bedrock session that stopped working before its stated expiry going on being treated as good, which left every turn falling through to a sign-in opened where nobody could see it.
  - Fixed Bedrock attempting a sign-in for an AWS profile that is not configured, which is now reported as missing along with the profiles that exist.
  - Fixed ctrl-t being offered from the first frame, before any turn had left a trail for it to show.
  - Fixed an aside being drawn in bright black, which most terminal colour schemes leave too dim to read.
 
-## [0.2.0](https://github.com/brave-experiments/brave-bot/releases/tag/v0.2.0)
+## [0.2.0](https://github.com/brave/bravebot/releases/tag/v0.2.0)
 
  - Added support for an OpenAI-compatible gateway, named by a `provider` block in `~/.bravebot/settings.json` in opencode's shape, whose models are offered beside the Brave and Bedrock ones.
  - Added `/loop`, which repeats a prompt on an interval you give it or at a pace each turn sets, until ctrl-c stops it.
@@ -100,9 +100,9 @@
  - Added a breakdown to `/status` of where a session's time went: the model, tools, waiting for you, and the rest.
  - Changed the Bedrock environment variable to `BRAVEBOT_USE_BEDROCK`. The old name is no longer read.
  - Changed where an imported Brave subscription is kept, from the system keychain to one file only you can read, so a machine with no desktop session can use it. Import it again to move an existing one, and `--forget` no longer takes a channel.
- - Changed a prompt typed while a turn is running to reach that turn between rounds, instead of waiting until the whole turn has finished. ([#68](https://github.com/brave-experiments/brave-bot/issues/68))
- - Fixed `run` handing this agent's own signing credentials to every program it starts, which no approval ever showed. ([#84](https://github.com/brave-experiments/brave-bot/issues/84))
+ - Changed a prompt typed while a turn is running to reach that turn between rounds, instead of waiting until the whole turn has finished. ([#68](https://github.com/brave/bravebot/issues/68))
+ - Fixed `run` handing this agent's own signing credentials to every program it starts, which no approval ever showed. ([#84](https://github.com/brave/bravebot/issues/84))
  - Fixed the delay before every turn on Bedrock, caused by re-checking the AWS session each time.
  - Fixed the confirm prompts and the trust prompt drawing their contents in the terminal's own colours instead of the theme's, which made them unreadable under a light theme in a dark terminal.
  - Fixed the prompt being drawn after the checks that run before a turn, which left it blank for a moment.
- - Fixed `?`, ctrl-t and ctrl-g being ignored while a turn was running, and the key list being left standing over a line written under it. ([#66](https://github.com/brave-experiments/brave-bot/issues/66))
+ - Fixed `?`, ctrl-t and ctrl-g being ignored while a turn was running, and the key list being left standing over a line written under it. ([#66](https://github.com/brave/bravebot/issues/66))
