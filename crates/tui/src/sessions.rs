@@ -747,14 +747,15 @@ impl Handle {
     ///
     /// A record of a session with no turns in it is a session nobody can resume into anything,
     /// and leaving one behind would put an empty row in the list for every rewind. The handle
-    /// goes back to being unwritten, so the next turn names the session after its own prompt.
-    pub fn discard_unwritten(&mut self) {
+    /// goes back to being unwritten under the title it held before the turn, so a session nobody
+    /// named is named by its next prompt, and one `/rename` named keeps that name.
+    pub fn discard_unwritten(&mut self, before: &str) {
         if let Some(directory) = self.directory() {
             let _ = std::fs::remove_file(directory.join(format!("{}.json", self.id)));
             let _ = std::fs::remove_file(directory.join(format!("{}.audit.jsonl", self.id)));
         }
         self.wrote = false;
-        self.title.clear();
+        self.title = before.to_string();
     }
 
     /// This session's own directory, resolved the way every writer resolves one.
@@ -1821,6 +1822,76 @@ mod tests {
         assert_eq!(audit_after.len(), 1);
         assert!(audit_after.contains_key(&1));
         assert!(!audit_after.contains_key(&2));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A rewind past a session's only turn leaves a conversation nobody can resume into anything,
+    /// so the record goes rather than standing in the list as a row with nothing behind it.
+    #[test]
+    fn discarding_a_record_leaves_nothing_to_resume() {
+        let root = crate::testutil::scratch_dir("bravebot-discard-unwritten");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create");
+
+        let mut handle = Handle::begin(&root);
+        let empty = bravebot_agent::Conversation::new().snapshot();
+        handle.save(
+            "delete the tests",
+            Standing {
+                conversation: &empty,
+                turns: 1,
+                tokens: 0,
+                spend: &BTreeMap::new(),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &TrustStore::new(),
+                programs: &TrustedPrograms::default(),
+                directories: &[],
+                manifest: None,
+            },
+        );
+        handle.append_audit(
+            1,
+            &[crate::audit::Stamped {
+                at: 1,
+                event: bravebot_core::event::Event::GatePassed {
+                    gate: "file_read",
+                    detail: "secret.txt".to_string(),
+                },
+            }],
+        );
+        assert_eq!(list(&root).len(), 1, "the record was not written");
+
+        handle.discard_unwritten("");
+
+        assert!(list(&root).is_empty(), "the record is still in the list");
+        assert!(audit_of(&root, handle.id()).is_empty());
+        assert!(handle.resumable().is_none());
+        assert!(
+            handle.title().is_empty(),
+            "the undone turn still names the session"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A name somebody chose outlives the turn that was rewound: it was not the turn's to give, so
+    /// dropping it would make the next prompt rename a session that had already been named.
+    #[test]
+    fn discarding_keeps_a_name_chosen_before_the_turn() {
+        let root = crate::testutil::scratch_dir("bravebot-discard-renamed");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create");
+
+        let mut handle = Handle::begin(&root);
+        assert!(handle.rename("release audit"), "the name was refused");
+
+        handle.discard_unwritten("release audit");
+
+        assert_eq!(handle.title(), "release audit");
 
         let _ = std::fs::remove_dir_all(&root);
     }
