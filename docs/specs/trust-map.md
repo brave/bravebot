@@ -9,6 +9,7 @@ governs:
   - crates/tui/src/sessions.rs
   - crates/tui/src/dropped.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/scratch.rs
 guards:
   - symbol: TrustStore::trust
   - symbol: TrustStore::distrust
@@ -436,42 +437,87 @@ machine has left in a world-writable directory as trusted input in the same acti
 writing into the project, where the file is untracked and a build, a test run, a `git add -A` and a
 reviewer each have to deal with it, and somebody has to remember to delete it.
 
-The decision is that a session is given a directory of its own in the system temporary directory,
-that its reach is granted without asking while the label on it is the workspace's own, and that
-nothing in it outlives the session. Nothing in this section is in force, and no session has such a
-directory. The clauses above are what one is held to once a session has it.
+<a id="TRUST-14"></a>
+### TRUST-14: a session is given a directory of its own, outside the project
 
-**Where it lives.** In the system temporary directory, under a name carrying this program's own
-prefix and enough besides to tell two apart, created rather than opened so that a name already taken
-is refused. This is what the editor hand-off already does with the one file it has to write
-([incognito.md](incognito.md#INCOG-8)), and the reasoning there carries over unchanged: on a shared
-temporary directory an existing name may be something another account left pointing at a file of
-theirs, and refusing to reuse one is what keeps a write from going through it. On Unix the directory
-is created with mode `0700`, which is the other half of that, and is what keeps another account away
-from what lands inside, because a file arriving there comes in at a umask whether this program
-opened it for a redirection or a program wrote it itself.
+A session has a directory of its own in the system temporary directory, created as the session
+opens. Its name carries this program's prefix and enough besides to tell two sessions apart. It is
+created rather than opened, so a name something else holds is refused rather than adopted, and on
+Unix it is created with mode `0700`. `/status` reports it as the session's own. A one-shot run has
+one for as long as it runs ([cli.md](cli.md)). A session that cannot be given one runs without one
+and says so.
 
-Which directory that is, on every platform, is a question the standard library already answers: it
-reads `TMPDIR` on Unix and falls back to `/tmp`, and on Windows it asks the operating system, which
-resolves `TMP`, then `TEMP`, then the profile directory. An undefined `TMPDIR` therefore needs no
-handling of this program's own and no platform call written here. What does not carry across is the
-mode, which is Unix's: the Windows temporary path is ordinarily the account's own and takes its
-permissions from that, and the refusal to reuse a name is what covers the rest.
+**Why.** Both of the other places to put an intermediate file cost more than this one. In the
+project it is a file a build, a test run, a `git add -A` and a reviewer each have to deal with, and
+one somebody has to remember to delete; it is also a file several walks would each have to be taught
+to skip, none of them reading a project's ignore file, on the ground that a tree that can hide its
+files from a search can hide them from review ([tools/search.md](tools/search.md)). Reached by
+`/add-dir /tmp` it costs the trust that line grants in the same action, over everything every other
+process on the machine has left in a world-writable directory. Out here neither is true.
 
-Not a fixed name, and not a fixed name with the session's identifier inside it. On macOS the system
-temporary directory is the account's own, but on Linux it is ordinarily the world-writable `/tmp`,
-where any name this program would compose is one another account can create, or point somewhere
-else, before this program gets there.
+Which directory the platform keeps temporary files in is a question the standard library already
+answers: `TMPDIR` on Unix, falling back to `/tmp`, and on Windows the operating system's own answer,
+which resolves `TMP`, then `TEMP`, then the profile directory. An undefined `TMPDIR` therefore needs
+nothing written here.
 
-Not under the working directory, which is how this section first read. A directory in the project is
-one that several walks have to be taught to skip, each keeping its own list and none of them reading
-a project's ignore file, on the ground that a tree that can hide its files from a search can hide
-them from review ([tools/search.md](tools/search.md)): a search and a glob expansion, a listing, and
-the picker `@` reads from ([naming-files.md](naming-files.md)). It is reported by a repository until
-an ignore file is written to hide it, its name has to be one no project uses for its own sources,
-and even empty it says a session ran in this project at this time, which is most of what an
-incognito session declines to write ([incognito.md](incognito.md)). Out here none of that holds, and
-none of it has to be built.
+Created rather than opened, and `0700`, because that directory is shared. On macOS it is the
+account's own, but on Linux it is ordinarily the world-writable `/tmp`, where a name this program
+composes is one another account can create first, or leave pointing at a file of theirs. Refusing a
+name already taken is what keeps a write from going through one of those, and the mode is what keeps
+another account away from what lands inside, because a file arriving there comes in at a umask
+whether this program opened it for a redirection or a program wrote it itself. It is what the editor
+hand-off already does with the one file it has to write ([incognito.md](incognito.md#INCOG-8)). The
+mode is Unix's alone: the Windows temporary path is ordinarily the account's own and takes its
+permissions from that, and the refusal to reuse a name covers the rest.
+
+Enough in the name to tell two apart rather than a fixed name, because two sessions sharing one
+directory could each read and overwrite what the other wrote, and because a fixed name is one
+another account can take first. Not the session's identifier either, which would name a session in
+a directory anybody on the machine can list.
+
+Saying so rather than refusing to open the session, because a session with nowhere to put an
+intermediate file can still do everything else.
+
+`verified-by: bravebot_agent::scratch::a_session_is_given_a_directory_of_its_own`
+`verified-by: bravebot_agent::scratch::a_name_something_else_holds_is_refused`
+`verified-by: bravebot_agent::scratch::nobody_else_may_read_what_a_session_writes_there`
+`verified-by: bravebot_tui::status::the_sessions_scratch_directory_is_reported_for_what_it_is`
+`verified-by: bravebot_tui::status::a_session_with_no_scratch_directory_reports_none`
+
+<a id="TRUST-15"></a>
+### TRUST-15: nothing in the session's directory outlives the session
+
+The directory goes as the session ends, with everything written in it, whether the session ended by
+being left or by an error on the way out. A session that carries on from another is given its own: a
+resume, a fork, and the session `/clear` begins each open a new directory, and the one belonging to
+the session they followed is removed rather than handed on.
+
+**Why.** A resume can come days later, and bytes surviving that gap are a cache nothing evicts.
+There is nothing to reconstruct anyway, since the name carries what tells one directory from its
+neighbours rather than the session's identifier. What a cleared context wrote is not something the
+session after it should find lying there either.
+
+A `/cd` needs nothing done to the directory, which is the one lifetime rule this location removes
+rather than restates: the directory is not under the working directory, so a move does not leave it
+behind, and there is no ordering to get right between removing it and still being able to reach it
+(TRUST-13).
+
+`verified-by: bravebot_agent::scratch::nothing_written_in_it_outlives_the_session`
+`verified-by: bravebot_agent::scratch::no_two_sessions_are_given_the_same_directory`
+
+## What the session's directory is still missing
+
+An incognito session has one as well, and [incognito.md](incognito.md) names it among the things
+that still reach the filesystem in that mode: the name says nothing about which project or which
+session, and nothing in it outlives the session, so what an empty one records is that this program
+ran at this time rather than that a session ran in this project at this time.
+
+Two things about the directory are decided and not built. The first is that its reach is granted
+while the label on it stays the workspace's own, and the second is that its path is in the
+environment each stage of a `run` is spawned with. Neither is in force: nothing reaches the
+directory today, because an absolute path outside the working directory is refused whatever the map
+says (TRUST-10) and the only rule that makes one reachable grants trust in the same action
+(TRUST-9). What follows is what those two will say.
 
 **Its reach is granted, its trust is not.** The directory is outside the working directory, so
 nothing reaches it unless something says so, and what says so here is this program rather than a
@@ -508,31 +554,15 @@ project does ([tools/command-line.md](tools/command-line.md)). What it buys is a
 needs no name invented for it, that a repository does not report, that no walk has to skip, and that
 goes when the session does. It buys no prompt anybody would otherwise see.
 
-**Given as the session opens, not asked for by a tool.** The directory is created as the session
-opens and its path is put in the environment this process holds, which is the environment each stage
-of a `run` is spawned with ([tools/command-line.md](tools/command-line.md)), so a line can name it
-without anything having been called first.
+**Given as the session opens, not asked for by a tool.** The path is put in the environment this
+process holds, which is the environment each stage of a `run` is spawned with
+([tools/command-line.md](tools/command-line.md)), so a line can name it without anything having been
+called first.
 
 A tool that makes one on demand is the alternative, and is refused. It would cost a description in
 every request whether or not a turn needs a scratch file at all, and the first line that redirects
 would be written before the tool had been called, so a turn pays a refusal and a round trip to learn
-what an environment variable would have told it for nothing. On-demand creation was worth weighing
-only while the directory was in the project, where one belonging to a session that never writes a
-file is litter somebody has to look at; out here an unused empty directory costs what the sweep
-below costs and nothing more.
-
-**Nothing in it outlives the session.** The session removes its directory as it closes. A resumed
-session is given a new one rather than the one it had, because the name carries what told it apart
-from its neighbours rather than the session's own identifier, so there is nothing to reconstruct,
-and a resume can come days later where bytes surviving that gap are a cache nothing evicts. A fork
-is a new session and is given its own. `/clear` begins a session as well as closing one, so it
-removes the directory of the session it closed and opens another.
-
-A `/cd` needs nothing done to the directory, which is the one lifetime rule this location removes
-rather than restates: the directory is not under the working directory, so a move does not leave it
-behind and there is no ordering to get right between removing it and still being able to reach it
-(TRUST-13). What a path under it is labelled after a move follows from whatever the map says then,
-exactly as for any path the startup answer covers.
+what an environment variable would have told it for nothing.
 
 **The system temporary directory itself stays unreachable.** One directory inside it is reached, not
 the directory that one sits in, so `/tmp` is no more writable than it was and the reason
@@ -551,8 +581,7 @@ describes.
   what a program may reach ([sandboxing.md](sandboxing.md)), and the base names no temporary
   directory today, so a redirection into the session's directory would be refused by the profile
   after the map had allowed it. The base has to name that one directory, and name it per session,
-  since which directory it is cannot be known when the base is written. This is the price of being
-  outside the workspace and the one thing the in-project version had for free.
+  since which directory it is cannot be known when the base is written.
 - The map has no rule that grants reach and says nothing about trust. Every rule it holds is a
   label, and TRUST-9 is the only thing that makes an absolute path reachable at all. What this needs
   is the reach half alone, with the label left to TRUST-7 and to reconciliation, and `/status` has
@@ -574,16 +603,6 @@ describes.
   clear of, so a large one written there spends what a source file's own backup needed and leaves
   that file unable to go back. Being outside the workspace makes the answer the ordinary one rather
   than a carve-out: what a rewind keeps is what is in the project.
-- An incognito session may have one, and [incognito.md](incognito.md) has to add it to the short
-  list of things that still reach the filesystem in that mode. The name says nothing about which
-  project or which session and the directory is not in the project, so what an empty one records is
-  that this program ran at this time, rather than that a session ran in this project at this time,
-  which is the record that mode refuses to leave. That puts it beside the editor hand-off the same
-  list already carries, so the list grows by an entry rather than the mode growing an exception.
-- The security scan flags a name composed under the system temporary directory, and the editor
-  hand-off carries an annotation and a justification for exactly that. This directory needs the same
-  ones, and the justification is the same: created and not opened, a taken name refused rather than
-  reused, and mode `0700` where a mode means anything.
 
 ## Known costs
 

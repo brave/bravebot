@@ -133,7 +133,7 @@ mode points.
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so
 
-Three things still reach the filesystem in an incognito session, each because not doing it would
+Four things still reach the filesystem in an incognito session, each because not doing it would
 mean not doing the work:
 
 - **The workspace.** `write_file` and `edit_file` go on editing the project. Those edits are the
@@ -146,6 +146,11 @@ mean not doing the work:
   file, because there is no way to hand an editor a buffer instead of a path. It goes to the
   system temporary directory rather than `~/.bravebot`, is created `0600` and refuses to reuse an
   existing name, and is unlinked on every path out of the function including the failing ones.
+- **The session's own scratch directory.** Somewhere to put a file that is not part of the project
+  is something a turn needs, and this mode does not take it away. It sits in the system temporary
+  directory beside the editor's hand-off file, on the same terms, and goes with the session. Its
+  name says which program made it and nothing about which project or which session, so an empty one
+  records that this program ran at this time. [trust-map.md](trust-map.md) governs it.
 
 **Why.** A stated limit is worth more than an unstated one. Someone who knows the third of these
 can decide not to open an editor; someone who assumed the mode covered it has been misled by their
