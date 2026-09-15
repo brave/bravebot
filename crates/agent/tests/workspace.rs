@@ -1,5 +1,6 @@
 //! Tests for the label-aware file tools, exercised against a real temporary directory.
 
+use bravebot_agent::SessionScratch;
 use bravebot_agent::workspace::{Paging, Workspace, WorkspaceError};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, RecordingSink};
@@ -4046,4 +4047,233 @@ fn a_write_does_not_promote_its_destination() {
         "the write promoted its destination: {:?}",
         sink.events()
     );
+}
+
+/// The point of granting the reach: a turn can write in the directory the session was given, by the
+/// absolute path `/status` shows, and read back what it wrote.
+#[test]
+fn a_file_in_the_sessions_own_directory_is_reachable_by_its_absolute_path() {
+    let project = Scratch::new("scratch-reach");
+    let given = SessionScratch::create().expect("a directory of its own");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(Some(given.path().to_path_buf()));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let named = given.path().join("workings.txt").display().to_string();
+    policy.issue_grant("file_write", "path", named.clone());
+    workspace
+        .write_endorsed(
+            &mut policy,
+            &Labelled::new(named.clone(), Label::untrusted_public()),
+            &Labelled::trusted("intermediate".to_string()),
+        )
+        .expect("a file in the session's own directory is writable");
+    workspace
+        .read(&mut policy, &Labelled::trusted(named))
+        .expect("and readable again");
+
+    assert_eq!(
+        std::fs::read_to_string(given.path().join("workings.txt")).expect("the file is there"),
+        "intermediate"
+    );
+}
+
+/// Given, not opened by name. It is not among the directories the user asked for, because `/status`
+/// says what it is instead of listing it as somewhere they chose to reach.
+#[test]
+fn the_sessions_own_directory_is_not_one_the_user_added() {
+    let project = Scratch::new("scratch-not-added");
+    let given = SessionScratch::create().expect("a directory of its own");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(Some(given.path().to_path_buf()));
+
+    assert!(workspace.added_directories().is_empty());
+    assert_eq!(workspace.scratch(), Some(given.path()));
+}
+
+/// Nor one a person may open: it is reachable already, and a rule about it is the one thing the
+/// directory is meant not to carry.
+#[test]
+fn the_sessions_own_directory_cannot_be_added_by_name() {
+    let project = Scratch::new("scratch-not-addable");
+    let given = SessionScratch::create().expect("a directory of its own");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(Some(given.path().to_path_buf()));
+
+    let error = workspace
+        .add_directory(given.path().to_str().expect("utf-8 path"))
+        .expect_err("the session's own directory is not one to add");
+
+    assert!(matches!(error, WorkspaceError::Invalid { .. }), "{error:?}");
+    assert!(workspace.added_directories().is_empty());
+}
+
+/// And it is not a working directory. The session removes it when it ends, so a root inside it is a
+/// root that goes while the session is still using it.
+#[test]
+fn the_working_directory_cannot_be_moved_into_the_sessions_own_directory() {
+    let project = Scratch::new("scratch-not-a-root");
+    let given = SessionScratch::create().expect("a directory of its own");
+    let inside = given.path().join("deeper");
+    std::fs::create_dir(&inside).expect("a directory inside it");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    let root = workspace.root().to_path_buf();
+    workspace.open_scratch(Some(given.path().to_path_buf()));
+
+    for refused in [given.path(), inside.as_path()] {
+        let error = workspace
+            .change_root(refused.to_str().expect("utf-8 path"))
+            .expect_err("the session's own directory is not a working directory");
+        assert!(matches!(error, WorkspaceError::Invalid { .. }), "{error:?}");
+    }
+
+    assert_eq!(workspace.root(), root);
+}
+
+/// A rule about a file there is reached by every spelling of it, as one in an added directory is.
+/// Without that a turn reads its own output back under a rule about a different name: one spelling
+/// carries what reconciliation recorded and the other, covered by nothing, takes the answer given
+/// about the workspace (TRUST-16). On macOS this is the ordinary case rather than a corner, since
+/// `$TMPDIR` is a link and the directory sits under it.
+#[cfg(unix)]
+#[test]
+fn a_second_spelling_of_a_file_in_the_sessions_own_directory_reaches_the_same_rule() {
+    let scratch = Scratch::new("scratch-second-spelling");
+    let base = scratch.path.canonicalize().expect("canonical scratch");
+    let holder = base.join("holder");
+    std::fs::create_dir_all(holder.join("work")).unwrap();
+    std::fs::create_dir_all(holder.join("given")).unwrap();
+    std::fs::write(holder.join("given/fetched.json"), "{}").unwrap();
+    std::os::unix::fs::symlink(&holder, base.join("link")).unwrap();
+
+    let mut workspace = Workspace::new(holder.join("work")).expect("workspace");
+    workspace.open_scratch(Some(holder.join("given")));
+
+    // A rule about the canonical name and nothing else. The workspace was answered about nothing, so
+    // a name that reaches no rule reads untrusted and the reduction is the whole of what is tested.
+    let mut trust = TrustStore::new();
+    trust.trust(&holder.join("given/fetched.json").display().to_string());
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust)
+    .with_root(workspace.root())
+    .with_scratch(workspace.scratch());
+
+    let recorded = workspace
+        .read(
+            &mut policy,
+            &Labelled::trusted(holder.join("given/fetched.json").display().to_string()),
+        )
+        .expect("the recorded spelling reads");
+    let through_the_link = workspace
+        .read(
+            &mut policy,
+            &Labelled::trusted(base.join("link/given/fetched.json").display().to_string()),
+        )
+        .expect("the linked spelling names the same file in the session's own directory");
+
+    assert_eq!(recorded.label().integrity, Integrity::Trusted);
+    assert_eq!(
+        through_the_link.label().integrity,
+        recorded.label().integrity,
+        "one file in the session's own directory answered to two rules"
+    );
+}
+
+/// The reach is that directory and nothing around it. The temporary directory holds every other
+/// session's, and whatever else on the machine puts files there.
+#[test]
+fn the_temporary_directory_around_it_stays_unreachable() {
+    let project = Scratch::new("scratch-neighbours");
+    let given = SessionScratch::create().expect("a directory of its own");
+    // The temporary directory is shared, so the name carries this process and the moment: a fixed
+    // one is a name a concurrent run of this suite writes and removes underneath us.
+    let neighbour = given
+        .path()
+        .parent()
+        .expect("a temporary directory")
+        .join(format!(
+            "bravebot-workspace-scratch-neighbour-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("a clock past the epoch")
+                .as_nanos()
+        ));
+    std::fs::write(&neighbour, "somebody else's").unwrap();
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(Some(given.path().to_path_buf()));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let read = workspace.read(
+        &mut policy,
+        &Labelled::trusted(neighbour.display().to_string()),
+    );
+    // Before the assertion, so a failing run leaves nothing behind in a shared directory either.
+    let _ = std::fs::remove_file(&neighbour);
+    let error = read.expect_err("a file beside the session's directory must be refused");
+
+    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+}
+
+/// A symlink out of it is refused, exactly as one out of an added directory is: the reach is where
+/// an operation lands, not where its name begins.
+#[cfg(unix)]
+#[test]
+fn a_symlink_out_of_the_sessions_own_directory_is_refused() {
+    let project = Scratch::new("scratch-symlink");
+    let secret = outside("scratch-symlink-secret");
+    std::fs::write(secret.path.join("private.txt"), "not yours").unwrap();
+    let given = SessionScratch::create().expect("a directory of its own");
+    std::os::unix::fs::symlink(
+        secret.path.join("private.txt"),
+        given.path().join("link.txt"),
+    )
+    .unwrap();
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(Some(given.path().to_path_buf()));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let link = Labelled::trusted(given.path().join("link.txt").display().to_string());
+    let error = workspace
+        .read(&mut policy, &link)
+        .expect_err("a symlink out of the session's own directory must be refused");
+    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
 }

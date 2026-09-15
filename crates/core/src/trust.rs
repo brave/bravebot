@@ -89,14 +89,25 @@ impl TrustStore {
     /// `None` when no rule covers `path` at all, which the caller should treat as untrusted, for
     /// the same reason `integrity_of` returns an option: nobody has said.
     pub fn integrity_beneath(&self, path: &str) -> Option<Integrity> {
-        let mut answer = self.integrity_of(path)?;
+        let covered = self.integrity_of(path)?;
+        Some(self.integrity_beneath_or(path, covered))
+    }
+
+    /// [`TrustStore::integrity_beneath`], answering `assumed` where no rule covers `path`.
+    ///
+    /// For a directory something else made reachable without a rule being written about it: the
+    /// caller says what an uncovered path there answers as. The rules recorded inside it still
+    /// weaken the answer, so a file a write marked untrusted is not laundered by a read of the tree
+    /// around it.
+    pub fn integrity_beneath_or(&self, path: &str, assumed: Integrity) -> Integrity {
+        let mut answer = self.integrity_of(path).unwrap_or(assumed);
         let path = normalise(path);
         for (prefix, integrity) in self.rules() {
             if covers(&path, prefix) {
                 answer = answer.meet(integrity);
             }
         }
-        Some(answer)
+        answer
     }
 
     /// Whether `path` is trusted. Anything not covered by a rule is not.

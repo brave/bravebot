@@ -1845,7 +1845,10 @@ fn left_behind(stored: &crate::sessions::Handle) -> Option<crate::sessions::Resu
     stored.to_resume()
 }
 
-/// The directory this session writes what is not part of the project into.
+/// The directory this session writes what is not part of the project into, made and reachable.
+///
+/// Both at once, because a directory nothing may write in is not worth creating, and reach left
+/// pointing at the directory a previous session was given names one that has been removed.
 ///
 /// A session that cannot be given one carries on without it. A temporary directory that is full,
 /// read-only or missing is a reason to have nowhere to put an intermediate file, and not a reason
@@ -1853,8 +1856,8 @@ fn left_behind(stored: &crate::sessions::Handle) -> Option<crate::sessions::Resu
 ///
 /// Said out loud when that happens, because the alternative is a turn told it has nowhere to write
 /// with nothing on the screen to say why.
-fn opened_scratch(session: &mut Session) -> Option<SessionScratch> {
-    match SessionScratch::create() {
+fn opened_scratch(session: &mut Session, workspace: &mut Workspace) -> Option<SessionScratch> {
+    let scratch = match SessionScratch::create() {
         Ok(scratch) => Some(scratch),
         Err(problem) => {
             session.note(t!(
@@ -1863,7 +1866,9 @@ fn opened_scratch(session: &mut Session) -> Option<SessionScratch> {
             ));
             None
         }
-    }
+    };
+    workspace.open_scratch(scratch.as_ref().map(|held| held.path().to_path_buf()));
+    scratch
 }
 
 /// The session as it stood before the turn now in flight, for `/undo` to rewind to.
@@ -1993,7 +1998,7 @@ fn event_loop(
     // Somewhere of its own to write what is not part of the project, held for as long as the
     // session: dropping it takes the directory and everything in it. After the question, so a
     // person who left at it has nothing created for a session they declined to have.
-    let mut scratch = opened_scratch(&mut session);
+    let mut scratch = opened_scratch(&mut session, &mut workspace);
 
     // After the trust answer, because that question is the first thing on the screen and an aside
     // about a newer release does not come before it. Nothing is fetched here: the line is read off
@@ -2392,7 +2397,7 @@ fn event_loop(
                 // And a new directory, since nothing in the old one outlives the session that
                 // wrote it. The old one is removed either way: what the cleared context wrote is
                 // not something the session after it should find lying there.
-                scratch = opened_scratch(&mut session);
+                scratch = opened_scratch(&mut session, &mut workspace);
                 needs_draw = true;
             }
             Action::Submit(prompt) => {
