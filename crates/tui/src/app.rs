@@ -6219,6 +6219,23 @@ mod tests {
         assert_eq!(session.input(), "wait\n!");
     }
 
+    /// What arms the mode is a keystroke, and a paste is not one. The text arrived from a file, a
+    /// web page or somebody suggesting a command, and any of those can begin with `!`, so arming
+    /// from one would leave a line nobody chose to run one Enter from a shell. It goes to the
+    /// planner as the words it is, `!` and all.
+    #[test]
+    fn a_pasted_line_does_not_arm_shell_mode() {
+        let mut session = Session::new("none");
+        handle_paste(&mut session, "!rm -rf build");
+
+        assert!(!session.shell, "a paste armed shell mode");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("!rm -rf build".to_string()),
+            "the pasted line was taken as a command"
+        );
+    }
+
     /// A multi-line command is a `for` loop somebody typed, so the mode gets the key too.
     #[test]
     fn shift_enter_works_in_shell_mode() {

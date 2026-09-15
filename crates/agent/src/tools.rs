@@ -4754,12 +4754,50 @@ mod tests {
     /// The test that used to stand here banned every tool whose name contained "run". It predated
     /// the argv design by a day and would have blocked it, which is the failure mode worth
     /// remembering: a test pinning the old reason for a rule outlives the reason.
+    ///
+    /// Every audience there is, because no capability buys this one: a checker and a worker hold
+    /// the grant `run` is gated on, and what that gets them is `run`.
+    ///
+    /// A name is the weaker half of the check, since a shell can be called anything. The stronger
+    /// half is that a delegate is offered a subset of the turn's own list rather than a list of its
+    /// own, so `the_tool_set_is_reads_plus_gated_writes` counts for a delegate too, and one offered
+    /// a tool that list does not hold is the way that stops being true.
     #[test]
     fn no_shell_is_offered() {
-        for tool in available(Scheduling::ArrangingALook) {
-            let name = tool.function.name;
-            assert!(!name.contains("shell"), "{name} takes a shell string");
-            assert!(!name.contains("exec"), "{name} takes a shell string");
+        fn shell_free(audience: &str, offered: &[Tool]) {
+            for tool in offered {
+                let name = &tool.function.name;
+                assert!(
+                    !name.contains("shell"),
+                    "{audience} was offered {name}, which takes a shell string"
+                );
+                assert!(
+                    !name.contains("exec"),
+                    "{audience} was offered {name}, which takes a shell string"
+                );
+            }
+        }
+
+        let turn = available(Scheduling::ArrangingALook);
+        shell_free("a turn", &turn);
+        shell_free("a turn pacing a loop", &available(Scheduling::PacingALoop));
+        shell_free(
+            "a turn on their interval",
+            &available(Scheduling::TheirInterval),
+        );
+
+        let held: Vec<&str> = turn.iter().map(|t| t.function.name.as_str()).collect();
+        for name in bravebot_core::delegate::Kind::NAMES {
+            let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
+            let offered = for_delegate(&kind.capabilities());
+            shell_free(name, &offered);
+            for tool in &offered {
+                assert!(
+                    held.contains(&tool.function.name.as_str()),
+                    "a {name} was offered {}, which the turn's own list does not hold",
+                    tool.function.name
+                );
+            }
         }
     }
 
