@@ -105,14 +105,14 @@ a link inside the project. A file with two names of its own therefore still has 
 a cost of keying on the name and is written down below.
 
 The reduction is the workspace's, so it holds for what the workspace does: the reads, writes,
-listings, vouches and quarantines that go through it. Two things stay outside it, and in opposite
-directions. The prompt before a write asks under the spelling it was given, since it also matches
-the rules a person wrote in advance and those are matched on the path as written, so it asks where a
-reduced name would not have. A `run` line's output is labelled from the paths the line spelled
-([tools/command-line.md](tools/command-line.md#CMDLINE-8)), so where a directory above the project
-is trusted, a proven line naming a project file absolutely is still labelled from that directory's
-rule. That is what such a line answered before this reduction existed, and closing it means settling
-which spellings a command line is proven to read, which is that clause's question.
+listings, vouches and quarantines that go through it. A proven `run` line has no reduction to make,
+because it need not settle which name is the file's: it asks this map under every name the operand
+has and labels its output from the weakest answer
+([tools/command-line.md](tools/command-line.md#CMDLINE-8)). That is stronger than the reduction
+wherever the two differ, and it is the form that road can hold, since nothing there has a filesystem
+to settle a name with. One thing stays outside both: the prompt before a write asks under the
+spelling it was given, since it also matches the rules a person wrote in advance and those are
+matched on the path as written, so it asks where a reduced name would not have.
 
 `verified-by: bravebot_core::trust::an_absolute_rule_does_not_decide_a_relative_path`
 `verified-by: bravebot_core::trust::trusting_the_workspace_says_nothing_about_an_added_directory`
@@ -122,6 +122,7 @@ which spellings a command line is proven to read, which is that clause's questio
 `verified-by: bravebot_core::trust::equivalent_absolute_spellings_are_the_same_rule`
 `verified-by: bravebot_core::trust::every_equivalent_absolute_spelling_reaches_the_same_rule`
 `verified-by: bravebot_agent::workspace::a_project_file_named_absolutely_is_read_under_its_relative_rule`
+`verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
 `verified-by: bravebot_agent::workspace::a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule`
 `verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
 

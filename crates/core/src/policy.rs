@@ -2989,7 +2989,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// A path answers as trusted only where the trust map covers it and everything beneath it, and
     /// a `..` component answers as untrusted whatever the map holds: it names a file somewhere the
     /// map was never asked about, and the rule that would be consulted is about the spelling rather
-    /// than about the file.
+    /// than about the file. Each path is asked about under every name the map may hold a rule about
+    /// it by, and answers as the weakest of them ([`keys_for_the_map`]), because the spelling the
+    /// line happened to use is not a decision anybody made about the file.
     fn read_proven_label(&self, plan: &crate::command::Plan) -> Option<Label> {
         let paths = self.read_proven(plan)?;
         let base = Capability::ShellExec.output_label()?;
@@ -2998,11 +3000,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             .stdin
             .map_or(Integrity::Trusted, |label| label.integrity);
         for path in &paths {
+            // The line runs at the root, which `read_proven` established before it answered, so the
+            // directory it runs in is what the map's relative rules are spelled against. Asked
+            // before the names are worked out, since a `..` survives being re-spelled.
             let answer = match climbs_out(path) {
                 true => Integrity::Untrusted,
-                false => self
-                    .trust
-                    .integrity_beneath(path)
+                false => keys_for_the_map(&plan.directory, path)
+                    .iter()
+                    .filter_map(|key| self.trust.integrity_beneath(key))
+                    .reduce(Integrity::meet)
                     .unwrap_or(Integrity::Untrusted),
             };
             integrity = integrity.meet(answer);
@@ -3647,6 +3653,37 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 /// the line points at, including a file in the directory the line runs in.
 fn names_a_path(program: &str) -> bool {
     program.contains('/') || (cfg!(windows) && program.contains('\\'))
+}
+
+/// Every name the trust map may hold a rule about an operand under.
+///
+/// A relative name and an absolute one are separate namespaces (TRUST-3), so a file inside the
+/// workspace has a name in each: the one the project's own rules are written against, and the one a
+/// rule about a directory the workspace sits in answers about. The line picked one of them, and the
+/// pick is not a decision anybody made about the file, so both are returned and the caller takes the
+/// weakest answer. That is why this can be right without a filesystem to resolve a name with:
+/// choosing wrongly which spelling is authoritative could only cost a question, never grant trust.
+///
+/// The name as written is always one of them. An absolute name inside the root adds its relative
+/// one, which is what closes the round trip `/add-dir` opens: a directory above the project is
+/// trusted by an answer about that directory ([TRUST-9]), and a project file labelled from that rule
+/// alone would take the label of a directory it happens to be reachable through. An absolute name
+/// that holds the root adds the empty one, the rule covering the project, since a line reading that
+/// directory whole reads every file the project's own rules bear on.
+///
+/// Nothing is resolved, only re-spelled, so a name outside the root keeps just its own and the rule
+/// about the directory holding it decides.
+///
+/// [TRUST-9]: ../../../docs/specs/trust-map.md
+fn keys_for_the_map(root: &std::path::Path, operand: &str) -> Vec<String> {
+    let named = std::path::Path::new(operand);
+    let mut keys = vec![operand.to_string()];
+    match named.strip_prefix(root) {
+        Ok(inside) => keys.push(inside.to_string_lossy().into_owned()),
+        Err(_) if root.starts_with(named) => keys.push(String::new()),
+        Err(_) => {}
+    }
+    keys
 }
 
 /// Whether a path names something through a parent directory.
@@ -4947,6 +4984,19 @@ mod tests {
         trust
     }
 
+    /// The shortest read-proven line, `wc -l <operand>`, run in a named directory.
+    fn reading_in(directory: &str, operand: &str) -> crate::command::Plan {
+        let mut plan = plan_of(vec![step_named("wc", &["-l", operand])]);
+        plan.directory = std::path::PathBuf::from(directory);
+        plan
+    }
+
+    /// The label a line's output carries, past the question a person would be asked first.
+    fn label_of(policy: &mut Policy<'_, RecordingSink>, plan: &crate::command::Plan) -> Label {
+        policy.endorse_plan(plan);
+        policy.before_plan(plan).expect("an endorsed plan runs")
+    }
+
     /// A policy in a project the user has answered about, whose rules are spelled against the
     /// directory [`plan_of`] puts a plan in.
     fn in_a_project<'s>(
@@ -5151,6 +5201,111 @@ mod tests {
         assert!(
             policy.plan_needs_approval(&line),
             "a line reading through a parent directory ran unasked"
+        );
+    }
+
+    /// A directory the project sits in is opened by an answer about that directory, and a project
+    /// file named through it is the same file the project's own rules decide. Asked under the
+    /// absolute name alone, the rule above the project would answer, so every file in the work would
+    /// take the label of a directory it was reached through. Asked under the relative name alone,
+    /// the rule a write through a link out of the project left behind would be the one skipped. So
+    /// both are asked and the weaker answers, and a file that really is in the added directory has
+    /// only the one name and keeps that rule.
+    #[test]
+    fn a_project_file_named_absolutely_is_answered_by_the_project_rule() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting(
+                &[".", "/work"],
+                &["vendor", "/work/project/shared/fetched.json"],
+            ))
+            .with_root(std::path::Path::new("/work/project"));
+
+        let through_the_directory_above =
+            reading_in("/work/project", "/work/project/vendor/lib.js");
+        assert!(
+            policy.plan_needs_approval(&through_the_directory_above),
+            "a second spelling of a distrusted project file ran unasked"
+        );
+        assert!(
+            !label_of(&mut policy, &through_the_directory_above).is_trusted(),
+            "the rule about the directory above the project laundered a distrusted project file"
+        );
+
+        // The rule a write through a link out of the project records, which is written absolutely
+        // because the file it names is not in the project however the name reads.
+        let through_a_link_out = reading_in("/work/project", "/work/project/shared/fetched.json");
+        assert!(
+            policy.plan_needs_approval(&through_a_link_out),
+            "a distrusted file named absolutely ran unasked once the name was also read relatively"
+        );
+        assert!(
+            !label_of(&mut policy, &through_a_link_out).is_trusted(),
+            "the project's own rule laundered a file the map distrusts by its absolute name"
+        );
+
+        let in_the_added_directory = reading_in("/work/project", "/work/notes.txt");
+        assert!(
+            !policy.plan_needs_approval(&in_the_added_directory),
+            "a file the added directory holds lost the rule about that directory"
+        );
+        assert!(
+            label_of(&mut policy, &in_the_added_directory).is_trusted(),
+            "a file the added directory holds was not labelled from that directory's rule"
+        );
+    }
+
+    /// A line reading a directory that holds the project reads every file the project's own rules
+    /// bear on, so those rules answer for it too. The root named as itself is the same case: its
+    /// absolute name is what a directory added above it covers, and its relative name is the rule
+    /// the startup question wrote, so an answer from the first alone would hand back a tree holding
+    /// a distrusted subdirectory as trusted.
+    #[test]
+    fn a_line_reading_a_directory_holding_the_project_answers_for_the_project() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting(&[".", "/work"], &["vendor"]))
+            .with_root(std::path::Path::new("/work/project"));
+
+        let the_root_itself = reading_in("/work/project", "/work/project");
+        assert!(
+            policy.plan_needs_approval(&the_root_itself),
+            "a walk over the whole project ran unasked though the project holds a distrusted tree"
+        );
+        assert!(
+            !label_of(&mut policy, &the_root_itself).is_trusted(),
+            "the project's distrusted subdirectory was invisible to a walk over the root"
+        );
+
+        let the_directory_above = reading_in("/work/project", "/work");
+        assert!(
+            policy.plan_needs_approval(&the_directory_above),
+            "a walk over the directory holding the project ignored the project's own rules"
+        );
+        assert!(
+            !label_of(&mut policy, &the_directory_above).is_trusted(),
+            "a walk over the added directory laundered the distrusted tree inside the project"
+        );
+    }
+
+    /// The name a line gave is what a rule was or was not written about, so a climb is decided
+    /// before any re-spelling: a root spelled with a `..` of its own would otherwise swallow the
+    /// operand's, and the answer would come from a rule about a path nobody named.
+    #[test]
+    fn a_climbing_operand_is_untrusted_under_a_root_spelled_with_a_climb() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting(&["."], &[]))
+            .with_root(std::path::Path::new("/work/../work/project"));
+
+        let climbing = reading_in("/work/../work/project", "/work/../work/project/src/main.rs");
+        assert!(
+            policy.plan_needs_approval(&climbing),
+            "a line naming a file through a parent directory ran unasked"
+        );
+        assert!(
+            !label_of(&mut policy, &climbing).is_trusted(),
+            "a name that climbs was labelled from a rule about the path it appears to reach"
         );
     }
 
