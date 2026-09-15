@@ -6,6 +6,7 @@ governs:
   - crates/core/src/processor.rs
   - crates/core/src/policy.rs
 guards:
+  - symbol: ProcessorSpec::new
   - symbol: Policy::before_processor
   - symbol: Policy::compose_processor_input
   - symbol: Policy::write_belongs_here
@@ -55,7 +56,7 @@ which is the thing this design refuses. A loop would give a reply something to s
 
 The driver builds the spec, in one place, and nothing widens one afterwards.
 
-`verified-by: bravebot_core::processor::a_description_names_the_slots_and_the_label_but_no_content`
+`verified-by: by-construction (building a spec takes a SpecAuthority, minted only inside policy.rs, which is one of the files this spec governs, so no other module can build one at all; every field is private and no method takes &mut self, so nothing widens one once it is built)`
 
 <a id="PROC-3"></a>
 ### PROC-3: the output label is computed before the processor runs

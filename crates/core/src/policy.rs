@@ -51,6 +51,21 @@ impl Declassification {
     }
 }
 
+/// Permission to build a [`crate::processor::ProcessorSpec`].
+///
+/// Lives here for the reason [`Declassification`] does. A spec's fields are private to the module
+/// that declares them, so no gate could set them there, and a constructor another module of this
+/// crate could reach is a second place a spec can be built: one skipping the slot checks, the
+/// `about` check and the taint the label is computed by, which are what makes a spec worth
+/// freezing. `mint` is `pub(in crate::policy)`, so the gates here are that one place.
+pub(crate) struct SpecAuthority(());
+
+impl SpecAuthority {
+    pub(in crate::policy) fn mint() -> Self {
+        Self(())
+    }
+}
+
 /// Permission to take the bytes out of a transport envelope, for as long as the decoder needs.
 ///
 /// Confined to `Vec<u8>`, which is the shape of an envelope off a socket. A tool argument, a
@@ -1993,8 +2008,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             _ => None,
         });
 
-        let spec =
-            crate::processor::ProcessorSpec::new(id, reads.to_vec(), instruction, out_label, about);
+        let spec = crate::processor::ProcessorSpec::new(
+            id,
+            reads.to_vec(),
+            instruction,
+            out_label,
+            about,
+            &SpecAuthority::mint(),
+        );
 
         self.allow(
             "processor",
@@ -7841,6 +7862,38 @@ mod tests {
             );
             assert!(!text.contains(private.as_str()));
             assert_eq!(label, Label::untrusted_public());
+        }
+
+        /// The trail line for a processor says what went in and what the output will carry, so
+        /// somebody reading it can see the shape of the call, and never the instruction.
+        #[test]
+        fn a_description_names_the_slots_and_the_label_but_no_content() {
+            let (store, public, private) = quarantine();
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing_with("task", "rewrite it"),
+                ReleasePlan::new(),
+                all_capabilities(),
+                &mut sink,
+            )
+            .unwrap();
+
+            let spec = policy
+                .before_processor(
+                    "processor:1",
+                    &[public, private],
+                    &instruction(),
+                    None,
+                    &store,
+                )
+                .expect("a processor over both slots");
+
+            // The whole line rather than what it holds: a description is one sentence, and
+            // checking for the slots and the label leaves anything else it picked up unread.
+            assert_eq!(
+                spec.describe(),
+                "processor:1 reads ref:0, ref:1 and writes (U,priv)"
+            );
         }
 
         #[test]

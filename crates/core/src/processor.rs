@@ -23,6 +23,7 @@
 //! and the label on the output, which no part of the processor chooses.
 
 use crate::label::Label;
+use crate::policy::SpecAuthority;
 use crate::slot::SlotId;
 
 /// One piece of a processor's input.
@@ -59,9 +60,11 @@ impl Piece {
 
 /// What the driver fixed about one processor before it ran.
 ///
-/// Only [`crate::policy::Policy::before_processor`] constructs one, and nothing here can widen
-/// it afterwards: the input slots, the instruction, and the label the output will carry are all
-/// decided before the processor exists. The processor itself never sees this value.
+/// Built only by [`crate::policy::Policy::before_processor`]: building one takes a
+/// `SpecAuthority`, which is minted inside the module the gates live in and nowhere else, so no
+/// other module of this crate can make a spec, and nothing here can widen one afterwards. The input
+/// slots, the instruction, and the label the output will carry are all decided before the processor
+/// exists. The processor itself never sees this value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessorSpec {
     id: String,
@@ -78,6 +81,7 @@ impl ProcessorSpec {
         instruction: impl Into<String>,
         out_label: Label,
         about: Option<SlotId>,
+        _authority: &SpecAuthority,
     ) -> Self {
         Self {
             id: id.into(),
@@ -156,27 +160,5 @@ impl ProcessorSpec {
             reads.join(", "),
             self.out_label
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_description_names_the_slots_and_the_label_but_no_content() {
-        let spec = ProcessorSpec::new(
-            "processor:1",
-            vec![SlotId::new("ref:0"), SlotId::new("ref:1")],
-            "rewrite the function and output the whole file",
-            Label::untrusted_private(),
-            None,
-        );
-
-        let described = spec.describe();
-        assert!(described.contains("ref:0"));
-        assert!(described.contains("ref:1"));
-        assert!(described.contains("(U,priv)"));
-        assert!(!described.contains("rewrite the function"));
     }
 }
