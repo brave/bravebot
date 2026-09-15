@@ -17,6 +17,7 @@ use bravebot_core::capability::Capability;
 use bravebot_core::event::{Role, Sink};
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Denial, Policy};
+use bravebot_core::trust::is_absolute_key;
 use bravebot_core::value::Labelled;
 use std::ffi::OsString;
 use std::fmt;
@@ -214,6 +215,31 @@ fn overlaps(one: &Path, other: &Path) -> bool {
     one.starts_with(other) || other.starts_with(one)
 }
 
+/// Refuse a directory whose resolved name the trust map cannot key a rule under.
+///
+/// A directory is opened by handing the map the name it resolved to, and the map reads a name
+/// without a leading slash as a path under the primary root (TRUST-3), where the root's own empty
+/// prefix covers it. So a rule about a directory named any other way would land in the relative
+/// namespace and the answer given about the project at startup would decide files in a directory
+/// nobody vouched for. Refusing is the fail-closed half of that clause, and it is here rather than
+/// in the map because canonicalising a name is filesystem work.
+///
+/// Every door that opens a directory by name has to refuse it, `/cd` as much as `/add-dir`: the
+/// rules of a working directory left behind are re-keyed against the one replacing it, so a
+/// destination the map cannot key re-spells them into the wrong namespace instead.
+///
+/// The name is rendered the way a caller renders it to build the key, so the two cannot disagree
+/// about which namespace the directory is in.
+fn refuse_unkeyable(canonical: &Path, named: &str) -> Result<(), WorkspaceError> {
+    match is_absolute_key(&canonical.to_string_lossy()) {
+        true => Ok(()),
+        false => Err(WorkspaceError::Invalid {
+            path: named.to_string(),
+            reason: "is not spelled from '/', so no trust rule can be keyed under it",
+        }),
+    }
+}
+
 /// The most symlinks one path may be followed through by name before it is treated as a cycle.
 ///
 /// A link the operating system can resolve is resolved by it, under a limit of its own. Only the
@@ -333,6 +359,9 @@ impl Workspace {
     /// A directory already inside the primary root is refused. It is reachable by its relative path
     /// already, and admitting it would give one file two spellings, one governed by the project's
     /// trust rules and one by its own.
+    ///
+    /// So is one whose resolved name the trust map cannot key a rule under, which is what a platform
+    /// that spells its paths from a drive letter or a share hands back: `refuse_unkeyable` says why.
     pub fn resolve_directory(&self, directory: &str) -> Result<PathBuf, WorkspaceError> {
         let candidate = Path::new(directory);
         if !candidate.is_absolute() {
@@ -360,6 +389,8 @@ impl Workspace {
                 reason: "is already inside the workspace, so it can be named relatively",
             });
         }
+
+        refuse_unkeyable(&canonical, directory)?;
 
         Ok(canonical)
     }
@@ -424,6 +455,8 @@ impl Workspace {
                 reason: "is already the working directory",
             });
         }
+
+        refuse_unkeyable(&canonical, directory)?;
 
         // The old root among them: it is a directory that was open, and after this it is not.
         let mut closed = vec![std::mem::replace(&mut self.root, canonical.clone())];
@@ -2061,4 +2094,30 @@ fn written_below(named: &Path, opened: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A door that opens a directory by name hands the trust map the name it resolved to, so a name
+    /// the map cannot key a rule under is one no door may open: the rule would land in the relative
+    /// namespace, where the answer given about the project at startup covers it (TRUST-3). Said
+    /// about the resolved name directly, because canonicalising on a platform that spells its paths
+    /// from `/` always hands back a name that is a key, so neither door can reach its own refusal
+    /// where the tests run.
+    #[test]
+    fn a_directory_the_trust_map_cannot_key_is_refused() {
+        assert!(refuse_unkeyable(Path::new("/other"), "/other").is_ok());
+
+        let refused = refuse_unkeyable(Path::new("C:\\other"), "C:\\other")
+            .expect_err("a directory keyed in the relative namespace was opened");
+        assert_eq!(
+            refused.to_string(),
+            "'C:\\other' is not usable: is not spelled from '/', so no trust rule can be keyed under it"
+        );
+        // No drive letter in this one, and the same refusal: what is asked is how the name is
+        // spelled, not what spells it that way.
+        assert!(refuse_unkeyable(Path::new(r"\\server\share"), r"\\server\share").is_err());
+    }
 }

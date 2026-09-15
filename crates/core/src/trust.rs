@@ -137,7 +137,7 @@ impl TrustStore {
     pub fn rebased(&self, from: &Path, to: &Path) -> Self {
         let mut moved = Self::new();
         for (key, integrity) in self.rules() {
-            let absolute = match is_absolute(key) {
+            let absolute = match is_absolute_key(key) {
                 true => PathBuf::from(key),
                 false => from.join(key),
             };
@@ -159,9 +159,19 @@ impl TrustStore {
 /// Whether a path, or the key it normalises to, names an absolute path rather than a
 /// workspace-relative one.
 ///
-/// The two are separate namespaces, and nothing is a member of both. A relative key is a path
-/// under the primary root; an absolute key is a path in a directory the user added by name.
-fn is_absolute(key: &str) -> bool {
+/// The two are separate namespaces and nothing is a member of both: a relative name is read under
+/// the primary root, an absolute one under the filesystem root. That is a rule about the project
+/// against a rule about a directory opened by name (TRUST-3), and a relative permission pattern
+/// against an absolute one (PERM-3).
+///
+/// A leading `/` is the whole of the test, and a name spelled any other way is relative. A drive
+/// letter is not a root here and a backslash is not a separator: a key arrives spelled from `/`,
+/// and a backslash is a legal filename byte where paths are, so a file called `C:\notes` is a file
+/// in the project and reading its name as a root would hand it the rule for a directory somebody
+/// opened. Resolving a platform's path into a key therefore belongs outside this crate, which does
+/// no filesystem work, and the workspace refuses to open a directory it cannot spell this way
+/// rather than handing over a name that would be read as relative.
+pub fn is_absolute_key(key: &str) -> bool {
     key.starts_with('/')
 }
 
@@ -190,7 +200,7 @@ pub(crate) fn normalise(path: &str) -> String {
         .filter(|segment| !segment.is_empty() && *segment != ".")
         .collect::<Vec<_>>()
         .join("/");
-    match is_absolute(trimmed) {
+    match is_absolute_key(trimmed) {
         true => format!("/{segments}"),
         false => segments,
     }
@@ -203,7 +213,7 @@ pub(crate) fn normalise(path: &str) -> String {
 fn covers(prefix: &str, path: &str) -> bool {
     // Neither namespace says anything about the other: a rule about the workspace cannot decide a
     // path in an added directory, and the reverse.
-    if is_absolute(prefix) != is_absolute(path) {
+    if is_absolute_key(prefix) != is_absolute_key(path) {
         return false;
     }
     // The primary root covers every relative path; `/` covers every absolute one.
@@ -448,6 +458,30 @@ mod tests {
             store.integrity_of("/Users/me/notes/todo.md"),
             None,
             "the workspace rule reached outside it"
+        );
+    }
+
+    /// Which namespace a key is in is decided by a leading slash and by nothing else. A key arrives
+    /// spelled from `/`, and a backslash is a legal filename byte where paths are, so a name
+    /// carrying a drive letter is a path under the project and the project's own rules are the ones
+    /// that decide it. Reading such a name as a root instead would take a file the project holds out
+    /// of the namespace its rules are written in, which is the same collapse from the other side.
+    #[test]
+    fn a_name_that_is_a_root_on_another_platform_is_a_relative_key() {
+        let mut store = TrustStore::new();
+        store.distrust("C:\\notes");
+
+        assert!(!is_absolute_key("C:\\notes"));
+        assert_eq!(normalise("C:\\notes"), "C:\\notes");
+        assert_eq!(
+            store.integrity_of("C:\\notes"),
+            Some(Integrity::Untrusted),
+            "a file in the project stopped being decided by a rule about it"
+        );
+        assert_eq!(
+            store.integrity_of("/C:\\notes"),
+            None,
+            "a relative rule reached into the absolute namespace"
         );
     }
 

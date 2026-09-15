@@ -323,6 +323,16 @@ train the habit of answering without reading, which is the whole of what asking 
   Every run asks unless a person vouched for that exact command, so the prompt is what stands
   there; a `Bash` deny rule, or the sandbox, is what closes it. Naming a path in `deny` and
   expecting it to fence every subprocess would be believing something that is not true.
+- **A path spelled with another platform's separator is one segment, so no path rule reaches it.** A
+  pattern is matched segment by segment against a path split on `/` (PERM-3), and a backslash is a
+  legal filename byte rather than a separator, so a name carrying one arrives as a single opaque
+  segment: `Read(src/**)` does not cover it, and neither does `Read(.env)`, which matches that name
+  at any depth but only as a whole segment. On Windows that is every name the workspace hands back
+  for a file below the root, so a `deny` a person wrote is not applied to the path they wrote it
+  for. What
+  settles it is one canonical spelling for a path before any rule is matched against it, which is
+  the same fix the trust map needs and is written down as a known cost in
+  [trust-map.md](trust-map.md).
 - **`defaultMode` is read and does nothing.** The key is parsed so the file is not rejected for
   carrying it, and no mode is selected from it. A person who wrote `acceptEdits` gets the prompts
   they would have got without it. The modes exist, and the command line and the mode key are what
