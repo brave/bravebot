@@ -3242,6 +3242,7 @@ impl Session {
             .rfind('\n')
             .map_or(0, |newline| newline + 1);
         self.caret = along(&self.input[above..start - 1], self.column()) + above;
+        self.settle_onto_a_marker();
         true
     }
 
@@ -3256,7 +3257,23 @@ impl Session {
             .find('\n')
             .map_or(self.input.len(), |newline| below + newline);
         self.caret = along(&self.input[below..ends], self.column()) + below;
+        self.settle_onto_a_marker();
         true
+    }
+
+    /// Take the caret onto a marker it has landed inside of.
+    ///
+    /// A place along a line is counted in characters, and the characters a marker happens to be
+    /// spelled with count like any others, so a move between lines lands where Left and Right
+    /// refuse to stop and the next thing typed splits the marker in half.
+    ///
+    /// Onto the start of it rather than past the end, because the caret is drawn over the whole
+    /// marker it is on: the column the move was keeping is still under the caret, and the marker
+    /// the person is now looking at is the one they were aiming at.
+    fn settle_onto_a_marker(&mut self) {
+        if let Some((start, _)) = self.marker_at_caret() {
+            self.caret = start;
+        }
     }
 
     /// How many characters along its line the caret is.
@@ -6577,6 +6594,88 @@ mod tests {
                 "the caret rested inside a marker"
             );
         }
+    }
+
+    /// The same property when the caret arrives from another line. Up and Down keep the place
+    /// along the line the caret had, and a place counted in characters is a place inside a marker
+    /// as readily as beside one.
+    #[test]
+    fn the_caret_cannot_come_to_rest_inside_a_marker_on_another_line() {
+        let mut s = session();
+        for c in "compare all of these".chars() {
+            s.type_char(c);
+        }
+        s.type_newline();
+        for c in "see ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        s.type_newline();
+        for c in "and this".chars() {
+            s.type_char(c);
+        }
+        assert_eq!(s.input, "compare all of these\nsee [Image #1]\nand this");
+
+        let marker = s
+            .input
+            .find("[Image #1]")
+            .expect("the marker is in the line");
+        let inside = marker + 1..marker + "[Image #1]".len();
+        let last = s.input.rfind('\n').expect("three lines") + 1;
+        // Every column of the neighbouring lines, the one past the end of each included: a column
+        // beyond the marker line is the one that comes back clamped, and clamped is another way to
+        // arrive at a position the line does not offer.
+        for column in 0..="compare all of these".len() {
+            s.caret = column;
+            assert!(s.move_down_a_line(), "there is a line below the first");
+            assert!(
+                !inside.contains(&s.caret()),
+                "Down rested the caret inside a marker"
+            );
+        }
+        for column in 0..="and this".len() {
+            s.caret = last + column;
+            assert!(s.move_up_a_line(), "there is a line above the last");
+            assert!(
+                !inside.contains(&s.caret()),
+                "Up rested the caret inside a marker"
+            );
+        }
+
+        // On the marker rather than past it. The caret is drawn over the whole of the one it is on,
+        // so the column the move was keeping is still under it and the marker the person is looking
+        // at is the one they were aiming into.
+        s.caret = "compare".len();
+        assert!(s.move_down_a_line(), "there is a line below the first");
+        assert_eq!(s.caret(), marker, "the caret went past the marker");
+    }
+
+    /// What a caret inside a marker costs. The next character typed splits the marker, and a line
+    /// that no longer spells it is a line carrying nothing: the picture is gone from the turn with
+    /// nothing on the screen saying so.
+    #[test]
+    fn typing_after_a_move_between_lines_leaves_the_picture_attached() {
+        let mut s = session();
+        for c in "compare these".chars() {
+            s.type_char(c);
+        }
+        s.type_newline();
+        for c in "see ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+
+        s.caret = "compa".len();
+        assert!(s.move_down_a_line(), "there is a line below the first");
+        s.type_char('x');
+
+        let sent = s.submit().expect("submitted");
+        assert_eq!(sent, "compare these\nsee x[Image #1]");
+        assert_eq!(
+            s.sent_pasted().len(),
+            1,
+            "the picture stopped being attached"
+        );
     }
 
     /// Delete takes what the caret is on, and the caret is on the whole marker: the half of the
