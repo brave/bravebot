@@ -2428,18 +2428,32 @@ fn what_the_model_says_between_tool_calls_reaches_the_interface() {
     );
 }
 
-/// Says one thing, once, the first time it is asked.
+/// Says one thing, once, on the asking its constructor chose.
 ///
 /// What a person typing mid-turn looks like to a turn: nothing on most rounds, and one line on
 /// one of them. Refuses everything else, since a test that wanted a write approved says so.
 struct SaysOnce {
     said: Option<String>,
+    held_back: Option<String>,
 }
 
 impl SaysOnce {
     fn new(said: &str) -> Self {
         Self {
             said: Some(said.to_string()),
+            held_back: None,
+        }
+    }
+
+    /// The same line, typed after one asking has already gone by.
+    ///
+    /// Which is what "typed while a delegate runs" means from a turn's side: the turn asked at the
+    /// boundary of the round that spawned the delegate and there was nothing to take, and the line
+    /// arrives in the window between that asking and the next one.
+    fn said_after_one_asking(said: &str) -> Self {
+        Self {
+            said: None,
+            held_back: Some(said.to_string()),
         }
     }
 }
@@ -2505,7 +2519,13 @@ impl bravebot_agent::Confirmer for SaysOnce {
     }
 
     fn interjection(&mut self) -> Option<String> {
-        self.said.take()
+        match self.said.take() {
+            said @ Some(_) => said,
+            None => {
+                self.said = self.held_back.take();
+                None
+            }
+        }
     }
 }
 
@@ -2603,6 +2623,85 @@ fn a_prompt_typed_mid_turn_is_recorded_as_the_users_own_input() {
     assert!(
         recorded,
         "a prompt typed mid-turn went into the context with nothing in the trail saying so"
+    );
+}
+
+/// A line typed while a delegate runs is aimed at the turn the person is watching, which is the
+/// only turn they know about: the delegate was a planner's idea and its work is not on the screen.
+/// Handed to the delegate it answers a turn nobody typed it at. Taken off the queue by one, it
+/// answers nothing at all: the person watches the wrong file being read, says so, and the words
+/// reach neither planner while the reading carries on.
+///
+/// The shape the planner is told to use while a delegate works, too, which is where a line typed
+/// then has the furthest to fall: the turn answers with nothing, waits, and the boundary it reaches
+/// when the delegate is back is the one the line was aimed at.
+#[test]
+fn a_prompt_typed_while_a_delegate_runs_still_reaches_the_turn_that_spawned_it() {
+    let scratch = Scratch::new("interject-delegate");
+    std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+                // Nothing of its own to call, so the turn waits here until the delegate has
+                // finished, which is what the planner is told to do with a round it has no work
+                // for. It also puts every boundary the delegate reaches inside one window of the
+                // parent's: the parent's first asking is over before the delegate can have a reply
+                // to its own opening request, and its next one waits on the delegate being joined.
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![
+                tool_request("read_file", r#"{"path":"a.txt"}"#),
+                reply_with("read it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK"),
+        &mut SaysOnce::said_after_one_asking("no, the other file"),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    // A turn replays the arguments it called with, so the task it handed out is in its own requests
+    // as well as in the delegate's. Its own prompt is what tells the two apart.
+    let asked = every_request(&received);
+    let (mine, delegated): (Vec<&String>, Vec<&String>) = asked
+        .iter()
+        .partition(|body| body.contains("DELEGATE-THE-WORK"));
+    assert!(
+        mine.iter().any(|body| body.contains("no, the other file")),
+        "a prompt typed while a delegate ran reached no planner at all, over {} rounds",
+        mine.len()
+    );
+    assert!(
+        !delegated
+            .iter()
+            .any(|body| body.contains("no, the other file")),
+        "a prompt typed at the turn on the screen was put to a delegate instead"
+    );
+    assert_eq!(
+        reporter.interjected,
+        vec!["no, the other file".to_string()],
+        "the interface was not told the prompt had gone in, or was told twice"
     );
 }
 
