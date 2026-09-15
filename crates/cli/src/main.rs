@@ -1957,6 +1957,24 @@ mod tests {
         );
     }
 
+    /// A pipe is not something a person can shorten: what they have is a program writing bytes at
+    /// a command, and a refusal that only says the bytes were too many leaves them with nothing to
+    /// try. The way to hand over something this large is a different gesture, so the refusal names
+    /// it.
+    #[test]
+    fn a_refused_pipe_says_what_to_do_instead() {
+        let oversized = vec![b'x'; PIPE_CAP + 1];
+
+        let refusal = piped_input(oversized.as_slice(), false)
+            .expect_err("an oversized pipe must be refused, not truncated");
+
+        assert!(
+            refusal.contains("Write it to a file and name that instead"),
+            "the refusal said the input was too large and nothing about what to do about it: \
+             {refusal}"
+        );
+    }
+
     fn trail_of(events: Vec<Event>) -> RecordingSink {
         let mut sink = RecordingSink::new();
         for event in events {
