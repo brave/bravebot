@@ -109,21 +109,28 @@ the trust map says about the path, so the second route is always private and alw
 `verified-by: bravebot_core::policy::one_unvouched_step_makes_the_whole_lines_output_untrusted`
 
 <a id="RUN-5"></a>
-### RUN-5: every run asks, unless every stage was vouched for or proven
+### RUN-5: every run asks, unless every stage was vouched for, ruled on, or proven
 
 There is no *declared* read-only category. `foo --bar` might write to disk and nothing here can
-tell, and a stage declaring itself harmless only helps if the declaration is honest. Two things may
-answer the question, and nothing else: a person having answered it before, in this session, for this
-exact command, and the audited table in [command-line.md](command-line.md) establishing that these
-exact arguments write nothing and read only paths the user vouched for. Never a property of the
-argv, never a declaration by a stage, never anything derived from what a program printed.
+tell, and a stage declaring itself harmless only helps if the declaration is honest. Three things
+may answer the question, and nothing else: a person having answered it before, in this session, for
+this exact command; a rule the person wrote down in advance, which
+[permissions.md](../permissions.md) governs and which stops the asking without raising any label;
+and the audited table in [command-line.md](command-line.md) establishing that these exact arguments
+write nothing and read only paths the user vouched for. Never a property of the argv this system
+worked out for itself, never a declaration by a stage, never anything derived from what a program
+printed.
 
 **Why.** An unprompted write is worse than an unwanted prompt, so nothing that could be wrong about
-a write may answer the question. An entry in the table is a claim checked by hand against one
+a write may answer the question. A person's own rule may because it is the same authority the first
+road has, exercised earlier and in writing, and it grants strictly less: it stops the question and
+leaves every label where it was. An entry in the table is a claim checked by hand against one
 program's full option list, which is why it may, and it is narrow for the same reason: anything it
 does not fully recognise asks.
 
 `verified-by: bravebot_core::policy::a_command_nobody_vouched_for_is_put_to_a_person`
+`verified-by: bravebot_core::policy::a_rule_the_user_wrote_in_advance_answers_the_run_prompt`
+`verified-by: bravebot_core::policy::an_allow_rule_stops_the_prompt_and_does_not_trust_what_the_command_prints`
 `verified-by: bravebot_core::policy::a_vouched_command_is_not_asked_about_again`
 `verified-by: bravebot_core::policy::one_unvouched_step_puts_the_whole_line_to_a_person`
 `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_does_not_ask`
