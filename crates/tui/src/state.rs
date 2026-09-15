@@ -7360,6 +7360,28 @@ mod tests {
         );
     }
 
+    /// Clamping an interval quietly leaves somebody believing they are watching something far
+    /// more closely than they are, so the number they get is said where they are reading.
+    #[test]
+    fn an_interval_outside_the_bounds_is_reported_as_the_one_that_will_happen() {
+        for (typed, said) in [
+            ("1s watch", t!(loop_interval_raised, every = "5s")),
+            ("8d watch", t!(loop_interval_capped, every = "7d")),
+        ] {
+            let mut s = session();
+            s.start_loop(crate::loops::parse(typed).expect("a request"));
+
+            assert!(
+                s.transcript.iter().any(|entry| entry.text == said),
+                "`/loop {typed}` did not say the interval it got: {:?}",
+                s.transcript
+                    .iter()
+                    .map(|entry| entry.text.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
     /// A tick comes from a timer, and a command comes from a key press. So a loop over a line
     /// that reads like a command sends the characters, and this program acts on none of them.
     #[test]
