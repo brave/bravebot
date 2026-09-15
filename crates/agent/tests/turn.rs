@@ -13222,11 +13222,15 @@ fn a_denied_host_is_refused_without_asking() {
 }
 
 /// A denied host is unreachable from a turn, end to end, whatever a person would have said about
-/// it: the request never goes out and the planner is told the rule refused it. That the gate at
-/// the point of egress holds too, which is what covers a redirect into a denied host, is pinned
-/// where that gate lives.
+/// it: the request never goes out and the planner is told the rule refused it.
+///
+/// Which of the two gates refused is deliberately not what this says, so it keeps holding if the
+/// order of them changes. Each is pinned where it lives: the rules check in front of the prompt by
+/// `a_denied_host_is_refused_without_asking` above, and the one at the point of egress, which is
+/// what covers a redirect into a denied host, by
+/// `bravebot_core::policy::a_denied_host_is_refused_at_the_egress_gate_on_its_own_account`.
 #[test]
-fn a_denied_host_is_not_fetched_even_when_approved() {
+fn a_denied_host_is_not_fetched_whatever_a_person_would_have_answered() {
     let scratch = Scratch::new("fetch-denied");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
@@ -13257,7 +13261,7 @@ fn a_denied_host_is_not_fetched_even_when_approved() {
         requests
             .recv_timeout(std::time::Duration::from_millis(300))
             .is_err(),
-        "a denied host was fetched because the user approved the URL"
+        "a denied host was fetched, so neither gate held"
     );
 
     let _first = received.recv().expect("first request");

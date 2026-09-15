@@ -5951,6 +5951,43 @@ mod tests {
         );
     }
 
+    /// The deny at this gate holds on its own account, without the gate in front of it having been
+    /// called. That is what makes it the second of two rather than a comment on the first: a gate
+    /// covered only by another gate doing its job can be deleted and no test says so.
+    ///
+    /// The hop here is the approved host itself, which is the one shape the other tests cannot
+    /// reach. A hop to any other host is already refused for being one nobody was shown, so those
+    /// tests pass whether this branch is here or not, and
+    /// [`Policy::before_fetch_rules`] now stops a denied host from being the approved one through
+    /// the tool. What is left to pin is the gate itself, reached the way a caller that forgot the
+    /// earlier one would reach it.
+    #[test]
+    fn a_denied_host_is_refused_at_the_egress_gate_on_its_own_account() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &["WebFetch(domain:evil.test)"],
+            &[],
+            &[],
+        ));
+
+        // Endorsed and admitted, because neither of those reads a rule: `before_fetch` checks the
+        // capability and the endorsement, which is precisely why the rule has to be checked here.
+        let denied = "https://evil.test/x";
+        policy.endorse_fetch(denied);
+        policy
+            .before_fetch(denied)
+            .expect("before_fetch reads no rules");
+
+        let denial = policy
+            .before_network(denied)
+            .expect_err("a denied host reached the network");
+        assert!(
+            denial.message.contains("denies fetching from evil.test"),
+            "refused, but not for the rule: {}",
+            denial.message
+        );
+    }
+
     /// A redirect to a host nobody named is refused too, denied or not: the approval was for one
     /// host, and the person was never shown the second.
     #[test]

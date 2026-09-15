@@ -122,9 +122,9 @@ knows because it set it, and which no reply can influence.
 
 `verified-by: bravebot_core::policy::a_fetch_cannot_be_redirected_to_a_host_nobody_approved`
 `verified-by: bravebot_core::policy::a_denied_host_is_refused_at_the_egress_gate_so_a_redirect_cannot_reach_it`
+`verified-by: bravebot_core::policy::a_denied_host_is_refused_at_the_egress_gate_on_its_own_account`
 `verified-by: bravebot_core::policy::a_web_fetch_rule_does_not_govern_this_programs_own_connection`
 `verified-by: bravebot_core::policy::a_finished_fetch_stops_confining_the_turns_other_egress`
-`verified-by: bravebot_agent::turn::a_denied_host_is_not_fetched_even_when_approved`
 
 <a id="FETCH-5"></a>
 ### FETCH-5: what is not text is carried anyway, and a cap is reported
