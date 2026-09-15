@@ -194,7 +194,7 @@ pays for it.
 | What | When |
 |---|---|
 | the person asks | `/goal clear` |
-| the person interrupts | Ctrl-C, read against the goal after the turn in flight and the line in the box, and before leaving; Escape and Ctrl-C both reach it during a check |
+| the person interrupts | Ctrl-C, read against the goal after a mode open over the session, the turn in flight and the line in the box, and before leaving; during a check Escape reaches the goal as well, and neither key reaches it while a mode is open |
 | the session moves on | `/clear`, and leaving |
 | the rounds run out | [GOAL-9](#GOAL-9) |
 
@@ -203,19 +203,28 @@ as failures and neither is judged: a request that never came back says nothing a
 work is finished, and an interrupted turn says only that the person did not want that turn. The
 goal stays set, and what is judged is the next turn there is something to judge.
 
-Ctrl-C therefore means one thing at a time: the half-written line, then the turn in flight, then
-the goal, then leaving. Each is nearer than the next. A person watching a goal go somewhere wrong
-stops that turn and says something else, which is the only way to steer work that keeps going, and
-a key that took the condition off along with the turn would leave them retyping it every time. The
-press that ends the goal is the one made with nothing running.
+Ctrl-C therefore means one thing at a time: a mode open over the session, then the half-written
+line, then the turn in flight, then the goal, then leaving. Each is nearer than the next. A person
+watching a goal go somewhere wrong stops that turn and says something else, which is the only way to
+steer work that keeps going, and a key that took the condition off along with the turn would leave
+them retyping it every time. The press that ends the goal is the one made with nothing running.
 
 **A check in flight is one request and does not stop, but the goal behind it does.** A verdict that
 arrives about a goal somebody has just taken off is not acted on and not reported: the session they
 would be told about is not the one they are in. Without this, the key pressed while the ninth round
 was being judged would leave the session, and the tenth round would go out regardless.
 
+A mode open over the session is nearer than the goal here as well. A scroller, a delegate's view or
+a prompt search takes both keys itself, as [scroller.md](scroller.md), [watching.md](watching.md)
+and [terminal-input.md](terminal-input.md) have them do everywhere else, and the check is the
+likeliest place to meet one: nothing closes a view when a turn ends, so one opened during the turn
+just judged is still standing there.
+
 `verified-by: bravebot_tui::state::clearing_a_goal_says_so_and_says_nothing_when_there_was_none`
 `verified-by: bravebot_tui::app::interrupting_takes_the_goal_off_before_it_leaves`
+`verified-by: bravebot_tui::app::the_goal_check_takes_the_goal_off_before_ctrl_c_means_leaving`
+`verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_goal_check_does`
+`verified-by: bravebot_tui::app::the_search_answers_the_stop_keys_before_the_goal_check_does`
 `verified-by: bravebot_tui::app::stopping_a_turn_leaves_the_goal_set`
 `verified-by: bravebot_tui::app::a_turn_that_failed_leaves_the_goal_where_it_was`
 `verified-by: bravebot_tui::state::clearing_the_session_takes_the_goal_off`
