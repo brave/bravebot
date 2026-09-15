@@ -373,6 +373,7 @@ be a way to write it anywhere.
 `verified-by: bravebot_tui::sessions::exporting_refuses_a_path_through_a_symlinked_directory`
 `verified-by: bravebot_tui::sessions::exporting_refuses_to_overwrite_an_existing_file`
 `verified-by: bravebot_tui::sessions::exporting_refuses_a_path_that_is_a_dangling_symlink`
+`verified-by: bravebot_tui::sessions::an_exported_transcript_is_readable_only_by_its_owner`
 `verified-by: bravebot_tui::sessions::exporting_creates_intermediate_directories`
 
 <a id="SESSION-18"></a>

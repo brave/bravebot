@@ -1738,6 +1738,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A transcript is the conversation, so an export at the process umask would drop a
+    /// world-readable copy of everything the session read into the working directory, undoing for
+    /// the copy what the record's own mode does for the original.
+    #[cfg(unix)]
+    #[test]
+    fn an_exported_transcript_is_readable_only_by_its_owner() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = crate::testutil::scratch_dir("bravebot-export-test-mode");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create");
+
+        let exported = export(&root, "test-id", None, "# Hello").expect("export");
+
+        let mode = std::fs::metadata(&exported)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "the exported transcript is at {mode:o}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn forking_a_manifest_session_is_refused() {
         let root = crate::testutil::scratch_dir("bravebot-fork-manifest");
