@@ -8,6 +8,7 @@ governs:
   - crates/core/src/url.rs
   - crates/net/src/lib.rs
 guards:
+  - symbol: Policy::before_fetch_rules
   - symbol: Policy::before_fetch
   - symbol: Policy::before_network
 ---
