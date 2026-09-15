@@ -535,7 +535,8 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
     // this sees both. `execute` fills in the parts and cannot know when the run began.
     let began = std::time::Instant::now();
 
-    let mut subscription = crate::turn::discover_subscription(config, reporter);
+    let mut subscription =
+        crate::turn::discover_subscription(config, egress, task.model.as_deref(), reporter);
 
     // Owned here rather than inside either half, so a failure in either one still comes back
     // with everything that got as far as existing.

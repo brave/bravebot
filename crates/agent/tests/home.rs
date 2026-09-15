@@ -149,3 +149,74 @@ fn a_subscription_imported_for_another_environment_is_reported() {
         assert!(discovery.found().is_none(), "nothing spendable");
     });
 }
+
+/// A build that knows the premium host and also names an AWS tier, so the model alone decides which
+/// service a turn reaches.
+fn premium_and_bedrock() -> bravebot_config::Config {
+    bravebot_config::Config::from_lookup(|key| {
+        match key {
+            bravebot_config::env_var::SIGNING_KEY => Some("test-signing-key"),
+            bravebot_config::env_var::KEY_ID => Some("test-key-id"),
+            bravebot_config::env_var::ENDPOINT => Some("https://ai-chat.bsg.brave.com"),
+            bravebot_config::env_var::PREMIUM_ENDPOINT => {
+                Some("https://ai-chat-premium.bsg.brave.com")
+            }
+            bravebot_config::env_var::USE_BEDROCK => Some("1"),
+            bravebot_config::env_var::AWS_REGION => Some("us-west-2"),
+            bravebot_config::env_var::BEDROCK_OPUS_MODEL => Some("opus-arn"),
+            _ => None,
+        }
+        .map(str::to_string)
+    })
+    .expect("configured")
+}
+
+/// A turn whose model is served by another backend is told nothing about the credential store.
+///
+/// The store is not read at all. An imported Leo credential means nothing to Bedrock or to a
+/// gateway, so a batch that cannot be spent costs such a turn nothing and there is no downgrade to
+/// report. Reported anyway, the line is wrong twice over: it says the turn fell back to the free
+/// tier, which is not where a request signed for AWS went, and it sends somebody to re-import a
+/// subscription that would have changed nothing about the answer they got.
+#[test]
+fn a_turn_on_another_backend_is_not_told_about_an_unusable_batch() {
+    with_temp_home("another-backend", |_| {
+        let path = bravebot_skus::store::path().expect("a scratch home");
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the state directory");
+        std::fs::write(&path, "").expect("a file holding nothing");
+
+        let config = premium_and_bedrock();
+        let egress = bravebot_net::Egress::new();
+
+        // The Brave roster still reports, the batch being one such a turn would have spent. Asserted
+        // here rather than taken on trust, since a gate that silenced everything would pass the half
+        // of this test that matters.
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        bravebot_agent::turn::discover_subscription(
+            &config,
+            &egress,
+            Some(bravebot_config::DEFAULT_MODEL),
+            &mut reporter,
+        );
+        assert_eq!(
+            reporter.notices.len(),
+            1,
+            "a Brave turn lost its downgrade warning: {:?}",
+            reporter.notices
+        );
+
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let found = bravebot_agent::turn::discover_subscription(
+            &config,
+            &egress,
+            Some("opus-arn"),
+            &mut reporter,
+        );
+        assert!(found.is_none(), "a Bedrock turn took a Leo credential");
+        assert!(
+            reporter.notices.is_empty(),
+            "a Bedrock turn was told about the credential store: {:?}",
+            reporter.notices
+        );
+    });
+}
