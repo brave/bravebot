@@ -446,10 +446,15 @@ fn encode(credentials: &StoredCredentials) -> String {
 }
 
 fn decode(raw: &str) -> Result<StoredCredentials, StoreError> {
-    // An entry can exist holding nothing, if a write was interrupted partway. Reported as absent
-    // rather than malformed, because the fix is the same as never having imported: run the import.
+    // A file can exist holding nothing, if a write was interrupted partway: the open truncates
+    // before anything is written. Reported rather than read as absent, since a subscription that
+    // was paid for is not being spent and nothing else would say so.
     if raw.trim().is_empty() {
-        return Err(StoreError::NotFound);
+        return Err(StoreError::Malformed {
+            detail: "the file holds nothing, which an interrupted write leaves behind; \
+                     run `bravebot import-leo-creds` again"
+                .to_string(),
+        });
     }
 
     let value: serde_json::Value =
@@ -906,13 +911,17 @@ mod tests {
         );
     }
 
-    /// An interrupted write can leave the entry present but empty. Reported as absent, since the
-    /// remedy is the same as never having imported, and a JSON parse error here would send someone
-    /// looking for corruption instead.
+    /// An interrupted write can leave the file present and holding nothing, which is a different
+    /// fact from never having imported: a subscription was paid for and is not being spent. Read as
+    /// absent it costs the user the model they chose with nothing said about it, so the emptiness is
+    /// reported and the message names the one thing that fixes it.
     #[test]
-    fn an_empty_entry_is_reported_as_absent_rather_than_malformed() {
-        assert!(matches!(decode("").unwrap_err(), StoreError::NotFound));
-        assert!(matches!(decode("   ").unwrap_err(), StoreError::NotFound));
+    fn an_empty_file_is_reported_rather_than_read_as_absent() {
+        for raw in ["", "   "] {
+            let err = decode(raw).unwrap_err();
+            assert!(matches!(err, StoreError::Malformed { .. }), "{err}");
+            assert!(err.to_string().contains("import-leo-creds"), "{err}");
+        }
     }
 
     #[test]
