@@ -1404,7 +1404,9 @@ mod tests {
     #[test]
     fn a_local_layer_overrides_project_and_global_keybindings() {
         let settings = Layers::new("keybindings-local-override")
-            .global(r#"{"keybindings": {"stash": "alt-s", "scroller": "alt-o", "editor": "alt-e"}}"#)
+            .global(
+                r#"{"keybindings": {"stash": "alt-s", "scroller": "alt-o", "editor": "alt-e"}}"#,
+            )
             .project(r#"{"keybindings": {"stash": "ctrl-x", "scroller": "ctrl-u"}}"#)
             .local(r#"{"keybindings": {"stash": "ctrl-p"}}"#)
             .read();

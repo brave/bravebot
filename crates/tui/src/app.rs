@@ -6591,7 +6591,10 @@ mod tests {
 
         // In Vi NORMAL mode, `/` opens prompt history search
         handle_key(&mut session, key(KeyCode::Char('/')));
-        assert!(session.searching_history(), "vi / did not open history search with custom chord");
+        assert!(
+            session.searching_history(),
+            "vi / did not open history search with custom chord"
+        );
     }
 
     /// A configured chord that collides with a readline line-editing key (such as ctrl-u or alt-b)
