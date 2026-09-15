@@ -4535,6 +4535,12 @@ impl Session {
             let rounds = goal.rounds();
             self.goal = None;
             self.note(t!(goal_spent, rounds = rounds));
+            // The sentence `/goal` answers with, said here because there is no goal left to ask:
+            // the round that spent the budget is the one whose reason a person wants, and this is
+            // the only place it is ever reported.
+            if !reason.is_empty() {
+                self.note(t!(goal_last_check, reason = &reason));
+            }
             return None;
         }
         if reason.is_empty() {
@@ -7538,15 +7544,51 @@ mod tests {
         let mut s = session();
         s.start_goal("cargo test exits 0".to_string());
 
+        let sent = spend(&mut s, "still nothing");
+
+        assert!(sent > 0, "the goal gave up before sending anything");
+        assert!(s.goal().is_none(), "a goal that gave up is still armed");
+    }
+
+    /// The round that spends the budget is the one whose reason a person most wants to read, and
+    /// the goal is gone by the time they could ask for it: what is said as it gives up is the only
+    /// report of that reason there will ever be. A judge that gave no reason is reported as one
+    /// rather than as an empty one.
+    #[test]
+    fn a_goal_that_gives_up_says_what_the_last_check_said() {
+        let mut s = session();
+        s.start_goal("cargo test exits 0".to_string());
+        let rounds = spend(&mut s, "the linker is still missing");
+
+        let ending = &s.transcript[s.transcript.len() - 2..];
+        assert_eq!(ending[0].text, t!(goal_spent, rounds = rounds));
+        assert_eq!(
+            ending[1].text,
+            t!(goal_last_check, reason = "the linker is still missing"),
+            "the give-up said nothing about the round that spent the budget"
+        );
+
+        let mut s = session();
+        s.start_goal("cargo test exits 0".to_string());
+        let rounds = spend(&mut s, "");
+
+        assert_eq!(
+            s.transcript.last().expect("an entry").text,
+            t!(goal_spent, rounds = rounds),
+            "a check that said nothing was quoted as having said it"
+        );
+    }
+
+    /// Send the work back with the same reason every round until the goal gives up, and say how
+    /// many rounds that took.
+    fn spend(s: &mut Session, reason: &str) -> usize {
         let mut sent = 0;
-        while s.goal_not_met("still nothing".to_string()).is_some() {
+        while s.goal_not_met(reason.to_string()).is_some() {
             sent += 1;
             s.complete("still going", Vec::new(), 0);
             assert!(sent < 1_000, "the goal never gave up");
         }
-
-        assert!(sent > 0, "the goal gave up before sending anything");
-        assert!(s.goal().is_none(), "a goal that gave up is still armed");
+        sent
     }
 
     /// A verdict about a goal nobody set is a verdict about nothing, and acting on one would send
