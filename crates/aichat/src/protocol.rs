@@ -287,6 +287,13 @@ pub struct ChatRequest {
     /// sent before and every service keeps its own default.
     #[serde(rename = "reasoning_effort", skip_serializing_if = "Option::is_none")]
     pub effort: Option<Effort>,
+    /// Whether a later request sends this conversation again, which is what makes a breakpoint on
+    /// the end of it worth the write it costs.
+    ///
+    /// Not a field this protocol has: it decides what the body asks to be cached rather than
+    /// travelling in one.
+    #[serde(skip)]
+    pub conversation_is_sent_again: bool,
 }
 
 /// Options that only apply to a streamed request.
@@ -306,7 +313,19 @@ impl ChatRequest {
             stream_options: None,
             tools: None,
             effort: None,
+            conversation_is_sent_again: true,
         }
+    }
+
+    /// The conversation in this request is given up once it answers, so nothing asks for a cache of
+    /// it.
+    ///
+    /// A breakpoint on the end of it would ask a service to store a prefix nothing sends again, and
+    /// a cache write is charged above the tokens it covers. The prompt in front of it is marked as
+    /// any other request's is, being the same bytes every time this request is made.
+    pub fn giving_up_its_conversation(mut self) -> Self {
+        self.conversation_is_sent_again = false;
+        self
     }
 
     pub fn with_tools(mut self, tools: Vec<Tool>) -> Self {
@@ -343,7 +362,7 @@ impl ChatRequest {
         let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
             return Ok(body);
         };
-        for at in breakpoints(&self.messages) {
+        for at in breakpoints(&self.messages, self.conversation_is_sent_again) {
             let content = serde_json::to_value(marked(&self.messages[at].content))?;
             if let Some(message) = messages.get_mut(at).and_then(Value::as_object_mut) {
                 message.insert("content".to_string(), content);
@@ -405,13 +424,18 @@ impl<'a> From<&'a Part> for MarkedPart<'a> {
 /// A result or a call is not marked. Marking one would mean sending a `tool` message's content as
 /// a list of blocks, which not every service that reads this wire format accepts, and a service
 /// that rejects it costs the system prompt's breakpoint too.
-fn breakpoints(messages: &[Message]) -> Vec<usize> {
+///
+/// The conversation's own breakpoint goes on only where a later request sends that conversation
+/// again. A request that gives its exchange up once it answers would be paying a cache write, which
+/// costs more than the tokens it covers, for a prefix nothing can read back.
+fn breakpoints(messages: &[Message], conversation_is_sent_again: bool) -> Vec<usize> {
     let system = messages
         .iter()
         .rposition(|message| matches!(message.role, Role::System));
     let last = messages
         .len()
         .checked_sub(1)
+        .filter(|_| conversation_is_sent_again)
         .filter(|&at| matches!(messages[at].role, Role::User));
     system
         .into_iter()
@@ -1610,6 +1634,32 @@ mod tests {
             // Everything between them is the request it always was, down to the bare string.
             assert_eq!(messages[1]["content"], json!("hi"));
             assert_eq!(messages[2]["content"], json!("hello"));
+        }
+
+        /// A request that gives its conversation up once it answers has no next request to read the
+        /// conversation's prefix back, and a cache write is charged above the tokens it covers. The
+        /// prompt is the other prefix: the same bytes every time such a request is made, so it is
+        /// marked as any other request's is.
+        #[test]
+        fn a_request_giving_up_its_conversation_marks_the_prompt_alone() {
+            let request = ChatRequest::new(
+                DEFAULT_MODEL,
+                vec![
+                    Message::system("summarise what you are shown"),
+                    Message::user("hi"),
+                    Message::assistant("hello"),
+                    Message::user("summarise everything above"),
+                ],
+            )
+            .giving_up_its_conversation();
+
+            let messages = &request.marked_body().unwrap()["messages"];
+
+            assert_eq!(
+                messages[0]["content"][0]["cache_control"],
+                json!({"type": "ephemeral"})
+            );
+            assert_eq!(messages[3]["content"], json!("summarise everything above"));
         }
 
         /// A round in the middle of a turn ends in a result rather than in what the person said.

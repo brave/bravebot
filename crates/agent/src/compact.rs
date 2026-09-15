@@ -161,7 +161,7 @@ pub fn compact<S: Sink>(
     // below adds to it. A summariser with a tool would be a second planner, and a second planner
     // is a second thing to reason about rather than a shorter conversation.
     let model = chat.model.unwrap_or(&chat.config.default_model);
-    let request = ChatRequest::new(model, messages);
+    let request = ChatRequest::new(model, messages).giving_up_its_conversation();
 
     let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
     if let Some(cancel) = chat.cancel {

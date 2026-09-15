@@ -10803,6 +10803,48 @@ fn a_conversation_past_the_budget_is_summarised_before_the_next_request() {
     );
 }
 
+/// The exchange in a summariser's request is the part compaction gives up, so a breakpoint on the
+/// end of it asks a service to store a prefix nothing sends again. A cache write is charged above
+/// the tokens it covers, which makes that a premium on one of the longest prefixes a session sends,
+/// for a cache nothing can read back.
+#[test]
+fn the_summariser_asks_for_no_cache_of_the_exchange_it_gives_up() {
+    let (endpoint, received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = a_long_conversation();
+
+    turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new(),
+    )
+    .expect("compacting runs")
+    .expect("a long conversation has something to summarise");
+
+    let body = received.recv().expect("the summariser's request");
+    let sent: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let messages = sent["messages"].as_array().expect("messages");
+    let marked: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| message.to_string().contains("cache_control"))
+        .map(|(at, _)| at)
+        .collect();
+
+    assert_eq!(messages[0]["role"], "system", "{body}");
+    assert_eq!(
+        marked,
+        vec![0],
+        "the summariser marked something other than its own instructions: {body}"
+    );
+}
+
 /// A summariser with a tool would be a second planner, which is a second thing to reason about
 /// rather than a shorter conversation. The request carries none, and nothing may add one.
 #[test]

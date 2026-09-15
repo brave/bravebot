@@ -39,7 +39,7 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [mcp.md](mcp.md) | `MCP` | 8 | tools that come from outside this repository, and what they are allowed to do |
 | [network-egress.md](network-egress.md) | `NET` | 6 | every request that leaves this process, and what comes back |
 | [backends.md](backends.md) | `BACKEND` | 32 | which service answers a request, and what a person may choose between |
-| [compaction.md](compaction.md) | `COMPACT` | 10 | shortening a long conversation into a summary of itself, in the request only |
+| [compaction.md](compaction.md) | `COMPACT` | 11 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 14 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 16 | one condition a person set, judged after every turn, until it holds |
 | [sessions.md](sessions.md) | `SESSION` | 20 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |

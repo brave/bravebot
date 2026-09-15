@@ -604,6 +604,11 @@ impl<'a> BedrockClient<'a> {
 
         let converse = protocol::request_from(&request.messages, request.tools.as_deref())
             .with_effort(request.effort.filter(|_| self.effort));
+        let converse = if request.conversation_is_sent_again {
+            converse
+        } else {
+            converse.without_the_conversation_breakpoint()
+        };
         let converse = if self.breakpoints {
             converse
         } else {
