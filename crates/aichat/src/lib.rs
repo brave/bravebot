@@ -154,6 +154,13 @@ pub struct AichatClient<'a> {
     subscription: Option<&'a mut dyn Subscription>,
     cancel: Option<Cancel>,
     gateway: Option<Gateway<'a>>,
+    /// Whether to ask the service to cache the prefix it will be sent again.
+    ///
+    /// On until a service says otherwise, because there is no field in this protocol's model
+    /// listings, or in Brave's, that answers whether a service reads a breakpoint. Asking costs one
+    /// extra round trip against a service that refuses, once per process; not asking costs the
+    /// whole prompt on every request against every service that would have cached it.
+    breakpoints: bool,
 }
 
 /// Where a request goes when a configured gateway serves the model, rather than Brave's endpoint.
@@ -179,6 +186,7 @@ impl<'a> AichatClient<'a> {
             subscription: None,
             cancel: None,
             gateway: None,
+            breakpoints: true,
         }
     }
 
@@ -250,6 +258,63 @@ impl<'a> AichatClient<'a> {
         }
     }
 
+    /// The body this request goes out as, asking the service to cache the prefix unless it has
+    /// already refused to.
+    ///
+    /// Marked on a copy on its way out rather than in the request the caller holds, so nothing a
+    /// turn built and nothing a session records carries a breakpoint: the mark belongs to this
+    /// request only.
+    fn body(&self, request: &ChatRequest) -> Result<serde_json::Value, ChatError> {
+        match self.breakpoints {
+            true => request.marked_body(),
+            false => serde_json::to_value(request),
+        }
+        .map_err(|e| ChatError::Encode(e.to_string()))
+    }
+
+    /// What a refusal is remembered against: the service, and the name the model goes out under.
+    ///
+    /// The service as well as the model, because a model id is only unique within one of them. Two
+    /// gateways can serve the same id, and one gateway refusing would otherwise stop the asking
+    /// everywhere, Brave's endpoint included. Both of Brave's tiers answer to the free host here,
+    /// being one deployment rather than two services.
+    fn refusal_key(&self, request: &ChatRequest) -> String {
+        let (service, model) = match self.gateway.as_ref() {
+            Some(gateway) => (
+                gateway.provider.chat_completions_url(),
+                gateway.model.as_str(),
+            ),
+            None => (self.config.chat_completions_url(), request.model.as_str()),
+        };
+        format!("{service}\n{model}")
+    }
+
+    /// Ask for no breakpoint from a service that has already refused one for this model.
+    fn recall(&mut self, key: &str) {
+        self.breakpoints = !refused(key);
+    }
+
+    /// Whether this failure is worth sending the request again without the breakpoints.
+    ///
+    /// Only when there are breakpoints to drop, so a service that answers this status for its own
+    /// reasons cannot make a retry loop out of it.
+    fn worth_dropping_breakpoints(&self, error: &ChatError) -> bool {
+        self.breakpoints && refuses_the_body(error)
+    }
+
+    /// Record what dropping the breakpoints proved, once the request has finished either way.
+    ///
+    /// Only a probe that answered says anything: the service took the request without the
+    /// breakpoints, having refused it with them. A probe that failed too proves nothing, an
+    /// invalid-request status being also what a prompt too long for the model is answered with, and
+    /// concluding a refusal from one would stop asking a service that caches happily. Nothing is
+    /// remembered from one, so the next request marks its prefixes and asks again.
+    fn probe_settled(&self, key: &str, probed: bool, failed: bool) {
+        if probed && !failed {
+            remember_refusal(key);
+        }
+    }
+
     /// The request to send, addressed and authenticated for whichever service serves it.
     ///
     /// The one place either backend is branched on. Both speak the same protocol over the same
@@ -270,9 +335,9 @@ impl<'a> AichatClient<'a> {
             serde_json::to_vec(value).map_err(|e| ChatError::Encode(e.to_string()))
         };
 
+        let mut body = self.body(request)?;
+
         if let Some(gateway) = self.gateway.as_ref() {
-            let mut body =
-                serde_json::to_value(request).map_err(|e| ChatError::Encode(e.to_string()))?;
             if let Some(object) = body.as_object_mut() {
                 object.insert(
                     "model".to_string(),
@@ -297,7 +362,7 @@ impl<'a> AichatClient<'a> {
             );
         }
 
-        let body = serde_json::to_vec(request).map_err(|e| ChatError::Encode(e.to_string()))?;
+        let body = encode(&body)?;
         let headers =
             bravebot_signing::sign(self.config.signing_key.expose(), &self.config.key_id, &body);
         let (url, credential) = self.route()?;
@@ -326,14 +391,26 @@ impl<'a> AichatClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
+        let refusal_key = self.refusal_key(request);
+        self.recall(&refusal_key);
+        let mut probed = false;
         let mut attempt = 1;
         loop {
             match self.complete_once(policy, request) {
+                // No backoff and no count against the attempts: the service answered, and what it
+                // objected to may be a field the next request can simply leave out.
+                Err(error) if self.worth_dropping_breakpoints(&error) => {
+                    self.breakpoints = false;
+                    probed = true;
+                }
                 Err(error) if worth_another_attempt(attempt, &error) => {
                     std::thread::sleep(backoff(attempt));
                     attempt += 1;
                 }
-                result => return result,
+                result => {
+                    self.probe_settled(&refusal_key, probed, result.is_err());
+                    return result;
+                }
             }
         }
     }
@@ -396,9 +473,18 @@ impl<'a> AichatClient<'a> {
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
         let request = request.clone().streamed();
+        let refusal_key = self.refusal_key(&request);
+        self.recall(&refusal_key);
+        let mut probed = false;
         let mut attempt = 1;
         loop {
             match self.stream_once(policy, &request, attempt, &mut progress) {
+                // Nothing has been drawn yet: a service refuses the body before it sends a chunk,
+                // so this retry is invisible rather than a reply that starts over.
+                Err(error) if self.worth_dropping_breakpoints(&error) => {
+                    self.breakpoints = false;
+                    probed = true;
+                }
                 Err(error) if worth_another_attempt(attempt, &error) => {
                     attempt += 1;
                     // Announced before the wait rather than after it, so the pause is explained
@@ -414,7 +500,10 @@ impl<'a> AichatClient<'a> {
                         return Err(ChatError::Cancelled);
                     }
                 }
-                result => return result,
+                result => {
+                    self.probe_settled(&refusal_key, probed, result.is_err());
+                    return result;
+                }
             }
         }
     }
@@ -658,6 +747,45 @@ fn worth_another_attempt(attempt: u32, error: &ChatError) -> bool {
 
 fn backoff(failures: u32) -> Duration {
     BACKOFF * 2u32.pow(failures - 1)
+}
+
+/// Statuses a service uses to say the body is not one it will take.
+///
+/// A refusal of the request as written, rather than of the credential, the model, or the rate. The
+/// same statuses cover a prompt too long for the model, which is why nothing is concluded from one
+/// until the request has been sent again without the breakpoints.
+const REFUSED_BODY_STATUSES: [u16; 2] = [400, 422];
+
+fn refuses_the_body(error: &ChatError) -> bool {
+    matches!(
+        error,
+        ChatError::Egress(EgressError::Status { status, .. })
+            if REFUSED_BODY_STATUSES.contains(status)
+    )
+}
+
+/// The service-and-model pairs a breakpoint has been refused for.
+///
+/// Process-wide, because a client is built per request and would otherwise re-learn the same
+/// refusal for every turn, which is the round trip this is here to spend once. Forgotten when the
+/// process ends, which is also when a service that has since started reading breakpoints gets
+/// asked again.
+fn refusers() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static REFUSERS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    REFUSERS.get_or_init(Default::default)
+}
+
+fn refused(key: &str) -> bool {
+    refusers()
+        .lock()
+        .is_ok_and(|refusers| refusers.contains(key))
+}
+
+fn remember_refusal(key: &str) {
+    if let Ok(mut refusers) = refusers().lock() {
+        refusers.insert(key.to_string());
+    }
 }
 
 #[cfg(test)]

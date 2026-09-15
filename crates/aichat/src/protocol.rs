@@ -331,6 +331,122 @@ impl ChatRequest {
         });
         self
     }
+
+    /// This request's body with the prefixes worth caching marked, for a service that reads a
+    /// breakpoint.
+    ///
+    /// A `Value` rather than a second request type. Every field is serialized from this struct and
+    /// only the marked messages' content is written over, so a field added to a request cannot be
+    /// forgotten here, which is the way a parallel wire struct goes wrong.
+    pub fn marked_body(&self) -> Result<Value, serde_json::Error> {
+        let mut body = serde_json::to_value(self)?;
+        let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+            return Ok(body);
+        };
+        for at in breakpoints(&self.messages) {
+            let content = serde_json::to_value(marked(&self.messages[at].content))?;
+            if let Some(message) = messages.get_mut(at).and_then(Value::as_object_mut) {
+                message.insert("content".to_string(), content);
+            }
+        }
+        Ok(body)
+    }
+}
+
+/// A breakpoint: everything up to and including the block carrying this may be answered out of
+/// the service's cache.
+///
+/// `ephemeral` is the only lifetime the shape defines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CacheControl {
+    Ephemeral,
+}
+
+/// One content block on its way out, which unlike a [`Part`] can carry a breakpoint.
+///
+/// Separate from [`Part`] because a part is also what a stored session records, and a breakpoint
+/// belongs to one request rather than to the conversation. Keeping the field out of the recorded
+/// type is what stops a breakpoint reaching a session file, where it would be read back and sent
+/// again in a request that never asked for one.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum MarkedPart<'a> {
+    Text {
+        text: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
+    ImageUrl {
+        image_url: &'a ImageUrl,
+    },
+}
+
+impl<'a> From<&'a Part> for MarkedPart<'a> {
+    fn from(part: &'a Part) -> Self {
+        match part {
+            Part::Text { text } => MarkedPart::Text {
+                text,
+                cache_control: None,
+            },
+            Part::ImageUrl { image_url } => MarkedPart::ImageUrl { image_url },
+        }
+    }
+}
+
+/// Which messages carry a breakpoint: the system prompt, and the last thing the user said.
+///
+/// Those are the two prefixes that outlive a request. The system prompt and the tool schemas in
+/// front of it are the same bytes every turn, and the conversation up to the last user turn is the
+/// same bytes for every round of that turn, since what a round adds is a call and its result on
+/// the end. So the rounds within one turn read the whole conversation back and pay only for what
+/// they appended, and the next turn extends the cached prefix rather than starting one.
+///
+/// A result or a call is not marked. Marking one would mean sending a `tool` message's content as
+/// a list of blocks, which not every service that reads this wire format accepts, and a service
+/// that rejects it costs the system prompt's breakpoint too.
+fn breakpoints(messages: &[Message]) -> Vec<usize> {
+    let system = messages
+        .iter()
+        .rposition(|message| matches!(message.role, Role::System));
+    let last = messages
+        .len()
+        .checked_sub(1)
+        .filter(|&at| matches!(messages[at].role, Role::User));
+    system
+        .into_iter()
+        .chain(last)
+        .filter(|&at| ends_in_words(&messages[at]))
+        .collect()
+}
+
+/// Whether a message ends in words, which is what a breakpoint has to sit on.
+///
+/// A message ending in a picture is left unmarked rather than marked behind the picture: what a
+/// service makes of a breakpoint on an image block is not a thing to guess at. An empty string is
+/// no words at all.
+fn ends_in_words(message: &Message) -> bool {
+    match &message.content {
+        Content::Text(text) => !text.is_empty(),
+        Content::Parts(parts) => {
+            matches!(parts.last(), Some(Part::Text { text }) if !text.is_empty())
+        }
+    }
+}
+
+/// The same content as blocks, with the breakpoint on the words it ends in.
+fn marked(content: &Content) -> Vec<MarkedPart<'_>> {
+    let mut parts = match content {
+        Content::Text(text) => vec![MarkedPart::Text {
+            text,
+            cache_control: None,
+        }],
+        Content::Parts(parts) => parts.iter().map(MarkedPart::from).collect(),
+    };
+    if let Some(MarkedPart::Text { cache_control, .. }) = parts.last_mut() {
+        *cache_control = Some(CacheControl::Ephemeral);
+    }
+    parts
 }
 
 /// A tool call the model asked for.
@@ -1453,5 +1569,187 @@ mod tests {
             },
         }]);
         assert_eq!(message.content.as_text(), None);
+    }
+
+    mod breakpoints {
+        use super::*;
+        use serde_json::json;
+
+        fn picture() -> Part {
+            Part::ImageUrl {
+                image_url: ImageUrl {
+                    url: "data:image/png;base64,AAAA".into(),
+                },
+            }
+        }
+
+        /// The two prefixes the next request will send again: the system prompt, which the tool
+        /// schemas sit in front of, and the conversation up to the last thing the user said.
+        #[test]
+        fn the_system_prompt_and_the_last_thing_the_user_said_are_marked() {
+            let request = ChatRequest::new(
+                DEFAULT_MODEL,
+                vec![
+                    Message::system("be brief"),
+                    Message::user("hi"),
+                    Message::assistant("hello"),
+                    Message::user("make a game"),
+                ],
+            );
+
+            let messages = &request.marked_body().unwrap()["messages"];
+
+            assert_eq!(
+                messages[0]["content"],
+                json!([{"type": "text", "text": "be brief", "cache_control": {"type": "ephemeral"}}])
+            );
+            assert_eq!(
+                messages[3]["content"],
+                json!([{"type": "text", "text": "make a game", "cache_control": {"type": "ephemeral"}}])
+            );
+            // Everything between them is the request it always was, down to the bare string.
+            assert_eq!(messages[1]["content"], json!("hi"));
+            assert_eq!(messages[2]["content"], json!("hello"));
+        }
+
+        /// A round in the middle of a turn ends in a result rather than in what the person said.
+        /// Marking one would mean sending a `tool` message as a list of blocks, which not every
+        /// service reading this wire format accepts, and a service that rejects the shape costs
+        /// the system prompt's breakpoint too. The prefix through the last user turn is cached
+        /// from the first round of the turn regardless, which is the part worth having.
+        #[test]
+        fn a_result_the_assistant_asked_for_is_not_marked() {
+            let request = ChatRequest::new(
+                DEFAULT_MODEL,
+                vec![
+                    Message::system("be brief"),
+                    Message::user("read it"),
+                    Message::assistant_calling("", vec![]),
+                    Message::tool_result("call-1", "the file"),
+                ],
+            );
+
+            let messages = &request.marked_body().unwrap()["messages"];
+
+            assert_eq!(
+                messages[0]["content"][0]["cache_control"],
+                json!({"type": "ephemeral"})
+            );
+            assert_eq!(messages[3]["content"], json!("the file"));
+        }
+
+        /// A breakpoint has to sit on a block, and what a service makes of one on a picture is not
+        /// a thing to guess at. The words the person typed arrive in front of the attachment, so
+        /// the block on the end is the picture.
+        #[test]
+        fn a_turn_ending_in_a_picture_is_left_unmarked() {
+            let request = ChatRequest::new(
+                DEFAULT_MODEL,
+                vec![Message::user_parts(vec![
+                    Part::Text {
+                        text: "what is this".into(),
+                    },
+                    picture(),
+                ])],
+            );
+
+            let messages = &request.marked_body().unwrap()["messages"];
+
+            assert_eq!(
+                messages[0]["content"],
+                json!([
+                    {"type": "text", "text": "what is this"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+                ])
+            );
+        }
+
+        /// And where the words are the last block, the mark goes on them and the picture beside
+        /// them is sent exactly as it was.
+        #[test]
+        fn the_words_after_a_picture_carry_the_mark() {
+            let request = ChatRequest::new(
+                DEFAULT_MODEL,
+                vec![Message::user_parts(vec![
+                    picture(),
+                    Part::Text {
+                        text: "what is this".into(),
+                    },
+                ])],
+            );
+
+            let messages = &request.marked_body().unwrap()["messages"];
+
+            assert_eq!(
+                messages[0]["content"][1]["cache_control"],
+                json!({"type": "ephemeral"})
+            );
+            assert_eq!(messages[0]["content"][0]["type"], json!("image_url"));
+        }
+
+        /// The marked body is this request and not a second one built beside it. A field added to a
+        /// request must reach the service whether or not the prefix was marked, and the way that
+        /// goes wrong is a parallel wire struct nobody remembered to extend.
+        #[test]
+        fn a_marked_body_changes_nothing_but_the_messages() {
+            let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")])
+                .with_tools(vec![Tool::function("read", "reads", json!({}))])
+                .with_effort(Some(Effort::Xhigh))
+                .streamed();
+
+            let plain = serde_json::to_value(&request).unwrap();
+            let marked = request.marked_body().unwrap();
+
+            let plain = plain.as_object().unwrap();
+            let marked = marked.as_object().unwrap();
+            for (field, value) in plain {
+                if field == "messages" {
+                    continue;
+                }
+                assert_eq!(marked.get(field), Some(value), "{field} did not survive");
+            }
+            assert_eq!(
+                marked.len(),
+                plain.len(),
+                "a field appeared or went missing"
+            );
+        }
+
+        /// A marked message's blocks are the only thing built a second time, so they are where
+        /// something can go missing: a block carries what the part it came from carried, and the
+        /// mark is all that is new. Asserted against the serialization of the same content rather
+        /// than against a literal, so a field a part gains and a marked block does not fails here
+        /// instead of quietly stopping arriving.
+        #[test]
+        fn a_marked_block_is_the_block_it_came_from_and_the_mark() {
+            let parts = vec![
+                Part::Text {
+                    text: "look".into(),
+                },
+                picture(),
+                Part::Text {
+                    text: "at this".into(),
+                },
+            ];
+            let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user_parts(parts.clone())]);
+
+            let mut expected = serde_json::to_value(&parts).unwrap();
+            expected.as_array_mut().unwrap().last_mut().unwrap()["cache_control"] =
+                json!({"type": "ephemeral"});
+
+            assert_eq!(
+                request.marked_body().unwrap()["messages"][0]["content"],
+                expected
+            );
+        }
+
+        /// An empty message carries no words to mark. Marking one would send a block a service is
+        /// entitled to reject, in place of the empty string it accepts today.
+        #[test]
+        fn an_empty_turn_is_left_alone() {
+            let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("")]);
+            let messages = &request.marked_body().unwrap()["messages"];
+            assert_eq!(messages[0]["content"], json!(""));
+        }
     }
 }
