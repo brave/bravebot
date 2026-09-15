@@ -203,7 +203,8 @@ longer attached, and the only way to find that out is to keep pressing.
 ### INPUT-7: the caret steps over a marker whole, and never rests inside one
 
 One press of Left or Right crosses a marker in either direction, and there is no position within
-one for the caret to stop at.
+one for the caret to stop at. Up and Down keep their place along the line, and where that place
+falls inside a marker the caret comes to rest on the marker instead.
 
 **Why.** A caret between two halves of a picture is in a place the person cannot see, and whatever
 they type next lands there. Counting out the characters a marker happens to be spelled with is a
@@ -211,6 +212,8 @@ dozen presses to cross what reads as a single word.
 
 `verified-by: bravebot_tui::state::the_caret_steps_over_a_marker_whole`
 `verified-by: bravebot_tui::state::the_caret_cannot_come_to_rest_inside_a_marker`
+`verified-by: bravebot_tui::state::the_caret_cannot_come_to_rest_inside_a_marker_on_another_line`
+`verified-by: bravebot_tui::state::typing_after_a_move_between_lines_leaves_the_picture_attached`
 
 
 <a id="INPUT-8"></a>
