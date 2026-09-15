@@ -1391,6 +1391,54 @@ fn an_unknown_tool_is_reported_to_the_model() {
     assert!(second.contains("no such tool"), "got: {second}");
 }
 
+/// A shell the planner asks for by name gets the answer every unknown name gets, and the line it
+/// proposed does not run.
+///
+/// Leaving the tool out of the list it is offered is half of withholding it. A model can name a
+/// tool nobody offered, from a stale system prompt or a guess, so the refusal has to live where the
+/// name arrives. The marker file is what says the refusal was one: an assertion on the text alone
+/// would pass on a dispatch that ran the line and complained afterwards.
+///
+/// This is the one scratch name here that carries a process id, because it is the one whose absence
+/// is the assertion: a second run of this binary sharing the directory would delete a marker that
+/// had been written, and the test would pass on the regression it exists to catch.
+#[test]
+fn a_shell_the_planner_names_is_not_dispatched() {
+    let scratch = Scratch::new(&format!("shell-tool-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let marker = scratch.path.join("the-line-ran");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "shell",
+            &format!(r#"{{"command": "touch {}"}}"#, marker.display()),
+        ),
+        reply_with("there is no shell to call"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("run something for me");
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("no such tool"),
+        "a shell call was answered as something other than an unknown name: {second}"
+    );
+    assert!(!marker.exists(), "the line the planner proposed ran");
+}
+
 fn tool_request_2(tool: &str, arguments: &str) -> String {
     let escaped = arguments.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
