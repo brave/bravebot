@@ -9118,6 +9118,150 @@ fn a_line_remembered_past_the_session_covers_no_other_line() {
     );
 }
 
+/// The same, carrying forward what earlier turns in this session put to the person and handing
+/// back what this one leaves them with.
+fn a_run_turn_carrying(
+    scratch: &Scratch,
+    home: &std::path::Path,
+    arguments: &str,
+    asked: bravebot_core::programs::AskedAbout,
+    confirmer: &mut AskedAboutRuns,
+) -> bravebot_core::programs::AskedAbout {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) =
+        serve_sequence(vec![tool_request("run", arguments), reply_with("done")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it")
+            .with_home(Some(home.to_path_buf()))
+            .remembering(Some("the-session".to_string()))
+            .already_asked_about(asked),
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs")
+    .asked_about
+}
+
+/// RUN-20: a commit message is different every time, so the person is asked about the same binary
+/// again in this session and in every later one, and neither key on the prompt reaches the second
+/// line. The prompt says where the answer that does reach it is written, and it says it at the
+/// second prompt, which is the first moment anything can tell that the arguments move.
+#[test]
+fn a_binary_asked_about_under_two_argument_lists_is_advised_to_a_settings_file() {
+    let scratch = Scratch::new("run-varying-advice");
+    let home = Scratch::new("run-varying-advice-home");
+
+    let mut first = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let asked = a_run_turn_carrying(
+        &scratch,
+        &home.path,
+        r#"{"command":"touch one.txt"}"#,
+        bravebot_core::programs::AskedAbout::new(),
+        &mut first,
+    );
+    assert!(
+        first.seen.lock().unwrap()[0].pattern.is_none(),
+        "a first prompt advised a pattern with nothing to compare its arguments against"
+    );
+
+    let mut second = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    a_run_turn_carrying(
+        &scratch,
+        &home.path,
+        r#"{"command":"touch two.txt"}"#,
+        asked,
+        &mut second,
+    );
+
+    assert_eq!(
+        second.seen.lock().unwrap()[0].pattern,
+        Some(home.path.join("settings.json")),
+        "the prompt for a line whose arguments had already differed named no settings file"
+    );
+}
+
+/// RUN-20: the advice is for the line whose arguments move. A line repeated exactly is the one
+/// RUN-19's key answers in full, so advising a pattern there would send somebody to edit a file
+/// where a keypress would do.
+#[test]
+fn a_line_asked_about_again_unchanged_is_advised_no_pattern() {
+    let scratch = Scratch::new("run-unvarying-advice");
+    let home = Scratch::new("run-unvarying-advice-home");
+
+    let mut first = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let asked = a_run_turn_carrying(
+        &scratch,
+        &home.path,
+        r#"{"command":"touch again.txt"}"#,
+        bravebot_core::programs::AskedAbout::new(),
+        &mut first,
+    );
+
+    let mut second = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    a_run_turn_carrying(
+        &scratch,
+        &home.path,
+        r#"{"command":"touch again.txt"}"#,
+        asked,
+        &mut second,
+    );
+
+    assert!(
+        second.seen.lock().unwrap()[0].pattern.is_none(),
+        "a line that repeats exactly was advised to a settings file"
+    );
+}
+
+/// RUN-20: the advice says that editing a settings file ends the asking, and for a line naming a
+/// file to write it would not: such a line is put to a person before any rule is read, so a pattern
+/// for it stops no prompt. The arguments have varied all the same, which is what makes this the
+/// case the refusal is for.
+#[test]
+fn a_line_no_rule_is_ever_read_for_is_advised_no_pattern() {
+    let scratch = Scratch::new("run-writing-advice");
+    let home = Scratch::new("run-writing-advice-home");
+
+    let mut first = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let asked = a_run_turn_carrying(
+        &scratch,
+        &home.path,
+        r#"{"command":"echo one"}"#,
+        bravebot_core::programs::AskedAbout::new(),
+        &mut first,
+    );
+
+    let mut second = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    a_run_turn_carrying(
+        &scratch,
+        &home.path,
+        r#"{"command":"echo two > out.txt"}"#,
+        asked,
+        &mut second,
+    );
+
+    let seen = second.seen.lock().unwrap();
+    assert!(
+        !seen[0].plan.writes.is_empty(),
+        "this test needs a line the rules are never read for"
+    );
+    assert!(
+        seen[0].pattern.is_none(),
+        "a line asked about before any rule is read was told a pattern would end the asking"
+    );
+}
+
 /// RUN-19: a session with nobody to put a prompt to consults no record at all. What a record
 /// answers is a prompt, and where no prompt can be drawn it would be saying instead which effects
 /// may happen with nobody there to see them.

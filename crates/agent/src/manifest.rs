@@ -1128,6 +1128,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
 
     let trust = policy.trust().clone();
     let programs = policy.programs().clone();
+    let asked_about = policy.asked().clone();
     Ok(Outcome {
         answer: reply.clone(),
         reply,
@@ -1137,6 +1138,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         clean: planning_was_clean && policy.finish(),
         trust,
         programs,
+        asked_about,
         tokens,
         output_tokens,
         cached,

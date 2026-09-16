@@ -248,6 +248,12 @@ pub struct Policy<'sink, S: Sink> {
     scratch: Option<std::path::PathBuf>,
     /// Which programs the user has stopped being asked about, by resolved path.
     programs: crate::programs::TrustedPrograms,
+    /// Which command lines this session has already put to the user at a run prompt.
+    ///
+    /// Decides nothing about whether a line runs. It is read only to say, at a prompt, that the
+    /// program in front of the person is one they have already answered about under different
+    /// arguments, which is a line no key at a prompt will finish asking about.
+    asked: crate::programs::AskedAbout,
     /// The command lines somebody asked to be remembered past the session, for this directory.
     ///
     /// Refreshed by the driver wherever a run prompt would be drawn rather than held from the start
@@ -360,6 +366,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             root: None,
             scratch: None,
             programs: crate::programs::TrustedPrograms::new(),
+            asked: crate::programs::AskedAbout::new(),
             remembered: crate::remembered::Remembered::new(),
             permissions: crate::permissions::Permissions::new(),
             vouch_asked: std::collections::BTreeSet::new(),
@@ -650,6 +657,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The programs vouched for, including any this turn recorded.
     pub fn programs(&self) -> &crate::programs::TrustedPrograms {
         &self.programs
+    }
+
+    /// Seed the session's list of run prompts already put to this person.
+    ///
+    /// A turn is where a prompt is drawn and a session is where somebody answers the same shape of
+    /// prompt all day, so the list is the caller's and this turn adds to it. It grants nothing, so
+    /// seeding it cannot widen what a turn may do: the most a wrong list can cost is a sentence of
+    /// advice drawn or not drawn.
+    pub fn with_asked(mut self, asked: crate::programs::AskedAbout) -> Self {
+        self.asked = asked;
+        self
+    }
+
+    /// The run prompts put to this person, for the caller to carry into the next turn.
+    pub fn asked(&self) -> &crate::programs::AskedAbout {
+        &self.asked
     }
 
     /// Hand over the record of lines somebody asked to be remembered past the session.
@@ -3332,6 +3355,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// RUN-6 gives about the key that vouches: an invariant about what a record may hold does not
     /// rest on a drawing.
     pub fn may_remember(&self, plan: &crate::command::Plan) -> bool {
+        self.a_rule_could_answer(plan)
+    }
+
+    /// Whether a rule the person writes in the settings file would decide this line.
+    ///
+    /// The same question [`Policy::may_remember`] asks, because the answer is the same one: the
+    /// four refusals above are each made in [`Policy::plan_needs_approval`] before the rules are
+    /// read, and the record is consulted after them, so whatever stops a rule from deciding a line
+    /// stops a record from deciding it too. Two names rather than one because the two call sites
+    /// are asking different things: one is whether a key may be offered, and this is whether the
+    /// prompt may say that editing a file ends the asking. Saying so of a line the rules never
+    /// reach would send somebody to write a pattern that stops no prompt.
+    ///
+    /// False as well where a rule already matches the line, which is not a refusal but an answer:
+    /// the person has found the file, and what their rule says is what happens.
+    pub fn a_rule_could_answer(&self, plan: &crate::command::Plan) -> bool {
         !plan.releases_private()
             && plan.writes.is_empty()
             && self.runs_at_the_root(plan)
@@ -3340,6 +3379,34 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 self.permissions.for_pipeline(&self.plan_lines(plan)),
                 crate::permissions::Decision::Unmatched
             )
+    }
+
+    /// Record that this plan was put to a person at a run prompt.
+    ///
+    /// Called where the prompt is drawn rather than from [`Policy::plan_needs_approval`], because
+    /// what this list holds is questions somebody read. It grants nothing, so nothing rests on it
+    /// being complete: a line missed here costs a sentence of advice at a later prompt and can
+    /// cost nothing else.
+    pub fn asked_about(&mut self, plan: &crate::command::Plan) {
+        for step in plan.steps() {
+            self.asked.record(step.command());
+        }
+    }
+
+    /// Whether some step of this plan names a binary already asked about under other arguments.
+    ///
+    /// What a prompt says instead of offering a key that would cover a family: this is the only
+    /// thing available at a prompt that establishes a line will be asked about again however it is
+    /// answered, and it establishes it by having asked twice rather than by reading the argv.
+    ///
+    /// Order against [`Policy::asked_about`] does not matter, and neither does a line naming one
+    /// binary twice: the whole line is compared at once and its own steps are not what it differs
+    /// from, so nothing here can make a line vary from itself.
+    ///
+    /// Read-only, and it writes no audit entry: it decides what a prompt says, not what runs.
+    pub fn arguments_have_varied(&self, plan: &crate::command::Plan) -> bool {
+        let line: Vec<_> = plan.steps().iter().map(|step| step.command()).collect();
+        self.asked.arguments_have_varied(&line)
     }
 
     /// Record that a person approved this exact plan.
@@ -6056,6 +6123,76 @@ mod tests {
             label.confidentiality,
             crate::label::Confidentiality::Private
         );
+    }
+
+    /// RUN-20: the prompt for a line whose arguments differ from one run to the next says so, and
+    /// the only thing that establishes it at a prompt is the person having read two argument lists
+    /// for one binary. A commit message is the case: the second `git commit` is a new line, is
+    /// asked about however the first was answered, and no key on the screen changes that.
+    #[test]
+    fn a_binary_asked_about_under_two_argument_lists_is_one_whose_arguments_have_varied() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        let first = plan_of(vec![step_named("git", &["commit", "-m", "first"])]);
+        let second = plan_of(vec![step_named("git", &["commit", "-m", "second"])]);
+        assert!(
+            !policy.arguments_have_varied(&first),
+            "a first prompt had something to compare itself against"
+        );
+        policy.asked_about(&first);
+        assert!(policy.arguments_have_varied(&second));
+    }
+
+    /// RUN-20: a line that repeats exactly is the one RUN-19's key answers in full, so advice about
+    /// a settings file there would be sending somebody to edit a file where a keypress would do.
+    #[test]
+    fn a_line_asked_about_again_unchanged_has_not_varied() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.asked_about(&a_plan());
+        assert!(!policy.arguments_have_varied(&a_plan()));
+    }
+
+    /// RUN-20: the advice says that editing a settings file ends the asking, so it must not be
+    /// given about a line no rule in that file is ever read for. A line naming a file to write is
+    /// put to a person before the rules are consulted, and so are one fed private data, one running
+    /// outside the root and one carrying an assignment: a pattern for any of them would stop no
+    /// prompt, and somebody who wrote one would be told to change the wrong thing.
+    #[test]
+    fn a_line_the_rules_are_never_read_for_is_one_no_pattern_would_answer() {
+        let mut sink = RecordingSink::new();
+        let policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        assert!(policy.a_rule_could_answer(&a_plan()));
+
+        let mut writing = a_plan();
+        writing.writes = vec![std::path::PathBuf::from("/work/out.txt")];
+        assert!(!policy.a_rule_could_answer(&writing));
+
+        let mut assigning = a_plan();
+        assigning.steps = crate::command::Steps::Pipeline(vec![crate::command::Step {
+            environment: vec![("LD_PRELOAD".to_string(), "./evil.so".to_string())],
+            ..step_named("git", &["log"])
+        }]);
+        assert!(!policy.a_rule_could_answer(&assigning));
+
+        let mut elsewhere = a_plan();
+        elsewhere.directory = std::path::PathBuf::from("/work/vendor");
+        assert!(!policy.a_rule_could_answer(&elsewhere));
+    }
+
+    /// RUN-20: the list of questions a person has read is not a grant. Nothing in it stops a later
+    /// prompt, vouches for a command, or reaches the record that outlives the session, so a session
+    /// cannot grow an allowlist out of what it asked about.
+    #[test]
+    fn a_line_asked_about_is_not_thereby_vouched_for_or_remembered() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.asked_about(&a_plan());
+        assert!(
+            policy.plan_needs_approval(&a_plan()),
+            "asking about a line stopped the next prompt for it"
+        );
+        assert!(policy.programs().is_empty());
     }
 
     /// RUN-19: a covered line is not an entry in the vouched list, and puts none there. One list

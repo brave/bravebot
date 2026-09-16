@@ -124,6 +124,17 @@ pub struct RunRequest {
     /// cannot endorse a record they were not shown, and deleting a line from that file is the way
     /// back from having pressed the key.
     pub record: Option<std::path::PathBuf>,
+    /// Where a pattern would be written, where this line's arguments will differ next time.
+    ///
+    /// `Some` exactly where the prompt says so: the same binary has already been put to this
+    /// person in this session under a different argument list, and there is a settings file to
+    /// name. `None` everywhere else, and nothing about patterns is drawn at all.
+    ///
+    /// The path rather than a flag, for the reason [`RunRequest::record`] carries one: the advice
+    /// is to edit a file, and advice that does not say which file is a chore handed over twice.
+    /// The two are independent. A line can repeat and vary in one session, so a prompt may offer
+    /// the key and give the advice together, and the key still covers only the line on screen.
+    pub pattern: Option<std::path::PathBuf>,
 }
 
 impl RunRequest {
@@ -143,6 +154,7 @@ impl RunRequest {
             .collect();
         Self {
             record: None,
+            pattern: None,
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),
@@ -193,6 +205,11 @@ impl RunRequest {
     /// Whether the prompt may offer to record this answer past the session.
     pub fn may_record(&self) -> bool {
         self.record.is_some()
+    }
+
+    /// Whether the prompt says a pattern in a settings file is what answers this line.
+    pub fn advises_a_pattern(&self) -> bool {
+        self.pattern.is_some()
     }
 
     /// A short description for a prompt line.

@@ -172,6 +172,20 @@ impl PermissionLists {
     }
 }
 
+/// The user's own settings file inside `directory`, whether or not it exists yet.
+///
+/// The one place a rule about which commands to ask about is written by hand, so a prompt that
+/// advises writing one has to name it. Here rather than in the caller because the name of the file
+/// is this module's, and a second spelling of it would have a prompt sending somebody to a path
+/// nothing reads.
+///
+/// The user's layer and not the project one. A rule in a checkout is a rule whoever wrote the
+/// checkout wrote, and advice to put a standing permission there would be advice to trust a file
+/// that arrives with a clone.
+pub fn user_settings_file(directory: &Path) -> PathBuf {
+    directory.join(SETTINGS_FILE)
+}
+
 impl Settings {
     /// Read every settings layer in force for this user, in this directory.
     pub fn load() -> Self {

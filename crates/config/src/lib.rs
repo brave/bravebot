@@ -21,7 +21,7 @@ mod settings;
 #[cfg(test)]
 mod testutil;
 
-pub use settings::Settings;
+pub use settings::{Settings, user_settings_file};
 
 pub mod bedrock;
 pub mod provider;

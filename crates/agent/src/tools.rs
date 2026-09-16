@@ -3271,6 +3271,11 @@ fn run<S: Sink, C: Confirmer>(
     let covered_by_record = !asking && recalled.as_ref().is_some_and(|lines| lines.covers(&plan));
 
     if asking {
+        // Whether this person has already read a prompt for this binary under other arguments,
+        // asked before the line on screen joins that list. An identical line is not a different
+        // argument list, so the order is a matter of reading rather than of correctness.
+        let varied = policy.arguments_have_varied(&plan);
+        policy.asked_about(&plan);
         let request = crate::confirm::RunRequest {
             plan: plan.clone(),
             // Offered only where it would stop a later prompt, which the policy decides: not for a
@@ -3283,6 +3288,18 @@ fn run<S: Sink, C: Confirmer>(
                 .filter(|_| policy.may_remember(&plan))
                 .filter(|_| crate::remembered::may_be_added_to())
                 .map(|store| store.path().to_path_buf()),
+            // Said only where a key at this prompt will not finish the asking, only where a rule
+            // in that file would decide the line at all, and only where there is a file to name:
+            // a line that writes, releases private data, runs outside the root or carries an
+            // assignment is asked about before any rule is read, so a pattern for one would stop
+            // no prompt, and advice on a machine that names no home directory would send somebody
+            // to a path nothing reads. A session in the mode that adds nothing to `~/.bravebot`
+            // still gets the advice, because writing that file is the person's own act rather
+            // than this session's.
+            pattern: tools
+                .home
+                .filter(|_| varied && policy.a_rule_could_answer(&plan))
+                .map(bravebot_config::user_settings_file),
         };
         let answer = confirmer.confirm_run(&request);
         if !answer.approved() {

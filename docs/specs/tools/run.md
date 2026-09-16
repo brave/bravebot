@@ -890,14 +890,70 @@ asking, and it makes nothing readable. A file they edited is also one they can r
 Saying nothing
 would be the worse answer, for the reason [RUN-14](#RUN-14) says what would lift a quarantine rather
 than leaving it to be found: somebody answering the same shape of prompt all day learns nothing from
-the prompt about the durable form.
+the prompt about the durable form. No pattern is put on the screen, for the reason a box with one in
+it is refused above: naming the file is the fact they cannot get from anywhere else, and composing
+the rule is the judgment only they can make.
+
+**How a prompt knows which line that is.** The person has already read a run prompt for the same
+binary, in this session, under a different argument list. Two argument lists for one program is the
+variation itself rather than a reading of the argv, and nothing in it says which position moved, so
+this establishes what the clause needs without making the judgment the clause refuses. It is read
+off the run prompts this session has drawn, which is a list that grants nothing: membership stops no
+prompt, raises no label, vouches for nothing and reaches no file. It is written nowhere, not even
+into the session record that carries the vouched list across a `--resume` ([RUN-9](#RUN-9)), because
+what it holds is questions somebody read rather than anything they are carrying. So the first prompt
+of a session says nothing about patterns, and so does the first prompt of a resumed one. Neither does
+any prompt on a machine that names no home directory, since there is no file to name and advice that
+cannot say which file is a chore handed over without the one fact it needs.
+
+The whole line is compared at once, and the argument lists the line itself holds are not what it
+differs from. `grep TODO src | grep -v test` names one binary under two argument lists, so a
+step-by-step reading would have that line, asked about a second time, varying from itself.
+
+**Only where a rule would decide the line.** The advice says that editing a file ends the asking, so
+it is given only where that is true. A line releasing private input, naming a file to write, running
+anywhere but the workspace root, or writing an assignment in front of a program is put to a person
+before any rule is read ([RUN-6](#RUN-6), [RUN-8](#RUN-8)), so no pattern reaches one and saying
+otherwise would have somebody change the wrong thing about the line. These are the same four
+refusals [RUN-19](#RUN-19)'s key is withheld for, and for the same reason: each is made before the
+thing being offered is consulted. Where a rule already matches the line, nothing is said either,
+since the person has found the file and what their rule says is what happens.
+
+**Why not on every prompt.** [RUN-19](#RUN-19)'s key is the whole of the answer for a line that
+repeats, so the advice there would send somebody to edit a file where a keypress would do. It is
+drawn beside that key rather than instead of it, because a line can repeat and vary in one session
+and both answers are then true of it.
 
 **A known cost.** A line whose arguments change every time is asked about every time, in this session
 and in the next. A commit message and a new branch name are the two that do this in ordinary work.
 The answer for them is a pattern the person writes or a prompt each time, and this clause chooses the
 prompt.
 
-`verified-by: none`
+**A second known cost.** Two different jobs for one program read as one job whose arguments moved.
+`git log` followed by `git push` draws the advice, because telling those apart means deciding which
+argument names something to run, which is what this clause refuses to decide for a grant and cannot
+decide here either. What it costs is a sentence of advice where a person did not need one, against
+the alternative of withholding it from the case it exists for.
+
+`verified-by: bravebot_core::programs::a_second_argument_list_for_one_binary_is_a_line_whose_arguments_vary`
+`verified-by: bravebot_core::programs::a_line_asked_about_twice_is_not_a_line_whose_arguments_vary`
+`verified-by: bravebot_core::programs::a_line_nothing_has_been_asked_about_has_no_arguments_that_have_varied`
+`verified-by: bravebot_core::programs::a_second_binary_is_not_the_first_ones_arguments_varying`
+`verified-by: bravebot_core::programs::asking_about_a_line_vouches_for_nothing`
+`verified-by: bravebot_core::policy::a_binary_asked_about_under_two_argument_lists_is_one_whose_arguments_have_varied`
+`verified-by: bravebot_core::policy::a_line_asked_about_again_unchanged_has_not_varied`
+`verified-by: bravebot_core::policy::a_line_asked_about_is_not_thereby_vouched_for_or_remembered`
+`verified-by: bravebot_core::policy::a_line_the_rules_are_never_read_for_is_one_no_pattern_would_answer`
+`verified-by: bravebot_core::programs::a_line_naming_one_binary_twice_does_not_vary_from_itself`
+`verified-by: bravebot_agent::turn::a_line_no_rule_is_ever_read_for_is_advised_no_pattern`
+`verified-by: bravebot_core::policy::vouching_for_one_command_does_not_cover_another_of_the_same_program`
+`verified-by: bravebot_core::remembered::no_entry_reaches_a_second_argument_list`
+`verified-by: bravebot_agent::turn::a_binary_asked_about_under_two_argument_lists_is_advised_to_a_settings_file`
+`verified-by: bravebot_agent::turn::a_line_asked_about_again_unchanged_is_advised_no_pattern`
+`verified-by: bravebot_tui::confirm::a_prompt_for_a_line_whose_arguments_vary_names_the_settings_file`
+`verified-by: bravebot_tui::confirm::a_prompt_for_a_line_whose_arguments_vary_says_what_a_pattern_costs`
+`verified-by: bravebot_tui::confirm::advising_a_pattern_offers_no_key_that_grants_one`
+`verified-by: bravebot_tui::confirm::a_prompt_for_a_line_nothing_has_varied_says_nothing_about_a_pattern`
 
 ## Open questions
 
