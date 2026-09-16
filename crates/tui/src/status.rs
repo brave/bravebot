@@ -113,6 +113,22 @@ pub struct Facts<'a> {
     ///
     /// Left out when there is none, for the reason the loop is.
     pub goal: Option<&'a crate::goals::Running>,
+    /// The command lines somebody asked to be remembered past a session, for this directory.
+    ///
+    /// `None` where this session keeps no such record at all: no state directory, or a mode that
+    /// adds nothing to one. Nothing is said in that case, for the reason the loop says nothing when
+    /// there is none.
+    pub remembered: Option<Remembered<'a>>,
+}
+
+/// The record of lines remembered past a session, as the report needs it.
+///
+/// The lines and where they are kept, because both are part of what a person has to be able to read
+/// back: what they are still carrying, and the file to delete a line from to be asked again.
+#[derive(Debug, Clone, Copy)]
+pub struct Remembered<'a> {
+    pub lines: &'a bravebot_core::remembered::Remembered,
+    pub path: &'a Path,
 }
 
 /// What to call a permission mode, or `None` for the one that needs no name.
@@ -367,10 +383,19 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // a line here there is nothing to tell them a command now runs unasked and that what it prints
     // is being read as trusted.
     let vouched: Vec<&bravebot_core::programs::Command> = facts.programs.iter().collect();
+    let remembered = facts.remembered.filter(|record| !record.lines.is_empty());
     if vouched.is_empty() {
+        // Two different true things, and the wider one is only true where the record is empty as
+        // well. A session that has vouched for nothing but carries a remembered line does not put
+        // every run to the person, and this is the screen responsible for saying what they are
+        // carrying: a flat "every run is put to you" above a list of lines that run unasked is the
+        // one claim this report must not make.
         lines.push(Line::new(
             t!(status_programs),
-            t!(status_every_run_is_asked),
+            match remembered.is_some() {
+                true => t!(status_nothing_vouched_this_session),
+                false => t!(status_every_run_is_asked),
+            },
         ));
     } else {
         lines.push(
@@ -389,6 +414,53 @@ pub fn report(facts: &Facts<'_>) -> Report {
                 t!(status_and_more, count = vouched.len() - MAX_COMMANDS),
             ));
         }
+    }
+
+    // The other standing answer that stops a prompt appearing, and the one a person is least able
+    // to account for from memory: it was given in a session that has ended, possibly last week, and
+    // nothing on the screen since has mentioned it. So each line says which of the two lifetimes it
+    // is carrying, and the report says where the file is, since deleting a line from it is the way
+    // back. Said only where there is something to say: a session that has remembered nothing learns
+    // nothing from a line about it, and the programs line above already says every run is asked.
+    if let Some(record) = remembered {
+        let entries: Vec<&bravebot_core::remembered::Entry> = record.lines.iter().collect();
+        lines.push(
+            Line::new(
+                t!(status_remembered),
+                t!(count_commands, count = entries.len()),
+            )
+            .with_note(t!(status_remembered_note)),
+        );
+        for entry in entries.iter().take(MAX_COMMANDS) {
+            lines.push(Line::new("", entry.line.display()).with_note(
+                match entry.answered_in == facts.session_id {
+                    true => t!(status_remembered_this_session),
+                    false => t!(status_remembered_earlier),
+                },
+            ));
+        }
+        if entries.len() > MAX_COMMANDS {
+            // How many of each was left out, not just how many: the two lifetimes are the point,
+            // and a person deciding what to delete cannot tell from a bare count which answers
+            // they are still carrying from another session.
+            let left_out = &entries[MAX_COMMANDS..];
+            let earlier = left_out
+                .iter()
+                .filter(|entry| entry.answered_in != facts.session_id)
+                .count();
+            lines.push(Line::new(
+                "",
+                t!(
+                    status_remembered_and_more,
+                    count = left_out.len(),
+                    earlier = earlier
+                ),
+            ));
+        }
+        lines.push(Line::new(
+            "",
+            t!(status_remembered_where, path = record.path.display()),
+        ));
     }
 
     Report { lines }
@@ -517,6 +589,9 @@ mod tests {
             looping: None,
             // Nothing to work towards, on the same footing.
             goal: None,
+            // Nothing remembered past a session, which is what a fresh directory looks like. Tests
+            // about that line build their own record and set it.
+            remembered: None,
         }
     }
 
@@ -686,6 +761,130 @@ mod tests {
         let trust = trusting();
         let shown = rendered(&report(&facts(&config, &trust)));
         assert!(shown.contains("every run is put to you"), "{shown}");
+    }
+
+    /// A record holding `count` lines, the first of them answered in this session and the rest in
+    /// an earlier one, which is the mixture the reading back exists to tell apart.
+    fn record_of(count: usize) -> bravebot_core::remembered::Remembered {
+        (0..count)
+            .map(|nth| bravebot_core::remembered::Entry {
+                line: bravebot_core::remembered::RememberedLine {
+                    steps: bravebot_core::remembered::Shape::Pipeline(vec![
+                        bravebot_core::remembered::RememberedStep {
+                            program: "make".to_string(),
+                            resolved: "/usr/bin/make".to_string(),
+                            args: vec![format!("check{nth}")],
+                            environment: Vec::new(),
+                            routes: Vec::new(),
+                        },
+                    ]),
+                },
+                answered_in: match nth {
+                    0 => "1787860306-65099".to_string(),
+                    _ => "a-session-last-week".to_string(),
+                },
+            })
+            .collect()
+    }
+
+    /// RUN-19: the answer that outlives the session is the one a person can least account for from
+    /// memory, since it was given in a session that has ended and nothing since has mentioned it.
+    /// So the report names the lines, says which of the two lifetimes each one is, and says where
+    /// the file is, because deleting a line from it is the way back.
+    #[test]
+    fn the_report_names_the_lines_remembered_past_a_session_and_who_answered_them() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let lines = record_of(2);
+        let mut facts = facts(&config, &trust);
+        facts.remembered = Some(Remembered {
+            lines: &lines,
+            path: Path::new("/home/someone/.bravebot/remembered/-tmp-project.jsonl"),
+        });
+
+        let shown = rendered(&report(&facts));
+        // The arguments are what the entry keys on, so they are what is reported.
+        assert!(shown.contains("/usr/bin/make check0"), "{shown}");
+        assert!(shown.contains("/usr/bin/make check1"), "{shown}");
+        assert!(
+            shown.contains(t!(status_remembered_this_session)),
+            "{shown}"
+        );
+        assert!(shown.contains(t!(status_remembered_earlier)), "{shown}");
+        // The half nothing else says: it stops the asking and leaves the output where it was.
+        assert!(shown.contains("stays quarantined"), "{shown}");
+        assert!(
+            shown.contains("/home/someone/.bravebot/remembered"),
+            "{shown}"
+        );
+    }
+
+    /// RUN-19: where the list is shortened it says how many of each it left out. A bare count would
+    /// leave a person unable to tell how much of what they are carrying came from another session,
+    /// which is the whole question the two lifetimes raise.
+    #[test]
+    fn a_shortened_list_of_remembered_lines_says_how_many_came_from_an_earlier_session() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let lines = record_of(MAX_COMMANDS + 3);
+        let mut facts = facts(&config, &trust);
+        facts.remembered = Some(Remembered {
+            lines: &lines,
+            path: Path::new("/home/someone/.bravebot/remembered/-tmp-project.jsonl"),
+        });
+
+        let shown = rendered(&report(&facts));
+        assert!(
+            shown.contains(&t!(status_remembered_and_more, count = 3, earlier = 3)),
+            "{shown}"
+        );
+    }
+
+    /// The report must not say every run is put to the person while listing lines that run unasked.
+    /// This is the screen a person goes to in order to find out what they are carrying, so the one
+    /// claim it cannot make is the one that contradicts the list below it.
+    #[test]
+    fn a_session_carrying_a_remembered_line_is_not_told_every_run_is_asked_about() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let lines = record_of(1);
+        let mut facts = facts(&config, &trust);
+        facts.remembered = Some(Remembered {
+            lines: &lines,
+            path: Path::new("/home/someone/.bravebot/remembered/-tmp-project.jsonl"),
+        });
+
+        let shown = rendered(&report(&facts));
+        assert!(
+            !shown.contains(t!(status_every_run_is_asked)),
+            "the report claimed every run is asked about beside a line that is not: {shown}"
+        );
+        assert!(
+            shown.contains(t!(status_nothing_vouched_this_session)),
+            "{shown}"
+        );
+    }
+
+    /// A directory nobody has remembered anything in says nothing about it, rather than carrying a
+    /// line about a thing that is not happening: the programs line above already says every run is
+    /// put to the person.
+    #[test]
+    fn a_directory_with_nothing_remembered_does_not_mention_the_record() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let empty = bravebot_core::remembered::Remembered::new();
+        for record in [
+            None,
+            Some(Remembered {
+                lines: &empty,
+                path: Path::new("/home/someone/.bravebot/remembered/-tmp-project.jsonl"),
+            }),
+        ] {
+            let mut facts = facts(&config, &trust);
+            facts.remembered = record;
+            let shown = rendered(&report(&facts));
+            assert!(!shown.contains(t!(status_remembered)), "{shown}");
+        }
     }
 
     /// The other standing permission that stops announcing itself, and the broader one: it changes

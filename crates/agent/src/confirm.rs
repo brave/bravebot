@@ -114,6 +114,16 @@ pub struct RunRequest {
     /// The plan and not the line. Two lines that compile alike are one thing to agree to, and a
     /// person reading the text rather than the plan would be answering for something else.
     pub plan: bravebot_core::command::Plan,
+    /// Where an answer that outlives the session would be written, where one may be.
+    ///
+    /// `Some` exactly where the prompt may offer to remember this line: a session that can keep
+    /// such a record at all, and a plan the policy will still consult one for. `None` everywhere
+    /// else, and the key is not drawn.
+    ///
+    /// The path rather than a flag, because the prompt has to show where the record goes. A person
+    /// cannot endorse a record they were not shown, and deleting a line from that file is the way
+    /// back from having pressed the key.
+    pub record: Option<std::path::PathBuf>,
 }
 
 impl RunRequest {
@@ -132,6 +142,7 @@ impl RunRequest {
             })
             .collect();
         Self {
+            record: None,
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),
@@ -177,6 +188,11 @@ impl RunRequest {
     /// added later cannot reach the drawing and miss the layer that acts on the answer.
     pub fn can_be_remembered(&self) -> bool {
         self.plan.can_be_remembered()
+    }
+
+    /// Whether the prompt may offer to record this answer past the session.
+    pub fn may_record(&self) -> bool {
+        self.record.is_some()
     }
 
     /// A short description for a prompt line.
@@ -349,6 +365,12 @@ pub struct RunDecision {
     pub decision: Decision,
     /// Whether the person asked for these programs to stop being asked about this session.
     pub remember: bool,
+    /// Whether the person asked for this exact line to stop being asked about past the session.
+    ///
+    /// A separate field from `remember` because the two keys grant different things with different
+    /// lifetimes, and one field could not carry both: this one stops the asking and leaves every
+    /// label where it was, while `remember` also says what the command prints may be read.
+    pub record: bool,
 }
 
 impl RunDecision {
@@ -357,6 +379,7 @@ impl RunDecision {
         Self {
             decision: Decision::Approve,
             remember: false,
+            record: false,
         }
     }
 
@@ -365,6 +388,20 @@ impl RunDecision {
         Self {
             decision: Decision::Approve,
             remember: true,
+            record: false,
+        }
+    }
+
+    /// Run it, and record this exact line so every session in this directory runs it unasked.
+    ///
+    /// Vouches for nothing: what the line prints keeps the label it would have had. The two
+    /// lifetimes are separate keys because one is a decision about a label and the other is a
+    /// decision about how long an answer lasts.
+    pub fn approve_and_record() -> Self {
+        Self {
+            decision: Decision::Approve,
+            remember: false,
+            record: true,
         }
     }
 
@@ -373,6 +410,7 @@ impl RunDecision {
         Self {
             decision: Decision::Reject,
             remember: false,
+            record: false,
         }
     }
 

@@ -27,6 +27,7 @@ pub mod preamble;
 pub mod processor;
 pub mod programs;
 pub mod regex;
+pub mod remembered;
 pub mod replace;
 pub mod report;
 pub mod scrub;

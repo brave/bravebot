@@ -923,25 +923,11 @@ fn writable_project_directory(project: &Path) -> Option<PathBuf> {
 
 /// The single path segment standing for a working directory.
 ///
-/// Separators become dashes and anything that is not a plain path character goes the same way,
-/// so the name is one segment on every platform and readable in a directory listing. It is not
-/// reversible, which is why the record holds the real path as well.
+/// One definition for every per-directory record under the state directory, which is
+/// [`bravebot_agent::home::key_for`]. It is not reversible, which is why the session record holds
+/// the real path as well.
 pub fn key_for(project: &Path) -> String {
-    let mangled: String = project
-        .display()
-        .to_string()
-        .chars()
-        .map(|c| match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' => c,
-            _ => '-',
-        })
-        .collect();
-
-    // A path of only separators would otherwise name the sessions directory itself.
-    if mangled.trim_matches('-').is_empty() {
-        return "root".to_string();
-    }
-    mangled
+    bravebot_agent::home::key_for(project)
 }
 
 /// What to say about a session being picked up somewhere other than where it ran.
