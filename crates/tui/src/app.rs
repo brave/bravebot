@@ -1950,6 +1950,80 @@ fn rewind_point(
     }
 }
 
+/// Put the session back to where it stood `steps` turns ago, on disk and in the conversation.
+///
+/// Says what happened either way. A rewind that reported nothing would leave somebody who asked
+/// for three turns back and had two believing the tree in front of them is three turns older
+/// than it is.
+fn rewind(
+    session: &mut Session,
+    conversation: &mut Conversation,
+    trust: &mut TrustStore,
+    programs: &mut TrustedPrograms,
+    stored: &mut crate::sessions::Handle,
+    workspace: &Workspace,
+    steps: usize,
+) {
+    let Some((snapshot, backups)) = session.take_rewind(steps) else {
+        session.note(t!(session_nothing_to_undo));
+        return;
+    };
+    let refused = workspace.restore_backups(backups);
+
+    *conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
+    session.turns = snapshot.turns;
+    session.tokens = snapshot.tokens;
+    session.restore_spend(snapshot.tokens, snapshot.spend);
+    session.restore_timing(snapshot.timing);
+    // With the spend, for the same reason clearing takes it: the figure describes a
+    // prompt that is no longer part of what this session sent.
+    session.restore_cache(snapshot.cached);
+    session.written = 0;
+    session.finished = None;
+    *trust = snapshot.trust;
+    *programs = snapshot.programs;
+
+    session.transcript.truncate(snapshot.transcript_len);
+    stored.truncate_audit(session.turns + 1);
+
+    if snapshot.turns == 0 && !snapshot.was_wrote {
+        stored.discard_unwritten(&snapshot.title);
+    } else {
+        stored.save(
+            &snapshot.title,
+            crate::sessions::Standing {
+                conversation: &conversation.snapshot(),
+                turns: session.turns,
+                tokens: session.tokens,
+                spend: session.spend_by_turn(),
+                timing: session.timing_by_turn(),
+                model: session.served_model(),
+                todos: &session.todos_by_turn(),
+                asides: session.asides(),
+                trust,
+                programs,
+                directories: workspace.added_directories(),
+                manifest: None,
+            },
+        );
+    }
+    // Where it landed rather than how far it came, because that is the fact a person checks the
+    // tree against, and a count of turns is one they would have to do the arithmetic on.
+    let turn = snapshot.turns + 1;
+    if refused.is_empty() {
+        session.note(t!(session_rewound, turn = turn));
+    } else {
+        // Named rather than counted. A person who has to go and put a file back by
+        // hand needs to know which one, and a count sends them looking.
+        let paths = refused
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        session.note(t!(session_rewound_partly, turn = turn, paths = paths));
+    }
+}
+
 /// Returns the session left behind, where there is one to pick up again.
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -2194,62 +2268,15 @@ fn event_loop(
                 needs_draw = true;
             }
             Action::Undo => {
-                if let Some(snapshot) = session.previous_turn.take() {
-                    let refused =
-                        workspace.restore_backups(std::mem::take(&mut session.last_turn_backups));
-
-                    conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
-                    session.turns = snapshot.turns;
-                    session.tokens = snapshot.tokens;
-                    session.restore_spend(snapshot.tokens, snapshot.spend);
-                    session.restore_timing(snapshot.timing);
-                    // With the spend, for the same reason clearing takes it: the figure describes a
-                    // prompt that is no longer part of what this session sent.
-                    session.restore_cache(snapshot.cached);
-                    session.written = 0;
-                    session.finished = None;
-                    trust = snapshot.trust;
-                    programs = snapshot.programs;
-
-                    session.transcript.truncate(snapshot.transcript_len);
-                    stored.truncate_audit(session.turns + 1);
-
-                    if snapshot.turns == 0 && !snapshot.was_wrote {
-                        stored.discard_unwritten(&snapshot.title);
-                    } else {
-                        stored.save(
-                            &snapshot.title,
-                            crate::sessions::Standing {
-                                conversation: &conversation.snapshot(),
-                                turns: session.turns,
-                                tokens: session.tokens,
-                                spend: session.spend_by_turn(),
-                                timing: session.timing_by_turn(),
-                                model: session.served_model(),
-                                todos: &session.todos_by_turn(),
-                                asides: session.asides(),
-                                trust: &trust,
-                                programs: &programs,
-                                directories: workspace.added_directories(),
-                                manifest: None,
-                            },
-                        );
-                    }
-                    // Named rather than counted. A person who has to go and put a file back by
-                    // hand needs to know which one, and a count sends them looking.
-                    if refused.is_empty() {
-                        session.note(t!(session_last_turn_undone));
-                    } else {
-                        let paths = refused
-                            .iter()
-                            .map(|path| path.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        session.note(t!(session_last_turn_undone_partly, paths = paths));
-                    }
-                } else {
-                    session.note(t!(session_nothing_to_undo));
-                }
+                rewind(
+                    &mut session,
+                    &mut conversation,
+                    &mut trust,
+                    &mut programs,
+                    &mut stored,
+                    &workspace,
+                    1,
+                );
                 needs_draw = true;
             }
             Action::Show => {
@@ -2469,7 +2496,7 @@ fn event_loop(
                     // drain is for is the *next* turn, which takes whatever the workspace is
                     // holding as its own. Left here, the run's writes would be attributed to that
                     // turn and `/undo` on it would revert them.
-                    session.last_turn_backups = workspace.take_backups();
+                    let _ = workspace.take_backups();
 
                     // The session's own record, written for the reason an aside's is: the run is
                     // the change, and a session that started one and then slept should resume
@@ -2549,7 +2576,7 @@ fn event_loop(
                 let mut sending = Some((prompt, Wrote::ThePerson));
                 while let Some((prompt, wrote)) = sending {
                     let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
-                    session.previous_turn = Some(point);
+                    session.open_rewind_point(point, prompt.clone());
                     let _ = workspace.take_backups();
 
                     // Everything the session holds is lent for the turn and taken back: a turn that
@@ -2576,7 +2603,7 @@ fn event_loop(
                     programs = continued.programs;
                     servers = continued.servers;
 
-                    session.last_turn_backups = workspace.take_backups();
+                    session.keep_backups(workspace.take_backups());
 
                     // Written after each turn rather than at the end, because the end may never
                     // come: the session worth resuming is the one whose machine slept and never

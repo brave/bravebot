@@ -397,29 +397,39 @@ the invariant that finished autonomous runs have a definite end.
 `verified-by: bravebot_tui::sessions::forking_a_manifest_session_is_refused`
 
 <a id="SESSION-19"></a>
-### SESSION-19: the last turn can be rewound, on disk and in the conversation together
+### SESSION-19: turns can be rewound, on disk and in the conversation together
 
-`/undo` puts the session back where it stood before the most recent turn. Every path in the project
-that turn wrote through a file tool goes back to what it held first, and one the turn created is
-removed. The conversation returns to its pre-turn snapshot, and with it the turn count, the spend,
-the timing, the trust map, the trusted programs, and the transcript. The turn's audit lines are
-dropped, since they decided about a turn that is no longer in the conversation. A rewind that
-goes back past the session's first turn removes its record rather than leaving one with nothing
-in it, and a name the user gave the session before that turn stays with it: the name was not the
-turn's to give, so it is not the rewind's to take. The directory the session was given of its own is
-not in the project: what a turn wrote there is neither put back nor counted against the budget
-below, for the reasons [trust-map.md](trust-map.md) gives.
+`/undo` puts the session back where it stood before the most recent turn, and saying it again
+goes back another. Every path in the project that a rewound turn wrote through a file tool goes
+back to what it held first, and one such a turn created is removed; where two of the rewound
+turns wrote the same path, it goes back to what it held before the first of them. The
+conversation returns to the snapshot taken before the earliest rewound turn, and with it the turn
+count, the spend, the timing, the trust map, the trusted programs, and the transcript. Those
+turns' audit lines are dropped, since they decided about turns that are no longer in the
+conversation. A rewind that goes back past the session's first turn removes its record rather than
+leaving one with nothing in it, and a name the user gave the session before that turn stays with
+it: the name was not the turn's to give, so it is not the rewind's to take. The directory the
+session was given of its own is not in the project: what a turn wrote there is neither put back nor
+counted against the budget below, for the reasons [trust-map.md](trust-map.md) gives.
 
-What one turn keeps is bounded. Past that budget a path is still remembered, but what it held is
-not, and a rewind treats it as a path that will not go back rather than as a file that was never
-there. A path that will not go back is named on the line that reports the rewind, and the rest of
-the rewind still happens.
+A standing permission goes back with the turn that granted it. The map and the programs restored
+are the ones that stood before the earliest turn being rewound, so a path or a command vouched
+for during any of those turns is vouched for no longer, and one vouched for before them is
+untouched.
 
-One turn is as far back as it goes, and the window closes when the next turn begins. Anything
-else that changes the session outside a turn closes it as well: `/clear`, `/compact`, `/btw`,
-`/rename`, `/add-dir`, `/cd`, and a shell-mode command, whose writes the workspace never saw. `/undo` then
-says there is nothing left to undo rather than rewinding to a snapshot that describes a different
-session.
+What is kept is bounded twice over. A session remembers its last five turns, and what those turns
+wrote over is held to one budget between them rather than to one each: past it the turns furthest
+back are dropped whole, and the most recent is kept whatever it cost. Inside a turn the same
+budget decides a path: past it the path is still remembered, but what it held is not, and a
+rewind treats it as a path that will not go back rather than as a file that was never there. A
+path that will not go back is named on the line that reports the rewind, and the rest of the
+rewind still happens.
+
+Anything that changes the session outside a turn gives up every point at once: `/clear`,
+`/compact`, `/btw`, `/rename`, `/add-dir`, `/cd`, and a shell-mode command, whose writes the
+workspace never saw. `/undo` then says there is nothing left to undo rather than rewinding to a
+point that describes a different session. Every point goes rather than the most recent alone,
+since such a change lands after the most recent point and so before none of them.
 
 **Why.** A turn that went wrong is the case with no clean recovery: `git checkout` takes the
 user's own uncommitted work with it, and `/clear` throws away the context that was worth keeping.
@@ -428,7 +438,14 @@ tree that is not there, which is worse than neither. A file that would not go ba
 disagreement, so it is said out loud rather than swallowed: a person told a turn was undone will
 not go looking. The budget exists because the cost is paid by every turn that writes anything,
 not by the rare one that is rewound; unbounded, one write of a large file would hold it in memory
-until the turn after it.
+for as long as the turn is one a rewind can reach.
+
+**Why more than one turn back.** The turn that just ended is the one least likely to need
+rewinding, because it is the one still on the screen. What a person notices late is a mistake
+made two or three prompts ago, after approving several diffs in a row, and a session that
+remembers only the last turn is no help at exactly that moment. Depth stops at five because every
+point holds a copy of the conversation as well as the bytes, and is written after every turn
+whether or not it is ever read.
 
 `verified-by: bravebot_agent::workspace::a_rewind_puts_back_what_a_turn_overwrote`
 `verified-by: bravebot_agent::workspace::a_rewind_removes_a_file_the_turn_created`
@@ -443,6 +460,12 @@ until the turn after it.
 `verified-by: bravebot_tui::app::a_rewind_point_excludes_the_turn_it_undoes`
 `verified-by: bravebot_tui::state::clearing_drops_the_transcript_and_what_it_spent`
 `verified-by: bravebot_tui::state::closing_the_rewind_window_leaves_nothing_to_rewind_to`
+`verified-by: bravebot_tui::state::a_rewind_reaches_past_the_turn_that_just_ended`
+`verified-by: bravebot_tui::state::going_back_further_than_the_session_remembers_rewinds_nothing`
+`verified-by: bravebot_tui::state::a_path_written_in_two_undone_turns_goes_back_to_before_the_first`
+`verified-by: bravebot_tui::state::a_session_keeps_no_more_points_than_it_may`
+`verified-by: bravebot_tui::state::one_turns_writes_can_cost_the_session_the_turns_behind_it`
+`verified-by: bravebot_tui::state::backups_with_no_point_to_hang_them_on_are_dropped`
 
 <a id="SESSION-20"></a>
 ### SESSION-20: a question asked beside the work is recorded, and comes back into the view alone
