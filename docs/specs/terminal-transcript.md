@@ -306,6 +306,7 @@ need searching.
 `verified-by: bravebot_tui::model_prompt::a_search_ignores_case`
 `verified-by: bravebot_tui::model_prompt::backspace_widens_the_list_again`
 `verified-by: bravebot_tui::model_prompt::the_cursor_stays_on_the_model_it_was_on_while_the_search_narrows`
+`verified-by: bravebot_tui::model_prompt::the_cursor_stays_on_the_model_it_was_on_while_the_search_widens`
 `verified-by: bravebot_tui::model_prompt::the_cursor_falls_to_the_first_match_when_what_it_was_on_is_filtered_out`
 `verified-by: bravebot_tui::model_prompt::a_search_matching_nothing_leaves_nothing_to_choose`
 `verified-by: bravebot_tui::model_prompt::a_search_matching_nothing_says_so`
@@ -331,6 +332,7 @@ a gateway has.
 `verified-by: bravebot_tui::model_prompt::every_service_heads_its_own_section`
 `verified-by: bravebot_tui::model_prompt::a_service_that_appears_twice_in_the_roster_is_still_one_section`
 `verified-by: bravebot_tui::model_prompt::a_heading_stays_above_the_rows_when_the_list_is_scrolled`
+`verified-by: bravebot_tui::model_prompt::a_service_is_never_given_two_headings_at_once`
 `verified-by: bravebot_tui::model_prompt::the_model_in_use_is_marked`
 `verified-by: bravebot_tui::model_prompt::a_premium_model_says_so`
 `verified-by: bravebot_tui::model_prompt::the_list_shows_names_a_person_reads`
