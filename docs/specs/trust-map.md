@@ -700,11 +700,6 @@ ran at this time rather than that a session ran in this project at this time.
 
 **What has to exist first.**
 
-- A confined program cannot write there yet. A profile as generated denies everything and then names
-  what a program may reach ([sandboxing.md](sandboxing.md)), and the base names no temporary
-  directory today, so a redirection into the session's directory would be refused by the profile
-  after the map had allowed it. The base has to name that one directory, and name it per session,
-  since which directory it is cannot be known when the base is written.
 - A leftover cannot be told from a live one without a claim. Removal as a session closes covers a
   session that closes, but a killed process leaves its directory, and the names are unrelated to
   each other precisely so that concurrent sessions cannot collide, so a later session cannot tell a
@@ -759,6 +754,16 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   is, and what is in it is the workings of a turn rather than anybody's work in progress, which is
   what makes this smaller than the two things keeping it would cost: the budget the file in the
   project needs, and a rewind naming every intermediate file it could not put back.
+- **Confinement does not keep a program out of the session's directory.** A program that cannot
+  open a temporary file fails outright, so the base of a `run` profile names the system temporary
+  directory for reading and writing ([sandboxing.md](sandboxing.md)), and TRUST-14 puts this
+  session's directory inside it. Narrowing that row to this one directory is not available, since
+  it leaves a compiler or a package manager nowhere to write a temporary file of its own. So a
+  confined stage reads what a turn left here without its plan naming the path, and a file it
+  writes here is answered by what was said about the workspace (TRUST-16). What keeps TRUST-16's
+  grounds standing after the first instant is the ownership and the mode, and neither tells a
+  program this session started from the session itself. A program `run` starts is unconfined, so
+  what this costs arrives with the profile rather than before it.
 - **Confinement is decided before an operation runs, not while it runs.** Where a path lands is
   worked out by resolving it, and the operation happens after that, so a component that is a
   directory when it is resolved and a symlink when the file is opened carries the bytes with it.
