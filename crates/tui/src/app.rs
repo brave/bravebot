@@ -10,6 +10,7 @@
 //! ever being in flight together.
 
 use bravebot_agent::conversation::Conversation;
+use bravebot_agent::lsp::LanguageServers;
 use bravebot_agent::turn::{self, PastedImage, Task};
 use bravebot_agent::{SessionScratch, Workspace};
 use bravebot_config::Config;
@@ -2022,6 +2023,14 @@ fn event_loop(
     // person who left at it has nothing created for a session they declined to have.
     let mut scratch = opened_scratch(&mut session, &mut workspace);
 
+    // The language servers this session has started, LSP-8. Held here rather than inside a turn
+    // because the process is the session's: one built per turn would be shut down at the end of
+    // the turn that started it, so the next message would ask the same person about the same
+    // language and wait for a second index of the same tree. `None` until the first turn builds
+    // one, and again after `/clear`, which ends the session the approval belonged to, and after
+    // `/cd`, which leaves the tree it was approved for.
+    let mut servers: Option<LanguageServers> = None;
+
     // After the trust answer, because that question is the first thing on the screen and an aside
     // about a newer release does not come before it. Nothing is fetched here: the line is read off
     // what an earlier launch wrote down, and the ask that answers the next launch runs behind the
@@ -2253,7 +2262,13 @@ fn event_loop(
                 // The record moves with the working directory, so the snapshot describes a
                 // session that is no longer written where it was.
                 session.close_rewind_window();
-                if change_directory(&mut session, &mut workspace, &mut trust, &directory) {
+                if change_directory(
+                    &mut session,
+                    &mut workspace,
+                    &mut trust,
+                    &mut servers,
+                    &directory,
+                ) {
                     stored.move_to(
                         workspace.root(),
                         crate::sessions::Standing {
@@ -2489,6 +2504,10 @@ fn event_loop(
                 // wrote it. The old one is removed either way: what the cleared context wrote is
                 // not something the session after it should find lying there.
                 scratch = opened_scratch(&mut session, &mut workspace);
+                // The servers go with it, LSP-8: what was approved was a process for the session,
+                // so dropping the set shuts them down and the session beginning here is asked
+                // again before one starts.
+                servers = None;
                 needs_draw = true;
             }
             Action::Submit(prompt) => {
@@ -2505,11 +2524,11 @@ fn event_loop(
                     session.previous_turn = Some(point);
                     let _ = workspace.take_backups();
 
-                    // Both are threaded through: a turn that writes untrusted data into a trusted
-                    // path records that, and the next turn must honour it, and a turn that has been
-                    // had is a turn the next one can be asked about.
-                    let events;
-                    (conversation, trust, programs, events) = run_turn_animated(
+                    // Everything the session holds is lent for the turn and taken back: a turn that
+                    // writes untrusted data into a trusted path records that, and the next turn must
+                    // honour it; a turn that has been had is a turn the next one can be asked about;
+                    // and a server somebody approved answers the next question without asking again.
+                    let continued = run_turn_animated(
                         terminal,
                         &mut session,
                         config,
@@ -2519,9 +2538,15 @@ fn event_loop(
                         conversation,
                         trust,
                         programs,
+                        servers,
                         &permissions,
                         stored.id(),
                     )?;
+                    let events = continued.events;
+                    conversation = continued.conversation;
+                    trust = continued.trust;
+                    programs = continued.programs;
+                    servers = continued.servers;
 
                     session.last_turn_backups = workspace.take_backups();
 
@@ -2667,6 +2692,7 @@ fn change_directory(
     session: &mut Session,
     workspace: &mut Workspace,
     trust: &mut TrustStore,
+    servers: &mut Option<LanguageServers>,
     directory: &str,
 ) -> bool {
     if directory.is_empty() {
@@ -2693,6 +2719,12 @@ fn change_directory(
 
     *trust = trust.rebased(&moved.root);
     trust.trust(".");
+    // The servers go, and LSP-5 is why: what a person approved was a server reading *that* tree,
+    // and a set indexes the root it was built with. Kept across the move it would answer questions
+    // about the new directory out of the old one's index, and resolve the paths it opens against a
+    // root the session has left. Dropping it shuts the processes down, and the first question asked
+    // here starts one for this directory with the person asked again.
+    *servers = None;
     session.now_in_workspace(&moved.root);
     session.note(t!(
         session_directory_changed,
@@ -4243,6 +4275,19 @@ fn remembered_record(
     Some((store, lines))
 }
 
+/// What the session gets back from a turn and carries into the next one.
+///
+/// A struct rather than a tuple because every field is something the session owns and lends for
+/// the length of one turn, and a caller taking five positional values back has no way of saying
+/// which is which.
+struct Continued {
+    conversation: Conversation,
+    trust: TrustStore,
+    programs: TrustedPrograms,
+    servers: Option<LanguageServers>,
+    events: Vec<Stamped>,
+}
+
 /// Run a turn on a worker thread, redrawing while it works.
 ///
 /// The turn itself blocks on network requests, so running it here would freeze the indicator on
@@ -4262,12 +4307,17 @@ fn run_turn_animated(
     conversation: Conversation,
     trust: TrustStore,
     programs: TrustedPrograms,
+    // The servers this session has started, LSP-8, or `None` before the first turn has had the
+    // chance to start one. Owned here and handed back like the conversation, because it is the
+    // session that keeps it: built inside a turn it would be shut down at the end of that turn,
+    // and the next message would ask the same person about the same language.
+    servers: Option<LanguageServers>,
     permissions: &Permissions,
     // This session's own identifier. It travels with the task because a run prompt may be answered
     // with the key whose grant outlives the session, and the record of that says which session
     // pressed it so that `/status` can tell a person which answers they are still carrying.
     session_id: &str,
-) -> io::Result<(Conversation, TrustStore, TrustedPrograms, Vec<Stamped>)> {
+) -> io::Result<Continued> {
     // The prompt is in the transcript by now, and drawn before anything that might take a moment:
     // a check that has to run the AWS CLI holds the frame for as long as the process takes, and
     // until this the line somebody typed is nowhere on their screen.
@@ -4370,6 +4420,14 @@ fn run_turn_animated(
         // succeeded or not. A failed turn is still part of the conversation, and the next one
         // is usually about it.
         let mut conversation = conversation;
+        // Built on the first turn of the session and handed back with the conversation. Nothing is
+        // started by building it: LSP-8 starts a server on the first question that needs one, so a
+        // session that asks about no symbol still starts no process and prompts about none.
+        let mut servers = servers.unwrap_or_else(|| {
+            // The task's home rather than a second look at the state directory, so an index is
+            // cached where the rest of this session's state goes.
+            LanguageServers::new(worker_workspace.root().to_path_buf(), task.home.clone())
+        });
         let outcome = turn::resume(
             &worker_config,
             &egress,
@@ -4381,9 +4439,10 @@ fn run_turn_animated(
             &mut sink,
             trust,
             programs,
+            Some(&mut servers),
             &worker_cancel,
         );
-        (outcome, conversation, sink)
+        (outcome, conversation, sink, Some(servers))
     });
 
     // Redraw until the turn finishes, answering approvals and watching for a cancel on the way.
@@ -4591,15 +4650,18 @@ fn run_turn_animated(
         }
     }
 
-    let (outcome, conversation, sink) = worker.join().unwrap_or_else(|_| {
+    let (outcome, conversation, sink, servers) = worker.join().unwrap_or_else(|_| {
         // A panicked turn is reported rather than propagated: the session survives. The
-        // conversation does not, since the thread that held it is gone.
+        // conversation does not, since the thread that held it is gone, and neither do the
+        // servers: they went down with the thread that owned them, so the next turn starts and
+        // is asked about a fresh one.
         (
             Err(turn::TurnError::Precommit(
                 t!(turn_ended_unexpectedly).to_string(),
             )),
             Conversation::new(),
             Trail::new(),
+            None,
         )
     });
 
@@ -4612,14 +4674,26 @@ fn run_turn_animated(
         // would put it back in the loop it was on its way out of, and hand back a prompt to a box
         // nobody is going to see.
         if session.is_quitting() {
-            return Ok((conversation, fallback, fallback_programs, events));
+            return Ok(Continued {
+                conversation,
+                trust: fallback,
+                programs: fallback_programs,
+                servers,
+                events,
+            });
         }
         session.restore(prompt);
         // What was lined up behind it stays lined up, and the loop sends the next one as it does
         // after any turn. A stop is aimed at the turn in flight: the prompts behind it are ones
         // the person typed and has not taken back, and throwing them away made stopping a turn
         // that had gone wrong cost every prompt they had queued while it did.
-        return Ok((conversation, fallback, fallback_programs, events));
+        return Ok(Continued {
+            conversation,
+            trust: fallback,
+            programs: fallback_programs,
+            servers,
+            events,
+        });
     }
 
     // Whether a difference between the model asked for and the one reported means anything is the
@@ -4652,7 +4726,13 @@ fn run_turn_animated(
             wrote,
         },
     );
-    Ok((conversation, carried.trust, carried.programs, events))
+    Ok(Continued {
+        conversation,
+        trust: carried.trust,
+        programs: carried.programs,
+        servers,
+        events,
+    })
 }
 
 /// Hand the worker's messages to `handle`: the one this frame waited for, and then everything
@@ -11114,6 +11194,7 @@ mod tests {
             &mut session,
             &mut workspace,
             &mut trust,
+            &mut None,
             other.to_str().expect("utf-8 path")
         ));
 
@@ -11122,6 +11203,43 @@ mod tests {
         assert!(
             trust.is_trusted("."),
             "the directory moved to was not vouched for"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// LSP-5 and LSP-8: a server is approved for one tree and indexes that tree, so the working
+    /// directory moving leaves it behind.
+    ///
+    /// Kept across the move it would answer questions about the new directory out of the old one's
+    /// index, and the paths it opens would be resolved against a root the session has left. Nobody
+    /// approved a server reading that directory from here.
+    #[test]
+    fn changing_directory_stops_the_servers_started_in_the_old_one() {
+        let root = crate::testutil::scratch_dir("bravebot-cd-servers-test");
+        let project = root.join("project");
+        let other = root.join("other");
+        std::fs::create_dir_all(&project).expect("scratch");
+        std::fs::create_dir_all(&other).expect("scratch");
+
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let mut session = Session::new("none");
+        let mut trust = TrustStore::new();
+        // Nothing is started by building the set, which is LSP-8: a server comes up on the first
+        // question that needs one. What is being asserted is who holds the set afterwards.
+        let mut servers = Some(LanguageServers::new(workspace.root().to_path_buf(), None));
+
+        assert!(change_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            &mut servers,
+            other.to_str().expect("utf-8 path")
+        ));
+
+        assert!(
+            servers.is_none(),
+            "the servers of the directory left behind are still the session's"
         );
 
         std::fs::remove_dir_all(&root).ok();
@@ -11149,6 +11267,7 @@ mod tests {
             &mut session,
             &mut workspace,
             &mut trust,
+            &mut None,
             other.to_str().expect("utf-8 path")
         ));
 
@@ -11188,6 +11307,7 @@ mod tests {
             &mut session,
             &mut workspace,
             &mut trust,
+            &mut None,
             "src"
         ));
 
@@ -11219,6 +11339,7 @@ mod tests {
             &mut session,
             &mut workspace,
             &mut trust,
+            &mut None,
             "nowhere"
         ));
         assert_eq!(workspace.root(), before);

@@ -263,6 +263,7 @@ fn a_background_server_stays_up() {
         &mut sink,
         trusting_everything(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");

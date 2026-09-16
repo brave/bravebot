@@ -5288,6 +5288,7 @@ fn take_a_turn(
         &mut sink,
         trust,
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
 }
@@ -5916,6 +5917,7 @@ fn a_file_nobody_may_name_is_fixed_through_its_reference() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -5979,6 +5981,7 @@ fn every_write_through_a_reference_is_shown() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -6214,6 +6217,7 @@ fn quarantined_content_reaches_the_person_and_not_the_planner() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -6294,6 +6298,7 @@ fn the_terminal_names_the_file_and_says_who_read_it() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -6370,6 +6375,7 @@ fn a_file_a_processor_left_alone_stays_exactly_as_it_was() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -6439,6 +6445,7 @@ fn each_result_says_whether_the_model_can_read_it() {
         &mut sink,
         trust,
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -6471,6 +6478,7 @@ fn each_result_says_whether_the_model_can_read_it() {
         &mut RecordingSink::new(),
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -6535,6 +6543,7 @@ fn what_a_processor_says_reaches_the_person_and_no_model() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -6609,6 +6618,7 @@ fn an_answer_about_nothing_in_particular_can_be_written_nowhere() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -6705,6 +6715,7 @@ fn an_answer_that_names_no_document_is_written_nowhere() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -6759,6 +6770,7 @@ fn a_processors_output_cannot_be_a_destination() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -6942,6 +6954,7 @@ fn a_turn_that_wrote_and_ran_is_not_asked_about_it() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn finishes");
@@ -8132,6 +8145,7 @@ fn the_preamble_is_not_stored_in_the_conversation() {
             &mut sink,
             trusting_the_workspace(),
             bravebot_core::programs::TrustedPrograms::new(),
+            None,
             &bravebot_core::cancel::Cancel::new(),
         )
         .expect("turn runs");
@@ -8928,6 +8942,7 @@ fn a_run_turn_with_trust(
         &mut sink,
         trust,
         programs,
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
 }
@@ -8962,6 +8977,7 @@ fn a_run_turn_remembering(
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
 }
@@ -9193,6 +9209,7 @@ fn a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -9293,6 +9310,7 @@ fn an_unattended_turn_runs_no_program() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn completes");
@@ -9575,6 +9593,7 @@ fn what_a_program_printed_does_not_reach_the_planner() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -9691,6 +9710,7 @@ fn a_quarantined_run_says_what_would_make_it_visible() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -9747,6 +9767,7 @@ fn a_line_that_only_reads_vouched_for_files_needs_no_prompt() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -9910,6 +9931,7 @@ fn a_vouched_commands_output_reaches_the_planner() {
                 vec!["secret.txt".to_string()],
             ),
         ]),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -9955,6 +9977,7 @@ fn the_planner_is_told_how_a_run_it_may_read_ended() {
         bravebot_core::programs::TrustedPrograms::from_iter([
             bravebot_core::programs::Command::new(program.display().to_string(), Vec::new()),
         ]),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -9994,6 +10017,7 @@ fn the_planner_is_told_how_a_run_it_may_not_read_ended() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -10045,6 +10069,7 @@ fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
                 vec!["secret.txt".to_string()],
             ),
         ]),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -10176,6 +10201,7 @@ fn output_a_person_reads_and_approves_reaches_the_planner() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -10229,6 +10255,7 @@ fn output_a_person_refuses_stays_out_of_the_planner() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -10278,6 +10305,7 @@ fn a_quarantined_file_cannot_be_read_through_the_output_route() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -10518,6 +10546,7 @@ fn a_quarantined_read_offers_the_user_the_chance_to_vouch() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -10582,6 +10611,7 @@ fn vouching_for_a_project_file_named_absolutely_records_its_relative_rule() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -10620,6 +10650,7 @@ fn declining_to_vouch_leaves_the_file_quarantined() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -10666,6 +10697,7 @@ fn a_trusted_file_is_not_offered_for_vouching() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -10706,6 +10738,7 @@ fn the_same_file_is_offered_once_per_turn() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -10748,6 +10781,7 @@ fn a_quarantined_file_with_nothing_in_it_is_still_offered_for_vouching() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -10802,6 +10836,7 @@ fn a_path_that_names_no_file_is_not_offered_for_vouching() {
             &mut sink,
             bravebot_core::trust::TrustStore::new("/work"),
             bravebot_core::programs::TrustedPrograms::new(),
+            None,
             &bravebot_core::cancel::Cancel::new(),
         )
         .expect("turn runs");
@@ -10868,6 +10903,7 @@ fn a_picture_is_not_offered_for_vouching() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -11766,6 +11802,7 @@ fn the_trail_says_which_round_a_compaction_landed_on() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -13213,6 +13250,7 @@ fn what_a_command_printed_reaches_the_person_watching() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -13273,6 +13311,7 @@ fn what_is_reported_about_a_line_says_which_directory_it_ran_in() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn completes");
@@ -13338,6 +13377,7 @@ fn the_middle_of_a_capped_output_stays_reachable() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -13919,6 +13959,7 @@ fn a_background_server_is_still_running_when_the_next_call_is_made() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -13988,6 +14029,7 @@ fn a_program_a_turn_runs_is_told_where_the_sessions_directory_is() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -14036,6 +14078,7 @@ fn what_a_background_job_printed_is_quarantined_like_any_other_output() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -14107,6 +14150,7 @@ fn the_middle_of_a_capped_job_output_stays_reachable() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -14175,6 +14219,7 @@ fn one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made() 
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -14237,6 +14282,7 @@ fn a_job_output_call_reports_the_code_a_finished_job_exited_with() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -14316,6 +14362,7 @@ fn a_background_command_must_be_one_pipeline() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -14358,6 +14405,7 @@ fn a_background_line_is_refused_for_any_redirection_it_carries() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -14410,6 +14458,7 @@ fn a_refused_background_run_starts_nothing() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn runs");
@@ -14554,6 +14603,7 @@ fn the_outcome_of_a_run(scratch: &Scratch, arguments: &str) -> bravebot_agent::r
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn completes");
@@ -14647,6 +14697,7 @@ fn a_non_integer_deadline_is_refused() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn completes");
@@ -14710,6 +14761,7 @@ fn the_working_directory_persists_across_calls() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn completes");
@@ -14789,6 +14841,7 @@ fn the_working_directory_can_be_an_added_directory() {
         &mut sink,
         trust,
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn completes");
@@ -14841,6 +14894,7 @@ fn a_directory_escaping_the_workspace_is_refused() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn completes");
@@ -14897,6 +14951,7 @@ fn a_nonexistent_directory_is_an_error_and_does_not_mutate() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn completes");
@@ -14949,6 +15004,7 @@ fn a_directory_that_is_not_a_string_is_refused() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn completes");
@@ -15006,6 +15062,7 @@ fn a_refused_run_directory_does_not_persist() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn completes");
@@ -15057,6 +15114,7 @@ fn a_vouched_line_is_asked_about_again_when_a_directory_is_named() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn completes");
