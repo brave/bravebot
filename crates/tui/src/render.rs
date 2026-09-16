@@ -3955,35 +3955,46 @@ mod tests {
         ///
         /// A ratio rather than a wall clock, because what matters is that the pass is of the same
         /// order as the one beside it and not that either takes a particular number of milliseconds.
+        ///
+        /// The shortest of several passes, and the two interleaved. A pass that lost the processor to
+        /// something else on the machine only ever reads long, so one sample of each compares the
+        /// contention of one moment against that of another, and a loaded machine fails this on the
+        /// draw it happened to interrupt. Three passes because the load measured here stalled about
+        /// one sample in fifteen, and each pass costs laying the transcript out twice.
         #[test]
         fn measuring_where_the_rows_are_stays_in_proportion_to_drawing_them() {
             let at_rest = a_long_session();
-            let started = std::time::Instant::now();
-            let (lines, plain) = lay_out(&at_rest, 90, 24);
-            // The wrap a frame at rest already pays for, and the one this is in proportion to.
-            // Laying the lines out is the cheaper half of drawing them, and measuring against it
-            // alone compares the new pass with something no frame has ever consisted of.
-            let rows = Paragraph::new(lines)
-                .wrap(Wrap { trim: false })
-                .line_count(90);
-            let baseline = started.elapsed();
-            assert!(rows > 2000, "the transcript is not long: {rows}");
-
             let mut scrolling = a_long_session();
             scrolling.open_scroller();
-            let started = std::time::Instant::now();
-            let (_, laid) = lay_out(&scrolling, 90, 24);
-            let took = started.elapsed();
 
+            let mut drawing = std::time::Duration::MAX;
+            let mut measuring = std::time::Duration::MAX;
+            let mut rows = 0;
+            let mut measured = 0;
+
+            for _ in 0..3 {
+                let started = std::time::Instant::now();
+                let (lines, plain) = lay_out(&at_rest, 90, 24);
+                // The wrap a frame at rest already pays for, and the one this is in proportion to.
+                // Laying the lines out is the cheaper half of drawing them, and measuring against it
+                // alone compares the new pass with something no frame has ever consisted of.
+                rows = Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .line_count(90);
+                drawing = drawing.min(started.elapsed());
+                assert_eq!(plain.rows, 0, "the rows were counted with nobody asking");
+
+                let started = std::time::Instant::now();
+                let (_, laid) = lay_out(&scrolling, 90, 24);
+                measuring = measuring.min(started.elapsed());
+                measured = laid.rows;
+            }
+
+            assert!(rows > 2000, "the transcript is not long: {rows}");
+            assert!(measured > 2000, "the transcript is not long: {measured}");
             assert!(
-                laid.rows > 2000,
-                "the transcript is not long: {}",
-                laid.rows
-            );
-            assert_eq!(plain.rows, 0, "the rows were counted with nobody asking");
-            assert!(
-                took < baseline * 4,
-                "measuring took {took:?} against {baseline:?} to draw, which is out of proportion"
+                measuring < drawing * 4,
+                "measuring took {measuring:?} against {drawing:?} to draw, which is out of proportion"
             );
         }
 
