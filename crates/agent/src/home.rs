@@ -91,6 +91,34 @@ pub fn writable() -> Option<PathBuf> {
     directory()
 }
 
+/// The single path segment standing for a working directory.
+///
+/// Separators become dashes and anything that is not a plain path character goes the same way, so
+/// the name is one segment on every platform and readable in a directory listing. It is not
+/// reversible, which is why a record keyed this way has to hold the real path as well, and why two
+/// directories whose names reduce to the same segment are answered by one file.
+///
+/// One definition rather than one per subsystem: the session store and the record of command lines
+/// somebody asked to be remembered are both kept per working directory, and two spellings of the
+/// same key would put a session under one name and the answers given in it under another.
+pub fn key_for(project: &Path) -> String {
+    let mangled: String = project
+        .display()
+        .to_string()
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' => c,
+            _ => '-',
+        })
+        .collect();
+
+    // A path of only separators would otherwise name the directory holding the keys itself.
+    if mangled.trim_matches('-').is_empty() {
+        return "root".to_string();
+    }
+    mangled
+}
+
 /// Create `path` and everything between it and the state directory, reachable only by this user.
 ///
 /// Every writer under `~/.bravebot` goes through this rather than `create_dir_all`, because a
