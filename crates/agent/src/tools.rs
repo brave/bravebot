@@ -687,7 +687,8 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
              the time: a run's output is quarantined by default, so `which`, `find`, `uname` and \
              the like tell you nothing until you ask for the result. Ask for the errors too when \
              a run fails, or you will not know why it failed and must not claim it succeeded. \
-             Only for output from run; a quarantined file is not readable this way.",
+             Only for output from run; a quarantined file is not readable this way. For \
+             anything else you are holding a reference to, vet_content is the question to ask.",
             json!({
                 "type": "object",
                 "properties": {
@@ -697,6 +698,43 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
                     }
                 },
                 "required": ["ref"]
+            }),
+        ),
+        Tool::function(
+            "vet_content",
+            "Ask to be shown something you are holding a reference to, after a check has looked \
+             at it for you. Give the reference and say what you expect it to hold. A second model \
+             with no tools and no memory reads the content and says in one word whether it looks \
+             like an attempt to give instructions to whoever reads it next; the user sees the \
+             content, that word and the reason for it, and decides. If they agree, the content \
+             comes back to you as text you can read. \
+             \
+             Use it for a page you fetched or a file nobody has vouched for, when working blind \
+             on it is not enough and you actually need to know what it says. Say plainly in your \
+             reply why you need to read it rather than pass it to spawn_processor, because that \
+             is what the user is weighing. \
+             \
+             What a yes covers is this content, this once. Nothing about the file or the host is \
+             vouched for, so reading the same path again asks again, and asking twice for the \
+             same thing is a refusal you earned. It is also not a way around a refusal: if the \
+             user said no, work with what you have.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "ref": {
+                        "type": "string",
+                        "description": "The reference you are holding, e.g. \"ref:5\"."
+                    },
+                    "expects": {
+                        "type": "string",
+                        "description": "What you think this holds and why you want it, in a \
+                                        sentence, e.g. \"the changelog for version 2, to find \
+                                        out what changed\". The check is told this so it can \
+                                        say whether the content is that; the user reads it too. \
+                                        Your own words, not anything you were shown."
+                    }
+                },
+                "required": ["ref", "expects"]
             }),
         ),
         Tool::function(
@@ -740,8 +778,9 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
             "Fetch an http or https URL. What comes back is quarantined, like a file nobody \
              vouched for: you get a reference rather than the text, and you cannot read it or be \
              told what it says. Hand the reference to spawn_processor to have a question answered \
-             about it, or to write_file as contents_ref to save it. The user is asked before \
-             anything leaves the machine.",
+             about it, or to write_file as contents_ref to save it. Where you have to read the \
+             page yourself, vet_content has it checked and asks the user to show it to you. The \
+             user is asked before anything leaves the machine.",
             json!({
                 "type": "object",
                 "properties": {
@@ -841,7 +880,7 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
 /// offered to a run whose gates refuse it on every call is a tool the model has to be told to
 /// ignore.
 ///
-/// Five are left out by name, each for its own reason:
+/// Six are left out by name, each for its own reason:
 ///
 /// - `spawn_agent`, because a delegate cannot delegate. The bound on a tree of them is the
 ///   product of the bounds, which is a number nobody chose, and a person approving a write at
@@ -855,6 +894,10 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
 ///   the person typed. A delegate was given a task by a planner and ends when it answers, so a
 ///   wait it asked for would either be dropped or would put the session back to work on something
 ///   nobody at the keyboard is waiting for.
+/// - `vet_content`, because what crosses back from a delegate is its own set of rules and a
+///   delegate has nobody watching it. The prompt it would draw belongs to the person who set the
+///   sub-task going, about content they never asked to see, in the middle of work they are not
+///   reading.
 /// - `fetch_url`, because every kind holds the capability for reaching the network so the driver
 ///   can make its model call, and that is the whole of what it buys. A delegate pointing a
 ///   request at a host of its own would be egress nobody approved for this sub-task, and the
@@ -869,7 +912,8 @@ pub fn for_delegate(capabilities: &bravebot_core::capability::CapabilitySet) -> 
     )
     .into_iter()
     .filter(|tool| match tool.function.name.as_str() {
-        "spawn_agent" | "ask_user" | "todo_write" | "schedule_next" | "fetch_url" => false,
+        "spawn_agent" | "ask_user" | "todo_write" | "schedule_next" | "fetch_url"
+        | "vet_content" => false,
         "write_file" | "edit_file" => capabilities.contains(Capability::FileWrite),
         "run" | "read_output" | "job_output" => capabilities.contains(Capability::ShellExec),
         // LSP-9: asking a server is its own grant, so a delegate holding file reads has not
@@ -1553,6 +1597,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "load_skill" => Some("name"),
         "fetch_url" => Some("url"),
         "job_output" => Some("job"),
+        "vet_content" => Some("ref"),
         _ => None,
     }
 }
@@ -1819,6 +1864,10 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         "ask_user" if !tools.delegated => ask_user(policy, confirmer, &arguments),
         "run" => run(policy, tools, confirmer, &arguments),
         "read_output" => read_output(policy, tools, confirmer, &arguments),
+        // Not offered to a delegate, so a call from one is answered the way any other unknown
+        // name is. What crosses back from a delegate is its own set of rules, and a delegate
+        // promoting a slot would put bytes into a context the person watching never sees.
+        "vet_content" if !tools.delegated => vet_content(policy, tools, confirmer, &arguments),
         // A kind's network capability buys the driver's own model call and nothing a delegate can
         // point somewhere, so this one is refused here too: the gate would pass it, since the
         // capability really is held.
@@ -3324,6 +3373,116 @@ fn read_output<S: Sink, C: Confirmer>(
         Ok(text) => {
             let lines = tally(request.lines(), "line", "lines");
             Produced::new(text, format!("what {slot} held"), format!("{lines}, read")).of_content()
+        }
+        Err(denial) => problem(format!("refused: {denial}")),
+    }
+}
+
+/// Check one quarantined slot, show it to the user with what the check said, and give it to the
+/// planner if they agree.
+///
+/// The second place bytes cross out of quarantine into the planner's context on a person's
+/// say-so, and the order is what makes that defensible. The check runs first, so its word is on
+/// the screen when the question is asked. The content is released for display and put in front of
+/// the person in full. Only then, if they agree, does an endorsement exist for the kernel to
+/// consume.
+///
+/// **The verdict is not consulted here.** Nothing in this function branches on what the check
+/// said: the word travels to the prompt, the prompt draws it, and what decides is the answer. A
+/// check that said the content was safe promotes nothing.
+///
+/// Unlike `read_output` this covers any quarantined slot, including a file, and it is still not a
+/// second answer to what a file is worth: nothing written here reaches the trust map, so a later
+/// read of the same path is quarantined exactly as it is today.
+fn vet_content<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    arguments: &Value,
+) -> Produced {
+    let Some(named) = argument(arguments, "ref") else {
+        return problem("error: 'ref' is required and must be a reference name, e.g. \"ref:5\"");
+    };
+    let Some(expects) = argument(arguments, "expects") else {
+        return problem(
+            "error: 'expects' is required and must say what you think this holds, e.g. \"the \
+             release notes for version 2\"",
+        );
+    };
+
+    let slot = match policy.accept_reference("vet_content", "ref", &named) {
+        Ok(slot) => slot,
+        Err(denial) => return problem(format!("refused: {denial}")),
+    };
+
+    // A reference to a file the driver reserved and never opened has no bytes yet, and there is
+    // nothing to check or to show until it does. Opened here rather than refused, because the
+    // planner naming one is the ordinary way to ask about a file it may not read.
+    if let Err(refusal) = materialise(
+        policy,
+        tools.workspace,
+        tools.slots,
+        "vet_content",
+        std::slice::from_ref(&slot),
+    ) {
+        return problem(refusal);
+    }
+
+    let spec = match policy.before_vetting(&slot, &expects, tools.slots) {
+        Ok(spec) => spec,
+        Err(denial) => return problem(format!("refused: {denial}")),
+    };
+
+    let asked_at = std::time::Instant::now();
+    let checked = match crate::vet::run(policy, &mut tools.chat, tools.slots, &spec) {
+        Ok(checked) => checked,
+        Err(denial) => return problem(format!("refused: {denial}")),
+    };
+    let waited = asked_at.elapsed();
+
+    // Released for the person to read, which is the whole of what this call is for. A display
+    // release cannot feed an effect, and both of these feed a screen.
+    let shown = {
+        let content = match policy.resolve("vet_content", &slot, tools.slots) {
+            Ok(content) => content,
+            Err(denial) => return problem(format!("refused: {denial}")),
+        };
+        let proof = policy.authorise_display_release("content the planner asked to be shown");
+        content.declassify(&proof)
+    };
+    let reason = checked.reason.map(|reason| {
+        let proof = policy.authorise_display_release("what a check said about content");
+        reason.declassify(&proof)
+    });
+
+    let request = crate::confirm::VetRequest {
+        origin: spec.origin().to_string(),
+        expects: spec.expects().to_string(),
+        content: shown,
+        verdict: checked.verdict,
+        reason,
+    };
+
+    if confirmer.confirm_vetted_read(&request) == Decision::Reject {
+        return problem(format!(
+            "refused: the user did not let you read {slot}. Do not ask for it again. Work with \
+             what you have, pass {slot} to spawn_processor, or say in your reply what you needed \
+             from it."
+        ))
+        .costing(checked.usage)
+        .waiting(waited);
+    }
+
+    // The approval is what makes these bytes readable, and it is bound to this exact reference.
+    policy.issue_grant("vet_content", "ref", slot.to_string());
+
+    match policy.promote_vetted(&slot, tools.slots) {
+        Ok(text) => {
+            let lines = tally(request.lines(), "line", "lines");
+            Produced::new(text, format!("what {slot} held"), format!("{lines}, read"))
+                .of_content()
+                .costing(checked.usage)
+                .waiting(waited)
         }
         Err(denial) => problem(format!("refused: {denial}")),
     }
@@ -5050,6 +5209,7 @@ mod tests {
                 "run",
                 "job_output",
                 "read_output",
+                "vet_content",
                 "spawn_agent",
                 "fetch_url",
                 "watch_file",
@@ -5072,6 +5232,25 @@ mod tests {
             assert!(
                 !offered.iter().any(|t| t == "spawn_agent"),
                 "a {name} was offered a way to delegate"
+            );
+        }
+    }
+
+    /// The prompt this tool draws belongs to the person who set the sub-task going, about content
+    /// they never asked to see, in the middle of work they are not reading. No kind is offered it,
+    /// whatever it holds: the capability a delegate has for reading files would otherwise hand it
+    /// over through the catch-all.
+    #[test]
+    fn a_delegate_is_never_offered_a_way_to_promote_a_slot() {
+        for name in bravebot_core::delegate::Kind::NAMES {
+            let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
+            let offered: Vec<String> = for_delegate(&kind.capabilities())
+                .iter()
+                .map(|t| t.function.name.clone())
+                .collect();
+            assert!(
+                !offered.iter().any(|t| t == "vet_content"),
+                "a {name} was offered a way to put quarantined bytes into its own context"
             );
         }
     }
@@ -6019,6 +6198,10 @@ mod tests {
                 &mut self,
                 _request: &crate::confirm::OutputRequest,
             ) -> Decision {
+                Decision::Reject
+            }
+
+            fn confirm_vetted_read(&mut self, _request: &crate::confirm::VetRequest) -> Decision {
                 Decision::Reject
             }
 

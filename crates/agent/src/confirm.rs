@@ -20,6 +20,7 @@
 use crate::diff::Diff;
 use bravebot_core::Pipeline;
 use bravebot_core::ask::{Answer, Asking};
+use bravebot_core::vetting::Verdict;
 use std::fmt;
 
 /// How a proposed write came about.
@@ -273,6 +274,47 @@ impl OutputRequest {
     }
 }
 
+/// One quarantined slot the planner has asked to be shown, with what a check made of it.
+///
+/// The bytes are here in full, released for display, for the reason an output request carries
+/// them: a person deciding whether the model may read something has to be reading it themselves.
+/// The verdict is beside them rather than in place of them. It is advice from a second model that
+/// read the same bytes, and while it says which warning the prompt carries, it decides nothing:
+/// approving is the person's, and a check that said the content was safe promotes nothing on its
+/// own.
+///
+/// The reason is free text the check wrote about content an attacker may own, so it reaches a
+/// screen and stops. Nothing compares it, routes on it or gives it to a model, and it can lie.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VetRequest {
+    /// Where the content came from, as the driver recorded it: a path, or the command that
+    /// printed it. Never taken from the content.
+    pub origin: String,
+    /// What the planner said it expects the slot to hold, in its own words.
+    pub expects: String,
+    /// The content, in full.
+    pub content: String,
+    /// What the check said, or that it did not complete.
+    pub verdict: Verdict,
+    /// The check's own sentence about why, where it wrote one.
+    pub reason: Option<String>,
+}
+
+impl VetRequest {
+    pub fn lines(&self) -> usize {
+        self.content.lines().count()
+    }
+
+    /// A short description for a prompt line.
+    pub fn summary(&self) -> String {
+        format!(
+            "let the model read {} from {}",
+            tally(self.lines(), "line", "lines"),
+            self.origin
+        )
+    }
+}
+
 /// A URL the model has asked to fetch.
 ///
 /// The host is carried beside the URL rather than left for a drawing to pick out, because it is
@@ -484,6 +526,19 @@ pub trait Confirmer {
     /// question cannot mean.
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision;
 
+    /// Ask whether the planner may read one quarantined slot that a check has looked at.
+    /// Implementations must default to refusal when they cannot ask.
+    ///
+    /// Separate from [`Confirmer::confirm_read_output`] because what a yes covers is different.
+    /// That one is about what a program printed, and only about that; this one is about any
+    /// quarantined slot, including a file, and still vouches for nothing but the bytes in front
+    /// of the reader: no trust rule is written, so the next read of the same file asks again.
+    ///
+    /// The verdict travels with the request and is not an answer to it. It says which warning the
+    /// prompt carries; whether the planner gets the bytes is the person's to say, and an
+    /// implementation that answered from the verdict would be letting a second model decide.
+    fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision;
+
     /// Ask about fetching a URL. Implementations must default to refusal when they cannot ask.
     ///
     /// Separate from [`Confirmer::confirm_run`] because what a yes grants is different. Vouching
@@ -591,6 +646,13 @@ impl Confirmer for Unattended {
         Decision::Reject
     }
 
+    /// Refuses. A check that said the content looked safe is not a person, and a run with nobody
+    /// watching that promoted a slot on a second model's word would be the one place in the
+    /// system where an approval came from a model.
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+        Decision::Reject
+    }
+
     /// Refuses. Nothing about a test double is a person agreeing to talk to a host.
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
         Decision::Reject
@@ -644,6 +706,10 @@ impl Confirmer for ApproveWrites {
         Decision::Reject
     }
 
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+        Decision::Reject
+    }
+
     /// Refuses. Nothing about a test double is a person agreeing to talk to a host.
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
         Decision::Reject
@@ -687,6 +753,10 @@ impl Confirmer for ChoosesFirst {
     }
 
     fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
         Decision::Reject
     }
 
@@ -752,6 +822,10 @@ impl Confirmer for ApproveRuns {
         Decision::Reject
     }
 
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+        Decision::Reject
+    }
+
     /// Refuses. Nothing about a test double is a person agreeing to talk to a host.
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
         Decision::Reject
@@ -795,6 +869,10 @@ impl Confirmer for RemembersRuns {
     }
 
     fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
         Decision::Reject
     }
 
@@ -844,6 +922,65 @@ impl Confirmer for ReadsOutput {
         Decision::Approve
     }
 
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Refuses. Nothing about a test double is a person agreeing to talk to a host.
+    fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
+        Vec::new()
+    }
+
+    /// Nobody is typing.
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// Approves a vetted read, and nothing else. Test-only, and named so its use is conspicuous.
+///
+/// Its own double rather than a wider reading of [`ReadsOutput`], because the two grants are
+/// different: one is about what a program printed and the other is about any quarantined slot.
+/// A test that used one for the other would be asserting that an answer to one question is taken
+/// for an answer to another, which is the thing the prompts exist not to do.
+#[derive(Debug, Default)]
+pub struct VetsContent;
+
+impl Confirmer for VetsContent {
+    /// Refuses: this double approves one vetted read and nothing else.
+    fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Refuses: this double approves one vetted read and nothing else.
+    fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
+        RunDecision::reject()
+    }
+
+    fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+        Decision::Approve
+    }
+
     /// Refuses. Nothing about a test double is a person agreeing to talk to a host.
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
         Decision::Reject
@@ -890,6 +1027,10 @@ impl Confirmer for ApproveFetches {
         Decision::Reject
     }
 
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
         Decision::Approve
     }
@@ -930,6 +1071,10 @@ impl Confirmer for ApprovePlans {
     }
 
     fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
         Decision::Reject
     }
 
@@ -1003,6 +1148,10 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
         self.timing(|inner| inner.confirm_read_output(request))
+    }
+
+    fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+        self.timing(|inner| inner.confirm_vetted_read(request))
     }
 
     fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
@@ -1105,6 +1254,11 @@ mod tests {
         }
 
         fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+            std::thread::sleep(self.0);
+            Decision::Reject
+        }
+
+        fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
             std::thread::sleep(self.0);
             Decision::Reject
         }

@@ -4193,8 +4193,9 @@ fn manifest_animated(
             crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
             crate::remote_confirm::ToMain::Landed(landing) => session.landed(landing),
             // The questions a turn asks that this mode cannot. There is no shell and no `run` in
-            // the schema (MANIFEST-5), so no pipeline is proposed and no output is read back, and
-            // there is no planner left to pose a question. None of the three can arrive, and each
+            // the schema (MANIFEST-5), so no pipeline is proposed and no output is read back;
+            // there is no step that asks to be shown a slot; and there is no planner left to pose
+            // a question. None of the four can arrive, and each
             // of them is a question the worker is *blocked* on, so silence here would be a hang
             // nothing can break: the loop would go round forever with the worker waiting on a
             // reply and the cancel token never looked at. Answered the way every other failure to
@@ -4206,6 +4207,11 @@ fn manifest_animated(
             }
             crate::remote_confirm::ToMain::ReadOutput(_) => {
                 let _ = answer_tx.send(crate::remote_confirm::Reply::ReadOutput(
+                    bravebot_agent::confirm::Decision::Reject,
+                ));
+            }
+            crate::remote_confirm::ToMain::Vet(_) => {
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Vet(
                     bravebot_agent::confirm::Decision::Reject,
                 ));
             }
@@ -4772,6 +4778,16 @@ fn run_turn_animated(
                     cancel.cancel();
                 }
                 let _ = answer_tx.send(crate::remote_confirm::Reply::ReadOutput(answer.decision()));
+            }
+            crate::remote_confirm::ToMain::Vet(request) => {
+                let answer = crate::confirm::ask_vet(terminal, &request);
+                if answer.stops_the_turn() {
+                    cancel.cancel();
+                }
+                // Nothing is noted on the transcript: an approval covers the bytes that were on
+                // the screen and leaves no rule behind, so there is no standing decision to
+                // record.
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Vet(answer.decision()));
             }
             crate::remote_confirm::ToMain::Fetch(request) => {
                 let answer = crate::confirm::ask_fetch(terminal, &request);

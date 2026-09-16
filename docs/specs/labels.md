@@ -13,12 +13,13 @@ guards:
       - crates/agent/src/aside.rs: 2
       - crates/agent/src/manifest.rs: 4
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 23
+      - crates/agent/src/tools.rs: 25
       - crates/agent/src/turn.rs: 4
+      - crates/agent/src/vet.rs: 1
       - crates/agent/src/workspace.rs: 2
       - crates/agent/tests/workspace.rs: 39
       - crates/aichat/tests/client.rs: 2
-      - crates/core/src/policy.rs: 39
+      - crates/core/src/policy.rs: 46
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 1
       - crates/mcp/tests/stdio.rs: 1
@@ -29,7 +30,7 @@ guards:
       - crates/core/src/value.rs: 4
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 36
+      - crates/core/src/policy.rs: 44
   - symbol: Policy::present
     sites:
       - crates/agent/src/aside.rs: 1
@@ -267,6 +268,7 @@ and the content has no say in it.
 | a reply taken out of a transport's envelope | the context's, never the network's | `verified-by: bravebot_core::policy::adopting_model_output_takes_the_context_s_label_not_the_transport_s` |
 | an answer a person typed to a question | trusted and public, because a person wrote it | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` |
 | what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
+| one slot's bytes a person read on their screen and vouched for | trusted and private, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |
 
@@ -311,9 +313,9 @@ what catches it.
 
 ## Known costs
 
-- **Two places in the policy layer do look at untrusted bytes in order to decide something.** The
-  clauses above say nothing may, so these are exceptions, and they are written down rather than
-  left to be found.
+- **Three places in the policy layer do look at untrusted bytes in order to decide something.**
+  The clauses above say nothing may, so these are exceptions, and they are written down rather
+  than left to be found.
 
   The first is splitting a processor's answer. A processor hands back a single piece of text that
   holds two things: a remark meant for the person watching, and the document to be written. It
@@ -351,3 +353,27 @@ what catches it.
   stays the planner's choice plus a person's approval, and no amount of steering the text changes
   it. The clauses above forbid decisions that redirect an effect, and none of these redirect
   anything.
+
+- **The third is reading a verdict out of a check.** A second model is shown one quarantined slot
+  and answers with one word about whether the content looks like an attempt to give instructions.
+  Reading that word is a decision taken from a reply that is a function of untrusted content, so
+  it is untrusted too. [vetting.md](vetting.md) is the whole of what such a check is and may say.
+
+  Suppose an attacker owns the content, so they steer both the content and, through it, what the
+  check replies. Everything that buys them is on this list:
+
+  - **Force the word `safe`.** What that reaches is the banner on the prompt. The bytes are drawn
+    below it either way, the same keys are offered either way, and nothing is promoted until a
+    person says so, so this buys a quieter sentence above content the reader is still reading.
+  - **Force the word `unsafe`, or reply with nothing a verdict can be read out of.** That lands on
+    the prompt with the warning, which is the direction this is built to fail in.
+  - **Put their words in the reason.** It reaches a person's screen and stops there. It is drawn
+    inside a margin it cannot forge, no model is given it, and it is kept out of the audit trail.
+    It can still *lie*, since nothing holds a reason against the content it describes and nothing
+    could. The residue is that a plausible sentence might persuade somebody to skim, which is the
+    same residue as the remark above and is
+    [issue #23](https://github.com/brave/bravebot/issues/23).
+
+  What is **not** on the list: choosing which slot is checked, choosing any destination, lowering
+  confidentiality, promoting anything without a person's approval, writing a trust rule, or
+  reaching the planner at all. A verdict is advice about bytes already on a person's screen.

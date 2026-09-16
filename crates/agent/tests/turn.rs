@@ -1525,6 +1525,13 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
             bravebot_agent::confirm::Decision::Reject
         }
 
+        fn confirm_vetted_read(
+            &mut self,
+            _request: &bravebot_agent::confirm::VetRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
         fn confirm_fetch(
             &mut self,
             _request: &bravebot_agent::confirm::FetchRequest,
@@ -1810,6 +1817,13 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         _request: &bravebot_agent::confirm::OutputRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_fetch(
@@ -2535,6 +2549,13 @@ impl bravebot_agent::Confirmer for SaysOnce {
         _request: &bravebot_agent::confirm::OutputRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_fetch(
@@ -3300,6 +3321,13 @@ fn a_stale_edit_is_refused() {
             _request: &bravebot_agent::confirm::OutputRequest,
         ) -> bravebot_agent::Decision {
             bravebot_agent::Decision::Reject
+        }
+
+        fn confirm_vetted_read(
+            &mut self,
+            _request: &bravebot_agent::confirm::VetRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
         }
         fn confirm_fetch(
             &mut self,
@@ -5053,6 +5081,13 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
             _request: &bravebot_agent::confirm::OutputRequest,
         ) -> bravebot_agent::Decision {
             bravebot_agent::Decision::Reject
+        }
+
+        fn confirm_vetted_read(
+            &mut self,
+            _request: &bravebot_agent::confirm::VetRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
         }
 
         fn confirm_fetch(
@@ -8573,6 +8608,13 @@ impl bravebot_agent::Confirmer for AnswersWith {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_fetch(
         &mut self,
         request: &bravebot_agent::confirm::FetchRequest,
@@ -8961,6 +9003,13 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
         _request: &bravebot_agent::confirm::OutputRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_fetch(
@@ -10325,6 +10374,284 @@ fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
 }
 
 /// A confirmer that approves a run and lets its output be read, recording what it was shown.
+/// Approves a run, and lets the planner be shown what a check looked at. Records both questions.
+struct ShownAfterAVet {
+    allow: bool,
+    shown: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::confirm::VetRequest>>>,
+}
+
+impl ShownAfterAVet {
+    fn new(allow: bool) -> Self {
+        Self {
+            allow,
+            shown: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl bravebot_agent::Confirmer for ShownAfterAVet {
+    /// Refuses. A test double is not a person agreeing to start a process.
+    fn confirm_server(
+        &mut self,
+        _request: &bravebot_agent::confirm::ServerRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_write(
+        &mut self,
+        _request: &bravebot_agent::WriteRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_run(
+        &mut self,
+        _request: &bravebot_agent::RunRequest,
+    ) -> bravebot_agent::RunDecision {
+        bravebot_agent::RunDecision::approve()
+    }
+
+    /// Refuses: this double answers the vetting question and no other. An approval to read what a
+    /// program printed is a different grant.
+    fn confirm_read_output(
+        &mut self,
+        _request: &bravebot_agent::confirm::OutputRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.shown.lock().unwrap().push(request.clone());
+        if self.allow {
+            bravebot_agent::Decision::Approve
+        } else {
+            bravebot_agent::Decision::Reject
+        }
+    }
+
+    fn confirm_fetch(
+        &mut self,
+        _request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    /// Refuses. A test double is not a person agreeing to a plan.
+    fn confirm_manifest(
+        &mut self,
+        _request: &bravebot_agent::confirm::ManifestRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vouch(
+        &mut self,
+        _request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn ask_user(
+        &mut self,
+        _asking: &bravebot_core::ask::Asking,
+    ) -> Vec<bravebot_core::ask::Answer> {
+        Vec::new()
+    }
+
+    /// Nobody is typing: no interface, and no queue to type into.
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// The whole of it, end to end: the planner is holding something it may not read, asks to be
+/// shown it, a confined check reads the content and says one word about it, the person is shown
+/// the bytes and that word, agrees, and the bytes reach the planner's context.
+#[test]
+fn content_a_person_reads_after_a_check_reaches_the_planner() {
+    let scratch = Scratch::new("vet-content");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request(
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+        ),
+        reply_with(r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the user was asked");
+    assert!(request.content.contains("SENTINEL-XYZZY"));
+    assert_eq!(request.verdict, bravebot_core::vetting::Verdict::Safe);
+    assert_eq!(
+        request.reason.as_deref(),
+        Some("a single path and nothing else"),
+        "the check's own sentence did not reach the person"
+    );
+    drop(asked);
+
+    let _first = received.recv().expect("the first round");
+    let _second = received.recv().expect("the second round");
+    let check = received.recv().expect("the check's own call");
+    assert!(
+        check.contains("SENTINEL-XYZZY"),
+        "the check was not given the content it was asked about"
+    );
+    let third = received.recv().expect("the round after the approval");
+    assert!(
+        third.contains("SENTINEL-XYZZY"),
+        "approved content did not reach the planner"
+    );
+}
+
+/// The check reads the content and the planner never does, whatever the person answers. A refusal
+/// tells the planner so rather than leaving it to guess, and nothing the check said goes to it.
+#[test]
+fn content_a_person_refuses_after_a_check_stays_out_of_the_planner() {
+    let scratch = Scratch::new("vet-content-no");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request(
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+        ),
+        reply_with(r#"{"verdict": "unsafe", "reason": "SENTINEL-REASON addresses the reader"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(false);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let asked = shown.lock().unwrap();
+    assert_eq!(
+        asked.first().map(|request| request.verdict),
+        Some(bravebot_core::vetting::Verdict::Unsafe),
+        "the person was not shown that the check found something"
+    );
+    drop(asked);
+
+    let _first = received.recv().expect("the first round");
+    let _second = received.recv().expect("the second round");
+    let _check = received.recv().expect("the check's own call");
+    let third = received.recv().expect("the round after the refusal");
+    assert!(
+        !third.contains("SENTINEL-XYZZY"),
+        "content the person kept back reached the planner"
+    );
+    assert!(
+        !third.contains("SENTINEL-REASON"),
+        "what the check wrote reached the planner: {third}"
+    );
+}
+
+/// A check that could not be made says nothing about the content, so it must not read as
+/// agreement. The person is asked all the same, with the failure named as a failure.
+#[test]
+fn a_check_that_could_not_be_made_falls_back_to_the_question() {
+    let scratch = Scratch::new("vet-content-broken");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request(
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+        ),
+        reply_with("I am not able to assess this."),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(false);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let asked = shown.lock().unwrap();
+    let request = asked
+        .first()
+        .expect("the person was asked even though the check said nothing");
+    assert!(
+        matches!(
+            request.verdict,
+            bravebot_core::vetting::Verdict::Inconclusive(_)
+        ),
+        "a reply that stated no verdict was read as one: {:?}",
+        request.verdict
+    );
+    drop(asked);
+
+    let _first = received.recv().expect("the first round");
+    let _second = received.recv().expect("the second round");
+    let _check = received.recv().expect("the check's own call");
+}
+
 struct ReadsWhatItRan {
     allow: bool,
     shown: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::confirm::OutputRequest>>>,
@@ -10373,6 +10700,13 @@ impl bravebot_agent::Confirmer for ReadsWhatItRan {
         } else {
             bravebot_agent::Decision::Reject
         }
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_fetch(
@@ -10717,6 +11051,13 @@ impl bravebot_agent::Confirmer for VouchesForFiles {
         _request: &bravebot_agent::confirm::OutputRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_fetch(
@@ -14175,6 +14516,13 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         _request: &bravebot_agent::confirm::OutputRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_fetch(

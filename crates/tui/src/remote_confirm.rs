@@ -21,7 +21,7 @@
 
 use bravebot_agent::confirm::{
     Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RunDecision, RunRequest,
-    ServerRequest, VouchRequest, WriteRequest,
+    ServerRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Shown,
@@ -87,6 +87,9 @@ pub enum ToMain {
     /// A command's output needs a person to read it before the planner may. The main thread
     /// must reply.
     ReadOutput(OutputRequest),
+    /// A quarantined slot the planner asked to be shown, with what a check made of it. The main
+    /// thread must reply.
+    Vet(VetRequest),
     /// A URL the planner wants fetched. The main thread must reply.
     Fetch(FetchRequest),
     /// A quarantined file the model would like to read. The main thread must reply.
@@ -143,6 +146,7 @@ pub enum Reply {
     Write(Decision),
     Run(RunDecision),
     ReadOutput(Decision),
+    Vet(Decision),
     Fetch(Decision),
     Vouch(Decision),
     Server(Decision),
@@ -202,6 +206,15 @@ impl Confirmer for RemoteConfirmer {
             Some(Reply::ReadOutput(decision)) => decision,
             // A reply to a different question is not consent to put these bytes in the planner's
             // context.
+            _ => Decision::Reject,
+        }
+    }
+
+    fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+        match self.exchange(ToMain::Vet(request.clone())) {
+            Some(Reply::Vet(decision)) => decision,
+            // A reply to a different question is not consent to put these bytes in the planner's
+            // context, and neither is the verdict that travelled out with the question.
             _ => Decision::Reject,
         }
     }
@@ -517,6 +530,54 @@ mod tests {
         );
     }
 
+    fn a_vetting() -> VetRequest {
+        VetRequest {
+            origin: "example.com/notes".into(),
+            expects: "the release notes".into(),
+            content: "the notes".into(),
+            verdict: bravebot_core::vetting::Verdict::Safe,
+            reason: None,
+        }
+    }
+
+    /// An approval to read what a program printed is not an approval to promote a slot. The two
+    /// cover different things, so a reply tagged as answering one must not settle the other.
+    #[test]
+    fn an_approved_output_read_does_not_approve_a_vetted_read() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let (answer_tx, answer_rx) = channel();
+
+        let responder = thread::spawn(move || {
+            inbound.recv().expect("a message arrived");
+            answer_tx
+                .send(Reply::ReadOutput(Decision::Approve))
+                .expect("answered");
+        });
+
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        assert_eq!(
+            confirmer.confirm_vetted_read(&a_vetting()),
+            Decision::Reject,
+            "consent to read a command's output was taken as consent to promote a slot"
+        );
+        responder.join().expect("responder finished");
+    }
+
+    /// Nobody is there to ask, so nothing is promoted. The verdict travelling out with the
+    /// question does not answer it: a word from a model is not a person having read something.
+    #[test]
+    fn a_closed_channel_refuses_a_vetted_read() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let (_answer_tx, answer_rx) = channel::<Reply>();
+        drop(inbound);
+
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        assert_eq!(
+            confirmer.confirm_vetted_read(&a_vetting()),
+            Decision::Reject
+        );
+    }
+
     fn a_series() -> Asking {
         bravebot_core::ask::asking(&bravebot_core::ask::Series::new(vec![
             bravebot_core::ask::Question::new(
@@ -719,6 +780,7 @@ mod tests {
                     ToMain::Ask(_) => seen.push("ask"),
                     ToMain::Run(_) => seen.push("run"),
                     ToMain::ReadOutput(_) => seen.push("read_output"),
+                    ToMain::Vet(_) => seen.push("vet"),
                     ToMain::Fetch(_) => seen.push("fetch"),
                     ToMain::Vouch(_) => seen.push("vouch"),
                     ToMain::Server(_) => seen.push("server"),

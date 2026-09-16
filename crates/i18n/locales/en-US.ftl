@@ -441,6 +441,29 @@ output-yes = let it read this
 output-no = keep it back
 
 
+## Letting the model read one quarantined slot a check has looked at
+
+vet-title = let the model read this?
+vet-verb = Read
+vet-lines = { $count ->
+    [one] { $count } line
+   *[other] { $count } lines
+    }
+vet-from = from { $origin }
+vet-safe = the check found no attempt to give instructions in this
+vet-unsafe = the check says this looks like an attempt to give instructions
+vet-inconclusive = the check did not complete, so nothing has looked at this
+vet-unseen =
+    the model has not seen this. Approving puts it in its context, and it will act on it.
+vet-covers-this-only =
+    this covers what is below and nothing else. No path is vouched for, so the next read of
+    the same thing asks again.
+vet-expected = the model asked for this expecting { $expects }
+vet-empty = (there is nothing in it)
+vet-yes = let it read this
+vet-no = keep it back
+
+
 ## Fetching a URL
 
 fetch-title = fetch this?
@@ -1050,6 +1073,7 @@ verb-load-skill = Skill
 verb-ask-user = Ask
 verb-run = Run
 verb-read-output = Read output
+verb-vet-content = Vet
 verb-fetch-url = Fetch
 verb-job-output = Job
 verb-spawn-agent = Delegate

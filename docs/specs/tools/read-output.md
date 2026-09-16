@@ -60,4 +60,8 @@ A file's worth is the trust map's answer, and naming a file, opening a directory
 question already give it. A second route to the same decision would be a way to disagree with the
 first.
 
+This rule is about a file's worth and not about a slot's bytes. Promoting one slot after a check
+has read it is a different thing, single-use, writing no rule and leaving the trust map saying
+what it said, and it is [vetting.md](../vetting.md).
+
 `verified-by: bravebot_core::policy::a_file_cannot_be_promoted_by_reading_it_aloud`
