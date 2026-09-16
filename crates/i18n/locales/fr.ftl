@@ -152,6 +152,21 @@ doctor-settings-overridden = { $name } depuis { $path }
 doctor-leo = leo
 doctor-subscription =
     abonnement { $environment } importé, { $unspent } identifiants sur { $total } non dépensés
+doctor-state-directory = répertoire d'état { $path }, depuis { $variable }
+doctor-state-directory-unprotected = non restreint
+doctor-state-directory-permissions =
+    l'historique des invites, les enregistrements de session et les choix retenus portent les
+    permissions de votre répertoire de profil
+doctor-state-directory-absent = aucun répertoire d'état : { $variables } ne nomme rien
+doctor-state-directory-not-kept = non conservés
+doctor-state-directory-forgotten =
+    les sessions et --resume, l'historique des invites, le modèle et le thème que vous choisissez
+doctor-state-directory-not-read = non lus
+doctor-state-directory-your-own =
+    vos propres réglages, compétences et instructions permanentes ; ceux d'une copie de travail
+    s'appliquent quand même
+doctor-state-directory-remedy = pour les garder
+doctor-state-directory-set-profile = réglez { $variables } sur un répertoire à vous
 doctor-confinement = confinement { $level }
 confinement-kernel = imposé par le noyau
 confinement-partial = partiel
@@ -201,6 +216,21 @@ trust-directory-regardless =
 trust-directory-yes = lui faire confiance
 trust-directory-no = me demander à chaque écriture
 quit = quitter
+
+
+## Ouvrir les répertoires qu'un fichier de réglages nomme, demandés une fois chacun au démarrage
+
+named-directory-title = ouvrir ce répertoire ?
+named-directory-question = Ouvrir
+named-directory-explained =
+    Un fichier de réglages a demandé que ce répertoire soit ouvert à côté de celui où vous
+    travaillez. L'ouvrir permet d'y lire et d'y modifier des fichiers, et de les lire comme
+    fiables.
+named-directory-regardless =
+    Un fichier ne peut pas ouvrir un répertoire de lui-même. Répondez non et cette session tourne
+    sans lui ; /add-dir en ouvre un à tout moment.
+named-directory-yes = l'ouvrir
+named-directory-no = le laisser fermé
 
 
 ## Choisir un thème, un modèle, ou une session à reprendre
@@ -367,6 +397,24 @@ fetch-yes = le récupérer
 fetch-no = ne pas le récupérer
 
 
+## Démarrer un serveur de langage
+
+server-title = démarrer un serveur de langage ?
+server-verb = Démarrer
+server-workspace = pour indexer { $workspace }
+server-build-tooling =
+    ceci lance les outils de compilation de son écosystème : le code de vos dépendances s'exécute
+    donc avec vos propres accès, comme le fait cargo test. il reste actif pendant cette session.
+server-reads-only =
+    il lit le projet et reste actif pendant cette session. rien n'est écrit dans votre projet.
+server-explained =
+    ce qu'il rapporte garde le même statut quelle que soit votre réponse : un emplacement dans un
+    fichier est montré, et le texte à cet emplacement est en quarantaine tant que vous n'avez pas
+    approuvé le fichier.
+server-yes = le démarrer
+server-no = ne pas le démarrer
+
+
 ## Approuver un plan avant son exécution
 
 plan-title = exécuter ce plan ?
@@ -456,6 +504,9 @@ status-loop-self-paced = cadencée par chaque tour
 status-loop-next = prochaine dans { $next }
 status-loop-running = en cours
 status-loop-unpaced = en attente que le tour dise quand
+status-goal = Objectif
+# « fois » est invariable, donc une seule forme là où l'anglais en a deux.
+status-goal-rounds = renvoyé { $rounds } fois, il en reste { $left }
 status-permissions = Permissions
 status-permissions-cycle = shift-tab pour changer
 status-this-session = Cette session
@@ -596,6 +647,7 @@ command-compact = Résumer la conversation jusqu'ici, en gardant la partie réce
 command-btw = Demander quelque chose à côté du travail, sans le mettre dans la conversation
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
 command-loop = Renvoyer une consigne encore et encore, à votre intervalle ou au rythme de chaque tour
+command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-export = Exporter la transcription de la session vers un fichier markdown
 command-undo = Annuler le dernier tour et restaurer les fichiers
 command-exit = Partir
@@ -651,6 +703,7 @@ session-vouched-for = { $path } approuvé pour cette session
 update-available =
     bravebot { $version } est disponible (celle-ci est { $running }) ; pour la mettre à jour :
     { $command }
+session-started-server = serveur de langage { $language } actif pour cette session ({ $program })
 session-answered-already = déjà répondu : { $question }
 session-something-was-refused =
     un contrôle de la politique a refusé quelque chose pendant ce tour
@@ -681,12 +734,51 @@ loop-stopped = la boucle est arrêtée
 loop-aged-out = la boucle a tourné une semaine et s'est arrêtée d'elle-même
 loop-unpaced = ce tour n'a pas dit quand recommencer, la boucle est donc arrêtée
 loop-busy = /loop commence par un tour à lui, il attend donc la fin de celui-ci
+loop-replaces-goal =
+    l'objectif qui était fixé a été retiré : une session ne travaille qu'à une chose à la fois
 loop-armed-by-the-turn =
     nouveau regard dans { $after }, en répétant ce que vous avez demandé ; ctrl-c l'arrête, et
     partir aussi
 loop-not-armed-under-a-goal =
     un regard plus tard a été demandé sans être lancé : cette session travaille vers un objectif,
     et elle fait une chose à la fois
+
+
+## Travailler jusqu'à ce qu'une condition soit remplie
+
+goal-set =
+    objectif : { $condition }. Rien ne démarre tant que vous n'avez pas envoyé quelque chose ;
+    ensuite chaque tour est jugé par rapport à lui. Ctrl-c le retire, et partir aussi
+goal-replaced = l'objectif qui était fixé a été remplacé
+goal-cleared = l'objectif est retiré
+goal-none =
+    aucun objectif n'est fixé. /goal <condition> en fixe un, comme /goal cargo test se termine
+    avec le code 0, et /goal clear le retire
+goal-active = objectif : { $condition }
+goal-last-check = la dernière vérification a dit : { $reason }
+goal-never-checked = rien n'a encore été jugé par rapport à lui
+goal-not-met = l'objectif n'est pas encore atteint : { $reason }
+goal-not-met-unsaid =
+    l'objectif n'est pas encore atteint, et la vérification n'a pas dit ce qui manque
+goal-met = l'objectif est atteint : { $reason }
+goal-met-unsaid = l'objectif est atteint
+goal-impossible = l'objectif ne peut pas être atteint, il est donc retiré : { $reason }
+goal-unreadable =
+    la vérification n'a pas répondu par un verdict : il n'y a donc rien sur quoi agir et
+    l'objectif est retiré
+goal-quarantined =
+    cette conversation a rencontré du contenu non fiable ; un verdict à son sujet n'est donc pas
+    quelque chose sur quoi ce programme a le droit d'agir, et l'objectif est retiré
+goal-spent =
+    l'objectif a renvoyé le travail { $rounds } fois sans être atteint, et s'est arrêté plutôt que
+    de continuer
+goal-failed = l'objectif n'a pas pu être vérifié ({ $problem }), il est donc retiré
+goal-uninterruptible =
+    la vérification déjà en cours tient en une requête et ne peut pas être arrêtée en chemin, mais
+    rien de plus ne sera envoyé
+goal-ended-unexpectedly = la vérification de l'objectif s'est terminée de façon inattendue
+goal-replaces-loop =
+    la boucle qui tournait a été arrêtée : une session ne travaille qu'à une chose à la fois
 
 
 ## Coller, déposer et joindre
@@ -737,6 +829,7 @@ opening-invitation = Posez une question sur cet espace de travail.
 verb-read-file = Lire
 verb-list-files = Lister
 verb-search = Chercher
+verb-lsp = Consulter
 verb-write-file = Écrire
 verb-edit-file = Modifier
 verb-todo-write = Planifier
