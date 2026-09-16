@@ -1623,6 +1623,7 @@ pub fn run(
     // Before the terminal is taken, because the request for no colour decides whether it is asked
     // about its background on the way in, and that question happens inside the takeover.
     crate::theme::sense_no_color();
+    crate::indicator::sense_no_motion();
 
     let mut stdout = io::stdout();
     take_over_terminal(&mut stdout)?;

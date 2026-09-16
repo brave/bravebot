@@ -3,6 +3,7 @@ id: VIEW
 title: The transcript
 status: normative
 governs:
+  - crates/tui/src/indicator.rs
   - crates/tui/src/reasoning.rs
   - crates/tui/src/render.rs
   - crates/tui/src/state.rs
@@ -468,3 +469,27 @@ than cleared, which is what makes the variable a switch rather than an edit.
 `verified-by: bravebot_tui::logo::the_wordmark_takes_no_colour_where_none_was_asked_for`
 `verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
 
+
+<a id="VIEW-21"></a>
+### VIEW-21: `NO_MOTION` stills the glyph, and the counters go on counting
+
+Where `NO_MOTION` is set to anything but the empty string, the glyph beside a running turn stands
+still instead of cycling. It is still drawn, and the elapsed time and the token counts change as
+they always did: a figure that moves when the thing it measures moves is information rather than
+animation.
+
+It is read from the environment the way the request for no colour is, and answers to presence the
+same way. Where it is not set, the glyph cycles.
+
+**Why.** Constant motion is tiring to work beside, and worse than tiring for vestibular
+sensitivity, so it is something a person can decline. Stilling the glyph rather than dropping it
+keeps the indicator answering the question it exists for: a turn runs with nothing else on the
+screen moving, so a row with nothing in it would be indistinguishable from a program that had hung.
+
+The variable is the environment rather than a settings file because the preference belongs to the
+person and their terminal rather than to a project, and because it has to hold for the first frame,
+which is drawn before any file this program reads has been looked for.
+
+`verified-by: bravebot_tui::indicator::the_indicator_stands_still_where_no_motion_is_asked_for`
+`verified-by: bravebot_tui::indicator::motion_nobody_declined_still_moves`
+`verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
