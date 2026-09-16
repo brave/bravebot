@@ -605,6 +605,13 @@ pub struct Task {
     /// cannot say what the next tick asks, because the line belongs to the person who typed it
     /// and the caller holds it.
     pub tick: Option<Tick>,
+    /// Whether this turn may arm a standing watch, and why not where it may not.
+    ///
+    /// `Unavailable` by default, which is a caller that keeps no watches: the tool is not
+    /// offered and a call to it is answered as an unknown name. A caller that does keep them
+    /// says how many slots are free, because the bound is the session's and only the session can
+    /// count it.
+    pub arming: crate::watch::Arming,
     /// The condition this session is working towards, where a person set one.
     ///
     /// `None` for a turn with no goal. It changes one thing: the planner is told what the session
@@ -669,6 +676,9 @@ impl Task {
             model: None,
             effort: None,
             tick: None,
+            // No watches unless a caller says it keeps some, for the reason `rounds` is bounded
+            // by default: a default cannot know whether anybody is there to read a fire.
+            arming: crate::watch::Arming::Unavailable,
             working_towards: None,
             // Bounded unless a caller says otherwise. The unbounded case needs somebody watching,
             // and a default cannot know whether anybody is, so the default is the one that is
@@ -782,6 +792,12 @@ impl Task {
     /// Say which tick of a loop this turn is.
     pub fn ticking(mut self, tick: Option<Tick>) -> Self {
         self.tick = tick;
+        self
+    }
+
+    /// Say whether this turn may arm a standing watch, and why not where it may not.
+    pub fn arming(mut self, arming: crate::watch::Arming) -> Self {
+        self.arming = arming;
         self
     }
 
@@ -913,6 +929,12 @@ pub struct Outcome {
     /// `None` from a turn that was offered the chance and said nothing. The caller decides what
     /// that silence means; nothing here waits for it.
     pub wakeup: Option<Wakeup>,
+    /// The paths this turn asked to have standing watches armed on, in the order it asked.
+    ///
+    /// Travels back for the reason a wakeup does: a watch outlives the turn, so the session is
+    /// what holds one. Each has been through the gate a read of that path goes through, and the
+    /// session applies the bound on how many may be live.
+    pub watches: Vec<String>,
     /// Where the turn's wall clock went.
     ///
     /// Beside the token figures because it answers the other half of the same question. Tokens say
@@ -1988,7 +2010,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // gates would refuse it on every call.
     let offered = match &task.delegate {
         Some(spec) => tools::for_delegate(spec.capabilities()),
-        None => tools::available(scheduling),
+        None => tools::available(scheduling, task.arming),
     };
 
     let mut steps = 0;
@@ -2028,6 +2050,11 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     let mut may_compact = true;
     // When the planner asked for the next tick, where this turn is one and it asked at all.
     let mut wakeup = None;
+    // Every watch the turn armed, in the order it asked for them, for whoever holds the session
+    // to arm. A list rather than one, because the bound is the session's and a turn may ask
+    // about several files.
+    let mut watches: Vec<String> = Vec::new();
+    let mut armed = 0usize;
     // How many delegates this turn has spawned, which is what numbers each one. Counted for the
     // turn rather than for the round: two delegates spawned in different rounds are still two
     // delegates, and everything reported about either is tagged with its number.
@@ -2389,6 +2416,8 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                         },
                         cancel,
                         scheduling,
+                        arming: task.arming,
+                        armed: &mut armed,
                         home: task.home.as_deref(),
                         remembering: task.remembering.as_deref(),
                         // A delegate is offered no way to delegate, and dispatch refuses one anyway.
@@ -2456,6 +2485,12 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                 // it ended on.
                 if let Some(asked) = output.wakeup {
                     wakeup = Some(asked);
+                }
+                // Kept rather than overwritten, unlike a wakeup: two calls naming two paths are
+                // two watches, and a session that armed only the last of them would have told
+                // the planner about one that does not exist.
+                if let Some(path) = output.watch.clone() {
+                    watches.push(path);
                 }
                 // As with a context file: what the turn has seen belongs to the conversation the
                 // moment it sees it, not once the turn happens to end well.
@@ -2968,6 +3003,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         // subscription that was found is one that will be spent on every round of this turn.
         premium: subscription.is_some(),
         wakeup,
+        watches,
         timing: spent.finish(),
         clean: policy.finish(),
         display,

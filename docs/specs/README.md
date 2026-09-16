@@ -42,7 +42,7 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [compaction.md](compaction.md) | `COMPACT` | 12 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 14 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 17 | one condition a person set, judged after every turn, until it holds |
-| [file-watches.md](file-watches.md) | `FSWATCH` | 11 | a standing watch on one path, firing with no turn running to notice it |
+| [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
 | [sessions.md](sessions.md) | `SESSION` | 22 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
 | [state-directory.md](state-directory.md) | `STATE` | 2 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
@@ -75,6 +75,7 @@ the routing-versus-content split they share.
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 3 | `load_skill` |
 | [tools/todo-write.md](tools/todo-write.md) | `TODO` | 2 | `todo_write` |
 | [tools/schedule-next.md](tools/schedule-next.md) | `SCHED` | 5 | `schedule_next` |
+| [tools/watch-file.md](tools/watch-file.md) | `ARM` | 6 | `watch_file` |
 | [tools/ask-user.md](tools/ask-user.md) | `ASK` | 8 | `ask_user` |
 
 Topics with no spec yet are ordinary code. Adding one is how a topic becomes review-required.

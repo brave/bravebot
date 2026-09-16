@@ -551,6 +551,8 @@ status-loop-next = next in { $next }
 status-loop-running = running now
 status-loop-unpaced = waiting for the turn to say when
 status-goal = Goal
+status-watch = Watch { $number }
+status-watch-armed-by = armed by turn { $turn } · { $left } left
 status-goal-rounds = { $rounds ->
     [one] sent back { $rounds } time, { $left } left
    *[other] sent back { $rounds } times, { $left } left
@@ -748,6 +750,7 @@ command-btw = Ask something beside the work, without putting it in the conversat
 command-clear = Start a new session here, keeping this one resumable
 command-loop = Send a prompt again and again, on your interval or at a pace each turn sets
 command-goal = Keep working until a condition you set is judged met
+command-watch = List the files this session is watching, and stop one by its number
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-export = Export the session transcript to a markdown file
 command-undo = Rewind one turn and put back the files it wrote
@@ -872,6 +875,9 @@ loop-armed-by-the-turn =
 loop-not-armed-under-a-goal =
     a later look was asked for and not started: this session is working towards a goal, and it
     does one thing at a time
+loop-not-armed-under-a-watch =
+    a later look was asked for and not started: this session is already watching a file, and it
+    does one thing at a time
 
 
 ## Working towards a condition
@@ -909,6 +915,48 @@ goal-ended-unexpectedly = the goal check ended unexpectedly
 goal-replaces-loop =
     the loop that was running has been stopped: a session works towards one thing at a time
 
+
+## Being told when a file changes
+
+watch-armed =
+    watch { $number } is on { $path }: you will be told when it looks written to, with no turn
+    running. /watch lists them, /watch stop { $number } ends this one, and ctrl-c ends them all
+watch-not-armed-under-a-loop =
+    a watch on a file was asked for and not armed: a loop is running, and a session does one
+    thing at a time that happens without anybody typing
+watch-not-armed-under-a-goal =
+    a watch on a file was asked for and not armed: this session is working towards a goal, and it
+    does one thing at a time
+watch-not-armed-full =
+    a watch on a file was asked for and not armed: { $count } are already live, which is as many
+    as a session keeps. /watch stop <n> ends one
+watch-not-armed-unreadable =
+    a watch on { $path } was asked for and not armed: that path cannot be looked at, so there is
+    nothing for a later look to be compared against
+watch-fired = watch { $number }: { $path } looks written to
+watch-listed = watch { $number }: { $path }, armed by turn { $turn }, { $left } left
+watch-none =
+    nothing is being watched. A turn arms a watch when you ask to be told about a file, and
+    /watch stop <n> ends one
+watch-no-such = there is no watch { $number }. /watch lists the live ones
+watch-command-takes =
+    /watch lists what this session is watching, and /watch stop <n> ends the one with that
+    number
+watch-stopped = watch { $number } is stopped
+watch-stopped-with-its-turn =
+    watch { $number } is stopped, since stopping the turn it started is how you say you have
+    finished with it
+watch-aged-out = watch { $number } has been on for a week and has stopped itself
+watch-out-of-reach =
+    watch { $number } is stopped: this session no longer reaches the path it was on
+watches-stopped = { $count ->
+    [one] { $count } watch is stopped
+   *[other] { $count } watches are stopped
+    }
+watches-replaced = { $count ->
+    [one] { $count } live watch has ended: a session does one such thing at a time
+   *[other] { $count } live watches have ended: a session does one such thing at a time
+    }
 
 ## Pasting, dropping and attaching
 
@@ -991,6 +1039,7 @@ verb-fetch-url = Fetch
 verb-job-output = Job
 verb-spawn-agent = Delegate
 verb-schedule-next = Schedule
+verb-watch-file = Watch
 verb-unknown = Tool
 
 ## Where what a call produced ended up, said at the end of the line about it

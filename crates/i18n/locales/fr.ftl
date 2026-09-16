@@ -529,6 +529,8 @@ status-loop-next = prochaine dans { $next }
 status-loop-running = en cours
 status-loop-unpaced = en attente que le tour dise quand
 status-goal = Objectif
+status-watch = Veille { $number }
+status-watch-armed-by = posée au tour { $turn } · il reste { $left }
 # « fois » est invariable, donc une seule forme là où l'anglais en a deux.
 status-goal-rounds = renvoyé { $rounds } fois, il en reste { $left }
 status-permissions = Permissions
@@ -684,6 +686,7 @@ command-btw = Demander quelque chose à côté du travail, sans le mettre dans l
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
 command-loop = Renvoyer une consigne encore et encore, à votre intervalle ou au rythme de chaque tour
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
+command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-export = Exporter la transcription de la session vers un fichier markdown
 command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
@@ -793,6 +796,9 @@ loop-armed-by-the-turn =
 loop-not-armed-under-a-goal =
     un regard plus tard a été demandé sans être lancé : cette session travaille vers un objectif,
     et elle fait une chose à la fois
+loop-not-armed-under-a-watch =
+    un regard plus tard a été demandé sans être lancé : cette session surveille déjà un fichier,
+    et elle fait une chose à la fois
 
 
 ## Travailler jusqu'à ce qu'une condition soit remplie
@@ -830,6 +836,51 @@ goal-uninterruptible =
 goal-ended-unexpectedly = la vérification de l'objectif s'est terminée de façon inattendue
 goal-replaces-loop =
     la boucle qui tournait a été arrêtée : une session ne travaille qu'à une chose à la fois
+
+
+## Être averti quand un fichier change
+
+watch-armed =
+    la veille { $number } porte sur { $path } : vous serez averti dès qu'il semblera avoir été
+    écrit, sans qu'un tour tourne. /watch les liste, /watch stop { $number } arrête celle-ci, et
+    ctrl-c les arrête toutes
+watch-not-armed-under-a-loop =
+    une veille sur un fichier a été demandée sans être posée : une boucle tourne, et une session
+    ne fait qu'une seule chose à la fois qui se produise sans que personne ne tape
+watch-not-armed-under-a-goal =
+    une veille sur un fichier a été demandée sans être posée : cette session travaille vers un
+    objectif, et elle fait une chose à la fois
+watch-not-armed-full =
+    une veille sur un fichier a été demandée sans être posée : { $count } sont déjà actives, le
+    maximum qu'une session garde. /watch stop <n> en arrête une
+watch-not-armed-unreadable =
+    une veille sur { $path } a été demandée sans être posée : ce chemin ne peut pas être regardé,
+    il n'y a donc rien à quoi comparer un regard ultérieur
+watch-fired = veille { $number } : { $path } semble avoir été écrit
+watch-listed =
+    veille { $number } : { $path }, posée au tour { $turn }, il reste { $left }
+watch-none =
+    rien n'est sous veille. Un tour en pose une quand vous demandez à être averti au sujet d'un
+    fichier, et /watch stop <n> en arrête une
+watch-no-such = il n'y a pas de veille { $number }. /watch liste celles qui sont actives
+watch-command-takes =
+    /watch liste ce que cette session surveille, et /watch stop <n> arrête celle qui porte ce
+    numéro
+watch-stopped = la veille { $number } est arrêtée
+watch-stopped-with-its-turn =
+    la veille { $number } est arrêtée : arrêter le tour qu'elle a lancé est la façon de dire que
+    vous en avez fini avec elle
+watch-aged-out = la veille { $number } dure depuis une semaine et s'est arrêtée d'elle-même
+watch-out-of-reach =
+    la veille { $number } est arrêtée : cette session n'atteint plus le chemin qu'elle surveillait
+watches-stopped = { $count ->
+    [one] { $count } veille est arrêtée
+   *[other] { $count } veilles sont arrêtées
+    }
+watches-replaced = { $count ->
+    [one] { $count } veille active a pris fin : une session n'en fait qu'une à la fois
+   *[other] { $count } veilles actives ont pris fin : une session n'en fait qu'une à la fois
+    }
 
 
 ## Coller, déposer et joindre
@@ -903,6 +954,7 @@ verb-fetch-url = Récupérer
 verb-job-output = Tâche
 verb-spawn-agent = Déléguer
 verb-schedule-next = Programmer
+verb-watch-file = Surveiller
 verb-unknown = Outil
 
 

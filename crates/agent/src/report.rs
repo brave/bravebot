@@ -705,6 +705,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         // watching a line go by should be able to see that the work moved somewhere else.
         "spawn_agent" => t!(verb_spawn_agent),
         "schedule_next" => t!(verb_schedule_next),
+        "watch_file" => t!(verb_watch_file),
         _ => t!(verb_unknown),
     }
 }
@@ -838,12 +839,15 @@ mod tests {
     /// shows up in the transcript as the fallback, which tells the user nothing.
     #[test]
     fn every_offered_tool_has_its_own_verb() {
-        for tool in crate::tools::available(crate::tools::Scheduling::ArrangingALook)
-            .into_iter()
-            .chain(crate::tools::available(
-                crate::tools::Scheduling::PacingALoop,
-            ))
-        {
+        for tool in crate::tools::available(
+            crate::tools::Scheduling::ArrangingALook,
+            crate::watch::Arming::Allowed { free: 1 },
+        )
+        .into_iter()
+        .chain(crate::tools::available(
+            crate::tools::Scheduling::PacingALoop,
+            crate::watch::Arming::Allowed { free: 1 },
+        )) {
             let name = &tool.function.name;
             assert_ne!(
                 verb_for(name),

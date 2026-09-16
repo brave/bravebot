@@ -115,6 +115,12 @@ pub struct Facts<'a> {
     ///
     /// Left out when there is none, for the reason the loop is.
     pub goal: Option<&'a crate::goals::Running>,
+    /// The standing watches this session holds, oldest first.
+    ///
+    /// Empty says nothing at all, for the reason the loop's absence says nothing. A live one is
+    /// a line each, because the number is what a person ends it by and the turn that armed it is
+    /// what makes a prompt arriving hours later have a cause.
+    pub watches: &'a [crate::watches::Watch],
     /// The command lines somebody asked to be remembered past a session, for this directory.
     ///
     /// `None` where this session keeps no such record at all: no state directory, or a mode that
@@ -300,6 +306,24 @@ pub fn report(facts: &Facts<'_>) -> Report {
             rounds => t!(status_goal_rounds, rounds = rounds, left = goal.left()),
         };
         lines.push(Line::new(t!(status_goal), goal.condition()).with_note(note));
+    }
+
+    // The third thing that happens without anybody typing, and the one with the least to go on
+    // elsewhere: a fire arrives hours after the turn that armed it, so the line carries the
+    // number a person ends the watch by, which turn armed it, and how long it has left.
+    let now = std::time::Instant::now();
+    for watch in facts.watches {
+        lines.push(
+            Line::new(
+                &t!(status_watch, number = watch.number()),
+                watch.path().to_string(),
+            )
+            .with_note(t!(
+                status_watch_armed_by,
+                turn = watch.armed_by(),
+                left = crate::loops::spell(watch.left(now))
+            )),
+        );
     }
 
     lines.push(Line::new(
@@ -604,10 +628,61 @@ mod tests {
             looping: None,
             // Nothing to work towards, on the same footing.
             goal: None,
+            // Nothing watched, on the same footing. The test about the watch lines builds its
+            // own registry and sets it.
+            watches: &[],
             // Nothing remembered past a session, which is what a fresh directory looks like. Tests
             // about that line build their own record and set it.
             remembered: None,
         }
+    }
+
+    /// What is going to happen without anybody typing is the one thing about a session that
+    /// cannot be read back off the transcript, and a watch is the sharpest case: a fire arrives
+    /// hours after the turn that armed it, so the line has to carry both the number a person ends
+    /// it by and the turn they asked for it in.
+    #[test]
+    fn the_report_lists_every_live_watch_with_the_turn_that_armed_it() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut watches = crate::watches::Watches::new();
+        watches
+            .arm(
+                "notes/plan.md".to_string(),
+                3,
+                bravebot_agent::watch::Looked::Saw("first".to_string()),
+                std::time::Instant::now(),
+            )
+            .expect("a watch");
+
+        let mut facts = facts(&config, &trust);
+        facts.watches = watches.live();
+        let report = report(&facts);
+
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_watch, number = 1))
+            .expect("the watch is on the report");
+        assert_eq!(line.value, "notes/plan.md");
+        assert!(line.note.contains('3'), "{:?}", line.note);
+    }
+
+    /// A line saying a thing is not happening is a line on every report for the sake of the few
+    /// where it is.
+    #[test]
+    fn a_session_watching_nothing_says_nothing_about_watches() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let report = report(&facts(&config, &trust));
+
+        assert!(
+            !report
+                .lines
+                .iter()
+                .any(|line| line.label.trim() == t!(status_watch, number = 1)),
+            "a session with no watch reported one"
+        );
     }
 
     /// The other thing that happens without anybody typing. The count is the part a person

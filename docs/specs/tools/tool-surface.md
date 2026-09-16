@@ -36,6 +36,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`load_skill`](load-skill.md) | `name` | none | the skill's text |
 | [`todo_write`](todo-write.md) | none | `todos` | confirmation |
 | [`schedule_next`](schedule-next.md) | `delay_seconds`, `noop` | `reason` | the wait that will happen |
+| [`watch_file`](watch-file.md) | `path` | none | confirmation that the watch exists |
 | [`ask_user`](ask-user.md) | `questions` | none | what the user answered |
 
 Reads return content when it is trusted and a reference when it is not. Writes are silent or shown

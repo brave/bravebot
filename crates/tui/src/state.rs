@@ -1000,6 +1000,16 @@ pub struct Session {
     /// conversation somebody resumed to read and keep working it, with nothing in the transcript
     /// to say why.
     goal: Option<crate::goals::Running>,
+    /// The standing watches this session holds, where a turn armed any.
+    ///
+    /// Private for the reason the loop and the goal are: a watch is looked at, fires, and has the
+    /// gap to its next fire measured from the end of the turn the last one started, and a field
+    /// anybody could set would let those three disagree.
+    ///
+    /// Not in [`crate::sessions::Standing`] either, and more strongly than the other two: a watch
+    /// that outlived its session would start sending prompts at somebody who opened a
+    /// conversation to read it, about a file that moved while nobody was here.
+    watches: crate::watches::Watches,
     /// The same prompts, resolved, for the turn in flight to take between rounds.
     ///
     /// Shared with the worker rather than sent down a channel, because a queued prompt can be
@@ -1178,6 +1188,7 @@ impl Session {
             running: None,
             queued: Vec::new(),
             looping: None,
+            watches: crate::watches::Watches::new(),
             goal: None,
             rewind_points: Vec::new(),
             turn_start: TurnStart::default(),
@@ -1603,6 +1614,10 @@ impl Session {
         // judged against an exchange that has been thrown away is judged against nothing, and the
         // first turn of the new session would be sent back for failing a test nobody set here.
         self.goal = None;
+        // And the watches, for the sharper version of the same reason again: a fire is a sentence
+        // this program writes about a file, and one arriving in a conversation that never asked
+        // for it has nothing above it to explain itself by.
+        self.watches.stop_all();
         // The delegates went with the transcript that held them, so the mode standing over one
         // is standing over nothing. What the commands printed is kept beside the transcript rather
         // than in it, so it is dropped here by name: a conversation nobody remembers leaving its
@@ -4584,6 +4599,10 @@ impl Session {
         if self.goal.take().is_some() {
             self.note(t!(loop_replaces_goal));
         }
+        // A person typing `/loop` is present and means it, so their request stands and the
+        // watches end saying so. A turn asking for a watch under a loop is refused instead: a
+        // turn that silently took somebody's loop off would be ending work they are waiting on.
+        self.end_watches_for_another_kind();
 
         match request.adjusted {
             Some(crate::loops::Held::Raised(every)) => {
@@ -4617,6 +4636,14 @@ impl Session {
     pub fn watch_again(&mut self, prompt: &str, wakeup: crate::loops::Wakeup) {
         if self.goal.is_some() {
             self.note(t!(loop_not_armed_under_a_goal));
+            return;
+        }
+        // And refused while a standing watch is live, for the same reason: a session does one
+        // thing at a time that happens without anybody typing, and a turn that took somebody's
+        // watch off to start a loop would be ending the standing answer to replace it with the
+        // repeating one.
+        if !self.watches.is_empty() {
+            self.note(t!(loop_not_armed_under_a_watch));
             return;
         }
         let after = crate::loops::spell(wakeup.after);
@@ -4658,6 +4685,7 @@ impl Session {
         if self.looping.take().is_some() {
             self.note(t!(goal_replaces_loop));
         }
+        self.end_watches_for_another_kind();
         self.note(t!(goal_set, condition = &condition));
         self.goal = Some(crate::goals::Running::begin(condition));
     }
@@ -4739,6 +4767,187 @@ impl Session {
         // not a message from the catalog: it goes to a model rather than to a reader.
         let prompt = bravebot_agent::goal::carry_on(&condition, &reason);
         Some(self.begin_turn(prompt, (Vec::new(), Vec::new())))
+    }
+
+    /// Every live watch, oldest first, for the report that lists them.
+    pub fn watches(&self) -> &[crate::watches::Watch] {
+        self.watches.live()
+    }
+
+    /// Whether this turn may arm a standing watch, and why not where it may not.
+    ///
+    /// Read once, as the turn is started, and handed to it: the tool answers out of this rather
+    /// than guessing, so what the planner is told matches what the session will actually do.
+    pub fn arming(&self) -> bravebot_agent::watch::Arming {
+        use bravebot_agent::watch::Arming;
+        if self.looping.is_some() {
+            return Arming::UnderALoop;
+        }
+        if self.goal.is_some() {
+            return Arming::UnderAGoal;
+        }
+        match crate::watches::MAX_LIVE.saturating_sub(self.watches.live().len()) {
+            0 => Arming::Full,
+            free => Arming::Allowed { free },
+        }
+    }
+
+    /// Arm a standing watch on a path the turn that has just ended asked to be told about.
+    ///
+    /// The turn already went through the gate a read of the path goes through, so nothing here
+    /// asks a second time. What is decided here is what only the session can decide: whether it
+    /// is already doing something that happens without anybody typing, whether it has room, and
+    /// what the first look at the path saw.
+    pub fn arm_watch(&mut self, path: &str, first: bravebot_agent::watch::Looked) {
+        if self.looping.is_some() {
+            self.note(t!(watch_not_armed_under_a_loop));
+            return;
+        }
+        if self.goal.is_some() {
+            self.note(t!(watch_not_armed_under_a_goal));
+            return;
+        }
+        match self
+            .watches
+            .arm(path.to_string(), self.turns, first, Instant::now())
+        {
+            Ok(number) => self.note(t!(watch_armed, number = number, path = path)),
+            Err(crate::watches::Refused::Full) => {
+                self.note(t!(watch_not_armed_full, count = crate::watches::MAX_LIVE))
+            }
+            Err(crate::watches::Refused::NothingToLookAt) => {
+                self.note(t!(watch_not_armed_unreadable, path = path))
+            }
+        }
+    }
+
+    /// Look at every watched path, and send the fire that is due where one is.
+    ///
+    /// The sibling of [`Session::loop_tick`], and called from the same place for the same reason:
+    /// nobody is going to press anything to make a fire happen, so a pass taken only after input
+    /// arrives would sit there until somebody typed something unrelated.
+    ///
+    /// A fire waits for an idle session and for the queue to empty, exactly as a tick does. A
+    /// filesystem event is not a licence to interrupt: the person is still the one using this
+    /// session.
+    ///
+    /// `look` is the caller's, because what this session may still reach is the workspace's
+    /// question rather than this one's. `now` is the caller's for the same reason the registry
+    /// takes one: the interval between two looks is five seconds, and a test that had to wait
+    /// them out would be a test nobody runs.
+    pub fn watch_fired(
+        &mut self,
+        now: Instant,
+        look: impl FnMut(&str) -> bravebot_agent::watch::Looked,
+    ) -> Option<String> {
+        for (number, why) in self.watches.look(now, look) {
+            match why {
+                crate::watches::Reaped::Aged => self.note(t!(watch_aged_out, number = number)),
+                crate::watches::Reaped::OutOfReach => {
+                    self.note(t!(watch_out_of_reach, number = number))
+                }
+            }
+        }
+        if self.status != Status::Idle || !self.queued.is_empty() {
+            return None;
+        }
+        let watch = self.watches.due(now)?;
+        let (number, path) = (watch.number(), watch.path().to_string());
+        self.watches.dispatched(number);
+        self.note(t!(watch_fired, number = number, path = &path));
+        let prompt = bravebot_agent::watch::fired(number, &path);
+        Some(self.begin_turn(prompt, (Vec::new(), Vec::new())))
+    }
+
+    /// Whether the turn running now is a watch's fire.
+    ///
+    /// What makes a fire's prompt the driver's rather than the person's: an `@` in the sentence
+    /// this program wrote names nothing, and a wait the turn asks for leaves no loop repeating
+    /// it.
+    pub fn watch_is_firing(&self) -> bool {
+        self.watches.firing().is_some()
+    }
+
+    /// Record that the turn a fire started has ended, which is where the gap to the next fire is
+    /// measured from.
+    pub fn watch_turn_ended(&mut self) {
+        self.watches.turn_ended(Instant::now());
+    }
+
+    /// End the watch whose fire is the turn being stopped, and say whether there was one.
+    ///
+    /// Without this the key never reaches a watch that fires often: every press lands on a turn,
+    /// and the next fire arrives seconds later. A turn that was not a fire ends no watch, because
+    /// that press is a person steering their own work.
+    pub fn stop_firing_watch(&mut self) -> bool {
+        let Some(number) = self.watches.stop_firing() else {
+            return false;
+        };
+        self.note(t!(watch_stopped_with_its_turn, number = number));
+        true
+    }
+
+    /// End one watch because somebody named it, and say whether there was one.
+    pub fn stop_watch(&mut self, number: usize) -> bool {
+        let stopped = self.watches.stop(number);
+        if stopped {
+            self.note(t!(watch_stopped, number = number));
+        } else {
+            self.note(t!(watch_no_such, number = number));
+        }
+        stopped
+    }
+
+    /// End every live watch because somebody pressed the key that stops things, and say whether
+    /// there were any.
+    pub fn stop_watches(&mut self) -> bool {
+        let stopped = self.watches.stop_all();
+        if stopped > 0 {
+            self.note(t!(watches_stopped, count = stopped));
+        }
+        stopped > 0
+    }
+
+    /// End every live watch because the session is about to do one of the other two things that
+    /// happen without anybody typing.
+    ///
+    /// Silent where there are none, so a person who never armed one is not told about a feature
+    /// every time they type `/loop`.
+    fn end_watches_for_another_kind(&mut self) {
+        let stopped = self.watches.stop_all();
+        if stopped > 0 {
+            self.note(t!(watches_replaced, count = stopped));
+        }
+    }
+
+    /// Say what is being watched, or that nothing is.
+    ///
+    /// What the bare command answers, and the same list `/status` draws. A watch that ended in
+    /// silence is indistinguishable from one that is live and has seen nothing, so the way to
+    /// tell them apart has to be askable.
+    pub fn report_watches(&mut self) {
+        let now = Instant::now();
+        let lines: Vec<String> = self
+            .watches
+            .live()
+            .iter()
+            .map(|watch| {
+                t!(
+                    watch_listed,
+                    number = watch.number(),
+                    path = watch.path(),
+                    turn = watch.armed_by(),
+                    left = crate::loops::spell(watch.left(now))
+                )
+            })
+            .collect();
+        if lines.is_empty() {
+            self.note(t!(watch_none));
+            return;
+        }
+        for line in lines {
+            self.note(line);
+        }
     }
 
     /// Send the next tick, if one is due and the session is free to take it.
@@ -7632,6 +7841,314 @@ mod tests {
 
         assert_eq!(s.start_loop(request).as_deref(), Some("/status"));
         assert_eq!(s.looping().expect("a loop").prompt(), "/status");
+    }
+
+    /// What a watch is armed with, for the tests below: a look that saw something, so the watch
+    /// has a first token to compare a later one against.
+    fn saw(token: &str) -> bravebot_agent::watch::Looked {
+        bravebot_agent::watch::Looked::Saw(token.to_string())
+    }
+
+    /// The whole of what this feature is for. Nothing is running, nobody typed anything, and a
+    /// file that moved still begins a turn.
+    #[test]
+    fn a_change_begins_a_turn_with_no_turn_running_to_notice_it() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+
+        let later = Instant::now() + Duration::from_secs(6);
+        let prompt = s
+            .watch_fired(later, |_| saw("second"))
+            .expect("a change with nothing running did not begin a turn");
+
+        assert!(prompt.contains("notes.md"), "{prompt}");
+        assert_eq!(s.status, Status::Working);
+    }
+
+    /// The injection regression test, at the level a fire actually reaches the conversation: the
+    /// line goes into the transcript in the user's own role, which is the one position nothing
+    /// can label, so it carries the driver's sentence and nothing off the filesystem.
+    #[test]
+    fn a_fires_prompt_carries_the_watch_and_the_path_and_nothing_else() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+
+        let later = Instant::now() + Duration::from_secs(6);
+        let prompt = s.watch_fired(later, |_| saw("second")).expect("a fire");
+
+        assert_eq!(prompt, bravebot_agent::watch::fired(1, "notes.md"));
+        let sent = s
+            .transcript
+            .iter()
+            .find(|entry| entry.speaker == Speaker::User)
+            .expect("the fire's prompt is in the transcript");
+        assert_eq!(sent.text, prompt);
+    }
+
+    /// A filesystem event is not a licence to interrupt: the person is still the one using this
+    /// session, and what they queued was typed before the file moved.
+    #[test]
+    fn a_fire_waits_for_the_turn_in_flight_and_for_what_is_queued() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+        let later = Instant::now() + Duration::from_secs(6);
+
+        for c in "their own question".chars() {
+            s.type_char(c);
+        }
+        s.submit();
+        assert!(
+            s.watch_fired(later, |_| saw("second")).is_none(),
+            "a fire interrupted a running turn"
+        );
+
+        for c in "and another".chars() {
+            s.type_char(c);
+        }
+        s.queue();
+        s.complete("done", Vec::new(), 0);
+        assert!(
+            s.watch_fired(later, |_| saw("second")).is_none(),
+            "a fire jumped the queue"
+        );
+    }
+
+    /// A turn that silently took somebody's loop off would be ending work they are waiting on in
+    /// order to watch a file, so the watch is what gives way and the turn is told why.
+    #[test]
+    fn a_watch_asked_for_under_a_loop_or_a_goal_is_refused_and_says_why() {
+        let mut under_a_loop = session();
+        under_a_loop.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        under_a_loop.arm_watch("notes.md", saw("first"));
+        assert!(under_a_loop.watches().is_empty());
+        assert!(
+            under_a_loop
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_not_armed_under_a_loop)),
+            "the turn was not told why"
+        );
+
+        let mut under_a_goal = session();
+        under_a_goal.start_goal("cargo test exits 0".to_string());
+        under_a_goal.arm_watch("notes.md", saw("first"));
+        assert!(under_a_goal.watches().is_empty());
+        assert!(
+            under_a_goal
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_not_armed_under_a_goal)),
+            "the turn was not told why"
+        );
+    }
+
+    /// A person typing `/loop` or setting a goal is present and means it, so their request stands
+    /// and the watches end saying so. A watch that ended in silence is indistinguishable from one
+    /// that is live and has seen nothing.
+    #[test]
+    fn a_person_starting_a_loop_or_a_goal_is_told_the_watches_have_ended() {
+        for start in [
+            &mut (|s: &mut Session| {
+                s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+            }) as &mut dyn FnMut(&mut Session),
+            &mut |s: &mut Session| s.start_goal("cargo test exits 0".to_string()),
+        ] {
+            let mut s = session();
+            s.arm_watch("notes.md", saw("first"));
+            assert_eq!(s.watches().len(), 1);
+
+            start(&mut s);
+            assert!(s.watches().is_empty(), "a watch outlived the other kind");
+            assert!(
+                s.transcript
+                    .iter()
+                    .any(|entry| entry.text == t!(watches_replaced, count = 1)),
+                "the watches ended in silence"
+            );
+        }
+    }
+
+    /// A turn asking for a later look while a watch is live would be replacing the standing
+    /// answer with the repeating one, which is the trade the person made when they asked to be
+    /// told about the file rather than asked again.
+    #[test]
+    fn a_later_look_a_turn_asked_for_is_refused_while_a_watch_is_live() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+        s.watch_again(
+            "tell me when notes.md changes",
+            crate::loops::Wakeup::asked(900, false),
+        );
+
+        assert!(s.looping().is_none(), "a turn started a loop under a watch");
+        assert_eq!(s.watches().len(), 1);
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_not_armed_under_a_watch)),
+            "the turn was not told why"
+        );
+    }
+
+    /// A turn that may not arm one is told which of the reasons it is, because that is what it
+    /// has to say to the person.
+    #[test]
+    fn what_a_turn_is_told_about_arming_is_read_off_the_session() {
+        use bravebot_agent::watch::Arming;
+
+        let mut s = session();
+        assert_eq!(s.arming(), Arming::Allowed { free: 8 });
+
+        s.arm_watch("notes.md", saw("first"));
+        assert_eq!(s.arming(), Arming::Allowed { free: 7 });
+
+        let mut looping = session();
+        looping.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        assert_eq!(looping.arming(), Arming::UnderALoop);
+
+        let mut goal = session();
+        goal.start_goal("cargo test exits 0".to_string());
+        assert_eq!(goal.arming(), Arming::UnderAGoal);
+    }
+
+    /// The ninth is refused rather than dropping one, and the session says so where the turn will
+    /// read it.
+    #[test]
+    fn a_session_holding_as_many_watches_as_it_keeps_reports_itself_full() {
+        use bravebot_agent::watch::Arming;
+
+        let mut s = session();
+        for n in 0..crate::watches::MAX_LIVE {
+            s.arm_watch(&format!("{n}.md"), saw("first"));
+        }
+        assert_eq!(s.arming(), Arming::Full);
+
+        s.arm_watch("ninth.md", saw("first"));
+        assert_eq!(s.watches().len(), crate::watches::MAX_LIVE);
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text
+                    == t!(watch_not_armed_full, count = crate::watches::MAX_LIVE)),
+            "a refused ninth watch said nothing"
+        );
+    }
+
+    /// Nothing to compare a later look against is nothing to watch, and the turn is told rather
+    /// than left believing a watch exists.
+    #[test]
+    fn a_path_that_cannot_be_looked_at_is_refused_and_said_so() {
+        let mut s = session();
+        s.arm_watch("gone.md", bravebot_agent::watch::Looked::Absent);
+        assert!(s.watches().is_empty());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_not_armed_unreadable, path = "gone.md")),
+            "a refused watch said nothing"
+        );
+    }
+
+    /// A watch that outlived its session would start sending prompts at somebody who opened a
+    /// conversation to read it, about a file that moved while nobody was here.
+    #[test]
+    fn clearing_a_session_ends_every_watch() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+        s.clear();
+        assert!(s.watches().is_empty());
+    }
+
+    /// A number a person read off the screen ends the watch it named and leaves the others.
+    #[test]
+    fn a_watch_is_ended_by_the_number_the_report_gave_it() {
+        let mut s = session();
+        s.arm_watch("a.md", saw("first"));
+        s.arm_watch("b.md", saw("first"));
+
+        assert!(s.stop_watch(1));
+        assert_eq!(
+            s.watches().iter().map(|w| w.path()).collect::<Vec<_>>(),
+            vec!["b.md"]
+        );
+        assert!(!s.stop_watch(1), "a watch that had ended was ended again");
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_no_such, number = 1)),
+            "a number naming nothing said nothing"
+        );
+    }
+
+    /// Stopping the turn a fire started is the most exact way anybody has to say which watch they
+    /// have finished with, since they are reading its prompt when they press the key.
+    #[test]
+    fn stopping_a_fires_turn_ends_the_watch_that_fired() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+        s.watch_fired(Instant::now() + Duration::from_secs(6), |_| saw("second"))
+            .expect("a fire");
+
+        assert!(s.watch_is_firing());
+        assert!(s.stop_firing_watch());
+        assert!(s.watches().is_empty());
+    }
+
+    /// A turn that was not a fire ends no watch: that press is a person steering their own work.
+    #[test]
+    fn stopping_a_turn_that_was_not_a_fire_ends_no_watch() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+        s.set_input("their own question".to_string());
+        s.submit();
+
+        assert!(!s.watch_is_firing());
+        assert!(!s.stop_firing_watch());
+        assert_eq!(s.watches().len(), 1);
+    }
+
+    /// A watch that ended in silence is indistinguishable from one that is live and has seen
+    /// nothing, and the difference between those two is the whole of what a person armed it to
+    /// learn.
+    #[test]
+    fn a_watch_that_ends_itself_says_which_of_the_two_endings_it_was() {
+        let mut aged = session();
+        aged.arm_watch("notes.md", saw("first"));
+        aged.watch_fired(
+            Instant::now() + Duration::from_secs(8 * 24 * 60 * 60),
+            |_| saw("first"),
+        );
+        assert!(aged.watches().is_empty());
+        assert!(
+            aged.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_aged_out, number = 1))
+        );
+
+        let mut gone = session();
+        gone.arm_watch("notes.md", saw("first"));
+        gone.watch_fired(Instant::now() + Duration::from_secs(6), |_| {
+            bravebot_agent::watch::Looked::OutOfReach
+        });
+        assert!(gone.watches().is_empty());
+        assert!(
+            gone.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_out_of_reach, number = 1))
+        );
+    }
+
+    /// A session with no live watch says so when asked, rather than answering with nothing: the
+    /// question is whether anything is going to happen without anybody typing.
+    #[test]
+    fn a_session_with_no_watch_says_so_when_asked() {
+        let mut s = session();
+        s.report_watches();
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_none))
+        );
     }
 
     /// A schedule is a request to be asked again, not a licence to interrupt. A tick that fired

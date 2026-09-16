@@ -1,11 +1,13 @@
 ---
 id: FSWATCH
 title: Being told when a file changes
-status: proposed
+status: normative
 governs:
+  - crates/tui/src/watches.rs
   - crates/tui/src/state.rs
   - crates/tui/src/app.rs
   - crates/tui/src/status.rs
+  - crates/agent/src/watch.rs
   - crates/agent/src/tools.rs
 ---
 
@@ -15,14 +17,10 @@ A standing watch on one path: a thing a turn arms and that fires later, on a cha
 running to notice. What a watch may observe, what a firing puts into the conversation, when it is
 allowed to fire, how long one lives, what ends one, and where a live one is shown.
 
-**Nothing here is in force.** This document specifies work not yet done, and exists to be argued
-about before any of it is built. Every clause is `verified-by: none`, no code implements one, and a
-conformance pass over the governed files therefore reports all of them unmet, which is the correct
-answer until the work lands. What ships today is one read and a self-paced loop over the line the
-person typed: the answer to a request to be told when a file changes is a look arranged by the turn,
-taken at the next tick, and nothing watches between ticks. That arrangement is [loop.md](loop.md)
-and [tools/schedule-next.md](tools/schedule-next.md), and it stays exactly as it is for a person who
-typed their own repeating line.
+A self-paced loop over the line a person typed still exists and is untouched: that is
+[loop.md](loop.md) and [tools/schedule-next.md](tools/schedule-next.md), and it stays exactly as it
+is for a person who typed their own repeating line. A watch is the other answer, for the case where
+what is being waited on is one file and nobody wants their line sent again.
 
 The comparison a watch is built on is the change token a read hands back, which is
 [tools/read-file.md](tools/read-file.md): a file's size and modification time, compared between two
@@ -31,9 +29,8 @@ looks. This document does not change it. Which paths may be read at all is
 [loop.md](loop.md), and one condition judged after every turn is [goal.md](goal.md). A watch is
 neither, and a session holds one of the three at a time ([FSWATCH-6](#FSWATCH-6)).
 
-The tool a turn arms a watch with is not specified here. It is one tool with one field, a path, and
-its own spec lands under [tools/](tools/tool-surface.md) with the code, as every other tool's does.
-What this document fixes is what the driver owes whoever calls it.
+The tool a turn arms a watch with is [tools/watch-file.md](tools/watch-file.md): one tool with one
+field, a path. What this document fixes is what the driver owes whoever calls it.
 
 ## Why it exists
 
@@ -82,7 +79,11 @@ allowed. A thing that outlives a turn and can only look is answerable to the bou
 that outlives a turn and can act would have to be watched by something, and there is nothing running
 to watch it.
 
-`verified-by: none`
+`verified-by: bravebot_tui::watches::a_change_seen_between_two_looks_makes_a_fire_due`
+`verified-by: bravebot_tui::watches::a_look_that_sees_what_the_last_one_saw_fires_nothing`
+`verified-by: bravebot_tui::watches::a_look_is_measured_against_the_one_before_it_rather_than_against_the_first`
+`verified-by: bravebot_tui::watches::the_look_taken_when_a_watch_is_armed_is_what_the_next_one_is_measured_against`
+`verified-by: bravebot_tui::state::a_change_begins_a_turn_with_no_turn_running_to_notice_it`
 
 <a id="FSWATCH-2"></a>
 ### FSWATCH-2: a watch names one path, settled when it is armed
@@ -100,7 +101,8 @@ has no business being in a prompt at all.
 A path fixed at arming time is also what makes a fire's prompt free of anything new: every word of
 it was already in the context of the turn that armed the watch.
 
-`verified-by: none`
+`verified-by: bravebot_agent::tools::a_directory_is_refused_rather_than_watched`
+`verified-by: bravebot_tui::status::the_report_lists_every_live_watch_with_the_turn_that_armed_it`
 
 <a id="FSWATCH-3"></a>
 ### FSWATCH-3: what a watch observes is the file's size and modification time, and nothing else
@@ -129,7 +131,8 @@ two looks moves nothing and so fires nothing, and a filesystem that leaves a mod
 alone hides a change entirely. These are properties of the comparison rather than of this watch,
 and [tools/read-file.md](tools/read-file.md) states them for the read that shares it.
 
-`verified-by: none`
+`verified-by: bravebot_tui::watches::a_look_that_sees_what_the_last_one_saw_fires_nothing`
+`verified-by: bravebot_agent::watch::a_fires_prompt_carries_the_watch_and_the_path_and_nothing_off_the_filesystem`
 
 ## What a firing does
 
@@ -167,7 +170,9 @@ refuses for a repeated line and this refuses for the same reason.
 **Why not more, since a fire costs a turn anyway.** The saving would be one read. The cost is that
 the one prompt in this system nobody can label would be the one carrying bytes off a disk.
 
-`verified-by: none`
+`verified-by: bravebot_agent::watch::a_fires_prompt_carries_the_watch_and_the_path_and_nothing_off_the_filesystem`
+`verified-by: bravebot_agent::watch::a_fires_prompt_does_not_endorse_the_path_it_names`
+`verified-by: bravebot_tui::state::a_fires_prompt_carries_the_watch_and_the_path_and_nothing_else`
 
 <a id="FSWATCH-5"></a>
 ### FSWATCH-5: a fire waits for an idle session and never interrupts, and changes while a turn runs are one fire
@@ -181,7 +186,10 @@ session, and the same holds for a tick of a loop. Coalescing follows from what a
 reports that the path looks written to, which is one fact however many times it was written, so a
 queue of held fires would be several turns all reporting the same sentence.
 
-`verified-by: none`
+`verified-by: bravebot_tui::state::a_fire_waits_for_the_turn_in_flight_and_for_what_is_queued`
+`verified-by: bravebot_tui::watches::changes_seen_before_a_fire_goes_out_are_one_fire`
+`verified-by: bravebot_tui::watches::a_watch_whose_fire_is_running_is_not_due_again`
+`verified-by: bravebot_tui::app::a_fire_whose_turn_failed_stops_being_the_turn_in_flight`
 
 <a id="FSWATCH-6"></a>
 ### FSWATCH-6: a watch, a loop and a goal are never live together, and a watch asked for under one is refused
@@ -203,7 +211,10 @@ present and means it, so their second request stands and the watches end saying 
 asked for by a turn, and a turn that silently took somebody's goal off would be ending work they
 are waiting on in order to watch a file.
 
-`verified-by: none`
+`verified-by: bravebot_tui::state::a_watch_asked_for_under_a_loop_or_a_goal_is_refused_and_says_why`
+`verified-by: bravebot_tui::state::a_person_starting_a_loop_or_a_goal_is_told_the_watches_have_ended`
+`verified-by: bravebot_agent::tools::a_session_already_doing_something_untyped_refuses_and_says_which`
+`verified-by: bravebot_tui::state::a_later_look_a_turn_asked_for_is_refused_while_a_watch_is_live`
 
 <a id="FSWATCH-7"></a>
 ### FSWATCH-7: a watch is armed only where the path could have been read, and ends if that stops being true
@@ -225,7 +236,9 @@ has already answered the first.
 keep a question alive past the moment it was agreed to, and the answers this program keeps do
 expire.
 
-`verified-by: none`
+`verified-by: bravebot_agent::tools::a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be`
+`verified-by: bravebot_tui::watches::a_path_the_session_no_longer_reaches_ends_its_watch_and_says_so`
+`verified-by: bravebot_tui::state::a_watch_that_ends_itself_says_which_of_the_two_endings_it_was`
 
 ## The bounds
 
@@ -257,7 +270,11 @@ continuously in a turn.
 happens rather than how fast the filesystem is. Five seconds is short enough that a person who
 saved a file sees the fire as a consequence of saving it.
 
-`verified-by: none`
+`verified-by: bravebot_tui::watches::a_watch_older_than_a_week_ends_itself_and_says_so`
+`verified-by: bravebot_tui::watches::a_ninth_watch_is_refused_rather_than_dropping_one`
+`verified-by: bravebot_tui::watches::a_second_fire_waits_for_the_floor_after_the_last_ones_turn`
+`verified-by: bravebot_tui::watches::a_path_is_not_looked_at_again_until_the_interval_is_up`
+`verified-by: bravebot_tui::state::a_session_holding_as_many_watches_as_it_keeps_reports_itself_full`
 
 <a id="FSWATCH-9"></a>
 ### FSWATCH-9: seven things end a watch, and each of them says so
@@ -265,7 +282,7 @@ saved a file sees the fire as a consequence of saving it.
 | What | When |
 |---|---|
 | the person ends one | `/watch stop <n>`, naming the number the report gives it, which leaves the others |
-| the person interrupts | Ctrl-C with nothing running, which ends every live watch |
+| the person interrupts | Ctrl-C with nothing nearer to stop, which ends every live watch |
 | a fire's turn is stopped | the watch that fired ends with the turn it started, and the others stand |
 | the person asks for a loop or a goal | every live watch ends, since a session does one of the three at a time |
 | the path stops being readable | the answer that armed it no longer holds |
@@ -273,9 +290,9 @@ saved a file sees the fire as a consequence of saving it.
 | age | 7 days after it was armed |
 
 Ctrl-C means one thing at a time, and the watches are the last rung before leaving: a mode open
-over the session, then the half-written line, then the turn in flight, then every live watch, then
-leaving. Each is nearer than the next, and the press that ends the watches is the one made with
-nothing running.
+over the session, then the turn in flight, then the half-written line, then the loop or the goal,
+then every live watch, then leaving. Each is nearer than the next, and the press that ends the
+watches is the one made with nothing running and nothing half written.
 
 **Why stopping a fire's turn ends the watch that fired it.** Otherwise the key never reaches a
 watch that is firing often: every press lands on a turn, and the next fire arrives seconds later.
@@ -283,7 +300,7 @@ Stopping the turn a fire started is also the most exact way anybody has to say w
 have finished with, since they are reading its prompt when they press the key. A turn that was not
 a fire ends no watch: that press is a person steering their own work.
 
-**Why Ctrl-C with nothing running takes all of them.** Somebody pressing the key that stops things
+**Why Ctrl-C with nothing nearer to stop takes all of them.** Somebody pressing the key that stops things
 wants the things stopped, and picking which of eight survived is not a decision to make from a
 keystroke.
 
@@ -291,7 +308,13 @@ keystroke.
 is live and has seen nothing, and the difference between those two is the whole of what a person
 armed it to learn.
 
-`verified-by: none`
+`verified-by: bravebot_tui::state::a_watch_is_ended_by_the_number_the_report_gave_it`
+`verified-by: bravebot_tui::state::stopping_a_fires_turn_ends_the_watch_that_fired`
+`verified-by: bravebot_tui::state::stopping_a_turn_that_was_not_a_fire_ends_no_watch`
+`verified-by: bravebot_tui::state::a_person_starting_a_loop_or_a_goal_is_told_the_watches_have_ended`
+`verified-by: bravebot_tui::state::a_watch_that_ends_itself_says_which_of_the_two_endings_it_was`
+`verified-by: bravebot_tui::state::clearing_a_session_ends_every_watch`
+`verified-by: bravebot_tui::app::interrupting_ends_every_watch_before_it_leaves`
 
 <a id="FSWATCH-10"></a>
 ### FSWATCH-10: a live watch is on the screen, with the turn that armed it
@@ -310,7 +333,11 @@ it can be seen. The turn that armed it is on the line because a prompt arriving 
 otherwise causeless: the person reads it against the conversation, and the conversation is where
 they asked for it.
 
-`verified-by: none`
+`verified-by: bravebot_tui::status::the_report_lists_every_live_watch_with_the_turn_that_armed_it`
+`verified-by: bravebot_tui::status::a_session_watching_nothing_says_nothing_about_watches`
+`verified-by: bravebot_tui::watches::a_number_is_not_reused_when_the_watch_it_named_ends`
+`verified-by: bravebot_tui::watches::a_live_watch_reports_its_path_the_turn_that_armed_it_and_what_is_left`
+`verified-by: bravebot_tui::state::a_session_with_no_watch_says_so_when_asked`
 
 <a id="FSWATCH-11"></a>
 ### FSWATCH-11: a watch is never written down, and the process ending is what reaps it
@@ -333,17 +360,33 @@ process. A watch that was a thread, a child process or an entry in a file would 
 be enumerated, stopped, aged out and reaped after a crash, and each of those is a mechanism that
 can be wrong.
 
-`verified-by: none`
+`verified-by: bravebot_tui::state::clearing_a_session_ends_every_watch`
+`verified-by: by-construction (the watches are a field on the live session and are not among the things a session record writes, so there is nothing on disk for a resume to restore and nothing for a later run to clean up)`
+
+<a id="FSWATCH-12"></a>
+### FSWATCH-12: a path with nothing at it is refused rather than watched for something to appear
+
+Arming asks for the first look at once, and a path that cannot be looked at is refused saying so.
+
+**Why.** Every look after the first is compared with the one before it, and the first is compared
+with nothing. A watch armed on a path with nothing at it would report the look that first found
+the file as a change, which is a write it never saw and cannot have seen.
+
+**Why not the other answer.** Watching for a file to appear is a real thing to want, and it is a
+different feature: what it compares is presence rather than the two facts
+[FSWATCH-3](#FSWATCH-3) fixes, and it needs its own answer to what a fire says about a file that
+came and went between two looks. Refusing here leaves room for it rather than half-building it.
+
+`verified-by: bravebot_agent::tools::a_path_that_names_nothing_is_refused`
+`verified-by: bravebot_tui::watches::a_path_that_cannot_be_looked_at_is_refused_rather_than_armed`
+`verified-by: bravebot_tui::state::a_path_that_cannot_be_looked_at_is_refused_and_said_so`
 
 ## Open questions
 
-- Whether a watch should be armed by a tool of its own or by a field on the read that hands back the
-  token. A field is one fewer tool and puts the arming where the person's question already is; a
-  tool of its own is one routing decision a person could approve on its own, which is the test every
-  other tool on this surface is held to.
 - Whether a person may arm a watch themselves, with a command, rather than only by asking for one in
-  a prompt. Nothing here needs a planner, and a person who wants to be told when a file changes is
-  the one case where the whole feature costs a turn only at the moment it fires.
+  a prompt. `/watch` lists them and ends one and arms none. Nothing here needs a planner, and a
+  person who wants to be told when a file changes is the one case where the whole feature costs a
+  turn only at the moment it fires.
 - Whether the five-second look should become an operating-system notification. The observable
   difference is latency, and the cost is a dependency and a per-platform surface, so it is a
   question about the bound rather than about any clause here.
@@ -352,9 +395,6 @@ can be wrong.
   want, and the argument against it is about the interval losing its meaning rather than about
   anything unsafe. A goal is the harder case of the two, because its rounds are a budget a fire
   would spend.
-- What a watch should do about a path that does not exist when it is armed. Watching for a file to
-  appear is the same question a person asks about a build artefact, and it is not a change to the
-  file in the sense [FSWATCH-3](#FSWATCH-3) compares.
 
 ## Known costs
 
