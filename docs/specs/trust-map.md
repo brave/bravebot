@@ -597,7 +597,10 @@ nothing, so a program finds the name absent rather than pointing at a directory 
 
 **Given as the session opens, not asked for by a tool.** The directory is there before the first
 line runs and its path is in the environment each stage is spawned with, so a program that wants
-somewhere to write finds it without anything having been called first.
+somewhere to write finds it without anything having been called first. The planner is told the
+same way and at the same point, as one of the facts the system prompt states about this machine
+([instructions.md](instructions.md)), since a variable nothing knows to read is a variable nothing
+reads.
 
 A tool that makes one on demand is the alternative, and is refused. It would cost a description in
 every request whether or not a turn needs a scratch file at all, and the first line that redirects
