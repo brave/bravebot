@@ -4,10 +4,12 @@ title: run
 status: normative
 governs:
   - crates/agent/src/exec.rs
+  - crates/agent/src/remembered.rs
   - crates/agent/src/scrub.rs
   - crates/core/src/command.rs
   - crates/core/src/programs.rs
   - crates/core/src/policy.rs
+  - crates/core/src/remembered.rs
   - crates/tui/src/confirm.rs
 guards:
   - symbol: Policy::read_output
@@ -115,7 +117,7 @@ There is no *declared* read-only category. `foo --bar` might write to disk and n
 tell, and a stage declaring itself harmless only helps if the declaration is honest. Four things
 may answer the question, and nothing else: a person having answered it before, in this session, for
 this exact command; that person having asked at a prompt for their answer to one exact command line
-to last past the session, which [RUN-19](#RUN-19) specifies and nothing yet does; a rule the person
+to last past the session, which [RUN-19](#RUN-19) specifies; a rule the person
 wrote down in advance, which
 [permissions.md](../permissions.md) governs and which stops the asking without raising any label;
 and the audited table in [command-line.md](command-line.md) establishing that these exact arguments
@@ -131,6 +133,7 @@ claim checked by hand against one program's full option list, which is why it ma
 for the same reason: anything it does not fully recognise asks.
 
 `verified-by: bravebot_core::policy::a_command_nobody_vouched_for_is_put_to_a_person`
+`verified-by: bravebot_core::policy::a_line_remembered_past_the_session_is_not_asked_about`
 `verified-by: bravebot_core::policy::a_rule_the_user_wrote_in_advance_answers_the_run_prompt`
 `verified-by: bravebot_core::policy::an_allow_rule_stops_the_prompt_and_does_not_trust_what_the_command_prints`
 `verified-by: bravebot_core::policy::a_vouched_command_is_not_asked_about_again`
@@ -170,8 +173,9 @@ not rest on a drawing.
   y run it    a always    n don't    ctrl-c stop the turn
 ```
 
-This is the row a run prompt draws. [RUN-19](#RUN-19) specifies a longer lifetime, the key that grants
-it and the label `a` carries once that key exists, and nothing yet draws that row.
+This is the row a run prompt would draw on its own. [RUN-19](#RUN-19) specifies a longer lifetime,
+the key that grants it and the label `a` carries beside it, and its row replaces this one wherever a
+run prompt is drawn.
 
 `a` grants, in these terms:
 
@@ -217,12 +221,13 @@ the session record and `/status` (RUN-9) describe as a program and its arguments
 Empty at the start of every session, written into the session record, restored by `--resume`,
 never inherited by a fresh session in the same directory. `/status` lists what was granted. A line
 somebody asked to be remembered past the session is a separate record holding less, which
-[RUN-19](#RUN-19) specifies and nothing yet does, and it puts no entry in this list.
+[RUN-19](#RUN-19) governs, and it puts no entry in this list.
 
 **Why.** The same reason the trust map belongs to a session. Its effect is invisible until a prompt
 does not appear, so it has to be readable back.
 
 `verified-by: bravebot_core::policy::a_fresh_policy_vouches_for_no_command`
+`verified-by: bravebot_core::policy::a_line_remembered_past_the_session_vouches_for_nothing`
 
 <a id="RUN-10"></a>
 ### RUN-10: the vouched-for list is not an allowlist and must never become one
@@ -345,9 +350,8 @@ stop being asked: `read_output` puts this one to the user, and a person vouching
 the exact command makes what it prints visible from then on. It is also pointed at `read_file` for
 a file. Only where a command produced the result: a quarantined read carries no advice about
 `read_output` or about vouching for a command nobody ran. The advice about vouching is left out where
-a record already stops the asking for that exact line, which [RUN-19](#RUN-19) specifies and nothing
-yet does, since no prompt will return there for a person to answer, and `read_output` is then the
-whole of what is said.
+a record already stops the asking for that exact line ([RUN-19](#RUN-19)), since no prompt will
+return there for a person to answer, and `read_output` is then the whole of what is said.
 
 **Why.** [RUN-4](#RUN-4) is about who answered for the command, not about programs being
 unreadable, and a planner that reads it the second way stops running them. One did: told once that
@@ -362,6 +366,7 @@ is not inferring it: the planner still cannot vouch for anything, and a person s
 
 `verified-by: bravebot_agent::turn::a_quarantined_run_says_what_would_make_it_visible`
 `verified-by: bravebot_agent::turn::a_quarantined_read_says_nothing_about_vouching_for_a_command`
+`verified-by: bravebot_agent::turn::a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching`
 
 <a id="RUN-15"></a>
 ### RUN-15: a pipeline may be left running, and the turn that started it ends it
@@ -757,7 +762,51 @@ takes a person resuming another directory's session to reach it, and here it tak
 begun in either. And a line whose arguments differ every time is not helped at all, which
 [RUN-20](#RUN-20) is the answer to.
 
-`verified-by: none`
+`verified-by: bravebot_core::remembered::the_line_that_was_recorded_is_covered`
+`verified-by: bravebot_core::remembered::no_entry_reaches_a_second_argument_list`
+`verified-by: bravebot_core::remembered::a_second_name_for_the_same_binary_is_not_the_line_that_was_read`
+`verified-by: bravebot_core::remembered::an_answer_does_not_follow_a_name_onto_a_different_binary`
+`verified-by: bravebot_core::remembered::an_environment_assignment_makes_a_different_line`
+`verified-by: bravebot_core::remembered::sending_the_streams_somewhere_else_makes_a_different_line`
+`verified-by: bravebot_core::remembered::a_pipeline_is_covered_only_where_every_stage_is`
+`verified-by: bravebot_core::remembered::how_the_steps_are_joined_is_part_of_the_line`
+`verified-by: bravebot_core::remembered::an_empty_record_covers_nothing`
+`verified-by: bravebot_core::remembered::an_entry_says_which_session_answered_it`
+`verified-by: bravebot_core::policy::a_line_remembered_past_the_session_is_not_asked_about`
+`verified-by: bravebot_core::policy::output_of_a_line_remembered_past_the_session_is_still_untrusted_and_private`
+`verified-by: bravebot_core::policy::a_line_remembered_past_the_session_vouches_for_nothing`
+`verified-by: bravebot_core::policy::a_remembered_line_fed_private_input_is_asked_about_anyway`
+`verified-by: bravebot_core::policy::a_remembered_line_that_writes_is_asked_about_anyway`
+`verified-by: bravebot_core::policy::a_remembered_line_run_outside_the_root_is_asked_about_anyway`
+`verified-by: bravebot_core::policy::an_ask_rule_takes_back_a_line_remembered_past_the_session`
+`verified-by: bravebot_core::policy::the_key_is_offered_for_a_line_nothing_refuses_it_for`
+`verified-by: bravebot_core::policy::a_record_handed_over_again_replaces_what_it_held`
+`verified-by: bravebot_agent::remembered::a_line_written_by_one_session_is_read_back_by_another`
+`verified-by: bravebot_agent::remembered::every_field_of_a_line_survives_being_written_and_read`
+`verified-by: bravebot_agent::remembered::a_second_answer_is_added_rather_than_replacing_the_first`
+`verified-by: bravebot_agent::remembered::a_line_answered_in_one_directory_does_not_answer_in_another`
+`verified-by: bravebot_agent::remembered::a_directory_sharing_a_key_with_another_is_not_answered_by_its_lines`
+`verified-by: bravebot_agent::remembered::a_record_that_cannot_be_read_covers_nothing`
+`verified-by: bravebot_agent::remembered::a_line_nothing_can_read_leaves_the_rest_of_the_record_answering`
+`verified-by: bravebot_agent::turn::a_line_remembered_past_the_session_runs_without_asking`
+`verified-by: bravebot_agent::turn::a_line_remembered_past_the_session_covers_no_other_line`
+`verified-by: bravebot_agent::turn::a_turn_with_nobody_to_ask_reads_no_record`
+`verified-by: bravebot_agent::turn::answering_with_a_key_the_prompt_did_not_offer_records_nothing`
+`verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
+`verified-by: bravebot_agent::incognito::no_remembered_line_is_written_down`
+`verified-by: bravebot_agent::incognito::a_line_an_earlier_session_recorded_is_still_honoured`
+`verified-by: bravebot_tui::confirm::the_run_keys_separate_this_session_from_every_session`
+`verified-by: bravebot_tui::confirm::a_prompt_that_offers_no_record_binds_no_key_to_one`
+`verified-by: bravebot_tui::confirm::enter_does_not_record_a_run_past_the_session`
+`verified-by: bravebot_tui::confirm::refusing_a_run_records_nothing_past_the_session`
+`verified-by: bravebot_tui::confirm::a_prompt_offering_to_remember_says_where_the_record_goes`
+`verified-by: bravebot_tui::confirm::the_row_says_which_lifetime_the_always_key_grants`
+`verified-by: bravebot_tui::confirm::a_prompt_with_no_record_to_offer_draws_no_key_for_one`
+`verified-by: bravebot_tui::status::the_report_names_the_lines_remembered_past_a_session_and_who_answered_them`
+`verified-by: bravebot_tui::status::a_shortened_list_of_remembered_lines_says_how_many_came_from_an_earlier_session`
+`verified-by: bravebot_tui::status::a_directory_with_nothing_remembered_does_not_mention_the_record`
+`verified-by: bravebot_tui::status::a_session_carrying_a_remembered_line_is_not_told_every_run_is_asked_about`
+`verified-by: bravebot_agent::remembered::an_entry_this_build_does_not_fully_understand_covers_nothing`
 
 <a id="RUN-20"></a>
 ### RUN-20: no answer at a prompt grants a family, because nothing here tells a value from a program

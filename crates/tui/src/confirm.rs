@@ -328,14 +328,22 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
 
 /// What the user did with a run question.
 ///
-/// Three answers rather than the write prompt's two. "Yes, and stop asking" is a different thing
+/// Four answers rather than the write prompt's two. "Yes, and stop asking" is a different thing
 /// from "yes", and it is the one that changes what happens next time, so it is a key of its own
-/// rather than a follow-up question nobody would read.
+/// rather than a follow-up question nobody would read. "Yes, and stop asking tomorrow as well" is a
+/// different thing again, and it is a third key rather than a wider reading of the second: the two
+/// grant different things and last different lengths of time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunAnswer {
     Approve,
     /// Run it, and vouch for its programs for the rest of the session.
     ApproveAlways,
+    /// Run it, and record this exact line so every session in this directory runs it unasked.
+    ///
+    /// A different thing from `ApproveAlways` and never a wider version of it: it decides how long
+    /// an answer lasts, where the other decides what a label is. The row says so in as many words,
+    /// because one word saying `always` is what could be read as either.
+    ApproveAndRecord,
     Reject,
     /// Refuse the run and stop the turn that asked for it.
     Interrupt,
@@ -348,6 +356,7 @@ impl RunAnswer {
         match self {
             RunAnswer::Approve => RunDecision::approve(),
             RunAnswer::ApproveAlways => RunDecision::approve_always(),
+            RunAnswer::ApproveAndRecord => RunDecision::approve_and_record(),
             RunAnswer::Reject | RunAnswer::Interrupt => RunDecision::reject(),
         }
     }
@@ -363,6 +372,10 @@ impl RunAnswer {
 /// to agree with the drawing: a key that grants a standing permission the same screen says cannot
 /// be granted is worse than an unbound one. Unbound is what it becomes, for the reason Enter is:
 /// this prompt starts a program, and a key pressed out of habit from the previous prompt must not.
+///
+/// `r` is the same rule over the wider of the two lifetimes: it is bound only where the request
+/// says where the answer would be written, which is the driver having decided the key would stop a
+/// later prompt at all.
 fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
     // The prompt blocks the whole interface, so without this Ctrl-C would do nothing at the one
     // moment a user is most likely to press it.
@@ -377,6 +390,12 @@ fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
         KeyCode::Char('y' | 'Y') => Some(RunResponse::Answer(RunAnswer::Approve)),
         KeyCode::Char('a' | 'A') if !request.releases_private() => {
             Some(RunResponse::Answer(RunAnswer::ApproveAlways))
+        }
+        // Unbound where the prompt did not draw it, for the reason `a` is: a key granting something
+        // the same screen says cannot be granted is worse than an unbound one, and this key's grant
+        // outlives the session that could have corrected it.
+        KeyCode::Char('r' | 'R') if request.may_record() => {
+            Some(RunResponse::Answer(RunAnswer::ApproveAndRecord))
         }
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(RunResponse::Answer(RunAnswer::Reject)),
         KeyCode::Up => Some(RunResponse::Scroll(-1)),
@@ -589,6 +608,37 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         )));
     }
 
+    // What `r` would grant, where it is offered. Three things a reader cannot get from the key's
+    // one word: that it lasts past this session, that every session in this directory reads it, and
+    // that it stops the asking without making anything readable. The place it is written down is
+    // part of the grant rather than a footnote, because nobody can endorse a record they were not
+    // shown, and deleting the line from that file is the way back.
+    if let Some(path) = &request.record {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", t!(run_remember_explained)),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_remember_every_session)),
+            Style::default().fg(theme::muted()),
+        )));
+        // The half a person is most likely to assume the other way, since the key beside it does
+        // grant it, so it is the half that is coloured.
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_remember_only_asking)),
+            Style::default().fg(theme::running()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_remember_where)),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("       {}", path.display()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+    }
+
     let mut key_spans = vec![
         Span::styled(
             "  y",
@@ -608,6 +658,18 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
                 .add_modifier(Modifier::BOLD),
         ));
         key_spans.push(Span::raw(format!(" {}    ", t!(run_always))));
+    }
+    // Drawn only where the driver said where the answer would go. `a` keeps its place on a prompt
+    // that offers no `r`, and its label still says which of the two lifetimes it is: the relabelling
+    // is what stops one word meaning either, so it is not conditional on this key being there.
+    if request.may_record() {
+        key_spans.push(Span::styled(
+            "r",
+            Style::default()
+                .fg(theme::running())
+                .add_modifier(Modifier::BOLD),
+        ));
+        key_spans.push(Span::raw(format!(" {}    ", t!(run_remember))));
     }
     key_spans.extend([
         Span::styled(
@@ -1428,6 +1490,9 @@ mod tests {
             append: false,
         }];
         RunRequest {
+            // A line naming a file to write is asked about however it was answered, so the prompt
+            // offers no key that would outlive the session.
+            record: None,
             plan: bravebot_core::command::Plan {
                 line: "git log --oneline | tee > out.txt".to_string(),
                 directory: std::path::PathBuf::from("/home/someone/project"),
@@ -1627,6 +1692,8 @@ mod tests {
             }],
         };
         RunRequest {
+            // Private input is asked about every time, so neither standing key is offered.
+            record: None,
             plan: bravebot_core::command::Plan {
                 line: "cat < /home/someone/.ssh/id_rsa".to_string(),
                 directory: std::path::PathBuf::from("/home/someone/project"),
@@ -1675,6 +1742,142 @@ mod tests {
         );
         assert_eq!(always, Some(RunResponse::Answer(RunAnswer::ApproveAlways)));
         assert!(RunAnswer::ApproveAlways.decision().remember);
+    }
+
+    /// A run prompt that may record its answer, as one in a session with somewhere to keep the
+    /// record looks. The path is what the prompt has to show, since nobody can endorse a record
+    /// they were not shown.
+    fn a_recordable_run() -> RunRequest {
+        RunRequest {
+            record: Some(std::path::PathBuf::from(
+                "/home/someone/.bravebot/remembered/-home-someone-project.jsonl",
+            )),
+            ..a_run(false)
+        }
+    }
+
+    /// RUN-19, PROMPT-6: the third answer has a key of its own. Pressing it approves the run and
+    /// records the line, and it vouches for nothing, which is the half `a` grants and this does not.
+    #[test]
+    fn the_run_keys_separate_this_session_from_every_session() {
+        let recorded = run_answer_for(
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+            &a_recordable_run(),
+        );
+        assert_eq!(
+            recorded,
+            Some(RunResponse::Answer(RunAnswer::ApproveAndRecord))
+        );
+
+        let decision = RunAnswer::ApproveAndRecord.decision();
+        assert!(decision.approved());
+        assert!(decision.record);
+        assert!(
+            !decision.remember,
+            "the key that decides a lifetime also vouched for the programs"
+        );
+        assert!(
+            !RunAnswer::ApproveAlways.decision().record,
+            "the key that decides a label also recorded an answer past the session"
+        );
+    }
+
+    /// RUN-19: the key is unbound where the prompt did not draw it. A key granting something the
+    /// same screen says cannot be granted is worse than an unbound one, and this key's grant
+    /// outlives the session that could have corrected it.
+    #[test]
+    fn a_prompt_that_offers_no_record_binds_no_key_to_one() {
+        for request in [a_run(false), a_run(true), a_compiled_run()] {
+            assert!(!request.may_record());
+            assert_eq!(
+                run_answer_for(
+                    KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+                    &request
+                ),
+                None,
+                "a key recorded an answer the prompt did not offer"
+            );
+        }
+    }
+
+    /// PROMPT-6: Enter does not reach the key whose grant outlives the session either.
+    #[test]
+    fn enter_does_not_record_a_run_past_the_session() {
+        assert_eq!(
+            run_answer_for(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &a_recordable_run()
+            ),
+            None
+        );
+    }
+
+    /// RUN-19: declining and Ctrl-C record nothing, which is what every standing grant here
+    /// requires. A refusal is not a reason to answer for anything past this moment.
+    #[test]
+    fn refusing_a_run_records_nothing_past_the_session() {
+        for answer in [RunAnswer::Reject, RunAnswer::Interrupt] {
+            let decision = answer.decision();
+            assert!(!decision.approved());
+            assert!(!decision.record, "{answer:?} recorded an answer");
+        }
+    }
+
+    /// The same drawing on a terminal tall enough to hold the whole body, for a test about what the
+    /// prompt says rather than about what scrolls.
+    fn fully_rendered_run(request: &RunRequest) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(160, 48)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw_run(frame, request, 0);
+            })
+            .expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    /// RUN-19: the prompt shows what would be recorded and where. The line is already on the
+    /// screen; the file is the part nothing else would tell them, and deleting a line from it is
+    /// the way back.
+    #[test]
+    fn a_prompt_offering_to_remember_says_where_the_record_goes() {
+        let drawn = fully_rendered_run(&a_recordable_run());
+        assert!(drawn.contains("remember it"), "{drawn}");
+        assert!(
+            drawn.contains("/home/someone/.bravebot/remembered"),
+            "the prompt offered a record without saying where it goes: {drawn}"
+        );
+        assert!(
+            drawn.contains("stays quarantined"),
+            "the prompt did not say the key leaves the output where it was: {drawn}"
+        );
+    }
+
+    /// RUN-19, PROMPT-6: the row is where the two lifetimes are told apart, and it says so on every
+    /// run prompt, including the ones that offer no `r`. A bare `always` is the one word this
+    /// relabelling exists to stop meaning two different things.
+    #[test]
+    fn the_row_says_which_lifetime_the_always_key_grants() {
+        for request in [a_run(false), a_recordable_run()] {
+            let drawn = rendered_run(&request);
+            assert!(
+                drawn.contains("always this session"),
+                "the row left `always` saying either lifetime: {drawn}"
+            );
+        }
+    }
+
+    /// RUN-19: a prompt with no record to offer draws no key for one, so nothing on the screen
+    /// promises something that will not happen.
+    #[test]
+    fn a_prompt_with_no_record_to_offer_draws_no_key_for_one() {
+        let drawn = rendered_run(&a_run(false));
+        assert!(!drawn.contains("remember it"), "{drawn}");
     }
 
     /// Enter is the key most likely to be pressed out of habit, and this prompt starts a program.

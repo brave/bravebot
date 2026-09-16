@@ -43,6 +43,7 @@ reason.
 
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
+`verified-by: bravebot_agent::turn::a_turn_with_nobody_to_ask_reads_no_record`
 `verified-by: bravebot_cli::main::permissions_are_enforced_unless_the_flag_is_given`
 `verified-by: bravebot_cli::main::an_allow_rule_decides_nothing_for_a_run_nobody_is_watching`
 `verified-by: bravebot_cli::main::the_flag_is_what_lets_an_allow_rule_decide_again`
