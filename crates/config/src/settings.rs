@@ -51,6 +51,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The file each layer is named by, inside its own directory.
 const SETTINGS_FILE: &str = "settings.json";
@@ -96,6 +97,7 @@ pub struct Settings {
     editor_mode: Option<String>,
     keybindings: BTreeMap<String, String>,
     attribution: Attribution,
+    search: SearchCaps,
     providers: Vec<crate::provider::Provider>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
@@ -119,6 +121,30 @@ impl Attribution {
     /// Whether the block said anything.
     pub fn is_empty(&self) -> bool {
         self.commit.is_none() && self.pr.is_none()
+    }
+}
+
+/// The `search` block: what bounds a search of the workspace, where a file bounds it.
+///
+/// `None` per cap, meaning the built-in one stands. A number carries no way to say "leave this
+/// alone", and a value reserved to mean it would be a second spelling of absence for whoever has
+/// to remember which number it was.
+///
+/// Two independent caps rather than one budget: one bounds how much of the tree is walked, the
+/// other how long is spent reading what the walk selected. A tree large enough to need one is not
+/// always slow enough to need the other.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchCaps {
+    /// How many files a search may walk, from `maxFiles`.
+    pub files: Option<usize>,
+    /// How long a search may spend opening them, from `maxSeconds`.
+    pub time: Option<Duration>,
+}
+
+impl SearchCaps {
+    /// Whether the block said anything.
+    pub fn is_empty(&self) -> bool {
+        self.files.is_none() && self.time.is_none()
     }
 }
 
@@ -237,6 +263,7 @@ impl Settings {
             editor_mode: word(root, "editorMode"),
             keybindings: keybindings_block(root),
             attribution: attribution_block(root),
+            search: search_caps(root),
             providers: crate::provider::Provider::all(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -280,6 +307,15 @@ impl Settings {
         &self.attribution
     }
 
+    /// What the settings in force put a search of the workspace under, cap by cap.
+    ///
+    /// A cap nobody named is `None` rather than the built-in number, because the built-in one is
+    /// the workspace's to know: answering with it here would make this crate the second place the
+    /// default is written down, and the two would drift.
+    pub fn search(&self) -> &SearchCaps {
+        &self.search
+    }
+
     /// Whether anything was set at all.
     pub fn is_empty(&self) -> bool {
         self.env.is_empty()
@@ -289,6 +325,7 @@ impl Settings {
             && self.editor_mode.is_none()
             && self.keybindings.is_empty()
             && self.attribution.is_empty()
+            && self.search.is_empty()
             && self.providers.is_empty()
     }
 
@@ -349,6 +386,8 @@ impl Settings {
                     .then_some("attribution.commit"),
             )
             .chain(self.attribution.pr.is_some().then_some("attribution.pr"))
+            .chain(self.search.files.is_some().then_some("search.maxFiles"))
+            .chain(self.search.time.is_some().then_some("search.maxSeconds"))
             .chain(self.env.keys().map(String::as_str))
     }
 }
@@ -425,7 +464,8 @@ fn merge(
                 if key == "env"
                     || key == "provider"
                     || key == "attribution"
-                    || key == "keybindings" =>
+                    || key == "keybindings"
+                    || key == "search" =>
             {
                 under.extend(above);
             }
@@ -548,6 +588,31 @@ fn keybindings_block(
         .map(|(action, chord)| (action.trim().to_ascii_lowercase(), chord.trim().to_string()))
         .filter(|(action, chord)| !action.is_empty() && !chord.is_empty())
         .collect()
+}
+
+/// The `search` block: how many files a search may walk, and how long it may spend reading them.
+///
+/// Numbers rather than the strings the rest of this file reads, because a cap is a quantity and
+/// there is no spelling of one worth carrying through unrecognised. Whole and positive: anything
+/// else is absence, on the same footing as everything else here, so a half-typed file leaves the
+/// built-in cap in force rather than refusing to start.
+///
+/// Zero is absence too. It is the number somebody writes meaning "no cap", and read literally it
+/// is a search permitted to open no file at all, which answers every pattern with nothing found.
+fn search_caps(root: &serde_json::Map<String, serde_json::Value>) -> SearchCaps {
+    let Some(serde_json::Value::Object(block)) = root.get("search") else {
+        return SearchCaps::default();
+    };
+    let count = |name: &str| {
+        block
+            .get(name)
+            .and_then(serde_json::Value::as_u64)
+            .filter(|cap| *cap > 0)
+    };
+    SearchCaps {
+        files: count("maxFiles").and_then(|files| usize::try_from(files).ok()),
+        time: count("maxSeconds").map(Duration::from_secs),
+    }
 }
 
 /// The `permissions` block: three lists of rule text, and the directories to open.
@@ -864,6 +929,64 @@ mod tests {
                 Settings::parse(text).scrubbed().count(),
                 0,
                 "{text:?} named something"
+            );
+        }
+    }
+
+    /// A tree where the built-in caps are the wrong numbers is the only thing that can say so, so
+    /// the block has to reach the code that walks it: without it there is no way to search a
+    /// repository larger than the default walks.
+    #[test]
+    fn a_file_may_cap_a_search_of_a_large_tree() {
+        let settings = Settings::parse(r#"{"search": {"maxFiles": 500000, "maxSeconds": 60}}"#);
+        assert_eq!(settings.search().files, Some(500_000));
+        assert_eq!(settings.search().time, Some(Duration::from_secs(60)));
+        assert!(!settings.is_empty());
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            ["search.maxFiles", "search.maxSeconds"]
+        );
+    }
+
+    /// The two caps bound different things, so a file raising the walk says nothing about how long
+    /// a read may take: one named alone leaves the other on its built-in number.
+    #[test]
+    fn one_search_cap_is_read_without_the_other() {
+        let files = Settings::parse(r#"{"search": {"maxFiles": 400000}}"#);
+        assert_eq!(files.search().files, Some(400_000));
+        assert_eq!(files.search().time, None);
+
+        let time = Settings::parse(r#"{"search": {"maxSeconds": 45}}"#);
+        assert_eq!(time.search().files, None);
+        assert_eq!(time.search().time, Some(Duration::from_secs(45)));
+    }
+
+    /// Zero is what somebody writes meaning "no cap", and honoured literally it is a search
+    /// permitted to open no file at all: every pattern would come back absent from a tree that
+    /// holds it. Absence leaves the built-in cap in force instead.
+    #[test]
+    fn a_search_cap_of_zero_leaves_the_built_in_one_in_force() {
+        let settings = Settings::parse(r#"{"search": {"maxFiles": 0, "maxSeconds": 0}}"#);
+        assert!(settings.search().is_empty());
+        assert!(settings.is_empty());
+    }
+
+    /// Every other shape is absence, on the same footing as the rest of this file: a half-typed
+    /// settings file leaves the built-in cap in force rather than stopping a session.
+    #[test]
+    fn a_search_cap_that_is_not_a_whole_count_is_absence() {
+        for text in [
+            r#"{"search": {"maxFiles": "500000"}}"#,
+            r#"{"search": {"maxFiles": 500000.5, "maxSeconds": 1.5}}"#,
+            r#"{"search": {"maxFiles": -1, "maxSeconds": -1}}"#,
+            r#"{"search": {"maxFiles": true, "maxSeconds": null}}"#,
+            r#"{"search": {"maxFiles": [500000]}}"#,
+            r#"{"search": "wide"}"#,
+            r#"{"maxFiles": 500000}"#,
+        ] {
+            assert!(
+                Settings::parse(text).search().is_empty(),
+                "{text:?} capped something"
             );
         }
     }
@@ -1362,6 +1485,18 @@ mod tests {
             settings.attribution().pr.as_deref(),
             Some("Opened by bravebot")
         );
+    }
+
+    /// The two caps are unrelated bounds that share a block, so a checkout widening the walk for
+    /// its own size must not hand back the reading time a person's own file had cut.
+    #[test]
+    fn a_layer_capping_one_side_of_a_search_leaves_the_other() {
+        let settings = Layers::new("search-per-name")
+            .global(r#"{"search": {"maxFiles": 500000, "maxSeconds": 60}}"#)
+            .project(r#"{"search": {"maxFiles": 900000}}"#)
+            .read();
+        assert_eq!(settings.search().files, Some(900_000));
+        assert_eq!(settings.search().time, Some(Duration::from_secs(60)));
     }
 
     /// A model is one choice rather than a list, so the closest layer that names one wins: a checkout

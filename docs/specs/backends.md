@@ -623,7 +623,7 @@ leaves everything else in force.
 
 | What | How layers combine |
 |---|---|
-| `env`, `provider`, `attribution` | per name, one level down; the value under a name is replaced whole |
+| `env`, `provider`, `attribution`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, every list under `permissions` | every layer's entries are kept |
 | `model`, anything else | the closest layer that set it wins |
 
@@ -641,7 +641,9 @@ which is why a gateway entry is replaced whole and a project file naming one mus
 
 The two names under `attribution` combine per name for the same reason `env` does: they are
 unrelated destinations that happen to share a block, and a file answering for one must not answer
-for the other by omission.
+for the other by omission. The chords under `keybindings` and the two caps under `search` are the
+same case: a file moving one action's key is no statement about the other six, and a checkout
+widening a search's walk for its own size is none about how long a read may take.
 
 The lists are the exception because an entry in one only ever narrows what is possible: a name under
 `scrubEnv` takes a variable away from a subprocess, and a rule under `permissions` refuses something
@@ -669,6 +671,7 @@ knowing where to put a value for one tool is knowing it for the other.
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_directories_a_file_makes_reachable`
 `verified-by: bravebot_config::settings::the_closest_layer_that_named_a_model_wins`
 `verified-by: bravebot_config::settings::a_layer_answering_for_one_attribution_name_leaves_the_other`
+`verified-by: bravebot_config::settings::a_layer_capping_one_side_of_a_search_leaves_the_other`
 `verified-by: bravebot_config::settings::a_layer_naming_no_model_leaves_the_one_below_it`
 `verified-by: bravebot_config::settings::a_project_layer_replaces_one_gateway_and_leaves_the_others`
 `verified-by: bravebot_config::settings::a_project_gateway_naming_no_host_replaces_one_that_did`

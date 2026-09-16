@@ -343,7 +343,9 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         }
     };
 
-    let mut workspace = match current_workspace() {
+    let settings = bravebot_config::Settings::load();
+
+    let mut workspace = match current_workspace(&settings) {
         Ok(w) => w,
         Err(err) => {
             eprintln!("{}", t!(cli_workspace_problem, problem = err));
@@ -369,7 +371,6 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
 
     // The rules the settings file carried. Anything unreadable is named on stderr, beside the rest
     // of what this run has to say about itself.
-    let settings = bravebot_config::Settings::load();
     let (permissions, rejected) = rules_for_a_one_shot_run(
         &settings,
         bravebot_agent::home::directory().as_deref(),
@@ -1038,7 +1039,7 @@ fn interactive(start: bravebot_tui::app::Start, skip_permissions: bool) -> ExitC
         }
     };
 
-    let workspace = match current_workspace() {
+    let workspace = match current_workspace(&bravebot_config::Settings::load()) {
         Ok(w) => w,
         Err(err) => {
             eprintln!("{}", t!(cli_workspace_problem, problem = err));
@@ -1138,10 +1139,16 @@ fn scratch_for_this_run(workspace: &mut Workspace) -> Option<bravebot_agent::Ses
 
 /// The workspace is the current directory: file arguments resolve relative to it, and
 /// confinement keeps reads inside it.
-fn current_workspace() -> Result<Workspace, String> {
+///
+/// The search caps come in from the settings here rather than being read inside the workspace,
+/// because a workspace is built by every test in the tree and one that read the settings would
+/// answer differently on a machine whose owner had configured them.
+fn current_workspace(settings: &bravebot_config::Settings) -> Result<Workspace, String> {
+    let caps = settings.search();
     std::env::current_dir()
         .map_err(|e| e.to_string())
         .and_then(|dir| Workspace::new(dir).map_err(|e| e.to_string()))
+        .map(|workspace| workspace.with_search_caps(caps.files, caps.time))
 }
 
 /// Import a Leo Premium subscription from a local Brave install.

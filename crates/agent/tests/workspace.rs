@@ -9,6 +9,7 @@ use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_core::trust::TrustStore;
 use bravebot_core::value::Labelled;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// A scratch directory that removes itself, so tests do not leave state behind.
 struct Scratch {
@@ -1224,7 +1225,7 @@ fn a_search_that_could_not_reach_every_file_says_so() {
     }
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_limit(10);
+        .with_search_caps(Some(10), None);
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -1265,7 +1266,7 @@ fn a_search_that_reached_every_file_makes_no_claim() {
     }
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_limit(10);
+        .with_search_caps(Some(10), None);
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -1293,6 +1294,100 @@ fn a_search_that_reached_every_file_makes_no_claim() {
         !found.unvisited,
         "every file was searched and the search claimed otherwise"
     );
+}
+
+/// A read that ran out of time is partial in the same dangerous way as a walk that stopped
+/// short: the files left unopened cannot have matched, and nothing in an empty result says they
+/// were never read.
+///
+/// No wall clock is waited on. A budget of nothing is spent before the first file, which is the
+/// same state a real timeout leaves the search in and is the only one a test can reach without
+/// a tree slow enough to take ten seconds.
+#[test]
+fn a_search_that_ran_out_of_time_says_so() {
+    let scratch = Scratch::new("search-timed-out");
+    std::fs::write(scratch.path.join("f.txt"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(None, Some(Duration::ZERO));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let found = workspace
+        .grep(
+            &mut policy,
+            std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+            &Labelled::trusted(".".to_string()),
+            None,
+            true,
+            1,
+        )
+        .expect("grep succeeds");
+    let proof = policy.authorise_content_release("test", "matches");
+    let found = found.declassify(&proof);
+
+    assert!(
+        found.timed_out,
+        "the clock ran out and the search did not say so"
+    );
+    assert_eq!(
+        found.searched, 0,
+        "no file can be read out of a spent clock"
+    );
+    assert!(
+        found.matches.is_empty(),
+        "nothing was read, so nothing matched"
+    );
+}
+
+/// A cap nobody configured leaves the built-in one in force, one cap at a time: a tree that needs
+/// a longer read and not a wider walk says so about the clock alone, and the default walk still
+/// reaches the end of a small tree.
+#[test]
+fn a_cap_nobody_named_stays_on_its_built_in_number() {
+    let scratch = Scratch::new("search-default-cap");
+    for n in 0..12 {
+        std::fs::write(scratch.path.join(format!("f{n:05}.txt")), "needle\n").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(None, Some(Duration::from_secs(60)));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let found = workspace
+        .grep(
+            &mut policy,
+            std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+            &Labelled::trusted(".".to_string()),
+            None,
+            true,
+            1,
+        )
+        .expect("grep succeeds");
+    let proof = policy.authorise_content_release("test", "matches");
+    let found = found.declassify(&proof);
+
+    assert_eq!(
+        found.searched, 12,
+        "the built-in walk reaches a tree this size"
+    );
+    assert!(!found.unvisited, "a longer clock must not narrow the walk");
+    assert!(!found.timed_out, "the search fitted the clock it was given");
 }
 
 /// The ordinary case must not claim truncation, or the notice becomes noise the model
@@ -3258,7 +3353,7 @@ fn a_search_that_could_not_reach_every_file_offers_no_later_page() {
     }
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_limit(10);
+        .with_search_caps(Some(10), None);
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -3532,7 +3627,7 @@ fn a_denied_file_does_not_spend_a_searchs_budget() {
     std::fs::write(scratch.path.join("keep.txt"), "needle\n").unwrap();
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_limit(2);
+        .with_search_caps(Some(2), None);
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -3581,7 +3676,7 @@ fn a_capped_search_keeps_the_same_files_every_time() {
 
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_limit(10);
+        .with_search_caps(Some(10), None);
 
     let paths_of = || {
         let mut sink = RecordingSink::new();
@@ -3631,7 +3726,7 @@ fn a_capped_search_prefers_a_directorys_own_files() {
 
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_limit(3);
+        .with_search_caps(Some(3), None);
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
         routing(),

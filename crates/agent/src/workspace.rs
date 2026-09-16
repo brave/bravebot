@@ -163,11 +163,19 @@ pub struct Workspace {
     /// among the directories they opened, and `/cd` leaves it alone rather than closing it for
     /// overlapping the directory being moved to.
     scratch: Option<PathBuf>,
-    /// How many files a search may walk. [`MAX_SEARCH_FILES`] unless a caller lowered it.
+    /// How many files a search may walk. [`MAX_SEARCH_FILES`] unless the settings named another.
     ///
-    /// A field rather than a constant so a test can reach the cap without writing a hundred
-    /// thousand files, and so a host on a slow filesystem can say so.
+    /// A field rather than a constant because the right number is a property of the tree: a
+    /// monorepo holds more files than the default walks, and a test reaches the cap without
+    /// writing a hundred thousand files.
     search_files: usize,
+    /// How long a search may spend opening files. [`MAX_SEARCH_TIME`] unless the settings named
+    /// another.
+    ///
+    /// A field for the same reason as `search_files`, and a separate one because the two bound
+    /// different things: a tree large enough to need a wider walk is not always slow enough to
+    /// need a longer read.
+    search_time: Duration,
     /// What the files this turn has written held before it wrote to them.
     ///
     /// Behind a lock and a handle because a workspace is cloned into the turn that uses it, and a
@@ -318,17 +326,25 @@ impl Workspace {
             added: Vec::new(),
             scratch: None,
             search_files: MAX_SEARCH_FILES,
+            search_time: MAX_SEARCH_TIME,
             backups: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
-    /// Lower how many files a search may walk.
+    /// Put a search under the caps somebody configured, keeping the built-in one for each cap
+    /// they did not name.
     ///
-    /// Only ever lowered in practice: the default is chosen to be past what any tree a person
-    /// works in holds, and raising it trades a bounded search for an unbounded one.
+    /// `None` rather than the default number, so that the defaults live here alone: a caller
+    /// passing [`MAX_SEARCH_FILES`] on to say "unchanged" would be a second copy of it to keep
+    /// in step with this one.
+    ///
+    /// Either cap may be raised as well as lowered. What the default is past depends on the tree
+    /// rather than on anything this can measure, and a search is still bounded afterwards: both
+    /// caps hold, and the match cap holds whatever they are.
     #[must_use]
-    pub fn with_search_limit(mut self, files: usize) -> Self {
-        self.search_files = files;
+    pub fn with_search_caps(mut self, files: Option<usize>, time: Option<Duration>) -> Self {
+        self.search_files = files.unwrap_or(self.search_files);
+        self.search_time = time.unwrap_or(self.search_time);
         self
     }
 
@@ -1262,18 +1278,26 @@ pub(crate) const MAX_ENTRIES: usize = 2_000;
 ///
 /// Walking is cheap: a path is a stat and a string. Reading is not, which is what
 /// [`MAX_SEARCH_TIME`] is for.
+///
+/// Past what a tree a person works in usually holds, which is not the same as past every tree:
+/// a monorepo or a checkout of generated sources reaches this, and
+/// [`Workspace::with_search_caps`] is how one says so.
 pub const MAX_SEARCH_FILES: usize = 100_000;
 
 const MAX_MATCHES: usize = 200;
 const MAX_MATCH_LINE: usize = 500;
 
-/// How long a search may spend opening files.
+/// How long a search may spend opening files, where nothing configured otherwise.
 ///
 /// The match cap already stops a *productive* search early. This is for the other one: a
 /// pattern that matches nothing is read to the end of the tree, so on a large repository the
 /// worst case is every file. A wall-clock budget bounds that without bounding the useful
 /// case, and stopping is reported the same way the entry cap is, since the answer is partial
 /// either way, and what the reader must not do is take it for complete.
+///
+/// Ten seconds is a guess about a filesystem rather than a fact about one, which is why
+/// [`Workspace::with_search_caps`] exists: a network mount reads an order of magnitude slower
+/// than a local disk, and nothing here can tell which it is on.
 const MAX_SEARCH_TIME: Duration = Duration::from_secs(10);
 
 /// Caps on a single paged read.
@@ -1853,7 +1877,7 @@ impl Workspace {
             }
             // Checked per file rather than per line: the clock is here to bound a walk over a
             // large tree, and a single file cannot be large enough to matter beside that.
-            if started.elapsed() >= MAX_SEARCH_TIME {
+            if started.elapsed() >= self.search_time {
                 timed_out = true;
                 break;
             }

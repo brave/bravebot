@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/glob.rs
   - crates/agent/src/regex.rs
   - crates/agent/src/workspace.rs
+  - crates/config/src/settings.rs
 ---
 
 ## Scope
@@ -93,6 +94,7 @@ through it.
 `verified-by: bravebot_agent::turn::a_complete_search_makes_no_truncation_claim`
 `verified-by: bravebot_agent::turn::a_quarantined_search_still_tells_the_model_it_is_incomplete`
 `verified-by: bravebot_agent::workspace::a_search_that_could_not_reach_every_file_says_so`
+`verified-by: bravebot_agent::workspace::a_search_that_ran_out_of_time_says_so`
 `verified-by: bravebot_agent::workspace::a_search_that_reached_every_file_makes_no_claim`
 `verified-by: bravebot_agent::workspace::a_capped_search_keeps_the_same_files_every_time`
 `verified-by: bravebot_agent::workspace::a_capped_search_prefers_a_directorys_own_files`
@@ -226,3 +228,44 @@ file again is the cost of not keeping one.
 `verified-by: bravebot_agent::turn::a_quarantined_capped_search_says_where_to_continue`
 `verified-by: bravebot_agent::turn::a_search_past_the_last_match_says_how_many_there_were`
 `verified-by: bravebot_agent::turn::a_quarantined_page_past_the_last_match_says_how_many_there_were`
+
+<a id="SEARCH-9"></a>
+### SEARCH-9: the caps a search runs under are configurable
+
+`search.maxFiles` and `search.maxSeconds`, in the settings files, name how many files a search may
+walk and how long it may spend opening them. Either may be raised as well as lowered, and a key
+nobody set leaves the built-in cap in force. The two are independent, so a file naming one says
+nothing about the other, in any layer.
+
+A cap of zero is absence rather than a search permitted to read nothing, as is any value that is
+not a whole count. Absence leaves the built-in cap in force, which is the cap a layer setting one
+of those values gets rather than the number a weaker layer had named.
+
+**Why.** The right number is a property of the tree, not of the program. The built-in caps are past
+what a repository a person usually works in holds, and a monorepo, a tree of generated sources, or
+a checkout on a network filesystem is where they are not: there every search comes back partial,
+and a partial search is the answer that reads like a complete one. Nothing the program can measure
+tells it which kind of tree it is in, which makes this configuration rather than a constant to pick
+better.
+
+Raising a cap does not unbound a search. The walk still stops at `maxFiles`, the reading still
+stops at `maxSeconds`, and the match cap holds regardless of both, so the result is still the
+bounded, deterministic, partial answer the clauses above describe.
+
+The clock bounds the reading and not the walk, so `maxFiles` is what a very large tree is paid for
+in: a walk of a million paths on a slow filesystem is a slow search rather than a truncated one,
+and it is the number a person chose. That is the right way round, because a walk cut off by a clock
+would keep a different part of the tree on every run, which is what the determinism above rules
+out.
+
+The caps are handed to the workspace by the caller that read the settings, rather than read by the
+workspace itself. A workspace that consulted them would answer differently on a machine whose owner
+had configured them, which is the one thing a test of a cap cannot have.
+
+`verified-by: bravebot_config::settings::a_file_may_cap_a_search_of_a_large_tree`
+`verified-by: bravebot_config::settings::one_search_cap_is_read_without_the_other`
+`verified-by: bravebot_config::settings::a_search_cap_of_zero_leaves_the_built_in_one_in_force`
+`verified-by: bravebot_config::settings::a_search_cap_that_is_not_a_whole_count_is_absence`
+`verified-by: bravebot_config::settings::a_layer_capping_one_side_of_a_search_leaves_the_other`
+`verified-by: bravebot_agent::workspace::a_cap_nobody_named_stays_on_its_built_in_number`
+`verified-by: bravebot_agent::workspace::a_search_that_ran_out_of_time_says_so`
