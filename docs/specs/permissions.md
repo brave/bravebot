@@ -217,19 +217,25 @@ into routing, which is the whole thing labels exist to prevent.
 `verified-by: bravebot_agent::turn::an_allow_rule_reaches_the_path_it_names_and_no_other`
 
 <a id="PERM-9"></a>
-### PERM-9: two prompts no rule can answer
+### PERM-9: three prompts no rule can answer
 
 A run that would put the user's private data into a program asks whatever the rules say. A write
-whose destination is known only through a reference asks whatever the rules say.
+whose destination is known only through a reference asks whatever the rules say. A run carrying an
+environment assignment written in front of one of its programs asks whatever the rules say.
 
-**Why.** They are not the same question a rule answers. The first is about confidentiality: a rule
+**Why.** None of them is the question a rule answers. The first is about confidentiality: a rule
 saying which commands may run is not consent to hand one the user's data, exactly as vouching for a
 command is not. The second is structural: that prompt is the only moment such a path is shown to
 anybody, and the endorsement is minted for the path the person saw, so nothing a pattern says can
-stand in for having looked.
+stand in for having looked. The third is about what a rule can say at all: a rule is matched against
+one string, the program's name and its arguments run together ([PERM-5](#PERM-5)), and an assignment is in
+neither, so `Bash(git log)` matches `LD_PRELOAD=./evil.so git log` and no rule anybody could write
+distinguishes them. An assignment decides what a program loads before its arguments are read
+([tools/run.md](tools/run.md)), so allowing the one is not allowing the other.
 
 `verified-by: bravebot_core::policy::private_input_asks_even_for_a_line_a_rule_allows`
 `verified-by: bravebot_core::policy::a_reference_named_write_asks_whatever_a_rule_says`
+`verified-by: bravebot_core::policy::an_environment_assignment_asks_even_for_a_line_a_rule_allows`
 
 <a id="PERM-10"></a>
 ### PERM-10: no rule extends reach, and `additionalDirectories` asks before it opens

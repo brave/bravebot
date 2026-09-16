@@ -382,6 +382,8 @@ run-always-output-trusted = what it prints is trusted, and the model reads it
 run-always-exact-arguments = these arguments only: git log would not cover git push
 run-private-not-remembered =
     private input is asked about every time, so this one cannot be remembered
+run-assignment-not-remembered =
+    an assignment in front of a program is asked about every time, so this one cannot be remembered
 run-yes = run it
 run-always = always
 run-no = don't

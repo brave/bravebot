@@ -2949,6 +2949,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// step anywhere is a transformation nobody answered for, and its output is what the next step
     /// reads, so one such step makes the whole line's output untrusted however familiar the steps
     /// either side of it are.
+    ///
+    /// An entry holds a resolved program and its arguments and nothing else, so this answers about
+    /// argv alone: [`crate::command::Plan::carries_an_assignment`] is the separate question, and
+    /// every gate that consults this one has to ask that one too.
     fn every_step_vouched(&self, plan: &crate::command::Plan) -> bool {
         plan.steps().iter().all(|step| {
             self.programs
@@ -3066,8 +3070,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Whether a person has to be asked before this plan runs.
     ///
     /// The questions in order: private input first and unconditionally, then a write, then the tree
-    /// the line runs in, then a rule the user wrote in advance, then the proof road, then the
-    /// vouched list.
+    /// the line runs in, then an environment assignment, then a rule the user wrote in advance, then
+    /// the proof road, then the vouched list.
     ///
     /// True unless the audited table accounts for **every** step, a rule the user wrote in advance
     /// covers the line, or this session's user has vouched for every step of it. There is no
@@ -3122,6 +3126,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "approval",
                 "the line runs outside the workspace root, which is a tree of its own that no \
                  standing answer covers, asking"
+                    .to_string(),
+            );
+            return true;
+        }
+
+        // A plan carrying an environment assignment has a load and a search path of its own as well
+        // as a program, and a vouched entry records neither: `LD_PRELOAD=./evil.so git log` matches
+        // an entry made for `git log`. An assignment decides what the program loads and reads before
+        // its own arguments are looked at, so it is asked about every time, for the same reason a
+        // write and a tree are.
+        if plan.carries_an_assignment() {
+            self.allow(
+                "approval",
+                "the line writes an assignment in front of a program, which decides what it loads \
+                 before its arguments are read and which no standing answer covers, asking"
                     .to_string(),
             );
             return true;
@@ -3193,7 +3212,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// a program is neither.
     ///
     /// The output label is `(U,priv)` unless every step is a command this session's user vouched
-    /// for **and the line runs where they vouched for it**, in which case it is `(T,priv)`.
+    /// for, **the line runs where they vouched for it**, and **no step carries an environment
+    /// assignment**, in which case it is `(T,priv)`.
     /// `(U,priv)` is the only label that holds without knowing what ran, and nothing a caller or
     /// the model can say changes it. Two things reach a better label, by different roads, and
     /// neither is a declaration.
@@ -3245,7 +3265,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "every step is an audited call whose output is a function of paths the user \
                  vouched for",
             )
-        } else if self.every_step_vouched(plan) && self.runs_at_the_root(plan) {
+        } else if self.every_step_vouched(plan)
+            && self.runs_at_the_root(plan)
+            && !plan.carries_an_assignment()
+        {
             (
                 Label::trusted_private(),
                 "every step is a command the user vouched for, output and all",
@@ -3253,7 +3276,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         } else {
             (
                 opaque,
-                "a program may print anything, and not every step was vouched for where it runs",
+                "a program may print anything, and not every step of this line was vouched for as \
+                 written, where it runs",
             )
         };
         self.allow("provenance", format!("run: output labelled {label}, {why}"));
@@ -5172,16 +5196,42 @@ mod tests {
 
     /// An assignment in front of a program decides what that program loads and reads before its own
     /// arguments are looked at, so an audit of an option surface says nothing about the call.
+    ///
+    /// Asked of the label as well as of the prompt, and against a control. The prompt has a second
+    /// reason to ask about this line ([`crate::command::Plan::carries_an_assignment`]) and would
+    /// answer the same with the proof road wide open, so the prompt alone cannot tell whether the
+    /// table refused. What a proof is for is the label, and the control establishes that the road is
+    /// otherwise open here: without it, a proof that had stopped working for every line would pass.
     #[test]
     fn an_environment_assignment_leaves_a_step_unproven() {
         let mut sink = RecordingSink::new();
         let mut policy = in_a_project(&mut sink, &[]);
 
+        let audited = plan_of(vec![step_named("wc", &["-l", "Cargo.toml"])]);
+        policy.endorse_plan(&audited);
+        assert!(
+            policy
+                .before_plan(&audited)
+                .expect("an endorsed plan runs")
+                .is_trusted(),
+            "the proof road is shut for the line this test contrasts with"
+        );
+
         let mut step = step_named("wc", &["-l", "Cargo.toml"]);
         step.environment = vec![("LD_PRELOAD".to_string(), "./evil.so".to_string())];
+        let carrying = plan_of(vec![step]);
         assert!(
-            policy.plan_needs_approval(&plan_of(vec![step])),
+            policy.plan_needs_approval(&carrying),
             "a line carrying an environment assignment ran unasked"
+        );
+
+        policy.endorse_plan(&carrying);
+        assert!(
+            !policy
+                .before_plan(&carrying)
+                .expect("an endorsed plan runs")
+                .is_trusted(),
+            "the audited table proved a call whose program loads what an assignment chose"
         );
     }
 
@@ -5616,6 +5666,29 @@ mod tests {
         );
     }
 
+    /// A rule is matched against the program and its arguments run together, which is a rendering
+    /// an assignment is not in: `Bash(git log)` covers `LD_PRELOAD=./evil.so git log` and there is
+    /// no rule anybody could have written to say otherwise. So the question comes before the rules,
+    /// and the allowed bare line is asserted first because it is what makes that ordering the thing
+    /// under test rather than a rule that never matched.
+    #[test]
+    fn an_environment_assignment_asks_even_for_a_line_a_rule_allows() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_permissions(permissions(&[], &[], &["Bash(git log)"]));
+
+        assert!(
+            !policy.plan_needs_approval(&a_plan()),
+            "the rule did not cover the line it was written for"
+        );
+
+        assert!(
+            policy.plan_needs_approval(&with_an_assignment()),
+            "a settings-file rule ran a program under an assignment it cannot name, unasked"
+        );
+    }
+
     /// The default label, and the only one that holds without knowing what ran: a program may
     /// print bytes an earlier step read out of a file an attacker wrote.
     #[test]
@@ -5714,6 +5787,56 @@ mod tests {
             "output from a tree nobody vouched for was labelled trusted"
         );
         assert!(!label.is_public());
+    }
+
+    /// An assignment decides what a program loads and reads before its own arguments are looked at,
+    /// so `LD_PRELOAD=./evil.so git log` is a different proposition from the `git log` somebody read
+    /// at a prompt. An entry records no assignment, so there is nothing in it that could answer for
+    /// one.
+    #[test]
+    fn a_vouched_line_carrying_an_environment_assignment_is_asked_about() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched("/usr/bin/git", &["log"]));
+
+        assert!(
+            !policy.plan_needs_approval(&a_plan()),
+            "the vouched entry did not cover the command it was made for"
+        );
+
+        assert!(
+            policy.plan_needs_approval(&with_an_assignment()),
+            "a program ran under an assignment nobody approved, behind a command somebody said \
+             yes to"
+        );
+    }
+
+    /// The other half of the same grant, and the half that still matters once a person has approved
+    /// the line: what a program prints under an assignment nobody vouched for is whatever the
+    /// library that assignment loaded decided to print, so labelling it trusted would hand the
+    /// planner content this design keeps out of its context.
+    #[test]
+    fn output_of_a_vouched_line_carrying_an_environment_assignment_is_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched("/usr/bin/git", &["log"]));
+
+        let tampered = with_an_assignment();
+        policy.endorse_plan(&tampered);
+        let label = policy.before_plan(&tampered).expect("endorsed");
+        assert!(
+            !label.is_trusted(),
+            "output from a program run under an assignment nobody vouched for was labelled trusted"
+        );
+        assert!(!label.is_public());
+    }
+
+    /// The vouched line of [`a_plan`] with an assignment written in front of it, which is the shape
+    /// the compiler produces for `LD_PRELOAD=./evil.so git log`.
+    fn with_an_assignment() -> crate::command::Plan {
+        let mut step = step_named("git", &["log"]);
+        step.environment = vec![("LD_PRELOAD".to_string(), "./evil.so".to_string())];
+        plan_of(vec![step])
     }
 
     /// Without a root there is nothing to check an answer about a directory against, so the vouched

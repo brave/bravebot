@@ -358,11 +358,12 @@ impl RunAnswer {
 /// Separated from the loop so it can be tested without a terminal.
 ///
 /// Takes the request and not only the key, because which keys the prompt offers depends on what
-/// is being asked. A run that releases private data is asked about every time whatever is
-/// remembered, so the prompt neither draws `a` nor promises anything about it, and the answer has
-/// to agree with the drawing: a key that grants a standing permission the same screen says cannot
-/// be granted is worse than an unbound one. Unbound is what it becomes, for the reason Enter is:
-/// this prompt starts a program, and a key pressed out of habit from the previous prompt must not.
+/// is being asked. A run an entry could not record is asked about every time whatever is remembered,
+/// so the prompt neither draws `a` nor promises anything about it, and the answer has to agree with
+/// the drawing: a key that grants a standing permission the same screen says cannot be granted is
+/// worse than an unbound one. Unbound is what it becomes, for the reason Enter is: this prompt starts
+/// a program, and a key pressed out of habit from the previous prompt must not. Which runs those are
+/// is [`RunRequest::can_be_remembered`], asked here and again where the prompt is drawn.
 fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
     // The prompt blocks the whole interface, so without this Ctrl-C would do nothing at the one
     // moment a user is most likely to press it.
@@ -375,7 +376,7 @@ fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
 
     match key.code {
         KeyCode::Char('y' | 'Y') => Some(RunResponse::Answer(RunAnswer::Approve)),
-        KeyCode::Char('a' | 'A') if !request.releases_private() => {
+        KeyCode::Char('a' | 'A') if request.can_be_remembered() => {
             Some(RunResponse::Answer(RunAnswer::ApproveAlways))
         }
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(RunResponse::Answer(RunAnswer::Reject)),
@@ -442,6 +443,11 @@ pub fn ask_run<B: Backend>(terminal: &mut Terminal<B>, request: &RunRequest) -> 
 fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u16 {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::accent(), t!(run_title));
+
+    // Worked out once and read by both the explanation and the key row, so a drawing cannot offer a
+    // key it has just said is unavailable. [`run_answer_for`] asks the same question again rather
+    // than being told the answer, because a grant must not rest on a drawing.
+    let offers_always = request.can_be_remembered();
 
     let steps = request.plan.steps();
     let mut lines = vec![
@@ -546,8 +552,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
     // is the one nothing else in the interface would tell them: what the command prints stops
     // being quarantined and the model reads it. Nothing checks that assertion, so the person
     // making it has to be asked for it in those terms.
-    let vouching = request.would_vouch_for();
-    if !request.releases_private() {
+    if offers_always {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
             format!("  {}", t!(run_always_explained)),
@@ -555,7 +560,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         )));
         // The command first, then what trusting it means. The claims are about this, so a reader
         // should have it in front of them before reading them.
-        for command in &vouching {
+        for command in request.would_vouch_for() {
             lines.push(Line::from(Span::styled(
                 format!("       {}", command.display()),
                 Style::default().add_modifier(Modifier::BOLD),
@@ -580,13 +585,24 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
             Style::default().fg(theme::muted()),
         )));
     } else {
-        // Private input asks every time whatever is remembered, so offering to stop asking would
-        // be offering something that will not happen.
+        // Each of these asks every time whatever is remembered, so offering to stop asking would be
+        // offering something that will not happen. Every reason that holds is given, not the first
+        // one: a reader who acts on the only reason they were shown and still sees no `a` has been
+        // told to change the wrong thing about the line.
         lines.push(Line::raw(""));
-        lines.push(Line::from(Span::styled(
-            format!("  {}", t!(run_private_not_remembered)),
-            Style::default().fg(theme::muted()),
-        )));
+        let mut why = Vec::new();
+        if request.releases_private() {
+            why.push(t!(run_private_not_remembered));
+        }
+        if request.carries_an_assignment() {
+            why.push(t!(run_assignment_not_remembered));
+        }
+        for reason in why {
+            lines.push(Line::from(Span::styled(
+                format!("  {reason}"),
+                Style::default().fg(theme::muted()),
+            )));
+        }
     }
 
     let mut key_spans = vec![
@@ -598,9 +614,9 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         ),
         Span::raw(format!(" {}    ", t!(run_yes))),
     ];
-    // Offered only where it would do something. Private input asks every time whatever is
-    // remembered, so the key would promise something that will not happen.
-    if !request.releases_private() {
+    // Offered only where it would do something. A line no entry could record asks every time
+    // whatever is remembered, so the key would promise something that will not happen.
+    if offers_always {
         key_spans.push(Span::styled(
             "a",
             Style::default()
@@ -1633,6 +1649,80 @@ mod tests {
                 steps: bravebot_core::command::Steps::Pipeline(vec![reading]),
                 writes: Vec::new(),
                 reads: vec![secret],
+                stdin: None,
+            },
+        }
+    }
+
+    /// A line carrying an assignment asks every time whatever is remembered, because an entry
+    /// records a program and its exact arguments and an assignment is in neither. The drawing and
+    /// the handler both have to withhold `a`, and the sentence has to give this reason rather than
+    /// the private-input one: a reader told the wrong reason cannot tell what to change about the
+    /// line.
+    #[test]
+    fn a_run_carrying_an_environment_assignment_offers_no_standing_permission() {
+        let drawn = rendered_run(&a_run_with_an_assignment());
+        assert!(
+            drawn.contains("cannot be remembered"),
+            "the prompt offered to remember a run that will always ask: {drawn}"
+        );
+        assert!(
+            drawn.contains("an assignment in front of a program"),
+            "the prompt did not say which of the two reasons this is: {drawn}"
+        );
+
+        let pressed = run_answer_for(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            &a_run_with_an_assignment(),
+        );
+        assert_eq!(
+            pressed, None,
+            "`a` answered a prompt that does not offer it"
+        );
+
+        let shouted = run_answer_for(
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE),
+            &a_run_with_an_assignment(),
+        );
+        assert_eq!(shouted, None, "the shifted spelling still answered");
+    }
+
+    /// Both reasons at once, as `LD_PRELOAD=./evil.so cat < secret.txt` is. A reader given only the
+    /// first one acts on it, sees no `a` appear, and has nothing left to tell them why: the two
+    /// reasons are independent, so the screen has to name every one that holds.
+    #[test]
+    fn a_run_that_is_private_and_carries_an_assignment_gives_both_reasons() {
+        let mut request = a_run_with_an_assignment();
+        request.plan.stdin = Some(bravebot_core::label::Label::trusted_private());
+
+        let drawn = rendered_run(&request);
+        assert!(
+            drawn.contains("private input is asked"),
+            "the prompt dropped the private-input reason: {drawn}"
+        );
+        assert!(
+            drawn.contains("an assignment in front of a program"),
+            "the prompt dropped the assignment reason: {drawn}"
+        );
+    }
+
+    /// A compiled plan with an assignment written in front of its program, as
+    /// `LD_PRELOAD=./evil.so git log` compiles.
+    fn a_run_with_an_assignment() -> RunRequest {
+        let step = bravebot_core::command::Step {
+            program: "git".to_string(),
+            resolved: std::path::PathBuf::from("/usr/bin/git"),
+            args: vec!["log".to_string()],
+            environment: vec![("LD_PRELOAD".to_string(), "./evil.so".to_string())],
+            routes: Vec::new(),
+        };
+        RunRequest {
+            plan: bravebot_core::command::Plan {
+                line: "LD_PRELOAD=./evil.so git log".to_string(),
+                directory: std::path::PathBuf::from("/home/someone/project"),
+                steps: bravebot_core::command::Steps::Pipeline(vec![step]),
+                writes: Vec::new(),
+                reads: Vec::new(),
                 stdin: None,
             },
         }

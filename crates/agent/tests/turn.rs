@@ -9076,6 +9076,43 @@ fn a_line_that_reads_a_file_is_not_remembered_however_it_is_answered() {
     );
 }
 
+/// A line writing an assignment in front of a program is asked about every time, so nothing it is
+/// answered with may put the program on the session's list. The terminal does not offer `a` for such
+/// a run, and this is the same refusal one layer down: an entry records a program and its argv and no
+/// assignment, so the entry made here would be a bare one covering the same program under no
+/// assignment at all, which is a grant nobody was shown.
+///
+/// The prompt is asserted to have happened, because an empty list is also what a line nobody was
+/// asked about leaves behind: without that the test would pass on the bug it exists to catch.
+#[test]
+fn a_line_carrying_an_environment_assignment_is_not_remembered_however_it_is_answered() {
+    let scratch = Scratch::new("run-always-assignment");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    let seen = confirmer.seen.clone();
+
+    let outcome = a_run_turn(
+        &scratch,
+        r#"{"command":"FOO=bar touch made.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "the line ran without anybody being asked, so nothing here is about an answer"
+    );
+    assert!(
+        scratch.path.join("made.txt").exists(),
+        "the approved line did not run"
+    );
+    assert!(
+        outcome.programs.is_empty(),
+        "a line carrying an environment assignment was recorded as vouched for"
+    );
+}
+
 /// Approving once is not approving always: a run approved for this call alone leaves the session
 /// vouching for nothing.
 #[test]
