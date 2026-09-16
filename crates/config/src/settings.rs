@@ -1154,6 +1154,39 @@ mod tests {
         assert_eq!(settings.get("AWS_PROFILE"), Some("personal"));
     }
 
+    /// A layer that spelled a name at all is the layer that answered for it, so a value that is not
+    /// a string leaves the name unset rather than the one underneath standing. The rest of that
+    /// layer, and every other name, is unaffected: one mistyped value must not discard a file.
+    #[test]
+    fn a_value_that_is_not_a_string_leaves_the_name_unset_in_every_layer() {
+        let settings = Layers::new("not-a-string")
+            .global(r#"{"env": {"AWS_PROFILE": "personal", "AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": 1, "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn"}}"#)
+            .read();
+        assert_eq!(settings.get("AWS_PROFILE"), None);
+        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
+        assert_eq!(
+            settings.get("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            Some("opus-arn")
+        );
+    }
+
+    /// The same rule one level up: a layer that spelled `env` as anything but a block answered for
+    /// the whole block, so nothing is read from it and nothing is read from the layers below. The
+    /// file parses, so this is not the failed-layer case, and the other keys are untouched.
+    #[test]
+    fn a_block_that_is_not_a_block_leaves_no_names_under_it() {
+        for spelling in ["null", "5", "\"AWS_PROFILE=personal\"", "[]"] {
+            let settings = Layers::new(&format!("not-a-block-{}", spelling.len()))
+                .global(r#"{"env": {"AWS_PROFILE": "personal", "AWS_REGION": "us-west-2"}}"#)
+                .project(&format!(r#"{{"env": {spelling}, "model": "opus"}}"#))
+                .read();
+            assert_eq!(settings.get("AWS_PROFILE"), None, "{spelling}");
+            assert_eq!(settings.get("AWS_REGION"), None, "{spelling}");
+            assert_eq!(settings.model(), Some("opus"), "{spelling}");
+        }
+    }
+
     /// Somebody working in a directory that carries no settings gets exactly what they had before
     /// any of this existed.
     #[test]
