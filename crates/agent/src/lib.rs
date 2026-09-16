@@ -46,7 +46,9 @@ pub mod vet;
 pub mod watch;
 pub mod workspace;
 
-pub use confirm::{Confirmer, Decision, Intent, RunDecision, RunRequest, Unattended, WriteRequest};
+pub use confirm::{
+    Confirmer, Decision, Intent, Remark, RunDecision, RunRequest, Unattended, WriteRequest,
+};
 pub use conversation::Conversation;
 pub use delegate::Delegated;
 pub use mode::Mode;

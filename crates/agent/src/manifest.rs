@@ -79,7 +79,7 @@ use bravebot_core::value::Labelled;
 use bravebot_net::Egress;
 use serde_json::Value;
 
-use crate::confirm::{Confirmer, Decision, Intent, ManifestRequest, WriteRequest};
+use crate::confirm::{Confirmer, Decision, Intent, ManifestRequest, Remark, WriteRequest};
 use crate::conversation::Conversation;
 use crate::processor::Chat;
 use crate::report::{Activity, Phase, Reporter};
@@ -1388,6 +1388,12 @@ fn run_step<S: Sink, C: Confirmer>(
             // precommitment rather than a wider permission, so an answer minted here carries the
             // home the same call would give it in a turn.
             policy.answers_for(&out_slot, spec.about(), slots);
+            // And what it said about that document, so the approval the document is put to shows
+            // the claim made about it. A plan does not put the remark in a transcript at all, so
+            // the prompt is the only place a planned run has to show it.
+            if let Some(said) = &processed.note {
+                policy.came_with_a_remark(&out_slot, said, slots);
+            }
             Ok(Done {
                 note,
                 tokens: processed.usage.total(),
@@ -1499,6 +1505,10 @@ fn write<S: Sink, C: Confirmer>(
 ) -> Result<Done, String> {
     let path = locked(policy, index, "path")?;
 
+    // What a processor said about the body, where a processor produced it. Filled below, from the
+    // slot the bytes come out of, and read by nothing but the question.
+    let mut remark = None;
+
     let body = match step.arg("from_slot").and_then(Arg::text) {
         // Quarantined bytes going back into the workspace they came from, without the driver
         // reading one of them.
@@ -1513,6 +1523,18 @@ fn write<S: Sink, C: Confirmer>(
             let content = policy
                 .resolve("write_file", &slot, slots)
                 .map_err(|d| d.to_string())?;
+            remark = policy
+                .remark_for_review(
+                    &slot,
+                    slots,
+                    crate::tools::REMARK_LINES,
+                    crate::tools::REMARK_WIDTH,
+                )
+                .map(|(preview, lines, label)| Remark {
+                    preview,
+                    lines,
+                    label: label.to_string(),
+                });
             policy.declassify_into_workspace(&slot, &path, content)
         }
         // A body the plan carried. Trusted, because the plan was fixed while the task string
@@ -1538,6 +1560,7 @@ fn write<S: Sink, C: Confirmer>(
             path: path.clone(),
             contents: shown.clone(),
             untrusted: !body_label.is_trusted(),
+            remark,
         };
         if confirmer.confirm_write(&request) == Decision::Reject {
             return Err(format!("the user did not approve writing {path}"));

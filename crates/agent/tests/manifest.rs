@@ -798,6 +798,138 @@ fn a_plan_may_write_a_body_it_fixed_in_advance() {
     );
 }
 
+/// Says yes to everything and keeps what it was shown, so a test can assert on the question
+/// rather than only on the file.
+#[derive(Default)]
+struct RecordsEveryQuestion {
+    writes: Vec<bravebot_agent::confirm::WriteRequest>,
+}
+
+impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
+    fn confirm_manifest(
+        &mut self,
+        _request: &bravebot_agent::confirm::ManifestRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Approve
+    }
+
+    fn confirm_write(
+        &mut self,
+        request: &bravebot_agent::confirm::WriteRequest,
+    ) -> bravebot_agent::Decision {
+        self.writes.push(request.clone());
+        bravebot_agent::Decision::Approve
+    }
+
+    fn confirm_run(
+        &mut self,
+        _request: &bravebot_agent::confirm::RunRequest,
+    ) -> bravebot_agent::confirm::RunDecision {
+        bravebot_agent::confirm::RunDecision::reject()
+    }
+
+    fn confirm_read_output(
+        &mut self,
+        _request: &bravebot_agent::confirm::OutputRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_fetch(
+        &mut self,
+        _request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_server(
+        &mut self,
+        _request: &bravebot_agent::confirm::ServerRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vouch(
+        &mut self,
+        _request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    /// Nobody is there to answer the planner, which is moot in this mode anyway.
+    fn ask_user(
+        &mut self,
+        _asking: &bravebot_core::ask::Asking,
+    ) -> Vec<bravebot_core::ask::Answer> {
+        Vec::new()
+    }
+
+    /// Nobody is typing: no interface, and no queue to type into.
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// A planned run puts no remark in a transcript at all, so the write prompt is the only place it
+/// can reach a person. The plan is fixed before anything is read either way, which says nothing
+/// about what the processor will claim about the document it produces.
+#[test]
+fn a_planned_write_carries_what_the_processor_said_about_it() {
+    let scratch = Scratch::new("planned-remark");
+    std::fs::write(scratch.path.join("game.js"), "const SPEED = 100;\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "game.js", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "fix the speed bug", "out_slot": "fixed"}},
+            {"capability": "FILE_WRITE", "args": {"path": "game.js", "from_slot": "fixed"}},
+        ])),
+        says(&format!(
+            "I only fixed the typo.\n{}\nconst SPEED = 50;\n",
+            bravebot_core::processor::ProcessorSpec::NOTE_MARKER
+        )),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordsEveryQuestion::default();
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("fix the speed bug in game.js"),
+        &mut confirmer,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+
+    let asked = confirmer
+        .writes
+        .first()
+        .expect("nobody was asked about the write");
+    let remark = asked
+        .remark
+        .as_ref()
+        .expect("the question carried no claim about the document it was asking about");
+    assert!(
+        remark.preview.join("\n").contains("only fixed the typo"),
+        "the claim was not the one the processor made: {:?}",
+        remark.preview
+    );
+}
+
 /// Says yes to the plan and no to everything in it.
 struct ApprovesThePlanOnly;
 

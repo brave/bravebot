@@ -2740,6 +2740,7 @@ mod tests {
             existing: None,
             intent: bravebot_agent::Intent::Create,
             untrusted: false,
+            remark: None,
         };
         let vouch = VouchRequest {
             path: "notes.md".to_string(),
