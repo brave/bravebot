@@ -15,10 +15,6 @@ docs/specs/processors.md:PROC-9: the confinement is the capability set, not an o
 docs/specs/routing.md:ROUTE-7: before adding a tool, ask what its routing field is
 docs/specs/sessions.md:SESSION-2: nothing untrusted is ever written down
 docs/specs/tools/command-line.md:CMDLINE-14: a call may run in the background, and its finish wakes the turn
-docs/specs/tools/load-skill.md:LOAD-2: a name close to a real one is refused, not guessed at
-docs/specs/tools/run.md:RUN-10: the vouched-for list is not an allowlist and must never become one
 docs/specs/tools/run.md:RUN-20: no answer at a prompt grants a family, because nothing here tells a value from a program
-docs/specs/tools/search.md:SEARCH-2: a result touching several files is trusted only if every one of them is
-docs/specs/tools/todo-write.md:TODO-1: there is no routing, because nothing is touched
 docs/specs/tools/tool-surface.md:TOOL-2: before adding a tool, ask what its routing field is
 docs/specs/trace.md:TRACE-2: the trail holds no content

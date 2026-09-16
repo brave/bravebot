@@ -26,9 +26,13 @@ holding a traversal matches nothing, because there is no lookup for it to reach.
 <a id="LOAD-2"></a>
 ### LOAD-2: a name close to a real one is refused, not guessed at
 
+The set is matched exactly. A name one character out selects nothing, and nothing falls back to a
+prefix, a case-insensitive comparison or a nearest match.
+
 **Why.** Guessing would load instructions nobody asked for.
 
-`verified-by: none`
+`verified-by: bravebot_agent::skills::a_name_one_character_off_selects_no_skill`
+`verified-by: bravebot_agent::turn::loading_a_skill_that_does_not_exist_is_refused_rather_than_guessed`
 
 <a id="LOAD-3"></a>
 ### LOAD-3: a body reaches the context only when it is asked for

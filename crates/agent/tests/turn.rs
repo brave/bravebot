@@ -4762,6 +4762,64 @@ fn untrusted_search_results_never_reach_the_model() {
     );
 }
 
+/// The mixed case, which is the one a search meets in a real tree: the result is a function of
+/// every file it read, so one file nobody vouched for taints the whole answer. Releasing the hits
+/// from the vouched file and withholding the rest would be worse than either: a search returns one
+/// reference for the whole result rather than one per hit, so there is no address to put in place
+/// of the lines that were dropped, and whoever owns the one unvouched file chooses which of their
+/// lines look like the answer.
+#[test]
+fn a_search_touching_one_unvouched_file_is_quarantined_whole() {
+    const VOUCHED: &str = "NEEDLE-IN-A-VOUCHED-FILE";
+
+    let scratch = Scratch::new("search-mixed-trust");
+    std::fs::create_dir_all(scratch.path.join("mine")).unwrap();
+    std::fs::write(
+        scratch.path.join("mine/a.rs"),
+        format!("needle {VOUCHED}\n"),
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("theirs.rs"), "needle elsewhere\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("search", r#"{"pattern":"needle","directory":"."}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Only the subdirectory is vouched for, so the search reads one file the person answered for
+    // and one they did not.
+    let mut trust = bravebot_core::trust::TrustStore::new();
+    trust.trust("mine");
+
+    let task = Task::new("find needle");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains(VOUCHED),
+        "a line from the vouched file reached the planner although the search also read an \
+         unvouched one: {second}"
+    );
+    assert!(
+        second.contains("quarantined"),
+        "the planner was not told the result was withheld: {second}"
+    );
+}
+
 /// Filenames are content too, since a file can be named to read like an instruction, so an untrusted
 /// listing must be quarantined as well.
 #[test]

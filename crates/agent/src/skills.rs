@@ -673,4 +673,37 @@ mod tests {
         assert_eq!(body_after_frontmatter("just prose\n"), "just prose\n");
         assert_eq!(body_after_frontmatter(""), "");
     }
+
+    /// A skill body is instructions this agent follows, so loading the nearest name to the one
+    /// asked for puts a file nobody chose into the context. A miss is cheap by comparison: the
+    /// planner is told there is no such skill and picks from the names it was advertised.
+    #[test]
+    fn a_name_one_character_off_selects_no_skill() {
+        let mut catalogue = Catalogue::default();
+        catalogue.insert(Skill {
+            name: "commit-style".to_string(),
+            description: "how commit messages are written here".to_string(),
+            origin: "SKILL.md".to_string(),
+            body: Labelled::trusted("sign them".to_string()),
+        });
+
+        assert!(
+            catalogue.get("commit-style").is_some(),
+            "the exact name missed"
+        );
+        // A character too many, a character too few, the other case, a prefix, and a name that
+        // contains the real one. Every spelling a nearest-match lookup would answer.
+        for near in [
+            "commit-styles",
+            "commit-styl",
+            "Commit-Style",
+            "commit",
+            "the commit-style skill",
+        ] {
+            assert!(
+                catalogue.get(near).is_none(),
+                "'{near}' selected a skill nobody named"
+            );
+        }
+    }
 }
