@@ -32,7 +32,7 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [terminal-input.md](terminal-input.md) | `INPUT` | 33 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 8 | a line beginning with `/`: where one may come from, when a line is one, and what it does to the line |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 21 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
-| [watching.md](watching.md) | `WATCH` | 20 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, and the mode Ctrl-L opens over them |
+| [watching.md](watching.md) | `WATCH` | 21 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, and the mode Ctrl-L opens over them |
 | [scroller.md](scroller.md) | `SCROLL` | 9 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | importing a Leo Premium subscription and spending its credentials |
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 6 | operating-system confinement for processes running code we did not write |
@@ -41,7 +41,7 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [backends.md](backends.md) | `BACKEND` | 36 | which service answers a request, and what a person may choose between |
 | [compaction.md](compaction.md) | `COMPACT` | 12 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 14 | sending one prompt again and again until somebody stops it |
-| [goal.md](goal.md) | `GOAL` | 16 | one condition a person set, judged after every turn, until it holds |
+| [goal.md](goal.md) | `GOAL` | 17 | one condition a person set, judged after every turn, until it holds |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 11 | a standing watch on one path, firing with no turn running to notice it |
 | [sessions.md](sessions.md) | `SESSION` | 22 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
 | [state-directory.md](state-directory.md) | `STATE` | 2 | `~/.bravebot`, and who on the machine may read what is written into it |
@@ -66,7 +66,7 @@ the routing-versus-content split they share.
 | [tools/lsp.md](tools/lsp.md) | `LSP` | 10 | `lsp` |
 | [tools/write-file.md](tools/write-file.md) | `WRITE` | 4 | `write_file` |
 | [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 4 | `edit_file` |
-| [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 3 | `spawn_processor` |
+| [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 4 | `spawn_processor` |
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 5 | `spawn_agent` |
 | [tools/run.md](tools/run.md) | `RUN` | 20 | `run` |
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |

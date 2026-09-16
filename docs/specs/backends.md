@@ -751,8 +751,9 @@ ending in an image or a tool call is left with the breakpoint on the system prom
 a cache write and nothing else. A request whose conversation no later request sends is left the same
 way: the write on the end of that exchange is charged above the tokens it covers and buys a cache
 nothing reads back, while the prompt in front of it is the same bytes every time such a request is
-made. Which requests those are is the caller's to say, and [compaction.md](compaction.md) is where
-one says it.
+made. Which requests those are is the caller's to say, and
+[compaction.md](compaction.md), [goal.md](goal.md), [watching.md](watching.md) and
+[tools/spawn-processor.md](tools/spawn-processor.md) are where they say it.
 
 **The reported prompt is what was sent, not what was read.** This API states `inputTokens` net of
 the cache and reports the cached tokens beside it, so the three are added back together on the way
@@ -967,7 +968,9 @@ is worth a cache write because the request after it sends everything in front of
 that gives its conversation up once it has been answered has no request after it, and the write is
 charged above the tokens it covers for a prefix nothing can read back. The prompt keeps its mark,
 being the same bytes every time such a request is made, so what is given up is a write and no read.
-[compaction.md](compaction.md) is where a request says its conversation is not sent again.
+[compaction.md](compaction.md), [goal.md](goal.md), [watching.md](watching.md) and
+[tools/spawn-processor.md](tools/spawn-processor.md) are where a request says its conversation is
+not sent again.
 
 **Marked on the way out and nowhere else.** The mark is put on a copy as the body is built, so the
 request a turn assembled does not carry one and neither does anything a session records. A
@@ -1193,15 +1196,14 @@ file in a checkout.
   with. That is a process this code did not write, reading a configuration this code does not
   govern.
 
-- **Not every request whose conversation nothing sends again says so.** Coming off the end of a
-  conversation is the caller's to ask for, and the summariser is the only caller that asks. A judge
-  putting a condition to the model, a question answered beside the work, and a processor reading
-  untrusted content are each sent once and answered once, and each still marks the end of what it
-  carries, so each pays a cache write for a prefix nothing reads back. The judge is the one that adds
-  up, being sent after every turn of a session working towards a condition, and it carries the
-  conversation: see [goal.md](goal.md), [watching.md](watching.md) and [processors.md](processors.md)
-  for what those requests are. A processor given content that ends in a picture is already unmarked,
-  for the reason BACKEND-32 gives.
+- **A planning round marks a conversation the round after it cannot read.** Planning a manifest is
+  two requests over one growing conversation, so the second does send the first's messages again, and
+  it sends them behind a different set of instructions. A cached prefix is matched from the start of
+  a request, so a prompt that changed leaves nothing after it matchable, and the mark on the end of
+  the first round's conversation is a write nothing reads. The second round is the last one, so its
+  own mark buys nothing either. Saying so is the caller's to do, as it is everywhere else, and
+  [manifest.md](manifest.md) is where it would be said. What it costs is two writes over a short
+  conversation, a planner carrying the prompt a person typed and one reply rather than a session.
 
 - **Compaction throws away the cache of the conversation.** A summary replaces the messages in front
   of the last few, which is a rewrite of the prefix the rolling breakpoint sits in, so the round

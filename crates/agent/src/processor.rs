@@ -218,7 +218,10 @@ pub fn run<S: Sink>(
     // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
     // below adds to it.
     let model = chat.model.unwrap_or(&chat.config.default_model);
-    let request = ChatRequest::new(model, messages);
+    // The content is given up once this answers, so nothing asks for a cache of it: a processor
+    // is asked once, about pieces assembled for this call alone. The instructions in front of them
+    // keep their mark, being the same bytes every time this spec runs.
+    let request = ChatRequest::new(model, messages).giving_up_its_conversation();
 
     let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
     if let Some(cancel) = chat.cancel {

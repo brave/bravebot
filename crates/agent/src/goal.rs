@@ -264,7 +264,11 @@ pub fn assess<S: Sink>(
     // below adds to it. A judge that could call a tool would be a turn, and it would be a turn
     // whose job is deciding whether turns stop.
     let model = chat.model.unwrap_or(&chat.config.default_model);
-    let request = ChatRequest::new(model, check.messages);
+    // The exchange is given up once this answers, so nothing asks for a cache of it: the next
+    // check carries a turn's work on the end of the same exchange, in front of the same condition,
+    // so the prefix this one would pay to store is never sent again. The instructions in front of
+    // it keep their mark, being the same bytes every check.
+    let request = ChatRequest::new(model, check.messages).giving_up_its_conversation();
 
     let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
     if let Some(cancel) = chat.cancel {
