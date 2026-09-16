@@ -114,7 +114,8 @@ exiting successfully with an explanation on stdout.
 
 It prints every backend this build can reach and what identifies it, which names the settings set,
 which settings files are in force and which of them won a name more than one set, the model in force
-and whether it was chosen or defaulted, where the state directory is or that there is none, the
+and whether it was chosen or defaulted, where the state directory is or that there is none, what a
+TLS handshake is validated against and what a request is routed through, the
 confinement available on this platform, and the state of any imported subscription. The signing key
 is named as never transmitted, and a value from a settings file is never printed: where a credential
 decides whether a backend works, what is reported is that one was found. A configuration error makes
@@ -168,12 +169,31 @@ runs as designed and wants none of what it is not getting, so what is owed there
 than an error. The section sits outside the configuration one because a configuration error stops that
 section before it prints anything, and where state is kept is a fact about the machine either way.
 
+The network is reported for the reason the state directory is, one step further out again. The
+certificate authorities a handshake is put to and the proxy a request crosses are stated outside this
+program ([NET-7](network-egress.md#NET-7), [NET-8](network-egress.md#NET-8)) and appear in no other
+line, and between them they account for the connection failure that has nothing to say for itself:
+an authority the machine trusts and this build does not, or a route out nobody reading the rest of
+the report would know was in use. Where nothing names either, the variables that would are named,
+because which variables a machine states them in is not something the reader is expected to know.
+The proxy is named without the credential it carries, and the hosts it is not used for are named
+beside it, since those decide whether it applies to the host that is failing.
+
+Three of the things it can say are configuration errors rather than findings, and make the command
+fail: a named path that yielded no certificate, a set of roots that leaves nothing trusted, and a
+proxy named in a protocol this build cannot connect through. Each is a statement about the machine
+that the program is not honouring, which is the case a report passing with a warning would leave
+somebody to discover at the next request.
+
 `verified-by: bravebot_cli::main::a_gateway_credential_is_reported_as_found_and_never_printed`
 `verified-by: bravebot_cli::main::a_gateway_with_no_credential_is_reported_as_having_none`
 `verified-by: bravebot_cli::main::doctor_names_the_state_directory_it_resolved`
 `verified-by: bravebot_cli::main::doctor_says_when_the_files_are_left_unrestricted`
 `verified-by: bravebot_cli::main::a_missing_state_directory_is_reported_with_what_it_costs`
 `verified-by: bravebot_cli::main::a_missing_state_directory_names_every_variable_it_looked_at`
+`verified-by: bravebot_cli::main::the_network_section_names_the_roots_in_force_and_the_proxy`
+`verified-by: bravebot_cli::main::the_network_section_points_at_the_variables_when_nothing_names_a_root_or_a_proxy`
+`verified-by: bravebot_cli::main::a_trust_root_that_cannot_be_read_is_reported_as_the_reason_connections_will_fail`
 
 <a id="CLI-8"></a>
 ### CLI-8: `--mode` chooses how a one-shot is run; the default is the turn loop

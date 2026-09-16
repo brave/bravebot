@@ -16,6 +16,10 @@ use bravebot_core::cancel::Cancel;
 use bravebot_core::event::{Event, RecordingSink, Role};
 use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
+use bravebot_net::Transport;
+use bravebot_net::transport::{
+    CERTIFICATE_DIRECTORY, CERTIFICATE_FILE, PROXY_VARIABLES, TrustRoots,
+};
 use bravebot_sandbox::SandboxError;
 use bravebot_sandbox::policy::Capabilities;
 use bravebot_tui::sessions::Resumable;
@@ -1254,14 +1258,18 @@ fn import_leo_creds(args: &[String]) -> ExitCode {
     // device's batch.
     let request_id = bravebot_skus::new_request_id();
 
-    let registration =
-        match bravebot_skus::device::register(order.environment, &order.order_id, &request_id) {
-            Ok(registration) => registration,
-            Err(err) => {
-                eprintln!("{err}");
-                return ExitCode::FAILURE;
-            }
-        };
+    let registration = match bravebot_skus::device::register(
+        order.environment,
+        &order.order_id,
+        &request_id,
+        Transport::shared().agent_config_builder(),
+    ) {
+        Ok(registration) => registration,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let credentials: bravebot_skus::StoredCredentials = registration.into();
     let count = credentials.credentials.len();
@@ -1415,6 +1423,22 @@ fn doctor() -> ExitCode {
         RESTRICTED,
     ) {
         println!("{line}");
+    }
+
+    println!();
+    // Outside the configuration block for the same reason the state directory is: what a handshake
+    // is validated against and what a request is routed through are facts about the machine, and
+    // they are most often what is wanted when the configuration above them looks right and nothing
+    // connects.
+    let transport = Transport::shared();
+    for line in network(transport) {
+        println!("{line}");
+    }
+    // Any of the three is a statement about this machine that the program is not honouring,
+    // which is what a report exits non-zero over: nothing is trusted, a named path holds nothing, or
+    // a proxy was named that requests are not taking.
+    if transport.trust_problem().is_some() || transport.unusable_proxy().is_some() {
+        ok = false;
     }
 
     println!();
@@ -1643,6 +1667,88 @@ fn state_directory(
     lines
 }
 
+/// The network section of `doctor`: the certificate authorities a handshake is validated against,
+/// and the proxy a request goes through.
+///
+/// Built rather than printed, so what the section says is a value a test can hold.
+///
+/// Both exist to answer the failure that has nothing to say for itself. A machine behind a
+/// TLS-inspecting proxy refuses every connection with a certificate error naming an authority the
+/// user has already installed, and a machine with a proxy variable set sends every request
+/// somewhere the rest of the report does not mention. Neither is visible anywhere else, and the
+/// second is the one nobody thinks to check.
+///
+/// The proxy is named by protocol, host and port. Its uri is not printed, because a proxy that
+/// requires a credential carries it there and a diagnostic that echoed one would put a live
+/// password in every issue somebody pastes this into. That a credential is in use is still said:
+/// a proxy rejecting an unauthenticated request is one of the failures this is run to explain.
+/// A list of variable names as a sentence reads one: commas, and `or` before the last.
+///
+/// Every list here is a set of variables somebody has to go and set one of, so joining them all
+/// with `or` would have the reader parsing a report rather than reading a remedy.
+fn listed(names: &[&str]) -> String {
+    match names.split_last() {
+        None => String::new(),
+        Some((last, [])) => (*last).to_string(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+    }
+}
+
+fn network(transport: &Transport) -> Vec<String> {
+    let roots = match (transport.roots(), transport.trusts_nothing()) {
+        (TrustRoots::Bundled, _) => t!(
+            doctor_trust_roots_bundled,
+            variables = listed(&[CERTIFICATE_FILE, CERTIFICATE_DIRECTORY])
+        )
+        .to_string(),
+        (_, true) => t!(doctor_trust_roots_none).to_string(),
+        (named, false) => t!(
+            doctor_trust_roots_named,
+            paths = named
+                .paths()
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+        .to_string(),
+    };
+
+    let mut lines = vec![
+        t!(doctor_network).to_string(),
+        aligned(t!(doctor_trust_roots), roots, DETAIL),
+    ];
+
+    // A path that yielded nothing is named even where another one did, because the set in force is
+    // then not the set that was asked for, and nothing else would say so.
+    if let Some(problem) = transport.trust_problem() {
+        lines.push(aligned(
+            t!(doctor_trust_roots_unusable),
+            problem.to_string(),
+            DETAIL,
+        ));
+    }
+
+    let proxy = match (transport.proxy_summary(), transport.unusable_proxy()) {
+        (_, Some(protocol)) => t!(doctor_proxy_unsupported, protocol = protocol).to_string(),
+        (None, None) => t!(doctor_proxy_absent, variables = listed(PROXY_VARIABLES)).to_string(),
+        (Some(proxy), None) if transport.proxy_is_authenticated() => {
+            t!(doctor_proxy_authenticated, proxy = proxy).to_string()
+        }
+        (Some(proxy), None) => t!(doctor_proxy_in_force, proxy = proxy).to_string(),
+    };
+    lines.push(aligned(t!(doctor_proxy), proxy, DETAIL));
+
+    // Which hosts the proxy is not used for, since that is what decides whether a proxy in force
+    // applies to the host that is failing, and `NO_PROXY=*` leaves one configured and used for
+    // nothing.
+    if let Some(excluded) = transport.no_proxy() {
+        lines.push(aligned(t!(doctor_no_proxy), excluded, DETAIL));
+    }
+
+    lines
+}
+
 /// What `doctor` says about confinement: the lines, and whether there was any.
 struct Confinement {
     lines: Vec<String>,
@@ -1708,6 +1814,124 @@ mod tests {
     use bravebot_core::slot::SlotId;
     use bravebot_sandbox::policy::ConfinementLevel;
     use std::path::PathBuf;
+
+    /// The two facts about the network nothing else in the report carries. A machine behind a
+    /// TLS-inspecting proxy refuses every connection over an authority its user already installed,
+    /// and a machine with a proxy variable set sends every request through somebody else's
+    /// machine; neither is visible in any other line.
+    #[test]
+    fn the_network_section_names_the_roots_in_force_and_the_proxy() {
+        let transport = Transport::stated(
+            TrustRoots::Named {
+                file: Some(PathBuf::from("/etc/corp/ca.pem")),
+                directory: None,
+            },
+            Some("http://proxy.corp.example:8080"),
+            None,
+        );
+
+        let report = network(&transport).join("\n");
+
+        assert!(report.contains("/etc/corp/ca.pem"), "{report}");
+        assert!(
+            report.contains("http://proxy.corp.example:8080"),
+            "{report}"
+        );
+    }
+
+    /// A proxy that requires a credential carries it in the uri. A diagnostic that echoed one would
+    /// put a live password in every issue somebody pastes this into, so the report says a credential
+    /// is in use and never what it is.
+    #[test]
+    fn the_network_section_never_prints_a_proxy_credential() {
+        let transport = Transport::stated(
+            TrustRoots::Bundled,
+            Some("http://alice:s3cret@proxy.corp.example:8080"),
+            None,
+        );
+
+        let report = network(&transport).join("\n");
+
+        assert!(!report.contains("s3cret"), "{report}");
+        assert!(!report.contains("alice"), "{report}");
+        assert!(
+            report.contains("http://proxy.corp.example:8080"),
+            "{report}"
+        );
+    }
+
+    /// Nothing named means the built-in set, and the variables that would name another are the whole
+    /// of the remedy: which variables a machine states an authority in is not something the reader
+    /// is expected to know.
+    #[test]
+    fn the_network_section_points_at_the_variables_when_nothing_names_a_root_or_a_proxy() {
+        let report = network(&Transport::stated(TrustRoots::Bundled, None, None)).join("\n");
+
+        assert!(report.contains(CERTIFICATE_FILE), "{report}");
+        assert!(report.contains(CERTIFICATE_DIRECTORY), "{report}");
+        for variable in PROXY_VARIABLES {
+            assert!(report.contains(variable), "{report}");
+        }
+    }
+
+    /// A named path that yields no certificate leaves nothing trusted, so every connection this
+    /// program makes is about to fail. Reported as a path in force it would read as working
+    /// configuration, and the one command run to explain the failure would explain nothing.
+    #[test]
+    fn a_trust_root_that_cannot_be_read_is_reported_as_the_reason_connections_will_fail() {
+        let transport = Transport::stated(
+            TrustRoots::Named {
+                file: Some(PathBuf::from("/etc/corp/absent.pem")),
+                directory: None,
+            },
+            None,
+            None,
+        );
+
+        let report = network(&transport).join("\n");
+
+        assert!(transport.trusts_nothing());
+        assert!(report.contains("/etc/corp/absent.pem"), "{report}");
+        assert!(report.contains("fail"), "{report}");
+    }
+
+    /// A protocol this build cannot connect through is not the route requests take, so naming it as
+    /// the proxy in force would send whoever ran this looking at a proxy that is seeing nothing.
+    #[test]
+    fn a_proxy_this_build_cannot_connect_through_is_reported_as_not_the_route() {
+        let transport =
+            Transport::stated(TrustRoots::Bundled, Some("socks5://proxy.corp:1080"), None);
+
+        let report = network(&transport).join("\n");
+
+        assert!(report.contains("socks5"), "{report}");
+        assert!(report.contains("direct"), "{report}");
+    }
+
+    /// A remedy naming three variables is read, not parsed, so the list is punctuated the way a
+    /// sentence is.
+    #[test]
+    fn a_list_of_variables_is_punctuated_as_a_sentence() {
+        assert_eq!(listed(&[]), "");
+        assert_eq!(listed(&["ONE"]), "ONE");
+        assert_eq!(listed(&["ONE", "TWO"]), "ONE or TWO");
+        assert_eq!(listed(&["ONE", "TWO", "THREE"]), "ONE, TWO or THREE");
+    }
+
+    /// Which hosts a proxy is not used for decides whether the one in force applies to the host
+    /// that is failing, and `NO_PROXY=*` leaves a proxy configured and used for nothing.
+    #[test]
+    fn the_network_section_names_the_hosts_a_proxy_is_not_used_for() {
+        let transport = Transport::stated(
+            TrustRoots::Bundled,
+            Some("http://proxy.corp.example:8080"),
+            Some("localhost,.internal.example"),
+        );
+
+        let report = network(&transport).join("\n");
+
+        assert!(report.contains("localhost,.internal.example"), "{report}");
+    }
 
     /// A session that stayed where it started needs no directory: the shell reading this line is
     /// already standing in the one the id will be looked up under.

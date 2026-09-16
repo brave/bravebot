@@ -241,13 +241,18 @@ fn is_production_endpoint(endpoint: &str) -> Option<bool> {
     }
 }
 
-/// Register against the real service.
+/// Register against the real service, over what this process trusts and goes through.
 fn default_register(
     environment: bravebot_skus::Environment,
     order_id: &str,
     request_id: &str,
 ) -> Result<Registration, DeviceError> {
-    bravebot_skus::device::register(environment, order_id, request_id)
+    bravebot_skus::device::register(
+        environment,
+        order_id,
+        request_id,
+        bravebot_net::Transport::shared().agent_config_builder(),
+    )
 }
 
 /// The current time, in the fixed-width UTC form the stored windows use.

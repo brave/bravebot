@@ -187,6 +187,21 @@ doctor-network-denial = network denial
 doctor-kernel-enforced = kernel-enforced
 doctor-not-enforced = NOT enforced
 doctor-confinement-unavailable = confinement unavailable
+# The network a request actually crosses: which certificate authorities a handshake is validated
+# against, and which proxy it is routed through. Both are stated outside this program, and neither
+# is visible anywhere else when a connection fails.
+doctor-network = network
+doctor-trust-roots = trust roots
+doctor-trust-roots-bundled = built in ({ $variables } names others)
+doctor-trust-roots-named = { $paths }
+doctor-trust-roots-none = nothing trusted, so every connection will fail
+doctor-trust-roots-unusable = unusable
+doctor-proxy = proxy
+doctor-proxy-absent = none ({ $variables } names one, in upper case or lower)
+doctor-proxy-in-force = { $proxy }
+doctor-proxy-authenticated = { $proxy } (with a credential, never printed)
+doctor-proxy-unsupported = { $protocol } is not supported by this build, so requests go direct
+doctor-no-proxy = not proxied
 
 
 ## Importing a Leo Premium subscription
