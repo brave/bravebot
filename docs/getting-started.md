@@ -140,3 +140,34 @@ directory and are left out when you did not. See [specs/skills.md](specs/skills.
 Configuration is built into the released binary, so there is nothing to set up. `bravebot doctor`
 reports what it will use. To point it at a different backend, see
 [development/configuration.md](development/configuration.md).
+
+## On a corporate network
+
+Two things a managed network changes, both stated in the environment and both reported by
+`bravebot doctor` under `network`.
+
+**A certificate authority of your own.** A network that inspects TLS presents its own certificate,
+signed by an authority your machine has been given and the released binary has not. Name it the way
+you name it for every other client on the machine:
+
+```sh
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt   # a bundle
+export SSL_CERT_DIR=/etc/ssl/certs                        # or a directory of them
+```
+
+What you name replaces the authorities built into the binary rather than adding to them, so name a
+bundle that holds the public roots as well as yours. Without this, every request fails with
+`invalid peer certificate: UnknownIssuer`.
+
+**A proxy.** `ALL_PROXY`, `HTTPS_PROXY` and `HTTP_PROXY` are honoured, in upper case or lower, and
+`NO_PROXY` names the hosts that bypass one. A SOCKS proxy is not supported; `doctor` says so rather
+than leaving requests to go direct unannounced. A proxy that inspects TLS reads the bodies of the requests that go through
+it, which for this program means the conversation; it can do that only with an authority you also
+gave the machine above.
+
+```sh
+export HTTPS_PROXY=http://proxy.example.internal:8080
+export NO_PROXY=localhost,127.0.0.1,.example.internal
+```
+
+`bravebot doctor` names the proxy by host and port, never its credential.

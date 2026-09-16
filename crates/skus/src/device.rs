@@ -150,17 +150,21 @@ struct OrderDetails {
 /// `request_id` identifies this batch. A fresh uuid means a new device; reusing one would claim an
 /// existing device's batch, which is why the caller supplies it explicitly rather than having one
 /// generated somewhere less visible.
+///
+/// `transport` is what the process has decided its clients trust and go through. It arrives
+/// half-built rather than as a finished agent so that this module keeps the one thing about the
+/// client that is its own, which is how long it will wait: the caller is the only place that knows
+/// what a machine says about certificate authorities and proxies, and this is the only place that
+/// knows what the subscription service is worth waiting for.
 pub fn register(
     environment: crate::Environment,
     order_id: &str,
     request_id: &str,
+    transport: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,
 ) -> Result<Registration, DeviceError> {
     let base_url = environment.payment_url();
 
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(TIMEOUT))
-        .build();
-    let agent: ureq::Agent = agent.into();
+    let agent: ureq::Agent = transport.timeout_global(Some(TIMEOUT)).build().into();
 
     let details = fetch_order(&agent, base_url, order_id)?;
 

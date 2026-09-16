@@ -37,7 +37,7 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | importing a Leo Premium subscription and spending its credentials |
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 6 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 8 | tools that come from outside this repository, and what they are allowed to do |
-| [network-egress.md](network-egress.md) | `NET` | 6 | every request that leaves this process, and what comes back |
+| [network-egress.md](network-egress.md) | `NET` | 8 | every request that leaves this process, and what comes back |
 | [backends.md](backends.md) | `BACKEND` | 36 | which service answers a request, and what a person may choose between |
 | [compaction.md](compaction.md) | `COMPACT` | 12 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 14 | sending one prompt again and again until somebody stops it |

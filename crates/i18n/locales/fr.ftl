@@ -178,6 +178,18 @@ doctor-network-denial = refus réseau
 doctor-kernel-enforced = imposé par le noyau
 doctor-not-enforced = NON imposé
 doctor-confinement-unavailable = confinement indisponible
+doctor-network = réseau
+doctor-trust-roots = racines de confiance
+doctor-trust-roots-bundled = intégrées ({ $variables } en désigne d'autres)
+doctor-trust-roots-named = { $paths }
+doctor-trust-roots-none = aucune, donc toute connexion échouera
+doctor-trust-roots-unusable = inutilisable
+doctor-proxy = proxy
+doctor-proxy-absent = aucun ({ $variables } en désigne un, en majuscules ou en minuscules)
+doctor-proxy-in-force = { $proxy }
+doctor-proxy-authenticated = { $proxy } (avec un identifiant, jamais affiché)
+doctor-proxy-unsupported = { $protocol } n'est pas pris en charge par cette version, les requêtes sont directes
+doctor-no-proxy = sans proxy
 
 
 ## Importer un abonnement Leo Premium
