@@ -12,6 +12,7 @@ governs:
   - crates/config/src/bedrock.rs
   - crates/config/src/env_var.rs
   - crates/config/src/lib.rs
+  - crates/config/src/managed.rs
   - crates/aichat/src/lib.rs
   - crates/aichat/src/models.rs
   - crates/config/src/provider.rs
@@ -1163,7 +1164,8 @@ the endpoint, the key id and the signing key included, and a project layer can n
 That is the case the file exists for, and what it costs is under Known costs.
 
 BACKEND-11 is the one exception and says why: a `model` key ranked here would lose to the baked-in
-default on every binary anybody was given.
+default on every binary anybody was given. A name a machine-level file pinned is resolved from that
+file and from none of these three, which is BACKEND-38.
 
 `verified-by: bravebot_config::lib::the_environment_outranks_the_settings_file`
 `verified-by: bravebot_config::lib::a_baked_in_value_outranks_the_settings_file`
@@ -1236,7 +1238,113 @@ names map to incomplete. Retry eligibility is unchanged.
 `verified-by: bravebot_agent::turn::a_stop_counts_the_requests_that_were_sent_and_no_others`
 `verified-by: bravebot_agent::turn::a_stop_while_a_processor_runs_is_reported_as_a_stop_with_what_it_sent`
 
+<a id="BACKEND-38"></a>
+### BACKEND-38: one machine-level file pins a destination above everything a person can set
+
+A file in the directory the platform reserves for an administrator answers for the names it pins,
+above the process environment and therefore above every other source. It is
+`/etc/bravebot/managed.json`, `/Library/Application Support/bravebot/managed.json` on macOS, and
+`C:\ProgramData\bravebot\managed.json` on Windows. The path is a literal and no variable names it.
+
+These names may be pinned, being the ones that decide where a request goes:
+`BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
+`AWS_PROFILE`, the three tier models of BACKEND-33's table, and the `provider` block. Every other
+name in the file decides nothing, the signing key and the key id included. A pinned name is resolved
+from this file alone, and a name it does not pin resolves exactly as it would with no such file.
+
+No credential is read from this file. A gateway entry's `apiKey` is dropped, and the entry's host,
+models and variable names are honoured without it.
+
+The `provider` block is pinned whole rather than a name at a time, and a block that is present and
+empty says that there are no gateways. A file that does not have the block, or that spells it as
+anything but a block, leaves the gateways a person configured in force.
+
+Refusing every account but the organisation's takes both halves: the switch pinned off and the
+`provider` block pinned, since a gateway entry can name an AWS account too.
+
+The file is read as the settings files of BACKEND-24 are: one that is missing, larger than 64 KB or
+unparseable pins nothing, and a value that is blank or is not a string pins nothing under that name.
+
+**Why.** Every other source is ultimately the individual's. The environment sits at the top of
+BACKEND-35's order so that a released binary can be pointed at a local backend without rebuilding
+it, and that convenience is what this deliberately inverts: a pin an exported variable outranked
+would pin nothing, so an organisation requiring that inference traffic reach an approved endpoint,
+or refusing to have models reached through somebody's personal cloud account, would have no way to
+say it.
+
+The authority is the filesystem's rather than this program's. The file sits in the directory the
+platform reserves for administration, and nothing here checks who owns it or what the permissions on
+it are: somebody who can write that path can replace this binary, so a check would add a thing to
+get wrong and settle nothing. How far that argument holds per platform is under Known costs. It is
+also why the path is a literal. `%ProgramData%` and the rest are stated in the environment of the process,
+which is the environment of the person this layer binds, so reading one would let them choose which
+file answers for them.
+
+A name at a time, and only these names, because a layer that can pin a preference is a layer
+somebody uses to pin a preference. What two parties have a legitimate say in is where a request goes
+and whose account pays for it; which theme is on and which keys do what are neither, and pinning one
+of those is an administrator reaching past the thing they have a stake in. The credential names are
+out for a different reason: a file here names a destination and grants nothing, which is BACKEND-1's
+rule and holds hardest for a file a person cannot read in their own directory. A gateway's own
+credential field is dropped rather than obeyed for the same reason plus one more: everyone on the
+machine can read this file, so a token in it is a token handed to every account rather than one held
+by its owner. Dropping it rather than refusing the entry keeps the host, which is the part worth
+pinning, and the service says what is missing on the first request.
+
+The gateway block is whole because pinning an endpoint pins nothing while anybody may add a
+destination beside it, and a gateway entry can name an AWS account as readily as a host, which is
+why refusing a personal account needs the block and not just the switch. Saying there are none has
+to be sayable, since "our endpoint or nothing" is half of what an organisation deploying this file
+means, and absence has to stay distinguishable from it, or a file pinning only a host would silently
+take away a gateway it never mentioned. A `provider` spelled as anything but a block is a mistyped
+file rather than either statement: taking every gateway on the machine away on the strength of a
+stray `null` is the one reading of it nobody would intend.
+
+Failing softly on a bad file is BACKEND-24's argument one layer up: a mistake in a file nobody can
+edit must not decide that the program no longer starts, and the remedy is with whoever can write
+that path rather than with the person in front of the screen.
+
+`verified-by: bravebot_config::managed::an_endpoint_is_pinnable`
+`verified-by: bravebot_config::managed::a_name_outside_the_pinnable_set_pins_nothing`
+`verified-by: bravebot_config::managed::the_switch_that_reaches_a_personal_account_is_pinnable`
+`verified-by: bravebot_config::managed::an_empty_gateway_block_says_there_are_no_gateways`
+`verified-by: bravebot_config::managed::a_file_with_no_gateway_block_leaves_the_gateways_alone`
+`verified-by: bravebot_config::managed::a_provider_key_that_is_not_a_block_decides_nothing`
+`verified-by: bravebot_config::managed::a_gateway_block_names_the_gateways_in_force`
+`verified-by: bravebot_config::managed::a_token_written_into_the_file_is_not_read`
+`verified-by: bravebot_config::managed::an_absent_file_pins_nothing_and_is_not_reported`
+`verified-by: bravebot_config::managed::an_unparseable_file_pins_nothing_and_is_still_named`
+`verified-by: bravebot_config::managed::a_blank_value_pins_nothing`
+`verified-by: bravebot_config::lib::a_managed_pin_outranks_an_exported_variable`
+`verified-by: bravebot_config::lib::a_name_the_managed_layer_did_not_pin_resolves_as_it_would_have`
+`verified-by: bravebot_config::lib::a_pinned_switch_outranks_the_exported_one`
+`verified-by: bravebot_config::lib::refusing_a_personal_cloud_account_takes_the_switch_and_the_gateways`
+`verified-by: bravebot_config::lib::a_managed_gateway_block_replaces_the_one_in_the_settings`
+`verified-by: bravebot_config::lib::an_empty_managed_gateway_block_leaves_no_gateways`
+`verified-by: bravebot_config::lib::a_managed_layer_silent_on_gateways_keeps_the_configured_ones`
+
 ## Known costs
+
+- **Which model answers is the individual's, and a managed layer cannot pin it.** A pinned default
+  model would lose to a `/model` choice the moment one was recorded, so it would pin nothing, and
+  making that choice unavailable is a change to what a person is offered rather than to where a
+  request goes. An organisation with a reason to care, a cost or a data-handling consequence
+  attached to one model, has the endpoint and the account to say it with and not the name.
+
+- **The layer binds nobody who can write the file, and what that takes differs per platform.** Its
+  whole authority is the permissions on the path. On a machine whose user is also its administrator,
+  which is most machines this is installed on, a pin is a note to self, and checking an owner would
+  not change that, the same account being able to replace the binary. Where it is thinner than that
+  argument assumes is a shared machine: `/etc` is root's, but `/Library/Application Support` is
+  writable by the admin group, and a `C:\ProgramData` subdirectory nobody has created yet can be
+  created by any authenticated user, who could then pin another account's endpoint. So the layer is
+  worth what the directory's permissions are worth, and on those two platforms an administrator has
+  to create the directory with permissions of their choosing rather than leave it to this program,
+  which never creates it.
+
+- **On Windows the path names one drive.** `C:\ProgramData` is where it looks, because the variable
+  that would say otherwise is the person's own to set, so a machine whose system drive is elsewhere
+  has no managed layer at all rather than one that can be redirected.
 
 - **The effort level is the one field in a Bedrock request that a single provider defines.** The
   body Bedrock states for every provider it hosts has no field for how hard to think, so the level

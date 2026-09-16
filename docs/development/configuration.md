@@ -15,7 +15,10 @@ rather than producing a binary that only works in the tree it came from; to buil
 deliberately, set `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1` and supply the variables at run time.
 
 The environment still wins when set, which is how a released binary is pointed at a local
-backend without rebuilding it. Baked values are masked so `strings` on the binary does not
+backend without rebuilding it. One thing outranks it: a machine-level file an administrator
+deploys, which pins where a request goes for everybody on that machine and is what
+`docs/specs/backends.md` calls the managed layer. Nothing on a development machine has one unless
+somebody wrote it as root. Baked values are masked so `strings` on the binary does not
 print them; that is obfuscation and not encryption, so a binary built with a live key should
 be treated as holding one.
 

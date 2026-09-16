@@ -154,7 +154,8 @@ over one set of failures is one of them going out of date.
 ### CLI-7: `doctor` reports configuration and confinement without changing anything
 
 It prints every backend this build can reach and what identifies it, which names the settings set,
-which settings files are in force and which of them won a name more than one set, the model in force
+which settings files are in force and which of them won a name more than one set, which names a
+machine-level file pinned and where that file is, the model in force
 and whether it was chosen or defaulted, where the state directory is or that there is none, what a
 TLS handshake is validated against and what a request is routed through, the
 confinement available on this platform, and the state of any imported subscription. The signing key
@@ -177,6 +178,15 @@ from and the path is the whole of what narrows it to one. Values are withheld be
 holds credentials on some machines, and a diagnostic that prints one is a diagnostic people paste
 into issues. Whether one was found still has to be said, because a backend nothing can authenticate
 is the case this is most often run to explain.
+
+A pinned name is named for a stronger version of the same reason. A value a person cannot change
+from anywhere they can write has to be explained somewhere, or the report shows a host they did not
+choose beside a variable of theirs that is doing nothing, and nothing on the machine says why. The
+file is named beside the names because the remedy belongs to whoever can write it rather than to the
+reader. A file that is there is named even where nothing in it was pinned, whether because it holds
+no pinnable name or because nothing could read it, since either is otherwise indistinguishable from
+a file this program never found. It is named on a configuration error too, that being the one case
+where nothing the reader can write will fix what the report is complaining about.
 
 The state directory is the same argument one step further out. What outlives a session is kept in it,
 and [STATE-2](state-directory.md#STATE-2) makes a profile directory nothing names a state this program
@@ -235,6 +245,9 @@ somebody to discover at the next request.
 `verified-by: bravebot_cli::main::the_network_section_names_the_roots_in_force_and_the_proxy`
 `verified-by: bravebot_cli::main::the_network_section_points_at_the_variables_when_nothing_names_a_root_or_a_proxy`
 `verified-by: bravebot_cli::main::a_trust_root_that_cannot_be_read_is_reported_as_the_reason_connections_will_fail`
+`verified-by: bravebot_cli::main::doctor_names_what_the_managed_layer_pinned_and_the_file_it_came_from`
+`verified-by: bravebot_cli::main::doctor_says_nothing_about_a_managed_layer_that_is_not_there`
+`verified-by: bravebot_cli::main::doctor_names_a_managed_file_that_pinned_nothing`
 
 <a id="CLI-8"></a>
 ### CLI-8: `--mode` chooses how a one-shot is run; the default is the turn loop
