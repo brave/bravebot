@@ -164,6 +164,36 @@ mod tests {
         assert!(profile.contains(r#"(allow file-write* (subpath "/workspace/target"))"#));
     }
 
+    /// A grant here is a name in a profile rather than a right on an open descriptor, so a
+    /// path that does not exist yet is one this backend can grant, and what a policy names
+    /// is what the profile carries. That is the half of the shared rule this backend
+    /// answers: the other cannot name such a path at all and refuses the policy rather
+    /// than granting less than it asked for, so a caller that meets a refusal there knows
+    /// it is the platform and not the policy.
+    ///
+    /// The command is built as well as the profile, so validation added here later has to
+    /// be decided rather than inherited from the other backend.
+    #[test]
+    fn a_path_that_is_not_there_yet_is_granted_as_named() {
+        let absent = "/bravebot-no-such-path/known_hosts";
+        assert!(
+            !Path::new(absent).exists(),
+            "the path has to be absent for this to say anything"
+        );
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_write(absent);
+        let profile = SeatbeltSandbox::profile(&policy);
+        assert!(
+            profile.contains(&format!(r#"(allow file-write* (subpath "{absent}"))"#)),
+            "the grant the policy named is not in the profile: {profile}"
+        );
+        SeatbeltSandbox
+            .command("/usr/bin/true", &[], &policy)
+            .expect("a path that is not there yet is a grant, not a refusal");
+    }
+
     #[test]
     fn network_is_only_allowed_when_requested() {
         let denied = SeatbeltSandbox::profile(&SandboxPolicy::strict());
