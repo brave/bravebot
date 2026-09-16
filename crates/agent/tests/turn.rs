@@ -4792,7 +4792,7 @@ fn a_search_touching_one_unvouched_file_is_quarantined_whole() {
 
     // Only the subdirectory is vouched for, so the search reads one file the person answered for
     // and one they did not.
-    let mut trust = bravebot_core::trust::TrustStore::new();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
     trust.trust("mine");
 
     let task = Task::new("find needle");

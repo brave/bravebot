@@ -11224,7 +11224,7 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new(workspace.root());
         // Nothing is started by building the set, which is LSP-8: a server comes up on the first
         // question that needs one. What is being asserted is who holds the set afterwards.
         let mut servers = Some(LanguageServers::new(workspace.root().to_path_buf(), None));

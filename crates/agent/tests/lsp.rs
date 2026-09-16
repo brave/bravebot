@@ -254,7 +254,7 @@ fn a_server_approved_in_one_turn_answers_the_next() {
             &mut asking,
             &mut bravebot_agent::report::RecordingReporter::default(),
             &mut sink,
-            trusting_the_workspace(),
+            trusting_the_workspace(&workspace),
             TrustedPrograms::new(),
             Some(&mut servers),
             &Cancel::new(),
@@ -317,7 +317,7 @@ fn a_turn_that_is_handed_no_set_starts_a_server_of_its_own() {
             &mut asking,
             &mut bravebot_agent::report::RecordingReporter::default(),
             &mut sink,
-            trusting_the_workspace(),
+            trusting_the_workspace(&workspace),
             TrustedPrograms::new(),
             None,
             &Cancel::new(),
@@ -332,8 +332,8 @@ fn a_turn_that_is_handed_no_set_starts_a_server_of_its_own() {
     assert_eq!(starts(&recorded), 2, "the second turn reused a process");
 }
 
-fn trusting_the_workspace() -> TrustStore {
-    let mut trust = TrustStore::new();
+fn trusting_the_workspace(workspace: &Workspace) -> TrustStore {
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(".");
     trust
 }
