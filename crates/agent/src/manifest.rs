@@ -1146,6 +1146,9 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         premium,
         // A manifest run has no loop to pace and is offered no way to ask for one.
         wakeup: None,
+        // Nor a session to hold a watch. The plan is frozen before anything is read, so a turn
+        // that armed one would be adding to a run whose steps were settled without it.
+        watches: Vec::new(),
         timing: spent.finish(),
         display: shown,
         notices: Vec::new(),

@@ -7,17 +7,6 @@
 # where the lists themselves merge cleanly, and a count nothing reads is wrong quietly. Count the
 # lines, or read the warnings check-spec prints.
 
-docs/specs/file-watches.md:FSWATCH-1: a watch outlives the turn that armed it, and observes rather than acts
-docs/specs/file-watches.md:FSWATCH-2: a watch names one path, settled when it is armed
-docs/specs/file-watches.md:FSWATCH-3: what a watch observes is the file's size and modification time, and nothing else
-docs/specs/file-watches.md:FSWATCH-4: a fire's prompt says which watch fired and on what path, and carries nothing from the filesystem
-docs/specs/file-watches.md:FSWATCH-5: a fire waits for an idle session and never interrupts, and changes while a turn runs are one fire
-docs/specs/file-watches.md:FSWATCH-6: a watch, a loop and a goal are never live together, and a watch asked for under one is refused
-docs/specs/file-watches.md:FSWATCH-7: a watch is armed only where the path could have been read, and ends if that stops being true
-docs/specs/file-watches.md:FSWATCH-8: how long a watch lives, how many there may be, and how often one may fire
-docs/specs/file-watches.md:FSWATCH-9: seven things end a watch, and each of them says so
-docs/specs/file-watches.md:FSWATCH-10: a live watch is on the screen, with the turn that armed it
-docs/specs/file-watches.md:FSWATCH-11: a watch is never written down, and the process ending is what reaps it
 docs/specs/layering.md:LAYER-2: `bravebot-core` and `bravebot-agent` are both the driver
 docs/specs/naming-files.md:NAME-3: the rule outlives the read
 docs/specs/processors.md:PROC-9: the confinement is the capability set, not an operating system boundary

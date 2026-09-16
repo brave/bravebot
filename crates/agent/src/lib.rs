@@ -41,6 +41,7 @@ mod testutil;
 pub mod timing;
 pub mod tools;
 pub mod turn;
+pub mod watch;
 pub mod workspace;
 
 pub use confirm::{Confirmer, Decision, Intent, RunDecision, RunRequest, Unattended, WriteRequest};

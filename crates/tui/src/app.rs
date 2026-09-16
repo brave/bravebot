@@ -102,6 +102,12 @@ const LOOP_COMMAND: &str = "/loop";
 /// argument.
 const GOAL_COMMAND: &str = "/goal";
 
+/// The line that lists the standing watches, and ends one by its number.
+///
+/// It cannot arm one. A watch is asked for in a prompt, and what a person needs a command for is
+/// the half they cannot read off the transcript: which watches are live, and how to end one.
+const WATCH_COMMAND: &str = "/watch";
+
 /// The one line that ends the session instead of starting a turn.
 const EXIT_COMMAND: &str = "/exit";
 
@@ -141,7 +147,7 @@ pub struct Command {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 18] {
+pub fn commands() -> [Command; 19] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -207,6 +213,11 @@ pub fn commands() -> [Command; 18] {
             name: GOAL_COMMAND,
             argument: "[<condition> | clear]",
             description: t!(command_goal),
+        },
+        Command {
+            name: WATCH_COMMAND,
+            argument: "[stop <n>]",
+            description: t!(command_watch),
         },
         Command {
             name: MANIFEST_COMMAND,
@@ -903,6 +914,14 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             session.clear_goal();
             Action::Redraw
         }
+        // The last rung before leaving, for the reason the loop and the goal are rungs at all:
+        // every live watch is a thing still happening, and somebody pressing the key that stops
+        // things wants them stopped. Taking all of them rather than one, because picking which of
+        // eight survived is not a decision to make from a keystroke.
+        KeyCode::Char('c') if ctrl && !session.watches().is_empty() => {
+            session.stop_watches();
+            Action::Redraw
+        }
         KeyCode::Char('c') if ctrl => {
             session.quit();
             Action::Quit
@@ -1113,6 +1132,19 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
                 }
             }
             crate::goals::Asked::Set(condition) => session.start_goal(condition),
+        }
+        return Action::Redraw;
+    }
+    // The command that sends nothing either. A watch is armed by asking for one in a prompt, so
+    // what is here is the reading and the ending: the two halves of a standing watch that a
+    // transcript cannot show.
+    if let Some(argument) = argument_to(line, WATCH_COMMAND) {
+        match crate::watches::parse(argument) {
+            crate::watches::Asked::List => session.report_watches(),
+            crate::watches::Asked::Stop(number) => {
+                session.stop_watch(number);
+            }
+            crate::watches::Asked::Unreadable => session.note(t!(watch_command_takes)),
         }
         return Action::Redraw;
     }
@@ -2302,32 +2334,41 @@ fn event_loop(
         // sent again.
         let action = match session.loop_tick() {
             Some(prompt) => Action::Submit(prompt),
-            // Then what the queue is holding, before the interface settles down to wait, for the
-            // reason a tick is looked at here.
-            None => match queued_next(&mut session) {
-                Some(action) => action,
-                None => {
-                    if !event::poll(POLL)? {
-                        continue;
-                    }
-                    match event::read()? {
-                        // Presses only. Asking for disambiguated keys asks for releases as well, and a
-                        // release handled as a press types every character twice.
-                        TermEvent::Key(key) if key.kind == KeyEventKind::Release => Action::None,
-                        TermEvent::Key(key) => handle_key(&mut session, key),
-                        TermEvent::Mouse(mouse) => handle_mouse(&mut session, mouse),
-                        TermEvent::Paste(text) => handle_paste(&mut session, &text),
-                        // Coming back from copying something is the moment a picture appears on the
-                        // clipboard, and the cheapest moment to notice: once per switch away and back,
-                        // rather than a clipboard tool spawned on a timer for the whole life of the
-                        // session.
-                        TermEvent::FocusGained => {
-                            session.image_on_clipboard = crate::clipboard::holds_an_image();
-                            Action::Redraw
+            // Then the watches, looked at here for the same reason and in the same pass: a
+            // filesystem change is the one event in this program that nobody presses a key for.
+            // Only one of the two can produce a turn, and a session holds only one kind at a
+            // time, so the order between them decides nothing.
+            None => match session.watch_fired(Instant::now(), |path| workspace.look(path)) {
+                Some(prompt) => Action::Submit(prompt),
+                // Then what the queue is holding, before the interface settles down to wait, for
+                // the reason a tick is looked at here.
+                None => match queued_next(&mut session) {
+                    Some(action) => action,
+                    None => {
+                        if !event::poll(POLL)? {
+                            continue;
                         }
-                        _ => Action::None,
+                        match event::read()? {
+                            // Presses only. Asking for disambiguated keys asks for releases as well, and a
+                            // release handled as a press types every character twice.
+                            TermEvent::Key(key) if key.kind == KeyEventKind::Release => {
+                                Action::None
+                            }
+                            TermEvent::Key(key) => handle_key(&mut session, key),
+                            TermEvent::Mouse(mouse) => handle_mouse(&mut session, mouse),
+                            TermEvent::Paste(text) => handle_paste(&mut session, &text),
+                            // Coming back from copying something is the moment a picture appears on the
+                            // clipboard, and the cheapest moment to notice: once per switch away and back,
+                            // rather than a clipboard tool spawned on a timer for the whole life of the
+                            // session.
+                            TermEvent::FocusGained => {
+                                session.image_on_clipboard = crate::clipboard::holds_an_image();
+                                Action::Redraw
+                            }
+                            _ => Action::None,
+                        }
                     }
-                }
+                },
             },
         };
 
@@ -2490,6 +2531,7 @@ fn event_loop(
                     trust: &trust,
                     programs: &programs,
                     looping: session.looping(),
+                    watches: session.watches(),
                     goal: session.goal(),
                     remembered: record
                         .as_ref()
@@ -2686,8 +2728,15 @@ fn event_loop(
                 // press that nobody is there to make.
                 // Whose line each one is, which decides whether a `@path` in it vouches for a
                 // file. Everything the person typed or queued is theirs; the sentence a goal
-                // carries the work on with is this program's.
-                let mut sending = Some((prompt, Wrote::ThePerson));
+                // carries the work on with is this program's, and so is the one a watch fires
+                // with. A fire also must not leave a loop behind repeating itself, which is the
+                // other thing this answers.
+                let whose = if session.watch_is_firing() {
+                    Wrote::TheDriver
+                } else {
+                    Wrote::ThePerson
+                };
+                let mut sending = Some((prompt, whose));
                 while let Some((prompt, wrote)) = sending {
                     let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
                     session.open_rewind_point(point, prompt.clone());
@@ -4530,6 +4579,10 @@ fn run_turn_animated(
     // goal carries it, the first one included: the round that sets the direction is the one that
     // most needs to know what it is aiming at.
     let working_towards = session.goal().map(|goal| goal.condition().to_string());
+    // And whether this turn may arm a standing watch. Read here for the reason the mode is read
+    // here: only the session can count what is live, and a tool answering out of a stale count
+    // would tell the planner about a watch the session then refused.
+    let arming = session.arming();
     // Read once, here, so the mode the planner is told about and the mode the confirmer enforces are
     // the same one: the person may press the key while this turn runs, and the two halves reading it
     // at different moments is how they would come to disagree.
@@ -4545,6 +4598,7 @@ fn run_turn_animated(
         .with_permissions(permissions.clone())
         .with_permission_mode(permission_mode)
         .ticking(tick)
+        .arming(arming)
         .working_towards(working_towards);
     // Every file named with `@` becomes context, which a turn treats as trusted: the user typed the
     // path and their keystroke is what vouches for it, exactly as `--file` does on the command
@@ -4906,6 +4960,7 @@ fn run_turn_animated(
             text: prompt,
             wrote,
         },
+        workspace,
     );
     Ok(Continued {
         conversation,
@@ -5063,6 +5118,7 @@ struct Carried {
 }
 
 /// Fold a finished turn into the session.
+#[allow(clippy::too_many_arguments)]
 fn fold_outcome(
     session: &mut Session,
     outcome: Result<turn::Outcome, turn::TurnError>,
@@ -5071,8 +5127,11 @@ fn fold_outcome(
     occupied: Occupied,
     asked: Asked,
     line: Line<'_>,
+    // Lent for the one thing a finished turn needs it for: the first look at a path the turn
+    // asked to have watched, which has to come from the same place every later look will.
+    workspace: &Workspace,
 ) -> Carried {
-    match outcome {
+    let carried = match outcome {
         Ok(outcome) => {
             let trail = sink.lines();
             session.complete(
@@ -5129,6 +5188,15 @@ fn fold_outcome(
             // asked to watch something gets the later look it needs. The line it repeats is this
             // turn's own, and only where the person wrote it: a loop repeats a line somebody
             // endorsed, and a sentence this program wrote carrying a goal on is not one.
+            // The watches this turn asked for, in the order it asked, and before the wait below:
+            // a session does one of a watch, a loop and a goal at a time, and a turn that asked
+            // for both meant the watch. Each has been through the gate a read of that path goes
+            // through; what is left is the session's own question, which is whether it has room
+            // and whether the first look sees anything.
+            for path in &outcome.watches {
+                session.arm_watch(path, workspace.look(path));
+            }
+
             if session.looping().is_some() {
                 session.loop_turn_ended(outcome.wakeup);
             } else if let Some(wakeup) = watch_to_start(outcome.wakeup, line.wrote) {
@@ -5150,6 +5218,11 @@ fn fold_outcome(
             // survived it would send the next prompt as though nothing had been said.
             if matches!(error, turn::TurnError::Cancelled) {
                 session.stop_loop();
+                // And the watch whose fire this turn was, since stopping a fire's turn is the
+                // most exact way anybody has to say which watch they are finished with: they are
+                // reading its prompt when they press the key. A turn that was not a fire ends no
+                // watch, because that press is a person steering their own work.
+                session.stop_firing_watch();
                 // Not the goal, which outlives one turn by design. A stopped turn is recorded as
                 // failed, so it is not judged and the work is not sent straight back, and the
                 // person who stops a turn going the wrong way keeps the condition they set: the
@@ -5181,7 +5254,14 @@ fn fold_outcome(
             }
             fallback
         }
-    }
+    };
+
+    // A fire is a whole turn, so the gap to the next fire of that watch is measured from here:
+    // the turn's own length is what spaces fires out, exactly as it is for a tick. Outside the
+    // two arms because a turn that failed still ended, and a watch left marked as firing would
+    // never fire again and would make every prompt after it read as the driver's.
+    session.watch_turn_ended();
+    carried
 }
 
 #[cfg(test)]
@@ -8981,6 +9061,124 @@ mod tests {
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
     }
 
+    /// A turn that failed still ended. A watch left marked as firing would never fire again, and
+    /// every prompt after it would be read as this program's rather than the person's, which
+    /// quietly stops `@path` from vouching for anything.
+    #[test]
+    fn a_fire_whose_turn_failed_stops_being_the_turn_in_flight() {
+        let mut session = Session::new("none");
+        session.arm_watch(
+            "notes.md",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+        session
+            .watch_fired(Instant::now() + Duration::from_secs(6), |_| {
+                bravebot_agent::watch::Looked::Saw("second".to_string())
+            })
+            .expect("a fire");
+        assert!(session.watch_is_firing());
+
+        fold_outcome(
+            &mut session,
+            Err(turn::TurnError::Precommit(
+                "the backend said no".to_string(),
+            )),
+            Trail::new(),
+            Carried {
+                trust: TrustStore::new("/work"),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+            },
+            Occupied {
+                budget: 100_000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            Asked {
+                name: "test-model".to_string(),
+                comparable: true,
+            },
+            Line {
+                text: "",
+                wrote: Wrote::TheDriver,
+            },
+            &workspace_for_test(),
+        );
+
+        assert!(!session.watch_is_firing(), "the watch is still firing");
+        assert_eq!(
+            session.watches().len(),
+            1,
+            "a failed request ended the watch"
+        );
+    }
+
+    /// Watches are the last rung before leaving, for the reason the loop and the goal are rungs:
+    /// somebody pressing the key that stops things wants the things stopped, and picking which of
+    /// eight survived is not a decision to make from a keystroke.
+    #[test]
+    fn interrupting_ends_every_watch_before_it_leaves() {
+        let mut session = Session::new("none");
+        session.arm_watch(
+            "a.md",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+        session.arm_watch(
+            "b.md",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
+        assert!(session.watches().is_empty());
+        assert!(
+            !session.is_quitting(),
+            "the press that stopped them also left"
+        );
+
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
+    }
+
+    /// The command cannot arm one: a watch is asked for in a prompt, and what a person needs a
+    /// command for is the half they cannot read off the transcript.
+    #[test]
+    fn the_watch_command_lists_and_stops_and_arms_nothing() {
+        let mut session = Session::new("none");
+        session.arm_watch(
+            "a.md",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+
+        for c in "/watch".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert_eq!(session.watches().len(), 1, "a report ended a watch");
+
+        for c in "/watch stop 1".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert!(session.watches().is_empty());
+
+        for c in "/watch src/main.rs".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert!(
+            session.watches().is_empty(),
+            "the command armed a watch of its own"
+        );
+    }
+
     /// A sentence mentioning it is a thing to say to the planner.
     #[test]
     fn a_prompt_containing_the_loop_command_is_still_a_prompt() {
@@ -11750,6 +11948,14 @@ mod tests {
         );
     }
 
+    /// A workspace for the tests below, which need one only because a finished turn takes the
+    /// first look at anything it asked to have watched.
+    fn workspace_for_test() -> Workspace {
+        let root = crate::testutil::scratch_dir("bravebot-fold-outcome-workspace");
+        std::fs::create_dir_all(&root).expect("scratch");
+        Workspace::new(&root).expect("workspace")
+    }
+
     #[test]
     fn a_failed_turn_measures_context_if_requests_were_sent() {
         let mut session = Session::new("none");
@@ -11780,6 +11986,7 @@ mod tests {
                 text: "",
                 wrote: Wrote::ThePerson,
             },
+            &workspace_for_test(),
         );
 
         assert_eq!(
@@ -11841,6 +12048,7 @@ mod tests {
                 text: "",
                 wrote: Wrote::ThePerson,
             },
+            &workspace_for_test(),
         );
 
         assert_eq!(
@@ -11884,6 +12092,7 @@ mod tests {
                 text: "",
                 wrote: Wrote::ThePerson,
             },
+            &workspace_for_test(),
         );
 
         assert!(
@@ -11922,6 +12131,7 @@ mod tests {
                 text: "",
                 wrote: Wrote::ThePerson,
             },
+            &workspace_for_test(),
         );
 
         assert_eq!(session.occupancy(), crate::state::Occupancy::Unmeasured);

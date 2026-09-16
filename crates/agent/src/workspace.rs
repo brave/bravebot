@@ -1050,6 +1050,25 @@ impl Workspace {
         Some(modified.elapsed().unwrap_or_default())
     }
 
+    /// Take the one look a standing watch takes at a path.
+    ///
+    /// The two facts a read hands the planner back as a change token, hashed the same way, so a
+    /// watch and a read answer the same question about the same file. Nothing derived from the
+    /// bytes is opened, read or hashed: this is a `stat` and nothing else.
+    ///
+    /// The reach question is asked on every look rather than only when the watch was armed. A path
+    /// this workspace no longer resolves is one the answer that allowed the watch has stopped
+    /// holding for, and the caller ends the watch on it.
+    pub fn look(&self, relative: &str) -> crate::watch::Looked {
+        let Ok(resolved) = self.resolve(relative) else {
+            return crate::watch::Looked::OutOfReach;
+        };
+        match std::fs::metadata(resolved) {
+            Ok(metadata) => crate::watch::Looked::Saw(change_token(&metadata)),
+            Err(_) => crate::watch::Looked::Absent,
+        }
+    }
+
     /// Write an endorsed file, but only if it still holds `expected`.
     ///
     /// An edit is approved against contents that were read moments earlier. If the file
