@@ -13903,6 +13903,64 @@ fn a_background_server_is_still_running_when_the_next_call_is_made() {
     );
 }
 
+/// A program a turn runs is told where this session's own directory is, so what it writes there
+/// goes when the session does instead of being left beside the work.
+#[test]
+fn a_program_a_turn_runs_is_told_where_the_sessions_directory_is() {
+    let scratch = Scratch::new("run-told-its-directory");
+    // Outside the workspace root, where a session's own directory is: one under the root would be a
+    // project file by another name and would exercise none of what makes this one reachable.
+    let session = Scratch::new("run-told-its-directory-given");
+    let given = session
+        .path
+        .canonicalize()
+        .expect("the session's own directory");
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    workspace.open_scratch(Some(given.clone()));
+
+    // A script rather than a line naming the variable: a `$` in a line is refused, so what reads
+    // the environment is the program the line named.
+    let script = scratch.path.join("mark");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nprintf workings > \"$BRAVEBOT_SCRATCH_DIR/note.txt\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./mark"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("leave a note"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(given.join("note.txt")).expect("the program wrote there"),
+        "workings"
+    );
+}
+
 /// What a background job printed is quarantined exactly as a foreground run's output is. Vouching
 /// is what makes it readable, and nothing about being left running does.
 #[test]

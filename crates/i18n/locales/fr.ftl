@@ -491,6 +491,8 @@ status-directory-trusted = fiable
 status-directory-untrusted = non fiable, chaque écriture vous est donc montrée
 status-also-open = Aussi ouvert
 status-added-directory = ajouté avec /add-dir
+status-scratch = Temporaire
+status-scratch-note = propre à cette session, qui peut y écrire, supprimé à sa fin
 status-model = Modèle
 status-model-chosen = choisi avec /model
 status-model-default = la valeur par défaut configurée
@@ -701,6 +703,7 @@ session-permissions-skipped =
     --dangerously-skip-permissions : rien ne sera demandé avant une écriture, une commande, ou la
     lecture d'un fichier que personne n'a approuvé. shift-tab pour changer
 session-directory-not-added = impossible d'ajouter { $directory } : { $problem }
+session-scratch-unavailable = aucun répertoire temporaire pour cette session : { $problem }
 session-using-model = utilise { $model }
 session-using-model-from = utilise { $model } via { $service }
 session-signing-in =

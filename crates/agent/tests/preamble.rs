@@ -491,6 +491,78 @@ fn moving_the_working_directory_restates_it() {
     );
 }
 
+/// The one fact in the block nothing else could tell a turn. The directory is made by this
+/// program rather than named by the user, so a planner never told of it puts what is not part of
+/// the project into the project, which is the file a build, a commit and a reviewer each have to
+/// deal with.
+#[test]
+fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
+    let tree = Scratch::new("own-directory");
+    let project = tree.directory("project");
+    let own = tree.directory("session");
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace.open_scratch(Some(own.clone()));
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+        )
+    };
+
+    assert!(
+        preamble.text.contains(&own.display().to_string()),
+        "the session's own directory is not in the preamble: {}",
+        preamble.text
+    );
+    assert!(
+        preamble.text.contains("BRAVEBOT_SCRATCH_DIR"),
+        "the preamble does not say where a program the line starts reads the path: {}",
+        preamble.text
+    );
+}
+
+/// A session that could not be given one has nowhere of its own to write, and a planner told
+/// otherwise spends a run discovering that the directory is not there.
+#[test]
+fn a_session_with_no_directory_of_its_own_is_told_of_none() {
+    let tree = Scratch::new("no-own-directory");
+    let project = tree.directory("project");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+        )
+    };
+
+    assert!(
+        preamble.text.contains("Working directory:"),
+        "the rest of the block is missing too: {}",
+        preamble.text
+    );
+    for absent in ["Scratch directory:", "BRAVEBOT_SCRATCH_DIR"] {
+        assert!(
+            !preamble.text.contains(absent),
+            "`{absent}` is stated for a session that has no directory of its own: {}",
+            preamble.text
+        );
+    }
+}
+
 /// A condition waiting on something outside the session is the case a goal handles worst if the
 /// turn is left to work it out: answering so as to be sent back spends a round of the goal's
 /// budget and a judge's reading of the whole conversation, and ten of those give up minutes

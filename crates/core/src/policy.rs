@@ -239,6 +239,12 @@ pub struct Policy<'sink, S: Sink> {
     /// know which directory the path was written relative to. `None` where the caller has not said,
     /// and then nothing that needs it holds.
     root: Option<std::path::PathBuf>,
+    /// The session's own directory outside the project, where it has one.
+    ///
+    /// Reachable with no rule written about it, so a path under it that no rule covers answers as
+    /// the workspace does. [`Policy::integrity_in_force`] is where that happens, and it is the only
+    /// thing this field is for.
+    scratch: Option<std::path::PathBuf>,
     /// Which programs the user has stopped being asked about, by resolved path.
     programs: crate::programs::TrustedPrograms,
     /// The command lines somebody asked to be remembered past the session, for this directory.
@@ -347,6 +353,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             denials: 0,
             trust: TrustStore::new(),
             root: None,
+            scratch: None,
             programs: crate::programs::TrustedPrograms::new(),
             remembered: crate::remembered::Remembered::new(),
             permissions: crate::permissions::Permissions::new(),
@@ -568,6 +575,66 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self
     }
 
+    /// Say where the session's own directory outside the project is, where it has one.
+    ///
+    /// Whether a path there can be reached at all is the workspace's question. What this decides is
+    /// the label on a file in it, which is the answer given about the workspace rather than a rule
+    /// of the directory's own: see [`Policy::integrity_in_force`].
+    pub fn with_scratch(mut self, directory: Option<&std::path::Path>) -> Self {
+        self.scratch = directory.map(std::path::Path::to_path_buf);
+        self
+    }
+
+    /// What the map says about `path`, with the session's own directory answered by the workspace.
+    ///
+    /// Every gate asks this rather than the store, because a directory made reachable without a
+    /// rule would otherwise answer as a path nobody has said anything about: every write there
+    /// prompting and every read quarantined, in a directory whose whole purpose is being written to
+    /// and read back. The answer given about the workspace is what it takes instead, so the
+    /// directory prompts when the workspace prompts and no more, and a session that vouched for
+    /// nothing is asked about a file there exactly as it is asked about one in the project.
+    ///
+    /// Only where nothing covers the path. A rule reconciliation wrote about a file there answers
+    /// for that file, which is what keeps untrusted output from being read back as trusted.
+    fn integrity_in_force(&self, path: &str) -> Option<Integrity> {
+        match self.trust.integrity_of(path) {
+            Some(integrity) => Some(integrity),
+            None if self.is_scratch(path) => self.trust.integrity_of(""),
+            None => None,
+        }
+    }
+
+    /// [`Policy::integrity_in_force`] for a whole subtree, which is what a command line's read set
+    /// is asked about.
+    fn integrity_beneath_in_force(&self, path: &str) -> Option<Integrity> {
+        match (self.is_scratch(path), self.trust.integrity_of("")) {
+            // Only where the workspace has an answer to lend. A session that vouched for nothing has
+            // none, and then the rules written inside the directory are the whole of what is known
+            // about it, exactly as for a path this does not cover.
+            (true, Some(workspace)) => Some(self.trust.integrity_beneath_or(path, workspace)),
+            _ => self.trust.integrity_beneath(path),
+        }
+    }
+
+    /// Whether `path` lands in the session's own directory outside the project.
+    ///
+    /// A key holding `..` is not, whatever it is spelled under. A trust key keeps such a component
+    /// as it was written, and matching by component would take a name that climbs out of the
+    /// directory for one inside it, which is the workspace's answer being lent to a path the session
+    /// was never given.
+    fn is_scratch(&self, path: &str) -> bool {
+        let path = std::path::Path::new(path);
+        if path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return false;
+        }
+        self.scratch
+            .as_deref()
+            .is_some_and(|directory| path.starts_with(directory))
+    }
+
     /// Begin with the programs an earlier turn of this session was told to stop asking about.
     pub fn with_programs(mut self, programs: crate::programs::TrustedPrograms) -> Self {
         self.programs = programs;
@@ -772,7 +839,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         // "Never mentioned" and "explicitly untrusted" both mean untrusted. Trust is granted,
         // never inferred from silence.
-        let integrity = match self.trust.integrity_of(path) {
+        let integrity = match self.integrity_in_force(path) {
             Some(Integrity::Trusted) => Integrity::Trusted,
             _ => Integrity::Untrusted,
         };
@@ -811,7 +878,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let mut visited = 0usize;
         for path in paths {
             visited += 1;
-            let this = match self.trust.integrity_of(path) {
+            let this = match self.integrity_in_force(path) {
                 Some(Integrity::Trusted) => Integrity::Trusted,
                 _ => Integrity::Untrusted,
             };
@@ -1454,7 +1521,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::present`] will ask afterwards, early enough to avoid reading a file nobody will
     /// be shown.
     pub fn read_is_quarantined(&self, path: &str) -> bool {
-        !matches!(self.trust.integrity_of(path), Some(Integrity::Trusted))
+        !matches!(self.integrity_in_force(path), Some(Integrity::Trusted))
     }
 
     /// Record that a slot will hold a file, without reading it.
@@ -1486,7 +1553,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             principle: Principle::Capability,
             message: "'file_read' produces no observation to label".to_string(),
         })?;
-        let integrity = match self.trust.integrity_of(&path) {
+        let integrity = match self.integrity_in_force(&path) {
             Some(Integrity::Trusted) => Integrity::Trusted,
             _ => Integrity::Untrusted,
         };
@@ -1577,7 +1644,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         let mut references = Vec::with_capacity(paths.len());
         for (slot, path) in ids.iter().cloned().zip(paths) {
-            let integrity = match self.trust.integrity_of(&path) {
+            let integrity = match self.integrity_in_force(&path) {
                 Some(Integrity::Trusted) => Integrity::Trusted,
                 _ => Integrity::Untrusted,
             };
@@ -2809,7 +2876,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             crate::permissions::Decision::Unmatched => {}
         }
 
-        let (needed, reason) = match self.trust.integrity_of(path) {
+        let (needed, reason) = match self.integrity_in_force(path) {
             // Nobody has said anything about this path, so the first write is the moment to ask.
             None => (true, "a path nobody has vouched for either way"),
             // The one irreversible case: a trusted path is about to stop being trusted.
@@ -2848,7 +2915,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Always the exact path, never its parent: one untrusted file must not distrust its
     /// siblings. Most-specific-wins then resolves the two rules correctly.
     pub fn reconcile_after_write(&mut self, path: &str, written: Label) {
-        let effective = self.trust.integrity_of(path);
+        let effective = self.integrity_in_force(path);
         let actual = written.integrity;
 
         if effective == Some(actual) {
@@ -3080,7 +3147,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 true => Integrity::Untrusted,
                 false => keys_for_the_map(&plan.directory, path)
                     .iter()
-                    .filter_map(|key| self.trust.integrity_beneath(key))
+                    .filter_map(|key| self.integrity_beneath_in_force(key))
                     .reduce(Integrity::meet)
                     .unwrap_or(Integrity::Untrusted),
             };
@@ -7130,6 +7197,139 @@ mod tests {
 
         assert!(policy.write_needs_approval("a.rs", Label::trusted_public(), Destination::Named));
         assert!(policy.write_needs_approval("a.rs", Label::untrusted_public(), Destination::Named));
+    }
+
+    /// The session's own directory is reachable with no rule written about it, so the answer given
+    /// about the workspace is what stands there: a write asks what a write in the project asks and
+    /// no more. Left to the row above, a directory whose whole purpose is being written to would
+    /// prompt on every file it held, in a session where the user has already said what they want to
+    /// be asked about.
+    #[test]
+    fn a_write_in_the_sessions_own_directory_asks_what_a_write_in_the_project_asks() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &["."])
+            .with_root(std::path::Path::new("/work"))
+            .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+
+        let own = "/tmp/bravebot-scratch-1/workings.txt";
+        assert_eq!(
+            policy.write_needs_approval(own, Label::trusted_public(), Destination::Named),
+            policy.write_needs_approval("src/a.rs", Label::trusted_public(), Destination::Named),
+            "a write in the session's own directory was not asked about as a project write is"
+        );
+        assert_eq!(
+            policy.write_needs_approval(own, Label::untrusted_public(), Destination::Named),
+            policy.write_needs_approval("src/a.rs", Label::untrusted_public(), Destination::Named),
+            "an untrusted write in the session's own directory took a different answer"
+        );
+        assert!(
+            !policy.read_is_quarantined(own),
+            "a turn could not read back what it wrote in its own directory"
+        );
+    }
+
+    /// The answer is the workspace's, whichever way the workspace was answered. A user who declined
+    /// to vouch for the project has not vouched for anything the session writes either, so nothing
+    /// here hands a turn trust it was not given.
+    #[test]
+    fn a_declined_workspace_leaves_the_sessions_own_directory_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut store = TrustStore::new();
+        store.distrust(".");
+        let policy = Policy::begin(
+            routing_with("task", "edit"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(store)
+        .with_root(std::path::Path::new("/work"))
+        .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+
+        assert!(
+            policy.read_is_quarantined("/tmp/bravebot-scratch-1/workings.txt"),
+            "a declined session was shown a file out of its own directory"
+        );
+    }
+
+    /// Only where nothing covers the path. A rule reconciliation wrote about a file there answers
+    /// for that file, and for a line reading the tree around it, which is what stops a turn from
+    /// reading its own untrusted output back as trusted.
+    #[test]
+    fn an_untrusted_file_in_the_sessions_own_directory_stays_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &["."])
+            .with_root(std::path::Path::new("/work"))
+            .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+
+        let fetched = "/tmp/bravebot-scratch-1/fetched.json";
+        policy.reconcile_after_write(fetched, Label::untrusted_public());
+
+        assert!(
+            policy.read_is_quarantined(fetched),
+            "the file a turn marked untrusted was shown as though nothing had been said about it"
+        );
+        assert!(
+            !policy.read_is_quarantined("/tmp/bravebot-scratch-1/workings.txt"),
+            "the rule about one file spread to the directory holding it"
+        );
+        assert!(
+            !label_of(&mut policy, &reading_in("/work", "/tmp/bravebot-scratch-1")).is_trusted(),
+            "a line reading the whole directory laundered the untrusted file inside it"
+        );
+        assert!(
+            label_of(
+                &mut policy,
+                &reading_in("/work", "/tmp/bravebot-scratch-1/workings.txt")
+            )
+            .is_trusted(),
+            "a line reading a file nothing was said about answered as unvouched for"
+        );
+    }
+
+    /// A name that climbs out of the directory is not in it. A trust key keeps a `..` as it was
+    /// written, so matching by component alone would lend the workspace's answer to whatever the
+    /// name climbed to.
+    #[test]
+    fn a_name_climbing_out_of_the_sessions_own_directory_is_not_answered_for_it() {
+        let mut sink = RecordingSink::new();
+        let policy = policy_trusting(&mut sink, &["."])
+            .with_root(std::path::Path::new("/work"))
+            .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+
+        assert!(
+            policy.read_is_quarantined("/tmp/bravebot-scratch-1/../../etc/hosts"),
+            "a name that climbed out of the session's directory took the workspace's own answer"
+        );
+    }
+
+    /// The workspace's answer is lent only where there is one. A session that vouched for nothing
+    /// has none, and then the rules inside the directory are the whole of what is known about it.
+    #[test]
+    fn a_line_reading_the_sessions_own_directory_still_sees_the_rules_inside_it() {
+        let mut sink = RecordingSink::new();
+        let mut store = TrustStore::new();
+        store.trust("/tmp/bravebot-scratch-1/workings.txt");
+        let mut policy = Policy::begin(
+            routing_with("task", "edit"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(store)
+        .with_root(std::path::Path::new("/work"))
+        .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+
+        assert!(
+            label_of(
+                &mut policy,
+                &reading_in("/work", "/tmp/bravebot-scratch-1/workings.txt")
+            )
+            .is_trusted(),
+            "a rule inside the directory was skipped because the workspace had no answer to lend"
+        );
     }
 
     /// Reading out of a trusted directory yields trusted data. This is what lets row 1 of

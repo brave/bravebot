@@ -3280,7 +3280,7 @@ fn run<S: Sink, C: Confirmer>(
             }
         };
 
-        return match crate::exec::start_steps(steps, &plan.directory) {
+        return match crate::exec::start_steps(steps, &plan.directory, tools.workspace.scratch()) {
             Ok(running) => {
                 // The directory is carried over only once pre-flight checks and launch succeed.
                 *tools.run_directory = plan.directory.clone();
@@ -3308,7 +3308,13 @@ fn run<S: Sink, C: Confirmer>(
     // spelled, because relative and absolute rules are separate namespaces in the map and a rule
     // in the wrong one decides nothing.
     let mut opened: Vec<std::path::PathBuf> = Vec::new();
-    let ran = crate::exec::run_plan(&plan, tools.cancel, limit, &mut opened);
+    let ran = crate::exec::run_plan(
+        &plan,
+        tools.cancel,
+        limit,
+        &mut opened,
+        tools.workspace.scratch(),
+    );
     let written: Vec<String> = opened
         .iter()
         .map(|path| tools.workspace.relative_display(path))

@@ -308,9 +308,10 @@ RUN-4's to decide.
 ### RUN-12: a program is not handed this agent's own credentials
 
 The environment a stage receives is the one this process holds, less the credentials this agent
-authenticates to its backend with. Every stage, not only the first. Removed rather than emptied, so a
-program that distinguishes an unset variable from a blank one sees what a machine that never held the
-credential sees.
+authenticates to its backend with and with the session's own directory named in it
+([TRUST-17](../trust-map.md#TRUST-17)). Every stage, not only the first. Removed rather than
+emptied, so a program that distinguishes an unset variable from a blank one sees what a machine that
+never held the credential sees.
 
 **Why.** A person approving a run reads the argv, the resolved binary and the directory. The
 environment is not among those, so a credential travelling alongside them is granted without having

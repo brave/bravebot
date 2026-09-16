@@ -1578,6 +1578,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         .map_err(|d| TurnError::Precommit(d.to_string()))?
         .with_trust(trust)
         .with_root(workspace.root())
+        .with_scratch(workspace.scratch())
         .with_programs(programs)
         .with_permissions(task.permissions.clone())
         .resuming(conversation.context());

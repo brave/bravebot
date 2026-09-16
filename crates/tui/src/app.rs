@@ -9,9 +9,9 @@
 //! the reply arrives. That is honest about what is happening, and it keeps two turns from
 //! ever being in flight together.
 
-use bravebot_agent::Workspace;
 use bravebot_agent::conversation::Conversation;
 use bravebot_agent::turn::{self, PastedImage, Task};
+use bravebot_agent::{SessionScratch, Workspace};
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::permissions::Permissions;
@@ -1845,6 +1845,32 @@ fn left_behind(stored: &crate::sessions::Handle) -> Option<crate::sessions::Resu
     stored.to_resume()
 }
 
+/// The directory this session writes what is not part of the project into, made and reachable.
+///
+/// Both at once, because a directory nothing may write in is not worth creating, and reach left
+/// pointing at the directory a previous session was given names one that has been removed.
+///
+/// A session that cannot be given one carries on without it. A temporary directory that is full,
+/// read-only or missing is a reason to have nowhere to put an intermediate file, and not a reason
+/// to refuse somebody the session they asked for.
+///
+/// Said out loud when that happens, because the alternative is a turn told it has nowhere to write
+/// with nothing on the screen to say why.
+fn opened_scratch(session: &mut Session, workspace: &mut Workspace) -> Option<SessionScratch> {
+    let scratch = match SessionScratch::create() {
+        Ok(scratch) => Some(scratch),
+        Err(problem) => {
+            session.note(t!(
+                session_scratch_unavailable,
+                problem = problem.to_string()
+            ));
+            None
+        }
+    };
+    workspace.open_scratch(scratch.as_ref().map(|held| held.path().to_path_buf()));
+    scratch
+}
+
 /// The session as it stood before the turn now in flight, for `/undo` to rewind to.
 ///
 /// The turn's own counts come from [`Session::turn_start`] and not from the session in hand: a
@@ -1968,6 +1994,11 @@ fn event_loop(
     else {
         return Ok(left_behind(&stored));
     };
+
+    // Somewhere of its own to write what is not part of the project, held for as long as the
+    // session: dropping it takes the directory and everything in it. After the question, so a
+    // person who left at it has nothing created for a session they declined to have.
+    let mut scratch = opened_scratch(&mut session, &mut workspace);
 
     // After the trust answer, because that question is the first thing on the screen and an aside
     // about a newer release does not come before it. Nothing is fetched here: the line is read off
@@ -2242,6 +2273,7 @@ fn event_loop(
                     session_id: stored.id(),
                     directory: workspace.root(),
                     added_directories: workspace.added_directories(),
+                    scratch: scratch.as_ref().map(SessionScratch::path),
                     model: session.model(),
                     effort: session.effort(),
                     model_reads_effort: session.model_reads_effort(),
@@ -2372,6 +2404,10 @@ fn event_loop(
                 // A new session vouches for no program, on the same reasoning as the map: the
                 // list is a standing permission, and this begins a session that was never asked.
                 programs = TrustedPrograms::new();
+                // And a new directory, since nothing in the old one outlives the session that
+                // wrote it. The old one is removed either way: what the cleared context wrote is
+                // not something the session after it should find lying there.
+                scratch = opened_scratch(&mut session, &mut workspace);
                 needs_draw = true;
             }
             Action::Submit(prompt) => {
