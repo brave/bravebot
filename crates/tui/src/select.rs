@@ -93,7 +93,7 @@ pub fn text(buffer: &Buffer, selection: &Selection) -> String {
 
 /// Paint the selection over what has already been drawn.
 ///
-/// Only the background changes, so the text keeps whatever colour it was given and a highlighted
+/// Only the marking changes, so the text keeps whatever colour it was given and a highlighted
 /// line still reads as the line it was.
 pub fn highlight(buffer: &mut Buffer, selection: &Selection) {
     let area = buffer.area;
@@ -102,7 +102,7 @@ pub fn highlight(buffer: &mut Buffer, selection: &Selection) {
             if selection.covers(row, column)
                 && let Some(cell) = buffer.cell_mut((column, row))
             {
-                cell.set_bg(theme::brand_primary());
+                cell.set_style(theme::picked_out());
             }
         }
     }

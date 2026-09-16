@@ -1620,10 +1620,24 @@ pub fn run(
     start: Start,
     skip_permissions: bool,
 ) -> io::Result<Option<crate::sessions::Resumable>> {
+    // Before the terminal is taken, because the request for no colour decides whether it is asked
+    // about its background on the way in, and that question happens inside the takeover.
+    crate::theme::sense_no_color();
+    crate::indicator::sense_no_motion();
+
     let mut stdout = io::stdout();
     take_over_terminal(&mut stdout)?;
 
-    let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+    // Handed back on the way out, because the terminal is already taken by the line above and a
+    // failure here would otherwise return from a session that never started, leaving the person in
+    // raw mode on a screen they cannot get off.
+    let mut terminal = match Terminal::new(CrosstermBackend::new(stdout)) {
+        Ok(terminal) => terminal,
+        Err(failure) => {
+            hand_back_terminal(&mut io::stdout())?;
+            return Err(failure);
+        }
+    };
 
     // Asked before the session begins, so what it starts with is settled before anything is
     // drawn for it. Choosing nothing is an ordinary session rather than an error.
@@ -1688,6 +1702,15 @@ fn take_over_terminal<W: Write>(out: &mut W) -> io::Result<()> {
     // alternate screen, so the query is not painted into the session.
     crate::theme::sense(out);
     crate::theme::restore_saved();
+    ask_for_modes(out, enhanced_keys())
+}
+
+/// Ask the terminal for every mode the interface draws and reads in.
+///
+/// Separate from raw mode, and told rather than asked whether the terminal understands
+/// disambiguated keys, because both of those are properties of a real tty: what is left here is
+/// bytes, so a test can read back what was asked for and what was given up.
+fn ask_for_modes<W: Write>(out: &mut W, enhanced: bool) -> io::Result<()> {
     execute!(
         out,
         EnterAlternateScreen,
@@ -1699,7 +1722,7 @@ fn take_over_terminal<W: Write>(out: &mut W) -> io::Result<()> {
         EnableFocusChange
     )?;
 
-    if enhanced_keys() {
+    if enhanced {
         execute!(
             out,
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
@@ -1717,8 +1740,13 @@ fn take_over_terminal<W: Write>(out: &mut W) -> io::Result<()> {
 /// Put the terminal back the way it was found.
 fn hand_back_terminal<W: Write>(out: &mut W) -> io::Result<()> {
     disable_raw_mode()?;
+    give_back_modes(out, enhanced_keys())
+}
+
+/// Give back every mode [`ask_for_modes`] asked for.
+fn give_back_modes<W: Write>(out: &mut W, enhanced: bool) -> io::Result<()> {
     // Popped before the modes below, so the stack is unwound in the order it was built.
-    if enhanced_keys() {
+    if enhanced {
         execute!(out, PopKeyboardEnhancementFlags)?;
     }
     execute!(
@@ -5005,6 +5033,89 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    /// The private modes a run of bytes leaves turned on, in the order the terminal would read
+    /// them: a mode asked for and then given up again is not left on.
+    fn modes_left_on(written: &str) -> std::collections::BTreeSet<String> {
+        let mut on = std::collections::BTreeSet::new();
+        for request in written.split("\x1b[?").skip(1) {
+            let mode: String = request.chars().take_while(char::is_ascii_digit).collect();
+            match request[mode.len()..].chars().next() {
+                Some('h') => {
+                    on.insert(mode);
+                }
+                Some('l') => {
+                    on.remove(&mode);
+                }
+                _ => {}
+            }
+        }
+        on
+    }
+
+    fn asked_for(enhanced: bool) -> String {
+        let mut written = Vec::new();
+        ask_for_modes(&mut written, enhanced).expect("ask");
+        String::from_utf8(written).expect("utf8")
+    }
+
+    fn given_back(enhanced: bool) -> String {
+        let mut written = Vec::new();
+        give_back_modes(&mut written, enhanced).expect("give back");
+        String::from_utf8(written).expect("utf8")
+    }
+
+    /// A session draws on a screen of its own, so what was in the terminal before it started is
+    /// still there afterwards. Nothing else in this file can be checked against a terminal, and a
+    /// takeover that stopped happening would look like a working program.
+    #[test]
+    fn a_session_draws_on_a_screen_of_its_own() {
+        // 1049 is the alternate screen. Named as a number because that is what is sent.
+        assert!(modes_left_on(&asked_for(false)).contains("1049"));
+        assert!(!modes_left_on(&given_back(false)).contains("1049"));
+    }
+
+    /// Every mode is given back, whether the session ended by being left or by failing. A mode
+    /// kept past the last frame is a terminal the person has to repair by hand: mouse reporting
+    /// left on turns every click into unreadable bytes, and bracketed paste left on prints its
+    /// markers into whatever they type next.
+    #[test]
+    fn every_mode_a_session_asks_for_is_given_back() {
+        for enhanced in [false, true] {
+            let asked = modes_left_on(&asked_for(enhanced));
+            let handed_back = modes_left_on(&given_back(enhanced));
+            assert!(!asked.is_empty(), "nothing was asked for");
+            for mode in &asked {
+                assert!(
+                    !handed_back.contains(mode),
+                    "mode {mode} is left on: asked {asked:?}, handed back {handed_back:?}"
+                );
+            }
+        }
+    }
+
+    /// Disambiguated keys are pushed onto a stack the terminal keeps, so the one thing owed is a
+    /// pop: a push left on the stack outlives the process and changes what every later program
+    /// reads from the keyboard.
+    #[test]
+    fn a_pushed_keyboard_mode_is_popped_and_an_unpushed_one_is_not() {
+        assert!(asked_for(true).contains("\x1b[>"));
+        assert!(given_back(true).contains("\x1b[<"));
+
+        assert!(!asked_for(false).contains("\x1b[>"));
+        assert!(!given_back(false).contains("\x1b[<"));
+    }
+
+    /// The wheel scrolls the transcript, which is what mouse reporting is asked for, and a pointer
+    /// merely crossing the window is not reported: that arrives as an event and a redraw per pixel
+    /// of travel, for a gesture nothing here reads.
+    #[test]
+    fn the_session_reads_a_drag_and_not_every_pointer_movement() {
+        let on = modes_left_on(&asked_for(false));
+        assert!(on.contains("1000"), "buttons are not reported: {on:?}");
+        assert!(on.contains("1002"), "a drag is not reported: {on:?}");
+        assert!(!on.contains("1003"), "all motion is reported: {on:?}");
     }
 
     fn listed(key: &str, window: Option<u64>) -> bravebot_aichat::models::Model {

@@ -913,7 +913,10 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
     };
 
     let mut spans = vec![
-        Span::styled(format!("  {name}"), Style::default().fg(Color::Cyan)),
+        Span::styled(
+            format!("  {name}"),
+            Style::default().fg(theme::brand_primary()),
+        ),
         Span::styled(format!("  ·  {standing}"), Style::default().fg(colour)),
     ];
 
@@ -1098,7 +1101,7 @@ fn session_row(highlighted: bool, width: usize) -> Line<'static> {
         Span::styled(about, detail),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1157,7 +1160,7 @@ fn aside_row(aside: &crate::state::Aside, highlighted: bool, width: usize) -> Li
         Span::styled(format!("{standing:<STANDING_COLUMN$}"), standing_style),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1210,7 +1213,7 @@ fn delegate_row(delegate: &Delegate, highlighted: bool, width: usize) -> Line<'s
         Span::styled(calls, detail),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1272,7 +1275,7 @@ fn output_row(output: &Output, highlighted: bool, width: usize) -> Line<'static>
         Span::styled(count, detail),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1379,7 +1382,10 @@ fn scroller_exit(bindings: &Keybindings) -> (String, &'static str) {
 fn draw_scroller_help(frame: &mut Frame, area: Rect, session: &Session) {
     let row = |(key, what): (&str, &str)| {
         Line::from(vec![
-            Span::styled(format!(" {key:<18}"), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!(" {key:<18}"),
+                Style::default().fg(theme::brand_primary()),
+            ),
             Span::styled(what.to_string(), dim()),
         ])
     };
@@ -1442,7 +1448,10 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
     if let Some(typing) = &scroller.typing {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(format!("  /{typing}"), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("  /{typing}"),
+                    Style::default().fg(theme::brand_primary()),
+                ),
                 Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
                 Span::styled(format!("  ·  {}", t!(scroller_searching)), dim()),
             ])),
@@ -1467,7 +1476,7 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
             Paragraph::new(Line::from(vec![
                 Span::styled(
                     format!("  /{}", scroller.needle),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme::brand_primary()),
                 ),
                 Span::styled(format!("  ·  {standing}"), dim()),
                 Span::styled(format!("  ·  {}", t!(scroller_search_keys)), dim()),
@@ -1490,7 +1499,7 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
     let running = session.indicator().map(|indicator| {
         Span::styled(
             format!("  ·  {}…", indicator.verb),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme::running()),
         )
     });
 
@@ -1500,7 +1509,7 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
     let mut spans = vec![
         Span::styled(
             format!("  {}", t!(scroller_footer)),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme::brand_primary()),
         ),
         Span::styled(format!("  ·  {}", t!(scroller_footer_keys)), dim()),
     ];
@@ -2466,7 +2475,7 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
             Span::styled(
                 " QUEUED ",
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(theme::on_primary())
                     .bg(theme::brand_primary())
                     .add_modifier(Modifier::BOLD),
             ),
@@ -6246,6 +6255,35 @@ mod tests {
         assert!(
             !inks.contains(&theme::running()),
             "the note is still yellow"
+        );
+    }
+
+    /// The word that names the mode carries meaning, so it is a shade this interface mixes rather
+    /// than one of the sixteen slots a terminal repaints. Cyan is not one of the three slots whose
+    /// meaning is the terminal's own, so a scheme that remapped it decided how this row read, and
+    /// a person who chose a theme was not drawn in it at all.
+    #[test]
+    fn the_scroller_names_the_mode_in_a_shade_and_not_a_slot() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+
+        let mut session = Session::new("none");
+        session.note_layout(crate::state::Laid {
+            width: 120,
+            height: 24,
+            rows: 24,
+            ..crate::state::Laid::default()
+        });
+        session.open_scroller();
+
+        let inks = inks_on_row_containing(&session, "scroller");
+        assert!(
+            inks.contains(&theme::brand_primary()),
+            "the mode is not named in the interface's own ink: {inks:?}"
+        );
+        assert!(
+            !inks.contains(&Color::Cyan),
+            "a slot the terminal repaints is still carrying it: {inks:?}"
         );
     }
 

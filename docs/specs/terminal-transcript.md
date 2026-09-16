@@ -3,6 +3,7 @@ id: VIEW
 title: The transcript
 status: normative
 governs:
+  - crates/tui/src/indicator.rs
   - crates/tui/src/reasoning.rs
   - crates/tui/src/render.rs
   - crates/tui/src/state.rs
@@ -14,7 +15,8 @@ governs:
 ## Scope
 
 What is drawn back to the user: the transcript, a resumed session, how content is shaped on its
-way to the screen, and which palette paints the interface. Presentation holds no labels, and the
+way to the screen, which palette paints the interface, and what the environment can decline of
+both. Presentation holds no labels, and the
 rules here are about a person being able to see what the agent did. What the user types into is
 [terminal-input.md](terminal-input.md). A line beginning with `/` is [commands.md](commands.md).
 
@@ -189,6 +191,7 @@ scheme's own foreground in roughly nine schemes out of ten.
 `verified-by: bravebot_tui::theme::an_osc_reply_with_a_pale_background_is_light`
 `verified-by: bravebot_tui::theme::brave_keeps_named_slots_for_the_terminals_own_meanings`
 `verified-by: bravebot_tui::theme::an_aside_is_a_shade_picked_for_the_background_rather_than_a_slot`
+`verified-by: bravebot_tui::render::the_scroller_names_the_mode_in_a_shade_and_not_a_slot`
 
 <a id="VIEW-10"></a>
 ### VIEW-10: a palette a person chose paints every role from that table
@@ -430,3 +433,63 @@ the notes do, so the last of them is still held apart from whatever is said next
 
 `verified-by: bravebot_tui::render::a_note_is_not_drawn_as_a_detail_of_the_line_above_it`
 `verified-by: bravebot_tui::render::a_run_of_notes_is_not_spaced_apart`
+
+
+<a id="VIEW-20"></a>
+### VIEW-20: `NO_COLOR` is honoured, and outranks the theme in force
+
+Where `NO_COLOR` is set to anything but the empty string, every role is drawn in the terminal's own
+ink and this program adds none of its own: the background it would paint, the shades it mixes, the
+named slots it asks for, and the gradient across the wordmark. The terminal is not asked about its
+background either, since nothing is drawn in a shade picked for one. A theme somebody chose stays
+recorded and paints again once the variable is unset.
+
+Distinctions this interface makes in colour alone are lost, which is what was asked for. Nothing a
+colour was not carrying is lost with them: the margin down a block of content the planner may not
+read is a glyph on every row, and it is drawn the same way. The one distinction that is kept is the
+row a cursor is on, which is drawn in reverse video instead of a fill: a list nobody can see their
+place in cannot be walked, and reverse video asks the terminal to swap the two inks the person
+already chose rather than naming one.
+
+**Why.** The convention costs a person one variable rather than one setting per program, which is
+the whole of its value: somebody whose terminal renders colour badly, or who cannot read a shade
+this interface picked, says so once. Reading the presence of the variable rather than its value is
+the convention as written, and `NO_COLOR=0` is somebody who set it: a value that switched colour
+back on would need every program reading one to agree on which words mean false.
+
+It outranks a chosen theme because the two answer different questions. A theme says which palette
+to draw in, and the variable says whether to draw in a palette at all, so there is no order in
+which the theme wins that is not this program deciding it knows better. The choice is kept rather
+than cleared, which is what makes the variable a switch rather than an edit.
+
+`verified-by: bravebot_tui::theme::no_colour_draws_every_role_in_the_terminals_own_ink`
+`verified-by: bravebot_tui::theme::a_chosen_theme_paints_nothing_where_no_colour_is_asked_for`
+`verified-by: bravebot_tui::theme::text_over_a_fill_that_is_not_painted_takes_no_ink`
+`verified-by: bravebot_tui::theme::a_row_the_cursor_is_on_is_marked_where_no_colour_is_drawn`
+`verified-by: bravebot_tui::logo::the_wordmark_takes_no_colour_where_none_was_asked_for`
+`verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
+
+
+<a id="VIEW-21"></a>
+### VIEW-21: `NO_MOTION` stills the glyph, and the counters go on counting
+
+Where `NO_MOTION` is set to anything but the empty string, the glyph beside a running turn stands
+still instead of cycling. It is still drawn, and the elapsed time and the token counts change as
+they always did: a figure that moves when the thing it measures moves is information rather than
+animation.
+
+It is read from the environment the way the request for no colour is, and answers to presence the
+same way. Where it is not set, the glyph cycles.
+
+**Why.** Constant motion is tiring to work beside, and worse than tiring for vestibular
+sensitivity, so it is something a person can decline. Stilling the glyph rather than dropping it
+keeps the indicator answering the question it exists for: a turn runs with nothing else on the
+screen moving, so a row with nothing in it would be indistinguishable from a program that had hung.
+
+The variable is the environment rather than a settings file because the preference belongs to the
+person and their terminal rather than to a project, and because it has to hold for the first frame,
+which is drawn before any file this program reads has been looked for.
+
+`verified-by: bravebot_tui::indicator::the_indicator_stands_still_where_no_motion_is_asked_for`
+`verified-by: bravebot_tui::indicator::motion_nobody_declined_still_moves`
+`verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
