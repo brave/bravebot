@@ -147,6 +147,15 @@ pub struct Seeded {
     /// Rules written in advance about what to ask about, which do not stop applying because the
     /// asking moved.
     pub permissions: bravebot_core::permissions::Permissions,
+    /// The session whose run prompts may have their answers remembered past it, where there is one.
+    ///
+    /// The spawning turn's. A delegate's prompts reach the same person the session's own do, and
+    /// what that person answers inside one is a decision about their own machine rather than the
+    /// delegate's, so the key is offered there too. Unlike the vouched list this is not handed back:
+    /// the record is a file every session in the directory reads at the moment it would draw a
+    /// prompt, so a line recorded inside a delegate holds for the turn that spawned it with nothing
+    /// collected.
+    pub remembering: Option<String>,
 }
 
 /// Names what it holds and never the task.
@@ -176,11 +185,16 @@ pub struct Finished {
 /// Separated from running it because these three come off the parent's policy and the run does
 /// not: a delegate holds no reference to its parent once it starts, so nothing it does has to
 /// wait for the parent and nothing the parent does has to wait for it.
-pub fn seed<S: Sink>(policy: &Policy<'_, S>, spec: DelegateSpec) -> Seeded {
+pub fn seed<S: Sink>(
+    policy: &Policy<'_, S>,
+    spec: DelegateSpec,
+    remembering: Option<&str>,
+) -> Seeded {
     Seeded {
         spec,
         vouched: policy.vouched(),
         permissions: policy.permissions().clone(),
+        remembering: remembering.map(str::to_string),
     }
 }
 
@@ -216,6 +230,7 @@ pub fn run(
     // what tells the delegate's planner why a write would be refused.
     let task = Task::delegated(seeded.spec.clone())
         .with_home(home.map(std::path::Path::to_path_buf))
+        .remembering(seeded.remembering.clone())
         .with_model(model.map(str::to_string))
         .with_permissions(seeded.permissions.clone())
         .with_permission_mode(permission_mode);

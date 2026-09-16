@@ -18,7 +18,6 @@ docs/specs/tools/command-line.md:CMDLINE-14: a call may run in the background, a
 docs/specs/tools/list-files.md:LIST-3: the glob is literal and the matcher does not backtrack
 docs/specs/tools/load-skill.md:LOAD-2: a name close to a real one is refused, not guessed at
 docs/specs/tools/run.md:RUN-10: the vouched-for list is not an allowlist and must never become one
-docs/specs/tools/run.md:RUN-19: a prompt may record its answer past the session, and it stops only the asking
 docs/specs/tools/run.md:RUN-20: no answer at a prompt grants a family, because nothing here tells a value from a program
 docs/specs/tools/search.md:SEARCH-2: a result touching several files is trusted only if every one of them is
 docs/specs/tools/todo-write.md:TODO-1: there is no routing, because nothing is touched

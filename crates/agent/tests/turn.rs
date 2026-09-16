@@ -8932,6 +8932,248 @@ fn a_run_turn_with_trust(
     )
 }
 
+/// The same, for a session that keeps the record of lines somebody asked to be remembered past it.
+///
+/// Two things a turn needs before that record exists for it: a state directory to keep it in, and
+/// the name of a session, which is the caller saying there is somebody a prompt could be put to.
+fn a_run_turn_remembering(
+    scratch: &Scratch,
+    home: &std::path::Path,
+    session: Option<&str>,
+    arguments: &str,
+    confirmer: &mut AskedAboutRuns,
+) -> Result<turn::Outcome, turn::TurnError> {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) =
+        serve_sequence(vec![tool_request("run", arguments), reply_with("done")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it")
+            .with_home(Some(home.to_path_buf()))
+            .remembering(session.map(str::to_string)),
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+}
+
+/// The record for a workspace, as the turn resolves it.
+fn record_for(home: &std::path::Path, scratch: &Scratch) -> bravebot_agent::remembered::Store {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    bravebot_agent::remembered::Store::new(home, workspace.root())
+}
+
+/// RUN-19: the answer outlives the session. A line recorded by an earlier session runs without
+/// anybody being asked, in a session that has vouched for nothing and asked about nothing.
+#[test]
+fn a_line_remembered_past_the_session_runs_without_asking() {
+    let scratch = Scratch::new("run-remembered-runs");
+    let home = Scratch::new("run-remembered-runs-home");
+    let mut writing = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_and_record());
+    a_run_turn_remembering(
+        &scratch,
+        &home.path,
+        Some("the-first-session"),
+        r#"{"command":"touch remembered.txt"}"#,
+        &mut writing,
+    )
+    .expect("the turn runs");
+    assert_eq!(writing.seen.lock().unwrap().len(), 1, "nobody was asked");
+    std::fs::remove_file(scratch.path.join("remembered.txt")).expect("the first run happened");
+
+    // A second session: nothing vouched for, nothing in its conversation, and a different name.
+    let mut later = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    a_run_turn_remembering(
+        &scratch,
+        &home.path,
+        Some("a-later-session"),
+        r#"{"command":"touch remembered.txt"}"#,
+        &mut later,
+    )
+    .expect("the turn runs");
+
+    assert!(
+        later.seen.lock().unwrap().is_empty(),
+        "a line recorded in an earlier session was still put to the person"
+    );
+    assert!(
+        scratch.path.join("remembered.txt").exists(),
+        "the covered line did not run"
+    );
+}
+
+/// RUN-19: what the key records is the exact line, so a later line differing in one argument is
+/// asked about like any other.
+#[test]
+fn a_line_remembered_past_the_session_covers_no_other_line() {
+    let scratch = Scratch::new("run-remembered-exact");
+    let home = Scratch::new("run-remembered-exact-home");
+    let mut writing = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_and_record());
+    a_run_turn_remembering(
+        &scratch,
+        &home.path,
+        Some("the-first-session"),
+        r#"{"command":"touch one.txt"}"#,
+        &mut writing,
+    )
+    .expect("the turn runs");
+
+    let mut later = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    a_run_turn_remembering(
+        &scratch,
+        &home.path,
+        Some("a-later-session"),
+        r#"{"command":"touch two.txt"}"#,
+        &mut later,
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        later.seen.lock().unwrap().len(),
+        1,
+        "an entry for one line covered a different one"
+    );
+}
+
+/// RUN-19: a session with nobody to put a prompt to consults no record at all. What a record
+/// answers is a prompt, and where no prompt can be drawn it would be saying instead which effects
+/// may happen with nobody there to see them.
+#[test]
+fn a_turn_with_nobody_to_ask_reads_no_record() {
+    let scratch = Scratch::new("run-remembered-unattended");
+    let home = Scratch::new("run-remembered-unattended-home");
+    let mut writing = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_and_record());
+    a_run_turn_remembering(
+        &scratch,
+        &home.path,
+        Some("the-first-session"),
+        r#"{"command":"touch anyway.txt"}"#,
+        &mut writing,
+    )
+    .expect("the turn runs");
+    assert!(
+        !record_for(&home.path, &scratch).read().is_empty(),
+        "this test needs a record to ignore"
+    );
+
+    let mut unattended = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    a_run_turn_remembering(
+        &scratch,
+        &home.path,
+        None,
+        r#"{"command":"touch anyway.txt"}"#,
+        &mut unattended,
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        unattended.seen.lock().unwrap().len(),
+        1,
+        "a turn with nobody to ask ran a line unasked on the strength of a record"
+    );
+}
+
+/// RUN-19: the refusal is made twice, once where the prompt is drawn and again where the answer is
+/// acted on. A front end answering with a key the prompt never offered must not be able to put a
+/// line into a record that outlives the session, and a line naming a file to write is one the
+/// prompt never offers the key for.
+#[test]
+fn answering_with_a_key_the_prompt_did_not_offer_records_nothing() {
+    let scratch = Scratch::new("run-remembered-unoffered");
+    let home = Scratch::new("run-remembered-unoffered-home");
+    let mut confirmer =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_and_record());
+    a_run_turn_remembering(
+        &scratch,
+        &home.path,
+        Some("a-session"),
+        r#"{"command":"echo hello > out.txt"}"#,
+        &mut confirmer,
+    )
+    .expect("the turn runs");
+
+    let asked = confirmer.seen.lock().unwrap();
+    let request = asked.first().expect("the person was asked");
+    assert!(
+        !request.may_record(),
+        "the prompt offered to remember a line that writes a file"
+    );
+    assert!(
+        record_for(&home.path, &scratch).read().is_empty(),
+        "a key the prompt did not offer put a line into the record"
+    );
+}
+
+/// RUN-14, RUN-19: the advice about vouching is advice about a prompt, and no prompt will return
+/// for a line a record already covers. So the quarantined result points at `read_output`, which is
+/// the way to see this one, and stops there rather than naming a key nobody will be offered.
+#[test]
+fn a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching() {
+    let scratch = Scratch::new("run-remembered-advice");
+    let home = Scratch::new("run-remembered-advice-home");
+    std::fs::write(scratch.path.join("notes.txt"), "some lines\n").unwrap();
+
+    let mut writing = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_and_record());
+    a_run_turn_remembering(
+        &scratch,
+        &home.path,
+        Some("the-first-session"),
+        r#"{"command":"cat notes.txt"}"#,
+        &mut writing,
+    )
+    .expect("the turn runs");
+
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat notes.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut later = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read it")
+            .with_home(Some(home.path.clone()))
+            .remembering(Some("a-later-session".to_string())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut later,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    assert!(
+        later.seen.lock().unwrap().is_empty(),
+        "this test needs the record to have stopped the prompt"
+    );
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("read_output"),
+        "the planner was not told it can ask to see this result: {second}"
+    );
+    assert!(
+        !second.contains("vouching for every stage"),
+        "the planner was pointed at a prompt that will not be drawn again: {second}"
+    );
+}
+
 /// The whole point of the gate: the user is asked before anything executes, and a refusal means
 /// nothing ran.
 #[test]

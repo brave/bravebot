@@ -2233,6 +2233,10 @@ fn event_loop(
             }
             Action::Status => {
                 let theme = crate::theme::name();
+                // Read here rather than held, for the reason the run prompt reads it where it would
+                // draw: the file belongs to every session begun in this directory, so a person
+                // asking what they are carrying should be told what the file says now.
+                let record = remembered_record(&workspace);
                 let report = crate::status::report(&crate::status::Facts {
                     session_name: stored.title(),
                     session_id: stored.id(),
@@ -2255,6 +2259,12 @@ fn event_loop(
                     programs: &programs,
                     looping: session.looping(),
                     goal: session.goal(),
+                    remembered: record
+                        .as_ref()
+                        .map(|(store, lines)| crate::status::Remembered {
+                            lines,
+                            path: store.path(),
+                        }),
                 });
                 session.report(report);
                 needs_draw = true;
@@ -2393,6 +2403,7 @@ fn event_loop(
                         trust,
                         programs,
                         &permissions,
+                        stored.id(),
                     )?;
 
                     session.last_turn_backups = workspace.take_backups();
@@ -3773,6 +3784,30 @@ fn goal_check_animated(
     Ok((carrying_on, sink.events().to_vec()))
 }
 
+/// The record of lines remembered past a session for this workspace, and what it holds now.
+///
+/// `None` on a machine that names no state directory, which is a session with nothing to report.
+///
+/// The reading directory rather than the writable one: a session that adds nothing to
+/// `~/.bravebot` still honours what an earlier one recorded, so it is still carrying those answers
+/// and still has to be able to read them back.
+///
+/// Read rather than held, and keyed by the workspace root, which is the tree a person answered
+/// about: what `make check` does depends on the tree it runs in.
+fn remembered_record(
+    workspace: &Workspace,
+) -> Option<(
+    bravebot_agent::remembered::Store,
+    bravebot_core::remembered::Remembered,
+)> {
+    let store = bravebot_agent::remembered::Store::new(
+        &bravebot_agent::home::directory()?,
+        workspace.root(),
+    );
+    let lines = store.read();
+    Some((store, lines))
+}
+
 /// Run a turn on a worker thread, redrawing while it works.
 ///
 /// The turn itself blocks on network requests, so running it here would freeze the indicator on
@@ -3793,6 +3828,10 @@ fn run_turn_animated(
     trust: TrustStore,
     programs: TrustedPrograms,
     permissions: &Permissions,
+    // This session's own identifier. It travels with the task because a run prompt may be answered
+    // with the key whose grant outlives the session, and the record of that says which session
+    // pressed it so that `/status` can tell a person which answers they are still carrying.
+    session_id: &str,
 ) -> io::Result<(Conversation, TrustStore, TrustedPrograms, Vec<Stamped>)> {
     // The prompt is in the transcript by now, and drawn before anything that might take a moment:
     // a check that has to run the AWS CLI holds the frame for as long as the process takes, and
@@ -3836,6 +3875,9 @@ fn run_turn_animated(
     let mut task = Task::new(prompt)
         .with_rounds(None)
         .with_home(bravebot_agent::home::directory())
+        // There is somebody in front of this, so a run prompt here may offer the key whose answer
+        // outlives the session. A one-shot run says nothing here and reads no record.
+        .remembering(Some(session_id.to_string()))
         .with_model(session.model().map(str::to_string))
         .with_effort(session.effort_in_force())
         .with_permissions(permissions.clone())

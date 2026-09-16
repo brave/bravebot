@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/core/src/incognito.rs
   - crates/agent/src/home.rs
+  - crates/agent/src/remembered.rs
   - crates/tui/src/store.rs
   - crates/tui/src/sessions.rs
   - crates/cli/src/main.rs
@@ -83,7 +84,7 @@ hold gate names and paths, which is a record of a session having happened and wh
 An incognito session reads the settings, the recorded model and theme, the standing instructions,
 the skills and the imported credentials, exactly as an ordinary one does. Only writing is refused. The
 record of command lines somebody asked to be remembered past a session, which
-[tools/run.md](tools/run.md) specifies and nothing yet builds, is read here on the same terms: a line
+[tools/run.md](tools/run.md) governs, is read here on the same terms: a line
 already in it stops the asking as it does anywhere, and the key that would add one is not offered.
 
 **Why.** A session that could not read its own configuration would not be private, it would be
@@ -97,6 +98,8 @@ reaches for the wrong one is visible in review.
 
 `verified-by: bravebot_tui::incognito::no_prompt_is_written_down`
 `verified-by: bravebot_tui::incognito::a_choice_applies_to_the_session_and_is_not_recorded`
+`verified-by: bravebot_agent::incognito::no_remembered_line_is_written_down`
+`verified-by: bravebot_agent::incognito::a_line_an_earlier_session_recorded_is_still_honoured`
 
 <a id="INCOG-6"></a>
 ### INCOG-6: asking is one way, and composes with every other way of starting

@@ -144,10 +144,13 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
-    /// Approves without vouching for the programs, where it approves at all. Remembering writes a
+    /// Approves without vouching for the programs and without recording anything past the session,
+    /// where it approves at all. Remembering writes a
     /// standing permission into the session record, which outlives the mode: that record can be
     /// resumed in another, and the vouched list would then claim a person approved programs nobody
-    /// ever showed them.
+    /// ever showed them. A line recorded past the session is the same objection over a longer
+    /// lifetime: no prompt was drawn for a key to reach, so a record saying somebody chose to
+    /// remember a line they were never shown would be a standing permission nobody granted.
     ///
     /// Accepting edits does not accept runs. A write lands in a tree that `git diff` will show in
     /// full afterwards; a command runs with everything the user's shell has and leaves no diff.
@@ -352,6 +355,10 @@ mod tests {
         let run = confining.confirm_run(&a_run());
         assert!(run.approved());
         assert!(!run.remember, "a standing permission outlived the mode");
+        assert!(
+            !run.record,
+            "a mode that draws no prompt recorded an answer past the session"
+        );
         assert_eq!(confining.confirm_manifest(&a_plan()), Decision::Approve);
     }
 
