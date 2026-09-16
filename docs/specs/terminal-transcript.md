@@ -189,6 +189,7 @@ scheme's own foreground in roughly nine schemes out of ten.
 `verified-by: bravebot_tui::theme::an_osc_reply_with_a_pale_background_is_light`
 `verified-by: bravebot_tui::theme::brave_keeps_named_slots_for_the_terminals_own_meanings`
 `verified-by: bravebot_tui::theme::an_aside_is_a_shade_picked_for_the_background_rather_than_a_slot`
+`verified-by: bravebot_tui::render::the_scroller_names_the_mode_in_a_shade_and_not_a_slot`
 
 <a id="VIEW-10"></a>
 ### VIEW-10: a palette a person chose paints every role from that table
