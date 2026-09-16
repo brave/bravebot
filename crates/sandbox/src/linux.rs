@@ -15,10 +15,11 @@
 use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
 use crate::{Sandbox, SandboxError};
 use landlock::{
-    ABI, Access, AccessFs, CompatLevel, Compatible, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
-    path_beneath_rules,
+    ABI, Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, RulesetAttr,
+    RulesetCreatedAttr, RulesetError, RulesetStatus, path_beneath_rules,
 };
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::Command;
 
 /// The Landlock ABI this backend targets. ABI v1 is the widest supported set, so
@@ -46,6 +47,37 @@ fn landlock_abi_version() -> libc::c_long {
             LANDLOCK_CREATE_RULESET_VERSION,
         )
     }
+}
+
+/// A rule for every path in `paths`, or an error saying how many produced none.
+///
+/// A Landlock rule is a right attached to an open descriptor, so a path nothing can open
+/// cannot be named in one, and the rule builder skips such a path rather than reporting
+/// it. A ruleset built straight from that builder therefore confines the process to fewer
+/// paths than the policy listed while the policy reads as applied in full.
+fn rules_for_every_path(
+    paths: &[PathBuf],
+    access: BitFlags<AccessFs>,
+) -> std::io::Result<Vec<Result<PathBeneath<PathFd>, RulesetError>>> {
+    let rules: Vec<_> = path_beneath_rules(paths, access).collect();
+    if rules.len() != paths.len() {
+        // Which paths, found by asking again, since the builder reports only the rules it
+        // produced. The second pass is on the refusal path alone, and it names the grant
+        // that is missing rather than leaving a count for somebody to work back from.
+        let missing: Vec<_> = paths
+            .iter()
+            .filter(|path| PathFd::new(path).is_err())
+            .map(|path| path.display().to_string())
+            .collect();
+        return Err(std::io::Error::other(format!(
+            "landlock: {} of the {} paths the policy names have no rule ({}); refusing \
+             rather than confining to less than the policy asked for",
+            paths.len() - rules.len(),
+            paths.len(),
+            missing.join(", ")
+        )));
+    }
+    Ok(rules)
 }
 
 /// Landlock-based confinement.
@@ -129,6 +161,26 @@ impl Sandbox for LandlockSandbox {
             });
         }
 
+        // A path nothing can open is a grant this backend cannot install, and installing
+        // the rest of the policy instead would hand the caller a narrower confinement
+        // than the one it asked for with nothing saying so. The caller hears it here,
+        // before a process exists, rather than from a program refused a path the policy
+        // named.
+        if let Some(e) = policy
+            .readable
+            .iter()
+            .chain(policy.writable.iter())
+            .find_map(|path| PathFd::new(path).err())
+        {
+            return Err(SandboxError::SetupFailed {
+                mechanism: "landlock",
+                detail: format!(
+                    "the policy names a path no rule can be built for ({e}); refusing \
+                     rather than confining to less than it asked for"
+                ),
+            });
+        }
+
         let mut command = Command::new(program);
         command.args(args);
 
@@ -153,19 +205,19 @@ impl Sandbox for LandlockSandbox {
 
                 if !readable.is_empty() {
                     ruleset = ruleset
-                        .add_rules(path_beneath_rules(
+                        .add_rules(rules_for_every_path(
                             &readable,
                             AccessFs::from_read(TARGET_ABI),
-                        ))
+                        )?)
                         .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
                 }
 
                 if !writable.is_empty() {
                     ruleset = ruleset
-                        .add_rules(path_beneath_rules(
+                        .add_rules(rules_for_every_path(
                             &writable,
                             AccessFs::from_all(TARGET_ABI),
-                        ))
+                        )?)
                         .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
                 }
 
@@ -207,14 +259,20 @@ mod tests {
     /// binary and the libraries it links, and Landlock has no exemption for that, while
     /// withholding the network or subprocesses is refused outright because neither
     /// denial is enforceable here.
+    ///
+    /// Only the library directories this machine has: naming one it does not is a policy
+    /// this backend refuses, and `/lib64` is absent on a distribution whose architecture
+    /// never had it.
     fn loadable_policy() -> SandboxPolicy {
-        SandboxPolicy::strict()
-            .allow_network_egress()
-            .allow_subprocesses()
-            .allow_read("/usr")
-            .allow_read("/lib")
-            .allow_read("/lib64")
-            .allow_read("/bin")
+        ["/usr", "/lib", "/lib64", "/bin"]
+            .into_iter()
+            .filter(|path| std::path::Path::new(path).exists())
+            .fold(
+                SandboxPolicy::strict()
+                    .allow_network_egress()
+                    .allow_subprocesses(),
+                SandboxPolicy::allow_read,
+            )
     }
 
     /// Landlock is absent on kernels before 5.13 and in container runtimes that do not
@@ -380,9 +438,9 @@ mod tests {
             return;
         };
 
-        // The directory has to be there before the ruleset is built: a rule for a path that
-        // cannot be opened is dropped rather than refused, so a missing directory is no grant
-        // at all and the write below would fail for a reason that proves nothing.
+        // The directory has to be there before the policy is built: a path that cannot be
+        // opened is a grant this backend refuses, so a missing directory would produce no
+        // command at all and the write below would never be reached.
         let dir = crate::testutil::scratch_dir("bravebot-landlock-granted-write");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
@@ -445,6 +503,58 @@ mod tests {
             Some(CAT_FAILED),
             "the read was not what failed"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The refusal before the spawn leaves a window: a path can go away between the check
+    /// and the exec, and the rules are built on the far side of a fork where no error can
+    /// reach the caller as anything but a failure to spawn. A dropped rule has to stop the
+    /// exec there too, or the window is a process running under a policy nobody applied in
+    /// full.
+    #[test]
+    fn a_ruleset_is_not_built_with_a_path_missing_from_it() {
+        let err = rules_for_every_path(
+            &[PathBuf::from("/bravebot-no-such-path")],
+            AccessFs::from_read(TARGET_ABI),
+        )
+        .expect_err("must refuse to build a ruleset short of a path");
+        assert!(
+            err.to_string().contains("/bravebot-no-such-path"),
+            "the refusal has to name the path that has no rule: {err}"
+        );
+    }
+
+    /// A policy is the list of paths a caller decided a program may reach, so a backend
+    /// granting fewer of them than it was given leaves nobody able to read the guarantee
+    /// off the policy: the process runs, the record says the policy was applied, and the
+    /// one path the caller cared about is the one that was dropped.
+    #[test]
+    fn a_path_that_cannot_be_opened_is_refused_rather_than_dropped() {
+        let dir = crate::testutil::scratch_dir("bravebot-landlock-absent-path");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let absent = dir.join("not-created-yet");
+
+        // Both lists, because a check over one of them leaves the other silently narrowing.
+        for policy in [
+            loadable_policy().allow_read(&absent),
+            loadable_policy().allow_write(&absent),
+        ] {
+            let err = LandlockSandbox
+                .command("/bin/true", &[], &policy)
+                .expect_err("must refuse a grant it cannot install");
+            match err {
+                SandboxError::SetupFailed { mechanism, detail } => {
+                    assert_eq!(mechanism, "landlock");
+                    assert!(
+                        detail.contains(&absent.display().to_string()),
+                        "the refusal has to name the path: {detail}"
+                    );
+                }
+                other => panic!("expected SetupFailed naming the path, got: {other:?}"),
+            }
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }

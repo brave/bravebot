@@ -101,6 +101,26 @@ road.
 `verified-by: bravebot_cli::main::doctor_says_whether_the_kernel_enforces_network_denial`
 `verified-by: bravebot_cli::main::confinement_that_could_not_be_established_fails_the_run`
 
+<a id="SANDBOX-6"></a>
+### SANDBOX-6: every path a policy names is granted, or the policy is refused
+
+A policy is granted as written. A backend that cannot install a grant for one of the paths refuses
+the policy and names that path, rather than confining the process to the rest of them. Where a
+backend can grant a path that does not exist yet, the profile carries that grant as named; where it
+cannot, the refusal arrives before the process starts, and again where a path goes away between
+that refusal and the exec.
+
+**Why.** A policy is the list a caller decided a program may reach, so a process running under
+fewer of those paths than the policy names is the silent degradation [SANDBOX-1](#SANDBOX-1)
+forbids, reached one grant at a time: the process runs, the record says the policy was applied,
+and the program is refused a path somebody granted it. Which paths a backend can name is a
+platform difference a caller can work with, and a grant that vanished without being reported is
+not.
+
+`verified-by: bravebot_sandbox::linux::a_path_that_cannot_be_opened_is_refused_rather_than_dropped`
+`verified-by: bravebot_sandbox::linux::a_ruleset_is_not_built_with_a_path_missing_from_it`
+`verified-by: bravebot_sandbox::macos::a_path_that_is_not_there_yet_is_granted_as_named`
+
 ## Programs a person asked for
 
 A program `run` ([tools/run.md](tools/run.md)) starts is unconfined: it gets the access the user's
@@ -222,12 +242,13 @@ output trusted.
   the socket instead. On Linux the right that governs connecting to a pathname socket arrives many
   ABI versions after the one this backend targets, so a connect there is neither granted nor
   deniable, and a profile meaning to bound one needs that ABI and a kernel carrying it.
-- The two backends disagree about a path that does not exist yet. On Linux a path a policy names and
-  cannot open is dropped rather than refused, so a scope naming `~/.ssh/known_hosts` on a fresh
-  account grants nothing and says nothing, and the push meets the refusal the scope existed to
-  prevent. On macOS the same name goes into the profile and the file can then be created. Granting
-  less than a policy asked for without saying so is the same degradation [SANDBOX-1](#SANDBOX-1)
-  forbids of an unavailable backend.
+- A profile has to name paths that are already there, on the backend that cannot name any other
+  kind. A path that does not exist yet goes into a macOS profile and the file can then be created,
+  while on Linux a grant is a right on an open descriptor, so such a path cannot be named in one at
+  all and the policy is refused ([SANDBOX-6](#SANDBOX-6)). A scope naming `~/.ssh/known_hosts` on a
+  fresh account is therefore a `run` that does not start rather than a push that fails for no stated
+  reason, and what the compiler owes the profile is to create the file, name the directory holding
+  it, or leave the scope out.
 - The base has to be written down. A profile as generated here denies everything and then names what
   a program may reach, on both backends, so "everything except this key" is not expressible and the
   base has to carry what an ordinary build reads.
