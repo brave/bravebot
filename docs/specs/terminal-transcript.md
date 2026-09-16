@@ -496,3 +496,32 @@ which is drawn before any file this program reads has been looked for.
 `verified-by: bravebot_tui::indicator::the_indicator_stands_still_where_no_motion_is_asked_for`
 `verified-by: bravebot_tui::indicator::motion_nobody_declined_still_moves`
 `verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
+
+
+<a id="VIEW-22"></a>
+### VIEW-22: failed and cancelled turns have distinct visible status
+
+A failed turn shows a reason below its status and in its transcript entry. The reason uses fixed
+text and the backend's known status and request count. It remains visible with the audit expanded
+or collapsed, after resizing, and while reading older scrollback. Long reasons wrap within the
+available space. Terminal control characters are not drawn.
+
+Failure, cancellation, and success have distinct labels. A successful turn after a failure shows
+its own status. Failure labels use the failure colour; shared details keep their muted colour.
+Ending a turn preserves the visible scrollback position, including when the status changes height.
+The live session's export includes its failure and cancellation entries.
+
+`verified-by: bravebot_tui::app::failure_reporting_uses_safe_fields_in_the_transcript_and_status`
+`verified-by: bravebot_tui::frame::a_failed_turn_says_why_with_the_audit_expanded`
+`verified-by: bravebot_tui::frame::a_failed_turn_says_why_with_the_audit_collapsed`
+`verified-by: bravebot_tui::frame::a_long_failure_reason_is_not_lost`
+`verified-by: bravebot_tui::frame::a_failure_reason_carrying_terminal_controls_is_drawn_inert`
+`verified-by: bravebot_tui::frame::a_failure_reason_survives_a_resize`
+`verified-by: bravebot_tui::frame::a_failed_turn_is_called_failed_rather_than_stopped`
+`verified-by: bravebot_tui::frame::a_turn_that_succeeds_after_a_failure_says_so`
+`verified-by: bravebot_tui::frame::an_export_of_a_failed_turn_says_why_it_failed`
+`verified-by: bravebot_tui::failure_history::turn_endings_keep_the_visible_history_anchor`
+`verified-by: bravebot_tui::outcome_colours::regression_success_cost_uses_neutral_colour`
+`verified-by: bravebot_tui::outcome_colours::failure_label_uses_failure_colour`
+
+`verified-by: bravebot_tui::frame::cancellation_has_its_own_status_even_when_the_prompt_returns`

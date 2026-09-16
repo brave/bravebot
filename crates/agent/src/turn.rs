@@ -357,7 +357,7 @@ const TOOL_BUDGET_SPENT: &str = "(from the system, not the user)";
 #[derive(Debug)]
 pub enum TurnError {
     /// The user asked for the turn to stop.
-    Cancelled,
+    Cancelled { attempts: Option<u32> },
     /// Routing could not be precommitted.
     Precommit(String),
     /// A file operation failed or was refused.
@@ -377,7 +377,7 @@ pub enum TurnError {
 impl fmt::Display for TurnError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Cancelled => write!(f, "cancelled"),
+            Self::Cancelled { .. } => write!(f, "cancelled"),
             Self::Precommit(detail) => write!(f, "{detail}"),
             Self::Workspace(e) => write!(f, "{e}"),
             Self::Chat(e) => write!(f, "{e}"),
@@ -387,6 +387,25 @@ impl fmt::Display for TurnError {
 }
 
 impl std::error::Error for TurnError {}
+
+impl TurnError {
+    /// Classify a failure or cancellation without copying raw error text.
+    pub fn ending(&self) -> crate::outcome::Ending {
+        use crate::outcome::{Category, Diagnosis, Ending};
+        match self {
+            Self::Cancelled { attempts } => Ending::Stopped {
+                attempts: *attempts,
+            },
+            Self::Chat(error) => Ending::Failed(error.diagnosis()),
+            Self::Workspace(_) => Ending::Failed(Diagnosis::of(Category::Workspace)),
+            // A precommit that would not hold and a plan that would not run are both this program
+            // failing to get a turn off the ground, whatever the wording of either.
+            Self::Precommit(_) | Self::Manifest { .. } => {
+                Ending::Failed(Diagnosis::of(Category::Internal))
+            }
+        }
+    }
+}
 
 impl From<WorkspaceError> for TurnError {
     fn from(value: WorkspaceError) -> Self {
@@ -400,7 +419,9 @@ impl From<crate::backend::BackendError> for TurnError {
         // failure of the call. Reported as one, it would be written into the transcript as
         // something that went wrong with the model.
         if value.is_cancelled() {
-            return Self::Cancelled;
+            return Self::Cancelled {
+                attempts: value.diagnosis().attempts,
+            };
         }
         Self::Chat(value)
     }
@@ -1561,8 +1582,13 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 (note, body, false, Some(reported))
             }
             Err(error) => {
-                let note = format!("error: the delegate could not finish: {error}");
-                let body = format!("{TOOL_BUDGET_SPENT} The delegate {id} did not finish: {error}");
+                let note = match error.ending() {
+                    crate::outcome::Ending::Stopped { .. } => {
+                        "the delegate was stopped".to_string()
+                    }
+                    _ => "the delegate could not finish".to_string(),
+                };
+                let body = format!("{TOOL_BUDGET_SPENT} The delegate {id} did not finish.");
                 (note, body, true, None)
             }
         };
@@ -2084,7 +2110,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             // Checked before each request rather than mid-flight: a request already on the wire has
             // to finish, but nothing new needs to start.
             if cancel.is_cancelled() {
-                return Err(TurnError::Cancelled);
+                return Err(TurnError::Cancelled { attempts: Some(0) });
             }
 
             // Whatever finished while the last round was running, before the planner is asked what to
@@ -2150,10 +2176,16 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                     // The conversation is untouched, so the turn carries on with the history it had.
                     // Failing the turn over this would turn a request that might still have fit into
                     // one that certainly does not happen.
-                    Err(e) => {
+                    Err(crate::compact::CompactError::Chat(error)) if error.is_cancelled() => {
+                        return Err(error.into());
+                    }
+                    Err(error) => {
                         may_compact = false;
-                        reporter
-                            .narration(format!("the conversation could not be summarised: {e}"));
+                        let category = error.category();
+                        reporter.narration(format!(
+                                "the conversation could not be summarised ({}); continuing with the existing context",
+                                category.name()
+                            ));
                     }
                 }
             }
@@ -2391,7 +2423,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                 // Checked per call, because a tool may write. Stopping here means the remaining
                 // calls in this round never run.
                 if cancel.is_cancelled() {
-                    return Err(TurnError::Cancelled);
+                    return Err(TurnError::Cancelled { attempts: Some(0) });
                 }
 
                 // Wrapped per call rather than once for the turn, because the borrow has to be given
@@ -2433,6 +2465,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                     call,
                 );
                 let took = ran_at.elapsed();
+                let cancellation = output.cancelled;
 
                 // Started here rather than inside the call. A delegate outlives the call that asked
                 // for one: that call has already answered, and what is still here when the work
@@ -2860,6 +2893,11 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                     Some(id) => Message::tool_result(id, body),
                     None => Message::user(body),
                 });
+                if let Some(cancelled) = cancellation {
+                    return Err(TurnError::Cancelled {
+                        attempts: cancelled.attempts,
+                    });
+                }
             }
 
             // Anything the person typed while that round ran, put in front of the next one.

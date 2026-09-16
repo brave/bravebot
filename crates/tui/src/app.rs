@@ -3807,7 +3807,7 @@ fn compact_animated(
             &mut sink,
             worker_trust,
         )
-        .map_err(|e| e.to_string());
+        .map_err(|error| error.category().name().to_string());
         (done, conversation, sink)
     });
 
@@ -4357,7 +4357,7 @@ fn goal_check_animated(
     }
     // Read rather than assumed: `begin_aside` below sets the session working again, and after that
     // there is no telling a turn that answered from one that did not.
-    if session.finished.is_none_or(|turn| turn.failed) {
+    if session.finished.is_none_or(|turn| turn.ending.unanswered()) {
         return Ok((None, Vec::new()));
     }
     // An invariant of the branch above, not a runtime condition.
@@ -4914,7 +4914,8 @@ fn run_turn_animated(
     // stopped it deliberately, so there is nothing to report.
     let events = sink.events().to_vec();
 
-    if matches!(outcome, Err(turn::TurnError::Cancelled)) {
+    if let Err(turn::TurnError::Cancelled { attempts }) = &outcome {
+        session.stopped(*attempts);
         // Not when the cancel was somebody leaving. Restoring returns the session to idle, which
         // would put it back in the loop it was on its way out of, and hand back a prompt to a box
         // nobody is going to see.
@@ -5229,7 +5230,7 @@ fn fold_outcome(
             // Stopping a turn stops the loop it was part of, and stops one the person was not
             // part way through: the key means "stop what is happening", and a schedule that
             // survived it would send the next prompt as though nothing had been said.
-            if matches!(error, turn::TurnError::Cancelled) {
+            if matches!(error, turn::TurnError::Cancelled { .. }) {
                 session.stop_loop();
                 // And the watch whose fire this turn was, since stopping a fire's turn is the
                 // most exact way anybody has to say which watch they are finished with: they are
@@ -5250,7 +5251,15 @@ fn fold_outcome(
             // The trail is kept on failure too: a refusal is exactly when a user wants
             // to see what happened.
             let trail = sink.lines();
-            session.fail(t!(session_error, problem = error));
+            // Format safe fields instead of an error that may contain endpoint credentials.
+            let ending = error.ending();
+            match ending {
+                bravebot_agent::Ending::Failed(diagnosis) => {
+                    session.fail(crate::state::failure_reason(diagnosis), ending);
+                }
+                bravebot_agent::Ending::Stopped { attempts } => session.stopped(attempts),
+                bravebot_agent::Ending::Done => {}
+            }
             // The panel reports the last turn's cache split, and this turn is now the last one. It
             // measured nothing, so leaving the turn before it on the panel would report a figure
             // against an exchange that never finished.
@@ -9018,7 +9027,7 @@ mod tests {
                 "the plan was not approved, so nothing ran".to_string(),
             ))
         };
-        let cancelled = || Err(bravebot_agent::TurnError::Cancelled);
+        let cancelled = || Err(bravebot_agent::TurnError::Cancelled { attempts: None });
 
         let pressed = Cancel::new();
         pressed.cancel();
@@ -12031,8 +12040,8 @@ mod tests {
 
     /// A goal is a condition for a session and not for one turn, so stopping a turn going the
     /// wrong way has to leave it: a person who has to retype the condition every time they
-    /// interrupt cannot steer the work at all. The stopped turn is recorded as failed, which is
-    /// what keeps it from being judged and sent straight back.
+    /// interrupt cannot steer the work at all. The stopped turn is recorded as stopped, which is
+    /// what keeps it from being judged and sent straight back: there is no answer to judge.
     #[test]
     fn stopping_a_turn_leaves_the_goal_set() {
         let mut session = Session::new("none");
@@ -12044,7 +12053,7 @@ mod tests {
 
         fold_outcome(
             &mut session,
-            Err(turn::TurnError::Cancelled),
+            Err(turn::TurnError::Cancelled { attempts: None }),
             Trail::new(),
             Carried {
                 trust: TrustStore::new("/work"),
@@ -12069,9 +12078,16 @@ mod tests {
             Some("cargo test exits 0"),
             "the stop took the goal off with the turn"
         );
+        assert_eq!(
+            session.finished.map(|turn| turn.ending),
+            Some(bravebot_agent::Ending::Stopped { attempts: None }),
+            "a stop was not recorded as one"
+        );
         assert!(
-            session.finished.is_some_and(|turn| turn.failed),
-            "a stopped turn was not recorded as failed, so it would be judged"
+            session
+                .finished
+                .is_some_and(|turn| turn.ending.unanswered()),
+            "a stopped turn looked answered, so it would be judged"
         );
     }
 
@@ -12149,5 +12165,55 @@ mod tests {
 
         assert_eq!(session.occupancy(), crate::state::Occupancy::Unmeasured);
         assert_eq!(session.fullness(), None);
+    }
+
+    #[test]
+    fn failure_reporting_uses_safe_fields_in_the_transcript_and_status() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "read a file");
+        session.submit().unwrap();
+        let error = bravebot_agent::backend::BackendError::Attempted {
+            attempts: 3,
+            cause: Box::new(bravebot_agent::backend::BackendError::from(
+                bravebot_aichat::ChatError::Egress(bravebot_net::EgressError::Status {
+                    url: "https://example.test/PRIVATE_PATH?key=PRIVATE_QUERY".into(),
+                    status: 503,
+                }),
+            )),
+        };
+        fold_outcome(
+            &mut session,
+            Err(turn::TurnError::from(error)),
+            Trail::new(),
+            Carried {
+                asked: Default::default(),
+                trust: TrustStore::new("/work"),
+                programs: TrustedPrograms::new(),
+            },
+            Occupied {
+                budget: 1000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            Asked {
+                name: "test-model".into(),
+                comparable: true,
+            },
+            Line {
+                text: "read a file",
+                wrote: Wrote::ThePerson,
+            },
+            &workspace_for_test(),
+        );
+        let reason = session.failure_said().expect("visible reason");
+        assert!(reason.contains("503"), "{reason}");
+        assert!(reason.contains("3 attempts"), "{reason}");
+        let exported = render::as_markdown(&session, "test");
+        for secret in ["PRIVATE_PATH", "PRIVATE_QUERY", "example.test"] {
+            assert!(!reason.contains(secret), "{reason}");
+            assert!(!exported.contains(secret), "{exported}");
+        }
+        assert_eq!(exported.matches("503").count(), 1);
+        assert!(session.finished.unwrap().failed());
     }
 }

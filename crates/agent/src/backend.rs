@@ -9,6 +9,7 @@
 //! environment and the user's own settings file before any turn starts, and nothing a model says can
 //! reach it.
 
+use crate::outcome::{Category, Diagnosis};
 use bravebot_aichat::protocol::ChatRequest;
 use bravebot_aichat::{AichatClient, ChatError, Completion, Progress, Subscription};
 use bravebot_bedrock::{BedrockClient, BedrockError};
@@ -39,6 +40,12 @@ pub enum BackendError {
     NoGatewayToken {
         provider: String,
     },
+    /// The failure and the number of requests handed to egress, including probes.
+    /// Zero means preparation failed before egress; a policy refusal still counts as an attempt.
+    Attempted {
+        attempts: u32,
+        cause: Box<BackendError>,
+    },
 }
 
 impl fmt::Display for BackendError {
@@ -51,6 +58,10 @@ impl fmt::Display for BackendError {
                 "no credential for the {provider} gateway: set one of the variables its `env` names, \
                  or `options.apiKey` in its settings block"
             ),
+            // The count is not said. It is a figure for a record and for a line composed from
+            // structure; this is the explanation of what went wrong, and it is the same explanation
+            // whichever attempt it arrived on.
+            Self::Attempted { cause, .. } => write!(f, "{cause}"),
         }
     }
 }
@@ -75,10 +86,99 @@ impl BackendError {
     /// Both backends have their own way of saying it, and a stop reported as a failure is written
     /// into the transcript as something that went wrong with the model.
     pub fn is_cancelled(&self) -> bool {
-        matches!(
-            self,
-            Self::Aichat(ChatError::Cancelled) | Self::Bedrock(BedrockError::Cancelled)
-        )
+        match self {
+            Self::Aichat(ChatError::Cancelled) | Self::Bedrock(BedrockError::Cancelled) => true,
+            Self::Attempted { cause, .. } => cause.is_cancelled(),
+            _ => false,
+        }
+    }
+
+    /// Preserve the client count even if preparing a later attempt fails.
+    pub(crate) fn counted(self, attempts: u32) -> Self {
+        Self::Attempted {
+            attempts,
+            cause: Box::new(self),
+        }
+    }
+
+    /// What is safe to keep about this failure.
+    ///
+    /// Structure only: a category out of the enumerated set, and the status a service answered with
+    /// where one arrived. Nothing here reads a response body, a header, or the address the request
+    /// went to, which is what lets the answer be written into a session record and drawn on a
+    /// screen.
+    pub fn diagnosis(&self) -> Diagnosis {
+        match self {
+            Self::Attempted {
+                attempts, cause, ..
+            } => cause.diagnosis().after(*attempts),
+            Self::NoGatewayToken { .. } => Diagnosis::of(Category::Unconfigured).after(0),
+            Self::Aichat(error) => match error {
+                ChatError::Encode(_) => Diagnosis::of(Category::Internal),
+                ChatError::Subscription(_) => Diagnosis::of(Category::Unauthorized),
+                ChatError::Decode { .. } | ChatError::NoContent => {
+                    Diagnosis::of(Category::Undecodable)
+                }
+                ChatError::Incomplete => Diagnosis::of(Category::Incomplete),
+                // A stop is reported as one rather than diagnosed. Named here so the match stays
+                // exhaustive: a caller that reaches this has already decided it was a failure.
+                ChatError::Cancelled => Diagnosis::of(Category::Internal),
+                ChatError::Egress(egress) => of_egress(egress),
+            },
+            Self::Bedrock(error) => match error {
+                BedrockError::Credentials(_) => Diagnosis::of(Category::Unauthorized),
+                BedrockError::Encode(_) => Diagnosis::of(Category::Internal),
+                BedrockError::Decode { .. } | BedrockError::Frame(_) | BedrockError::NoContent => {
+                    Diagnosis::of(Category::Undecodable)
+                }
+                // A truncated stream without a protocol exception has no more specific cause.
+                BedrockError::Incomplete => Diagnosis::of(Category::Incomplete),
+                BedrockError::Reported { kind } => Diagnosis::of(match kind.as_str() {
+                    "validationException" => Category::Refused,
+                    "throttlingException" => Category::RateLimited,
+                    "internalServerException" | "serviceUnavailableException" => {
+                        Category::Unavailable
+                    }
+                    // Unknown protocol names remain a cut-off reply. Never persist their text.
+                    _ => Category::Incomplete,
+                }),
+                BedrockError::TooLong => Diagnosis::of(Category::TooLong),
+                BedrockError::NoModel => Diagnosis::of(Category::Unconfigured),
+                BedrockError::Cancelled => Diagnosis::of(Category::Internal),
+                // A stale AWS session arrives here rather than above: AWS refuses one with a
+                // status, and the statuses that mean a credential was refused are the ones the
+                // mapping below already reads as a credential having been refused. Keeping the
+                // status with it is what lets a person be told to sign in again rather than to
+                // wait.
+                BedrockError::Egress(egress) => of_egress(egress),
+            },
+        }
+    }
+}
+
+/// What is safe to keep about a transport failure.
+///
+/// The status is kept because it is a number the transport read off a response line, and it is the
+/// one figure that tells a rate limit from an outage from a refusal. The address is not: it comes
+/// from a setting, and a setting can hold a credential in a path.
+fn of_egress(error: &bravebot_net::EgressError) -> Diagnosis {
+    use bravebot_net::EgressError;
+    match error {
+        EgressError::Denied(_) => Diagnosis::of(Category::Blocked),
+        EgressError::InvalidUrl { .. } => Diagnosis::of(Category::Unconfigured),
+        EgressError::Transport { .. }
+        | EgressError::TooManyRedirects { .. }
+        | EgressError::MissingLocation { .. }
+        // A withdrawn request is reported as a stop before it reaches here. Named so the match
+        // stays exhaustive rather than because a caller sees it.
+        | EgressError::Stopped { .. } => Diagnosis::of(Category::Transport),
+        EgressError::Status { status, .. } => Diagnosis::of(match status {
+            401 | 403 => Category::Unauthorized,
+            429 => Category::RateLimited,
+            408 | 500..=599 => Category::Unavailable,
+            _ => Category::Refused,
+        })
+        .with_status(*status),
     }
 }
 
@@ -291,7 +391,9 @@ impl<'a> Backend<'a> {
                 if let Some(subscription) = subscription.as_mut() {
                     client = client.with_subscription(*subscription);
                 }
-                Ok(client.complete(policy, request)?)
+                client
+                    .complete(policy, request)
+                    .map_err(|error| BackendError::from(error).counted(client.attempts()))
             }
             Self::Bedrock {
                 config,
@@ -302,7 +404,9 @@ impl<'a> Backend<'a> {
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
-                Ok(client.complete(policy, request)?)
+                client
+                    .complete(policy, request)
+                    .map_err(|error| BackendError::from(error).counted(client.attempts()))
             }
             Self::Gateway {
                 config,
@@ -315,7 +419,9 @@ impl<'a> Backend<'a> {
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
-                Ok(client.complete(policy, request)?)
+                client
+                    .complete(policy, request)
+                    .map_err(|error| BackendError::from(error).counted(client.attempts()))
             }
         }
     }
@@ -341,7 +447,9 @@ impl<'a> Backend<'a> {
                 if let Some(subscription) = subscription.as_mut() {
                     client = client.with_subscription(*subscription);
                 }
-                Ok(client.complete_streaming(policy, request, progress)?)
+                client
+                    .complete_streaming(policy, request, progress)
+                    .map_err(|error| BackendError::from(error).counted(client.attempts()))
             }
             Self::Bedrock {
                 config,
@@ -352,7 +460,9 @@ impl<'a> Backend<'a> {
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
-                Ok(client.complete_streaming(policy, request, progress)?)
+                client
+                    .complete_streaming(policy, request, progress)
+                    .map_err(|error| BackendError::from(error).counted(client.attempts()))
             }
             Self::Gateway {
                 config,
@@ -365,7 +475,9 @@ impl<'a> Backend<'a> {
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
-                Ok(client.complete_streaming(policy, request, progress)?)
+                client
+                    .complete_streaming(policy, request, progress)
+                    .map_err(|error| BackendError::from(error).counted(client.attempts()))
             }
         }
     }
@@ -753,5 +865,95 @@ mod tests {
 
         let leo = BackendError::from(ChatError::Subscription("spent".into())).to_string();
         assert!(leo.contains("import-leo-creds"), "{leo}");
+    }
+
+    /// A gateway nothing holds a token for is a setting somebody has not finished, not a service
+    /// that went down. Nothing was sent for it, so there is no status to report and no attempt to
+    /// count: a failure claiming three attempts at a request that never left describes a wait
+    /// nobody had.
+    #[test]
+    fn a_gateway_with_nothing_holding_a_token_is_reported_as_unconfigured() {
+        let config = with_a_gateway();
+        let egress = Egress::new();
+        let (provider, wire) = config.provider_for("z-ai/glm-4.6").expect("offered");
+        let failure = gateway_client(&config, provider, wire, &egress)
+            .err()
+            .expect("refused");
+
+        let why = failure.diagnosis();
+        assert_eq!(why.category, Category::Unconfigured, "{why:?}");
+        assert_eq!(why.status, None, "{why:?}");
+        assert_eq!(
+            why.attempts,
+            Some(0),
+            "a request that never left was counted as sent: {why:?}"
+        );
+    }
+
+    /// AWS refusing the credentials a request was signed with is fixed by signing in again, and a
+    /// person shown "the service could not answer" waits for an outage that is not happening. The
+    /// two ways it arrives are a status on the response and a credential that would not resolve,
+    /// and both mean the same thing to whoever has to fix it.
+    #[test]
+    fn aws_refusing_the_credentials_it_was_signed_with_is_reported_as_unauthorized() {
+        let refused = BackendError::from(BedrockError::Egress(bravebot_net::EgressError::Status {
+            url: "https://bedrock-runtime.example/model/invoke".into(),
+            status: 403,
+        }));
+        let why = refused.diagnosis();
+        assert_eq!(why.category, Category::Unauthorized, "{why:?}");
+        assert_eq!(why.status, Some(403), "{why:?}");
+
+        let unresolved = BackendError::from(BedrockError::Credentials(
+            bravebot_bedrock::credentials::CredentialError::Refused {
+                detail: "the session has expired".into(),
+            },
+        ));
+        let why = unresolved.diagnosis();
+        assert_eq!(why.category, Category::Unauthorized, "{why:?}");
+        assert_eq!(
+            why.status, None,
+            "a status was reported for a request that was never signed: {why:?}"
+        );
+    }
+
+    /// What a service asked for and what went wrong with the connection are different things to
+    /// wait on, and the status is the only figure that tells them apart.
+    #[test]
+    fn each_status_a_service_answers_with_is_reported_as_what_it_means() {
+        let of_status = |status: u16| {
+            BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
+                url: "https://service.example/v1/chat/completions".into(),
+                status,
+            }))
+            .diagnosis()
+        };
+        assert_eq!(of_status(401).category, Category::Unauthorized);
+        assert_eq!(of_status(429).category, Category::RateLimited);
+        assert_eq!(of_status(503).category, Category::Unavailable);
+        assert_eq!(of_status(400).category, Category::Refused);
+        assert_eq!(of_status(503).status, Some(503));
+    }
+
+    /// The address a request went to comes from a setting, and a setting can hold a credential in a
+    /// path or a query. What is kept about a failure is a category, a status and a count, so there
+    /// is no field for one to travel in.
+    #[test]
+    fn what_is_kept_about_a_failure_carries_nothing_the_service_or_the_setting_said() {
+        const SECRET: &str = "s3cret-in-the-url";
+        let failure = BackendError::from(ChatError::Egress(bravebot_net::EgressError::Transport {
+            url: format!("https://service.example/v1?key={SECRET}"),
+            detail: format!("connection reset while sending {SECRET}"),
+            transient: true,
+        }))
+        .counted(3);
+
+        let kept = format!("{:?}", failure.diagnosis());
+        assert!(
+            !kept.contains(SECRET),
+            "what is kept about a failure repeated something it was told: {kept}"
+        );
+        assert_eq!(failure.diagnosis().category, Category::Transport);
+        assert_eq!(failure.diagnosis().attempts, Some(3));
     }
 }

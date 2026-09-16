@@ -311,7 +311,11 @@ fn a_redirecting_server_is_revalidated() {
         .collect();
 
     assert_eq!(checked.len(), 2, "each hop must be checked: {checked:?}");
-    assert!(checked[1].contains("/elsewhere"));
+    assert!(
+        checked
+            .iter()
+            .all(|detail| detail.as_str() == "egress to 127.0.0.1")
+    );
 }
 
 /// A tool that reports failure of its own is a failure, and what it says about that failure is

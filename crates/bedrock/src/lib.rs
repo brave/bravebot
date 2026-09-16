@@ -241,6 +241,10 @@ impl From<credentials::CredentialError> for BedrockError {
 }
 
 pub struct BedrockClient<'a> {
+    attempts: u32,
+    // Tests replace signing and credentials while exercising the real HTTP and retry paths.
+    #[cfg(test)]
+    test_request: Option<Request>,
     config: &'a Bedrock,
     egress: &'a Egress,
     cancel: Option<Cancel>,
@@ -260,8 +264,16 @@ pub struct BedrockClient<'a> {
 }
 
 impl<'a> BedrockClient<'a> {
+    /// Requests handed to egress in the last call, including capability probes.
+    pub fn attempts(&self) -> u32 {
+        self.attempts
+    }
+
     pub fn new(config: &'a Bedrock, egress: &'a Egress) -> Self {
         Self {
+            attempts: 0,
+            #[cfg(test)]
+            test_request: None,
             config,
             egress,
             cancel: None,
@@ -283,6 +295,7 @@ impl<'a> BedrockClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, BedrockError> {
+        self.attempts = 0;
         self.recall(&self.model_for(request)?);
         let mut attempt = 1;
         let mut probed = false;
@@ -299,7 +312,9 @@ impl<'a> BedrockClient<'a> {
                     probed = true;
                 }
                 Err(error) if worth_another_attempt(attempt, &error) => {
-                    std::thread::sleep(backoff(attempt));
+                    if !self.wait(backoff(attempt)) {
+                        return Err(BedrockError::Cancelled);
+                    }
                     attempt += 1;
                 }
                 result => {
@@ -366,7 +381,11 @@ impl<'a> BedrockClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, BedrockError> {
+        if self.cancelled() {
+            return Err(BedrockError::Cancelled);
+        }
         let (http, model) = self.build(request, false)?;
+        self.attempts += 1;
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // The envelope is protocol, like the JSON envelope in the other backend: the bytes come out
@@ -422,6 +441,7 @@ impl<'a> BedrockClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, BedrockError> {
+        self.attempts = 0;
         self.recall(&self.model_for(request)?);
         let mut attempt = 1;
         let mut probed = false;
@@ -471,6 +491,7 @@ impl<'a> BedrockClient<'a> {
         }
 
         let (http, model) = self.build(request, true)?;
+        self.attempts += 1;
         let stream = self.egress.fetch_streaming(
             policy,
             http,
@@ -600,6 +621,10 @@ impl<'a> BedrockClient<'a> {
         request: &ChatRequest,
         streaming: bool,
     ) -> Result<(Request, String), BedrockError> {
+        #[cfg(test)]
+        if let Some(http) = &self.test_request {
+            return Ok((http.clone(), self.model_for(request)?));
+        }
         let model = self.model_for(request)?;
 
         let converse = protocol::request_from(&request.messages, request.tools.as_deref())
@@ -1401,5 +1426,173 @@ mod tests {
     fn each_backoff_is_longer_than_the_last() {
         assert!(backoff(1) < backoff(2));
         assert!(backoff(2) < backoff(3));
+    }
+    /// Use real loopback HTTP; no AWS credentials or account is involved.
+    fn refused_requests(statuses: Vec<u16>) -> (Request, std::sync::mpsc::Receiver<()>) {
+        scripted_responses(statuses.into_iter().map(|status| format!("HTTP/1.1 {status} Refused\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").into_bytes()).collect())
+    }
+
+    fn scripted_responses(responses: Vec<Vec<u8>>) -> (Request, std::sync::mpsc::Receiver<()>) {
+        use std::io::{BufRead, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = std::io::BufReader::new(&mut stream);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+                reader.read_exact(&mut vec![0; length]).unwrap();
+                stream.write_all(&response).unwrap();
+                sent.send(()).unwrap();
+            }
+        });
+        (
+            Request::post(format!("http://{address}/converse"), b"{}".to_vec()),
+            received,
+        )
+    }
+
+    /// Both entry points count cache and effort probes, which do not advance the retry ordinal.
+    #[test]
+    fn request_counts_include_capability_probes() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        for streaming in [false, true] {
+            let config = config();
+            let egress = Egress::new();
+            let (http, received) = refused_requests(vec![403, 400, 400]);
+            let mut client = BedrockClient::new(&config, &egress);
+            client.test_request = Some(http);
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                {
+                    let mut routing = Routing::new();
+                    routing.insert_trusted("task", "test");
+                    routing
+                },
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let request = ChatRequest::new("opus-arn", vec![]);
+            let result = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            };
+            assert!(matches!(
+                result,
+                Err(BedrockError::Egress(bravebot_net::EgressError::Status {
+                    status: 400,
+                    ..
+                }))
+            ));
+            assert_eq!(client.attempts(), 3);
+            for _ in 0..3 {
+                received.recv_timeout(Duration::from_secs(2)).unwrap();
+            }
+        }
+    }
+
+    /// Announcing a retry before a wait must not count it as sent when the caller cancels.
+    #[test]
+    fn cancellation_in_backoff_counts_only_sent_requests() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let config = config();
+        let egress = Egress::new();
+        let (http, received) = refused_requests(vec![503]);
+        let cancel = Cancel::new();
+        let mut client = BedrockClient::new(&config, &egress).with_cancel(cancel.clone());
+        client.test_request = Some(http);
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            {
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "test");
+                routing
+            },
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .unwrap();
+        let request = ChatRequest::new("opus-arn", vec![]);
+        let result = client.complete_streaming(&mut policy, &request, |progress| {
+            if progress.attempt > 1 {
+                cancel.cancel();
+            }
+        });
+        assert!(matches!(result, Err(BedrockError::Cancelled)));
+        assert_eq!(client.attempts(), 1);
+        received.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(
+            client.complete(&mut policy, &request),
+            Err(BedrockError::Cancelled)
+        ));
+        assert_eq!(client.attempts(), 0, "a new call resets the previous count");
+    }
+    /// Real exception frames follow the existing retry policy and keep the final protocol kind.
+    #[test]
+    fn framed_service_exceptions_keep_their_kind_and_request_count() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        for (kind, attempts) in [
+            ("validationException", 1),
+            ("throttlingException", 3),
+            ("serviceUnavailableException", 3),
+            ("internalServerException", 3),
+            ("PRIVATE_UNKNOWN_EXCEPTION", 1),
+        ] {
+            let body = eventstream::tests::failure(kind);
+            let mut response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/vnd.amazon.eventstream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+            response.extend(body);
+            let (http, received) = scripted_responses(vec![response; attempts]);
+            let config = config();
+            let egress = Egress::new();
+            let mut client = BedrockClient::new(&config, &egress);
+            client.test_request = Some(http);
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let error = client
+                .complete_streaming(&mut policy, &ChatRequest::new("opus-arn", vec![]), |_| {})
+                .unwrap_err();
+            assert!(
+                matches!(error, BedrockError::Reported { kind: ref reported } if reported == kind)
+            );
+            assert_eq!(client.attempts(), attempts as u32);
+            for _ in 0..attempts {
+                received.recv_timeout(Duration::from_secs(2)).unwrap();
+            }
+        }
     }
 }

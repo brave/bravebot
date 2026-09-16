@@ -594,7 +594,7 @@ indicator-tokens-written = ↑ { $tokens }
 tokens-thousands = { $thousands } k
 tokens-millions = { $millions } M
 turn-done = tour { $turn } terminé
-turn-failed = tour { $turn } interrompu
+turn-failed = tour { $turn } en échec
 
 
 ## Reprendre une session qui tournait ailleurs, ou sur autre chose
@@ -778,6 +778,23 @@ session-model-substituted =
     `bravebot doctor` si un abonnement était attendu.
 session-error = erreur : { $problem }
 session-no-output = aucune sortie
+
+## Pourquoi un tour a échoué
+
+failure-unauthorized = le service a refusé les identifiants
+failure-rate-limited = le service a demandé moins de requêtes
+failure-unavailable = le service n'a pas pu répondre
+failure-refused = le service a rejeté la requête
+failure-transport = la requête n'est pas passée
+failure-incomplete = la réponse s'est arrêtée avant la fin
+failure-undecodable = la réponse n'a pas pu être lue
+failure-too-long = le modèle a atteint sa limite de sortie
+failure-unconfigured = rien ici n'était configuré pour envoyer la requête
+failure-blocked = un contrôle local a refusé de laisser sortir la requête
+failure-workspace = l'espace de travail n'a pas pu être utilisé
+failure-internal = un problème est survenu ici
+failure-with-status = { $what } (HTTP { $status })
+failure-with-attempts = { $what }, après { $attempts } tentatives
 
 
 ## Répéter une consigne
@@ -1010,3 +1027,6 @@ watching-calls = { $count ->
 # au tour qui l'a dessinee. Le compte y est car une touche sans rien derriere ne vaut pas la
 # peine. Delegues et commandes sont comptes ensemble, une seule touche ouvrant la liste des deux.
 watching-hint = { $chord } { $count } a ouvrir
+
+# A turn deliberately stopped by the user.
+turn-cancelled = tour { $turn } annulé

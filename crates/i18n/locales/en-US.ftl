@@ -637,7 +637,7 @@ tokens-millions = { $millions }M
 # Said once a turn is over, because the end of one used to be announced by the indicator
 # disappearing, and an announcement made by something vanishing is one nobody reads.
 turn-done = turn { $turn } done
-turn-failed = turn { $turn } stopped
+turn-failed = turn { $turn } failed
 
 
 ## Picking up a session that ran somewhere, or on something, else
@@ -862,6 +862,26 @@ session-model-substituted =
 session-error = error: { $problem }
 session-no-output = no output
 
+## Why a turn failed
+
+# Fixed descriptions keep raw backend error text out of the interface.
+failure-unauthorized = the service would not accept the credentials
+failure-rate-limited = the service asked for fewer requests
+failure-unavailable = the service could not answer
+failure-refused = the service rejected the request
+failure-transport = the request did not get through
+failure-incomplete = the reply stopped before it was finished
+failure-undecodable = the reply could not be read
+failure-too-long = the model reached its output limit
+failure-unconfigured = nothing here was configured to send the request
+failure-blocked = a gate here would not let the request out
+failure-workspace = the workspace could not be used
+failure-internal = something went wrong here
+# Wrapped around the reason rather than written into each of them, so a status or a count of tries
+# is said the same way whatever went wrong.
+failure-with-status = { $what } (HTTP { $status })
+failure-with-attempts = { $what }, after { $attempts } attempts
+
 
 ## Repeating a prompt
 
@@ -1070,3 +1090,6 @@ reach-no-model = in no model's context: nothing can be sent to read this
 
 # How many calls a delegate has made, where its block shows only the last few.
 delegate-more-calls = { $count } calls so far
+
+# A turn deliberately stopped by the user.
+turn-cancelled = turn { $turn } cancelled

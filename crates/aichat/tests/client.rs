@@ -385,6 +385,7 @@ fn a_completion_round_trips() {
         .complete(&mut policy, &request)
         .expect("completion succeeds");
 
+    assert_eq!(client.attempts(), 1);
     assert_eq!(completion.model, "served-model");
     // Model output is untrusted, whatever it says.
     assert_eq!(completion.content.label(), Label::untrusted_public());
@@ -741,6 +742,7 @@ fn a_stream_stopped_before_it_starts_reports_nothing() {
         .complete_streaming(&mut policy, &request, |_| reports += 1)
         .expect_err("a stopped stream produced a completion");
 
+    assert_eq!(client.attempts(), 0);
     assert!(matches!(error, ChatError::Cancelled), "{error}");
     assert_eq!(reports, 0, "the reply was read anyway");
 }
@@ -1181,12 +1183,18 @@ fn a_stop_does_not_wait_out_the_pause_between_attempts() {
         })
         .expect_err("a stopped request produced a completion");
 
+    assert_eq!(client.attempts(), 1);
     assert!(matches!(error, ChatError::Cancelled), "{error}");
     assert!(
         started.elapsed() < Duration::from_millis(500),
         "it waited out the pause: {:?}",
         started.elapsed()
     );
+    assert!(matches!(
+        client.complete(&mut policy, &request),
+        Err(ChatError::Cancelled)
+    ));
+    assert_eq!(client.attempts(), 0, "a new call resets the attempt count");
 }
 
 /// The failure that started this: a machine sleeps, the connection it had is gone, and the reply
@@ -1312,6 +1320,7 @@ fn a_request_refused_on_its_contents_is_asked_again_without_the_breakpoints() {
     let completion = client
         .complete_streaming(&mut policy, &request, |_| {})
         .expect("the turn survives the refusal");
+    assert_eq!(client.attempts(), 2);
     assert_eq!(completion.model, "served-model");
 
     let first = received.recv().expect("a first request");

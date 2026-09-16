@@ -21,6 +21,7 @@ pub mod home;
 pub mod lsp;
 pub mod manifest;
 pub mod mode;
+pub mod outcome;
 pub mod permission_mode;
 pub mod permissions;
 pub mod preamble;
@@ -48,6 +49,7 @@ pub use confirm::{Confirmer, Decision, Intent, RunDecision, RunRequest, Unattend
 pub use conversation::Conversation;
 pub use delegate::Delegated;
 pub use mode::Mode;
+pub use outcome::{Category, Diagnosis, Ending};
 pub use permission_mode::{Confining, PermissionMode};
 pub use processor::ProcessorError;
 pub use report::{Activity, IgnoreReports, Reporter};
