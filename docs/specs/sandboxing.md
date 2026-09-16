@@ -141,13 +141,57 @@ Nothing a program prints reaches the profile, and no value the model supplied ch
 plan a person could read.
 
 **The base is reviewed as code.** The loader, the system directories and a toolchain are shown by no
-prompt, so they are a fixed part of the profile rather than a grant. That base holds no credential
-directory, which is the whole of what this buys: `~/.ssh/id_rsa` and `~/.aws/credentials` are out of
-reach of a program whose plan never named them. It does hold the caches and version manager
-directories a build resolves through, and not the token files beside them: `~/.cargo/registry` and
-`~/.npm/_cacache` are in it, `~/.cargo/credentials.toml` and `~/.npmrc` are not. The configuration
-of the editor `git commit` opens is in it too. Leaving a cache out breaks every build and protects
-nothing, so a cache is part of the base rather than an exception somebody is shown.
+prompt, so they are a fixed part of the profile rather than a grant. A profile denies everything and
+then names what may be reached, so "everything except this key" is not a profile anybody can write,
+and the base is the list that carries what an ordinary build reads. That list is code: it is the
+same for every plan, nothing the model supplied and nothing an argv carries adds to it, and it
+changes only in a diff somebody reviews. What it buys is that it holds no credential directory, so
+`~/.ssh/id_rsa` and `~/.aws/credentials` are out of reach of a program whose plan never named them.
+
+| The base holds | To |
+|---|---|
+| the loader, the system libraries, the system binary directories, the locale data, terminfo, the CA bundle and the certificate directory beside it, `/etc/hosts`, `/etc/resolv.conf`, `/etc/nsswitch.conf`, `/etc/passwd`, `/dev/null`, `/dev/zero`, `/dev/random` and `/dev/urandom` | read, and write for `/dev/null` |
+| the system temporary directory this process resolved as the session opened | read and write |
+| the toolchain installs and the version manager directories a shim goes through: `~/.rustup`, `~/.cargo/bin`, `~/.nvm`, `~/.pyenv` and `~/.asdf` | read |
+| the package caches a build resolves through: `~/.cargo/registry`, `~/.cargo/git`, `~/.cargo/.package-cache`, `~/.npm/_cacache`, `~/.cache/pip`, `~/.cache/go-build`, `~/go/pkg/mod`, `~/.m2/repository`, `~/.gradle/caches`, `~/.gradle/wrapper` and `~/.gradle/native` | read and write |
+| the git configuration any stage running `git` reads: `~/.gitconfig` and `~/.config/git/config` | read |
+| the configuration directory of each editor the list names, which is what the editor `git commit` opens reads, and that editor's own state directory | read, and write for the state directory |
+
+Leaving a cache out breaks every build and protects nothing, so a cache is part of the base rather
+than an exception somebody is shown. A cache is writable because a build that cannot write one
+fetches everything again or fails outright, and the price of that is a write no plan accounted for:
+a program can leave something in a package cache a later build reads. An install is read-only for
+the opposite reason. A build that would install a toolchain fails under the base, and a line
+somebody then runs unconfined costs less than letting a confined stage replace the `cargo` or the
+`node` that a later stage in the same pipeline resolves to. The git configuration is in the base
+rather than in a scope because every stage running `git` reads it for an identity, and it can name a
+credential store without holding one. The remote scope below naming `~/.gitconfig` as well costs
+nothing.
+
+The temporary directory is the one this process resolved as the session opened, and not one a
+stage's own environment assignment names, so a line carrying a `TMPDIR=` assignment changes where a
+program writes without changing what the profile allows. A program that cannot open a temporary file
+fails outright, and that directory is one every process on the machine already reaches, so the base
+names it. What it costs is that this session's own scratch directory sits inside it
+([trust-map.md](trust-map.md)): an intermediate file a turn left there is readable by a program whose
+plan never named it, and the mode that directory is created with does not separate two processes
+running as the same account.
+
+**The base names a cache, never the directory holding it.** A package manager keeps its token beside
+its cache, so naming the parent would grant the token with it: `~/.cargo/credentials.toml` sits in
+`~/.cargo`, `~/.m2/settings.xml` holds a server password, and `~/.gradle/gradle.properties` holds a
+signing key. Each row above names the subdirectory a build reads, and a token file is out of the
+base by never being named. Where a tool keeps state at the top of its home directory rather than in
+a subdirectory, that file is named on its own, which is why the cargo lock `~/.cargo/.package-cache`
+is in a row beside the registry and the token file next to it is not. The same rule keeps
+`~/.config` out, since `~/.config/gh` is a credential store the remote scope below grants, so the
+XDG git configuration and an editor's configuration are named one directory at a time rather than
+through the directory they sit in. Which editors the base knows is in the list and is not read from
+`core.editor`, since no configuration file's contents decide what the base holds. `$HOME` itself is
+in no row, so a file in it that no row names, `~/.npmrc` and `~/.pypirc` among them, is unreachable.
+What this costs is an editor the base does not know and an editor installed outside the system
+binary directories: the first opens without its configuration, the second cannot start at all, and
+naming the directory is a person's to do in either case.
 
 **A credential is a scope the plan carries.** A push is how most sessions end, so a profile that
 refuses one is a profile somebody turns off, and a scope a person has to go and find first is that
@@ -248,10 +292,9 @@ output trusted.
   all and the policy is refused ([SANDBOX-6](#SANDBOX-6)). A scope naming `~/.ssh/known_hosts` on a
   fresh account is therefore a `run` that does not start rather than a push that fails for no stated
   reason, and what the compiler owes the profile is to create the file, name the directory holding
-  it, or leave the scope out.
-- The base has to be written down. A profile as generated here denies everything and then names what
-  a program may reach, on both backends, so "everything except this key" is not expressible and the
-  base has to carry what an ordinary build reads.
+  it, or leave the scope out. The base names more such paths than any scope does, since a machine
+  carries a few of the toolchains it lists and not the rest, so leaving an absent row out is what it
+  owes a base as well: a machine without one of them is not a machine where every `run` is refused.
 - The macOS backend clears the environment of a process it wraps. A stage receives the environment
   this process holds, less the credentials this agent authenticates with, so a `run` profile needs a
   backend that leaves the rest of that environment alone. The ssh half of the remote scope depends
