@@ -164,6 +164,26 @@ answer wrongly. Nothing here has any of those to begin with.
 
 `verified-by: none`
 
+## What the person sees
+
+<a id="PROC-11"></a>
+### PROC-11: a remark is drawn as untrusted content and nothing else
+
+The remark reaches the person watching through the quarantined path and no other: reported as
+content in no model's context, and drawn inside the margin the renderer owns, with every control
+character replaced. So it cannot paint a margin of its own, cannot make its words look like
+something bravebot said, and says on the screen whose words they are.
+
+**Why.** The remark is free text a processor authors over an untrusted file, so it is
+attacker-influenced like anything else a processor produces, and the whole of what it can do is
+say something untrue. That ceiling is held by how the remark is drawn rather than by where it
+goes, and nothing pinned it to that path: the reach it is reported with is set in one place,
+[PROC-5](#PROC-5)'s test asserts the remark is shown and that no model saw it but nothing about
+how it is drawn, and no test in the interface drew a remark at all.
+
+`verified-by: bravebot_agent::turn::what_a_processor_says_reaches_the_person_and_no_model`
+`verified-by: bravebot_tui::marking::a_remark_is_drawn_inside_the_margin_it_cannot_forge`
+
 ## Known costs
 
 - **An untrusted file's contents reach the backend.** A processor is a model call, so working on

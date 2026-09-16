@@ -6780,6 +6780,15 @@ fn what_a_processor_says_reaches_the_person_and_no_model() {
         said.preview
     );
 
+    // And told the one thing that decides how it is drawn. The reach is what the renderer's
+    // margin and control-character replacement hang off, so a remark reported with anything
+    // else is a remark drawn as though a processor could be sent to read it.
+    assert_eq!(
+        said.reach,
+        bravebot_agent::report::Reach::NoModel,
+        "the remark was not reported as content no model may reach"
+    );
+
     // The file got the document and none of the remark.
     assert_eq!(
         std::fs::read_to_string(scratch.path.join("server.py")).unwrap(),
