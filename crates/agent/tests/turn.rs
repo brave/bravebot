@@ -5933,6 +5933,46 @@ fn a_quarantined_file_is_rewritten_by_a_processor() {
     }
 }
 
+/// A processor is asked once, about pieces assembled for that call alone, so nothing sends its
+/// content again and a mark on the end of it would buy a write and no read. Its instructions are
+/// the same bytes every time the same spec runs, which is what the prompt's own mark is for.
+#[test]
+fn a_processor_asks_for_no_cache_of_the_content_it_reads() {
+    let scratch = Scratch::new("processor-no-cache");
+    std::fs::write(scratch.path.join("notes.txt"), "a line from a file\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"notes.txt"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"say what it is about"}"#,
+        ),
+        processor_reply("a line"),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("say what notes.txt is about"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let processor = bodies
+        .iter()
+        .find(|body| body.contains("You are an isolated processor"))
+        .expect("the processor's request");
+    only_the_prompt_is_marked(processor);
+}
+
 /// The scenario the whole design exists for, in a directory nobody vouched for.
 ///
 /// The planner is not shown one filename from first to last. It lists the directory, gets a
@@ -11447,8 +11487,18 @@ fn the_summariser_asks_for_no_cache_of_the_exchange_it_gives_up() {
     .expect("compacting runs")
     .expect("a long conversation has something to summarise");
 
-    let body = received.recv().expect("the summariser's request");
-    let sent: serde_json::Value = serde_json::from_str(&body).expect("json");
+    only_the_prompt_is_marked(&received.recv().expect("the summariser's request"));
+}
+
+/// A request whose conversation nothing sends again marks its prompt and nothing else. The prompt
+/// is the same bytes every time such a request is made, so its mark buys a read; a mark on the end
+/// of the conversation would buy a write and no read, a write being charged above the tokens it
+/// covers.
+///
+/// The mark travels on a content block rather than on the message, so the body is read back as JSON
+/// and each message asked whether the field is anywhere inside it.
+fn only_the_prompt_is_marked(body: &str) {
+    let sent: serde_json::Value = serde_json::from_str(body).expect("json");
     let messages = sent["messages"].as_array().expect("messages");
     let marked: Vec<usize> = messages
         .iter()
@@ -11461,7 +11511,7 @@ fn the_summariser_asks_for_no_cache_of_the_exchange_it_gives_up() {
     assert_eq!(
         marked,
         vec![0],
-        "the summariser marked something other than its own instructions: {body}"
+        "a prefix nothing sends again was marked for caching: {body}"
     );
 }
 
@@ -11896,6 +11946,56 @@ fn asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone() 
 
     // Watched as it arrived, so a person waiting on an answer sees it being written.
     assert_eq!(watched, "because the grammar nests");
+}
+
+/// The exchange in a judge's request is one nothing sends again: the check after this one carries
+/// a turn's work on the end of the same exchange, in front of the same condition, so the prefix a
+/// mark here would pay to store is never asked for again. The judge is the request where that adds
+/// up, being sent after every turn of a session working towards a condition.
+#[test]
+fn the_judge_asks_for_no_cache_of_the_exchange_it_judges() {
+    let (endpoint, received) = serve_sequence(vec![reply_with("MET\nthe listing shows a.txt")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::goal(
+        &config,
+        &egress,
+        bravebot_agent::goal::Check::of(&an_exchange_to_ask_beside(), "a.txt exists"),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("judging a stopping condition must not be refused");
+
+    only_the_prompt_is_marked(&received.recv().expect("the check's request"));
+}
+
+/// An aside is answered once and its exchange is not sent again: a second question is asked over an
+/// exchange the work has moved on since, in front of words of its own, so nothing reads back what a
+/// mark on the end of this one would store.
+#[test]
+fn a_question_asked_beside_the_work_asks_for_no_cache_of_the_exchange() {
+    let (endpoint, received) = serve_sequence(vec![reply_with("because the grammar nests")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::aside(
+        &config,
+        &egress,
+        bravebot_agent::aside::Question::about(&an_exchange_to_ask_beside(), "why recursive?"),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        |_| {},
+    )
+    .expect("asking beside the work must not be refused");
+
+    only_the_prompt_is_marked(&received.recv().expect("the question's request"));
 }
 
 /// The answer goes into the record, so it goes past the gate that decides what the planner may
