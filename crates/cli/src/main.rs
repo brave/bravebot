@@ -940,16 +940,20 @@ fn resume_named(id: &str, skip_permissions: bool) -> ExitCode {
         return ExitCode::FAILURE;
     };
     match bravebot_tui::sessions::load(&directory, id) {
+        // Printing what a run produced is what naming one here is for (SESSION-10), and a session
+        // that started a run says to name it. So this answers on stdout and succeeds: the id was
+        // real, the record was read, and the person got the thing they asked for. Reporting it as a
+        // failure would make the line the session printed read as advice that does not work.
         Some(record) if record.manifest.is_some() => {
-            eprintln!("{}", bravebot_tui::resume::manifest_note());
+            println!("{}", t!(cli_manifest_run, id = id));
             if let Some(stored) = &record.manifest {
                 let report = stored.describe();
                 if !report.is_empty() {
-                    eprintln!();
-                    eprint!("{report}");
+                    println!();
+                    print!("{report}");
                 }
             }
-            ExitCode::FAILURE
+            ExitCode::SUCCESS
         }
         Some(record) => interactive(
             bravebot_tui::app::Start::Resuming(Box::new(record)),

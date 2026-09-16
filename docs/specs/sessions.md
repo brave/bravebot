@@ -203,6 +203,12 @@ manifest run has none. The picker marks the row and refuses Enter rather than lo
 session and asking the model to carry on from nothing. Naming one on the command line prints
 what it produced, and still does not continue it.
 
+That print is a report and not a refusal: it goes to stdout and exits successfully, because reading
+a run back is what naming one is for, and a session that started a run tells the person this is the
+command to read it with. Non-zero is for the failures [cli.md](cli.md) describes, and spending it
+here would make the session's own advice look broken to the person who followed it. Forking one is
+still refused, since a fork continues a conversation and there is none to continue.
+
 `verified-by: bravebot_tui::sessions::a_manifest_run_is_recorded_and_cannot_be_resumed`
 `verified-by: bravebot_tui::resume::a_manifest_session_cannot_be_resumed`
 `verified-by: bravebot_tui::resume::a_manifest_run_is_marked_in_the_list`

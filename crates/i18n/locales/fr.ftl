@@ -87,6 +87,7 @@ cli-workspace-problem = erreur d'espace de travail : { $problem }
 cli-interface-problem = erreur d'interface : { $problem }
 cli-directory-unknown = impossible de savoir de quel répertoire il s'agit
 cli-no-such-session = aucune session { $id } dans ce répertoire
+cli-manifest-run = { $id } est une exécution planifiée : il n'y a rien à poursuivre, voici ce qu'elle a fait
 cli-nothing-to-continue = aucune session à reprendre dans ce répertoire
 cli-fork-needs-a-name = --fork nécessite un identifiant de session
 cli-piped-input-unreadable = avertissement : impossible de lire l'entrée redirigée : { $problem }
@@ -843,15 +844,15 @@ btw-ended-unexpectedly = la question s'est terminée de façon inattendue
 btw-answered = demandé à côté du travail, et répondu là ; { $chord } l'ouvre à nouveau
 btw-failed = la question n'a pas pu recevoir de réponse : { $problem }
 
-# Ce que la session dit d'une exécution planifiée lancée depuis elle. Une telle exécution n'est
-# pas un tour de la conversation : rien n'en entre dans l'échange, donc ces lignes et
-# l'enregistrement de l'exécution sont tout ce qu'il en reste.
+# Ce que la session dit d'une exécution planifiée lancée depuis elle. Le plan, chaque étape et la
+# réponse s'affichent au fur et à mesure ; il ne reste donc à dire qu'une exécution commence, où
+# elle a été enregistrée, et ce qui a échoué là où quelque chose a échoué. Qu'une exécution ne soit
+# pas un tour de la conversation tient au mode et non à cette exécution : cela n'est pas dit ici.
 manifest-needs-a-task = /manifest prend la tâche à planifier, comme /manifest résume la documentation
 manifest-began = la tâche entière est planifiée d'abord ; la session attend ici jusqu'à la fin de l'exécution
 manifest-ended-unexpectedly = l'exécution s'est terminée de façon inattendue
-manifest-finished = l'exécution est terminée ; rien de ce qui en vient ne rejoint cette conversation
 manifest-failed = l'exécution s'est arrêtée : { $problem }
-manifest-recorded = enregistré sous { $id } ; à lire avec bravebot --resume { $id }
+manifest-recorded = enregistré sous { $id } ; à relire avec bravebot --resume { $id }
 
 
 ## L'écran d'accueil

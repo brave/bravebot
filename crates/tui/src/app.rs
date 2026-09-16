@@ -3973,8 +3973,9 @@ fn manifest_animated(
         Ok(finished) => {
             // Released for a screen, exactly as a turn's reply is, and into the transcript rather
             // than into the conversation: what this run said is not something a later turn holds.
+            // Nothing is said about that here. A reply that arrived is the run having worked, and a
+            // line under it announcing what did not happen reads as a complaint about the run.
             session.narrate(finished.reply_for_display());
-            session.note(t!(manifest_finished));
         }
         // Stopped by the person, so there is nothing to report. The transcript already holds the
         // steps that ran, and a complaint about a run they turned off themselves is noise.
@@ -3983,9 +3984,10 @@ fn manifest_animated(
             session.note(t!(manifest_failed, problem = failure.to_string()));
         }
     }
-    // Last, so it is the line under whichever of those was said. The run's own record is where the
-    // plan, the proposal and the steps are kept in full, and this is the only place its name
-    // appears: without it a person would have to find the run in the picker to read it.
+    // Last, so it is the line under the reply or under what went wrong. The run's own record is
+    // where the plan, the proposal and the steps are kept in full, and the id is the only way in:
+    // the picker marks a run's row but refuses Enter on it, so naming the id on the command line is
+    // what reads one back, and a person who never saw this line has no way to ask for it.
     if let Some(id) = recorded {
         session.note(t!(manifest_recorded, id = &id));
     }
