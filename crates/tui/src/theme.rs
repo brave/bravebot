@@ -871,6 +871,12 @@ fn light_from_colorfgbg(value: &str) -> Option<bool> {
 
 /// Rec. 709 luma. Integer so a threshold is a comparison and not a float that two call sites
 /// could round differently.
+///
+/// This, `parse_osc11`, `channels_slash` and `channel` read the reply to the OSC 11 query, which
+/// only the Unix arm of `light_background` sends, so on Windows the tests that pin the parsing are
+/// all that reach them. Compiled for those rather than allowed as dead code, so a Windows binary
+/// carries no parser nothing calls.
+#[cfg(any(unix, test))]
 fn light_from_rgb((r, g, b): Rgb) -> bool {
     2126u32 * u32::from(r) + 7152 * u32::from(g) + 722 * u32::from(b) > 1_270_000
 }
@@ -915,10 +921,14 @@ fn query_osc11(out: &mut impl Write) -> Option<bool> {
     None
 }
 
+/// Unix alone, unlike the parsing around it: this is the framing of a reply nothing on Windows
+/// asks for, so not even a test reaches it there.
+#[cfg(unix)]
 fn osc_complete(buf: &[u8]) -> bool {
     buf.contains(&0x07) || buf.windows(2).any(|w| w == [0x1b, b'\\'])
 }
 
+#[cfg(any(unix, test))]
 fn parse_osc11(buf: &[u8]) -> Option<Rgb> {
     let text = std::str::from_utf8(buf).ok()?;
     let rest = text.split("11;").nth(1)?;
@@ -944,6 +954,7 @@ fn channel6(hex: &str) -> Option<Rgb> {
     ))
 }
 
+#[cfg(any(unix, test))]
 fn channels_slash(spec: &str) -> Option<Rgb> {
     let mut parts = spec.split('/');
     let r = channel(parts.next()?)?;
@@ -952,6 +963,7 @@ fn channels_slash(spec: &str) -> Option<Rgb> {
     Some((r, g, b))
 }
 
+#[cfg(any(unix, test))]
 fn channel(hex: &str) -> Option<u8> {
     let v = u32::from_str_radix(hex, 16).ok()?;
     match hex.len() {

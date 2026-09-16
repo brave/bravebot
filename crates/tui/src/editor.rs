@@ -431,10 +431,15 @@ mod tests {
     }
 
     /// A scratch directory, removed with the test.
+    ///
+    /// Every test that uses one looks up a program on the PATH by mode bits or reaches it through
+    /// a symlink, so all of them are Unix-only and so is this.
+    #[cfg(unix)]
     struct Scratch {
         path: PathBuf,
     }
 
+    #[cfg(unix)]
     impl Scratch {
         fn new(name: &str) -> Self {
             let path = crate::testutil::scratch_dir(&format!("bravebot-editor-{name}"));
@@ -443,7 +448,6 @@ mod tests {
             Self { path }
         }
 
-        #[cfg(unix)]
         fn program(&self, name: &str) -> PathBuf {
             use std::os::unix::fs::PermissionsExt;
             let path = self.path.join(name);
@@ -453,6 +457,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Drop for Scratch {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
