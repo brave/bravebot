@@ -214,6 +214,7 @@ fn no_session_record_is_written() {
             programs: &bravebot_core::programs::TrustedPrograms::from_iter([]),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
 

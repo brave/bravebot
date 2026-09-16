@@ -178,6 +178,7 @@ fn a_session_is_named_once_there_is_a_record_to_name() {
             programs: &a_program_list(),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
 
@@ -217,6 +218,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             programs: &a_program_list(),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
     handle.append_audit(
@@ -295,6 +297,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             programs: &a_program_list(),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
     assert_eq!(sessions::list(&scratch.project).len(), 1);
@@ -327,6 +330,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             programs: &TrustedPrograms::new(),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
     assert_eq!(sessions::list(&elsewhere).len(), 1);
@@ -352,6 +356,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             programs: &a_program_list(),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
     let listed = sessions::list(&scratch.project);
@@ -502,6 +507,7 @@ fn the_audit_keeps_the_time_each_event_happened() {
             programs: &TrustedPrograms::new(),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
 
@@ -567,6 +573,7 @@ fn renaming_a_session_rewrites_the_record_immediately() {
             programs: &TrustedPrograms::new(),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
     let derived = sessions::list(&scratch.project)[0].title.clone();
@@ -612,6 +619,7 @@ fn a_chosen_name_survives_the_next_turn() {
             programs: &TrustedPrograms::new(),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
 
@@ -683,6 +691,7 @@ fn a_resumed_session_can_still_open_the_directory_it_added() {
             programs: &TrustedPrograms::new(),
             directories: workspace.added_directories(),
             manifest: None,
+            rewind: &[],
         },
     );
 
@@ -749,6 +758,7 @@ fn a_directory_that_has_gone_since_is_reported_on_resume() {
             programs: &TrustedPrograms::new(),
             directories: workspace.added_directories(),
             manifest: None,
+            rewind: &[],
         },
     );
     std::fs::remove_dir_all(&notes).expect("the directory goes away between sessions");
@@ -801,6 +811,7 @@ fn a_manifest_run_is_recorded_and_cannot_be_resumed() {
             programs: &TrustedPrograms::new(),
             directories: &[],
             manifest: Some(&stored),
+            rewind: &[],
         },
     );
 
@@ -846,6 +857,7 @@ fn the_session_continued_is_the_one_written_here() {
             programs: &a_program_list(),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
 
@@ -885,6 +897,7 @@ fn the_session_continued_is_the_one_written_here() {
             programs: &TrustedPrograms::new(),
             directories: &[],
             manifest: Some(&stored),
+            rewind: &[],
         },
     );
 
@@ -931,6 +944,7 @@ fn a_session_that_changes_directory_is_recorded_where_it_moved_to() {
         programs: &programs,
         directories: &[],
         manifest: None,
+        rewind: &[],
     };
 
     let nothing_vouched_for = TrustStore::new("/work");
@@ -1005,6 +1019,7 @@ fn a_session_that_moves_before_anything_is_written_is_recorded_where_it_moved_to
         programs: &programs,
         directories: &[],
         manifest: None,
+        rewind: &[],
     };
 
     let mut handle = Handle::begin(&scratch.project);
@@ -1074,6 +1089,7 @@ fn a_record_written_before_the_first_turn_follows_the_session_when_it_moves() {
         programs: &programs,
         directories: &[],
         manifest: None,
+        rewind: &[],
     };
 
     let mut handle = Handle::begin(&scratch.project);
@@ -1128,6 +1144,7 @@ fn session_records_and_audit_trails_are_written_mode_0600() {
             programs: &programs,
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
 
@@ -1234,6 +1251,7 @@ fn pre_existing_session_files_and_directories_are_tightened_on_write() {
             programs: &programs,
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
 
@@ -1319,6 +1337,7 @@ fn forking_narrows_the_session_directory_it_writes_into() {
             programs: &programs,
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
     handle.append_audit(
@@ -1379,6 +1398,7 @@ fn a_question_asked_beside_the_work_survives_a_resume() {
             programs: &a_program_list(),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
 
@@ -1448,6 +1468,7 @@ fn a_pasted_picture_is_kept_with_the_session_and_comes_back_on_a_resume() {
             programs: &a_program_list(),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
 
@@ -1505,6 +1526,7 @@ fn an_answer_the_planner_could_not_have_held_is_not_written_down() {
             programs: &a_program_list(),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
 
@@ -1531,4 +1553,92 @@ fn an_answer_the_planner_could_not_have_held_is_not_written_down() {
         "an answer the record did not keep came back as one it did"
     );
     assert!(!recalled.asides[0].kept);
+}
+
+/// Closing the program and picking the session up again gave a session with nothing to undo,
+/// while the transcript describing what those turns wrote came back in full. What a rewind needs
+/// is in the record now, so the point comes back with the transcript it belongs to.
+#[test]
+fn a_rewind_point_survives_being_written_and_read_back() {
+    use bravebot_agent::workspace::{Backup, Before};
+
+    let scratch = Scratch::new("rewind-point");
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(&scratch.project);
+
+    let point = bravebot_tui::state::RewindPoint {
+        snapshot: a_point_before_turn_two(&conversation),
+        backups: vec![Backup {
+            path: scratch.project.join("notes.md"),
+            was: Before::Bytes(b"the first line\n".to_vec()),
+        }],
+        prompt: "add a second line to notes.md".to_string(),
+    };
+
+    handle.save(
+        "add a second line to notes.md",
+        Standing {
+            conversation: &conversation.snapshot(),
+            turns: 2,
+            tokens: 1_200,
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &a_trust_map(),
+            programs: &a_program_list(),
+            directories: &[],
+            manifest: None,
+            rewind: &[point],
+        },
+    );
+
+    let record = sessions::load(&scratch.project, handle.id()).expect("the record");
+    let back = record.rewind_points(&scratch.project);
+
+    assert_eq!(back.len(), 1, "the point was not written down");
+    assert_eq!(
+        back[0].prompt, "add a second line to notes.md",
+        "the list has nothing to name the turn by"
+    );
+    assert_eq!(
+        back[0].snapshot.turns, 1,
+        "the point landed on another turn"
+    );
+    assert_eq!(
+        back[0].backups[0].path,
+        scratch.project.join("notes.md"),
+        "the path came back somewhere else"
+    );
+    assert_eq!(
+        back[0].backups[0].was,
+        Before::Bytes(b"the first line\n".to_vec()),
+        "what the file held did not survive the record"
+    );
+    assert!(
+        back[0].snapshot.trust.is_trusted("notes.md"),
+        "the map that stood before the turn did not come back with it"
+    );
+    assert!(
+        !back[0].snapshot.trust.is_trusted("src/fetched.json"),
+        "a path the session had marked untrusted came back trusted"
+    );
+}
+
+/// The state before the second turn of a session, for a record to carry.
+fn a_point_before_turn_two(conversation: &Conversation) -> bravebot_tui::state::TurnSnapshot {
+    bravebot_tui::state::TurnSnapshot {
+        conversation: conversation.snapshot(),
+        turns: 1,
+        tokens: 600,
+        spend: BTreeMap::from([(1, 600)]),
+        timing: BTreeMap::new(),
+        cached: None,
+        trust: a_trust_map(),
+        programs: a_program_list(),
+        transcript_len: 2,
+        title: "add a line to notes.md".to_string(),
+        was_wrote: true,
+    }
 }

@@ -669,6 +669,46 @@ pub struct TurnSnapshot {
     pub was_wrote: bool,
 }
 
+/// How many turns back a rewind may reach.
+///
+/// A point holds a copy of the conversation as well as the bytes the turn wrote over, and every
+/// one of them is written into the record after every turn, so depth is paid for continuously by
+/// sessions that never rewind at all. Five is set at the case a rewind exists for, which is a
+/// mistake noticed a few prompts after it was made rather than one noticed an hour later: past
+/// that the conversation has usually moved somewhere a wholesale rewind would not be wanted.
+pub const MAX_REWIND_POINTS: usize = 5;
+
+/// One point a session can be put back to, and what it would take to get there.
+///
+/// The snapshot is taken before the turn begins and the backups arrive when it ends, so a point
+/// exists for the whole of the turn it describes and is only complete afterwards.
+#[derive(Debug, Clone)]
+pub struct RewindPoint {
+    /// What the session held before the turn.
+    pub snapshot: TurnSnapshot,
+    /// What the files that turn wrote to held before it wrote to them.
+    pub backups: Vec<bravebot_agent::workspace::Backup>,
+    /// The prompt the turn began with.
+    ///
+    /// Kept here rather than read back out of the transcript, because the list is offered after
+    /// the transcript has been rewound past other points and a turn is named by what was asked
+    /// of it.
+    pub prompt: String,
+}
+
+/// What the rewind points are holding in memory, which is what the budget is spent on.
+fn held_bytes(points: &[RewindPoint]) -> usize {
+    points
+        .iter()
+        .flat_map(|point| &point.backups)
+        .map(|backup| match &backup.was {
+            bravebot_agent::workspace::Before::Bytes(bytes) => bytes.len(),
+            bravebot_agent::workspace::Before::Nothing
+            | bravebot_agent::workspace::Before::NotKept => 0,
+        })
+        .sum()
+}
+
 /// Everything the interface needs to draw itself.
 #[derive(Debug)]
 pub struct Session {
@@ -914,15 +954,13 @@ pub struct Session {
     /// Cleared between turns. `None` before the first request goes out, which is the only
     /// moment the generic word is all there is to say.
     pub phase: Option<Phase>,
-    /// What the files the last turn wrote to held before it wrote to them.
+    /// The points this session can be put back to, oldest first.
     ///
-    /// Taken off the workspace when the turn ends, so `/undo` can put them back.
-    pub last_turn_backups: Vec<bravebot_agent::workspace::Backup>,
-    /// The state before the most recent turn.
-    ///
-    /// Captured in memory right before a turn starts, and kept here so `/undo` can rebuild
-    /// the session to match it.
-    pub previous_turn: Option<TurnSnapshot>,
+    /// Private, because the depth and the budget hold over the whole list rather than over any
+    /// one point: a caller that could push onto it would be a caller that could grow it without
+    /// bound. Written with [`Session::open_rewind_point`] and [`Session::keep_backups`], read
+    /// with [`Session::rewind_points`].
+    rewind_points: Vec<RewindPoint>,
     /// Where the turn in flight began, for the snapshot that rewinds to it.
     ///
     /// Private, because it records what [`Session::begin_turn`] found rather than a figure anybody
@@ -1141,8 +1179,7 @@ impl Session {
             queued: Vec::new(),
             looping: None,
             goal: None,
-            last_turn_backups: Vec::new(),
-            previous_turn: None,
+            rewind_points: Vec::new(),
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
             streaming: String::new(),
@@ -1401,15 +1438,135 @@ impl Session {
     ///
     /// Deliberately not touching the input line, so a prompt half-typed when the user cleared is
     /// still there to send.
-    /// Give up the rewind the last turn left available.
+    /// Give up every rewind the turns so far left available.
     ///
-    /// A snapshot describes the session as it stood before the last turn, so anything that
-    /// changes the session outside a turn leaves it describing something else. Rewinding to a
-    /// stale snapshot would undo that change as well, silently and under a line saying one turn
-    /// was rewound.
+    /// A point describes the session as it stood before some turn, so anything that changes the
+    /// session outside a turn leaves every one of them describing something else. Rewinding to a
+    /// stale point would undo that change as well, silently and under a line saying the session
+    /// went back to a turn. All of them go rather than the newest, since the change lands after
+    /// the newest and therefore before none of them.
     pub fn close_rewind_window(&mut self) {
-        self.previous_turn = None;
-        self.last_turn_backups.clear();
+        self.rewind_points.clear();
+    }
+
+    /// Open a point for the turn about to begin.
+    pub fn open_rewind_point(&mut self, snapshot: TurnSnapshot, prompt: String) {
+        self.rewind_points.push(RewindPoint {
+            snapshot,
+            backups: Vec::new(),
+            prompt,
+        });
+        self.hold_rewind_points();
+    }
+
+    /// Keep what the turn that just ended wrote over, against the point it opened.
+    ///
+    /// Dropped where no point is open, which is a turn whose window something closed while it
+    /// ran: the backups belong to a point nothing can rewind to, and holding them would spend
+    /// the budget on bytes no rewind will ever read.
+    pub fn keep_backups(&mut self, backups: Vec<bravebot_agent::workspace::Backup>) {
+        let Some(point) = self.rewind_points.last_mut() else {
+            return;
+        };
+        point.backups = backups;
+        self.hold_rewind_points();
+    }
+
+    /// The points this session can be put back to, oldest first.
+    pub fn rewind_points(&self) -> &[RewindPoint] {
+        &self.rewind_points
+    }
+
+    /// Put back the points a record was holding, oldest first, into the transcript `conversation`
+    /// was just replayed into.
+    ///
+    /// Each point's place in the transcript is found again here rather than read off the record.
+    /// An index into the transcript is a fact about the list one process drew, and a resumed
+    /// session draws another: it opens with a line saying it was resumed, and it carries each
+    /// turn's trail where the live session carried events.
+    ///
+    /// It is found by measuring the point's own conversation against the one replayed, rather
+    /// than by counting turns. The transcript holds one entry per thing the conversation
+    /// recounts, so a point whose conversation recounts that many fewer begins that many entries
+    /// from the end, whatever else is above it. Turn numbers do not answer it: a shell-mode
+    /// command puts a line in the conversation without being a turn, so a replayed transcript can
+    /// hold more prompts than the session ever counted turns.
+    pub fn restore_rewind_points(
+        &mut self,
+        points: Vec<RewindPoint>,
+        conversation: &bravebot_agent::Conversation,
+    ) {
+        let whole = conversation.recounted().len();
+        let places: Vec<usize> = points
+            .iter()
+            .map(|point| {
+                let theirs =
+                    bravebot_agent::Conversation::restored(point.snapshot.conversation.clone())
+                        .recounted()
+                        .len();
+                self.transcript
+                    .len()
+                    .saturating_sub(whole.saturating_sub(theirs))
+            })
+            .collect();
+        self.rewind_points = points;
+        for (point, at) in self.rewind_points.iter_mut().zip(places) {
+            point.snapshot.transcript_len = at;
+        }
+        self.hold_rewind_points();
+    }
+
+    /// Take the last `steps` turns' points, and everything needed to put the tree back.
+    ///
+    /// `None` where the session holds fewer than `steps` points, so asking to go further back
+    /// than it remembers rewinds nothing: landing on the furthest point it happens to hold would
+    /// report a session put back somewhere it is not.
+    ///
+    /// One backup per path, the oldest, since that is the state being asked for. A path written
+    /// in two of the undone turns goes back to what it held before the first of them, and
+    /// carrying the later copy as well would write the middle state over the answer, or report a
+    /// path as refused when the copy that mattered did go back.
+    pub fn take_rewind(
+        &mut self,
+        steps: usize,
+    ) -> Option<(TurnSnapshot, Vec<bravebot_agent::workspace::Backup>)> {
+        if steps == 0 || steps > self.rewind_points.len() {
+            return None;
+        }
+        let mut undone = self
+            .rewind_points
+            .split_off(self.rewind_points.len() - steps);
+        let mut seen = std::collections::HashSet::new();
+        let mut backups = Vec::new();
+        for point in &mut undone {
+            for backup in std::mem::take(&mut point.backups) {
+                if seen.insert(backup.path.clone()) {
+                    backups.push(backup);
+                }
+            }
+        }
+        undone
+            .into_iter()
+            .next()
+            .map(|point| (point.snapshot, backups))
+    }
+
+    /// Hold the points to what a session may keep: the depth, and the bytes.
+    ///
+    /// The oldest go first. A rewind is reached for about the turn just gone or one of the few
+    /// before it, so the point furthest back is the one whose loss costs least, and dropping a
+    /// newer point to keep an older one would leave a stack with a hole nothing can walk past.
+    /// The newest is never dropped: a turn whose own writes fill the budget still has to be
+    /// undoable, which is the turn most likely to be worth undoing.
+    fn hold_rewind_points(&mut self) {
+        while self.rewind_points.len() > MAX_REWIND_POINTS {
+            self.rewind_points.remove(0);
+        }
+        while self.rewind_points.len() > 1
+            && held_bytes(&self.rewind_points) > bravebot_agent::workspace::MAX_REWIND_BYTES
+        {
+            self.rewind_points.remove(0);
+        }
     }
 
     pub fn clear(&mut self) {
@@ -7882,28 +8039,245 @@ mod tests {
     #[test]
     fn closing_the_rewind_window_leaves_nothing_to_rewind_to() {
         let mut s = session();
-        s.previous_turn = Some(TurnSnapshot {
+        s.open_rewind_point(snapshot_before(0), "the first thing".into());
+        s.keep_backups(vec![held("/tmp/whatever", Before::Nothing)]);
+        s.open_rewind_point(snapshot_before(1), "the second thing".into());
+
+        s.close_rewind_window();
+
+        assert!(s.rewind_points().is_empty());
+    }
+
+    /// The state before some turn, for a test that only needs a point to exist.
+    fn snapshot_before(turns: usize) -> TurnSnapshot {
+        TurnSnapshot {
             conversation: bravebot_agent::Conversation::new().snapshot(),
-            turns: 1,
+            turns,
             tokens: 10,
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
             cached: None,
             trust: bravebot_core::trust::TrustStore::new("/work"),
             programs: bravebot_core::programs::TrustedPrograms::default(),
-            transcript_len: 0,
+            transcript_len: turns,
             title: "a session".to_string(),
             was_wrote: true,
-        });
-        s.last_turn_backups.push(bravebot_agent::workspace::Backup {
-            path: std::path::PathBuf::from("/tmp/whatever"),
-            was: bravebot_agent::workspace::Before::Nothing,
-        });
+        }
+    }
 
-        s.close_rewind_window();
+    use bravebot_agent::workspace::{Backup, Before};
 
-        assert!(s.previous_turn.is_none());
-        assert!(s.last_turn_backups.is_empty());
+    /// What a path held before a turn wrote to it.
+    fn held(path: &str, was: Before) -> Backup {
+        Backup {
+            path: std::path::PathBuf::from(path),
+            was,
+        }
+    }
+
+    /// The point the issue is about: a mistake is usually noticed a turn or two after it was
+    /// made, so a session that remembers only the turn that just ended remembers the one case
+    /// least likely to need it.
+    #[test]
+    fn a_rewind_reaches_past_the_turn_that_just_ended() {
+        let mut s = session();
+        s.open_rewind_point(snapshot_before(0), "the first thing".into());
+        s.keep_backups(vec![held("/work/one", Before::Nothing)]);
+        s.open_rewind_point(snapshot_before(1), "the second thing".into());
+        s.keep_backups(vec![held("/work/two", Before::Nothing)]);
+
+        let (snapshot, backups) = s.take_rewind(2).expect("two turns to go back");
+
+        assert_eq!(snapshot.turns, 0, "two turns back is not before the first");
+        assert_eq!(backups.len(), 2, "one of the two turns' writes was dropped");
+        assert!(
+            s.rewind_points().is_empty(),
+            "a point that was rewound past is still offered"
+        );
+    }
+
+    /// Going back further than the session remembers has no honest answer, and landing on the
+    /// furthest point it happens to hold would report a tree put back somewhere it is not.
+    #[test]
+    fn going_back_further_than_the_session_remembers_rewinds_nothing() {
+        let mut s = session();
+        s.open_rewind_point(snapshot_before(0), "the only thing".into());
+
+        assert!(s.take_rewind(2).is_none());
+        assert_eq!(
+            s.rewind_points().len(),
+            1,
+            "the point that could not be reached was consumed anyway"
+        );
+    }
+
+    /// A path two of the undone turns wrote to goes back to what it held before the first of
+    /// them. Carrying the later copy as well would write the middle state over the answer.
+    #[test]
+    fn a_path_written_in_two_undone_turns_goes_back_to_before_the_first() {
+        let mut s = session();
+        s.open_rewind_point(snapshot_before(0), "the first thing".into());
+        s.keep_backups(vec![held(
+            "/work/notes",
+            Before::Bytes(b"original".to_vec()),
+        )]);
+        s.open_rewind_point(snapshot_before(1), "the second thing".into());
+        s.keep_backups(vec![held(
+            "/work/notes",
+            Before::Bytes(b"after the first turn".to_vec()),
+        )]);
+
+        let (_, backups) = s.take_rewind(2).expect("two turns to go back");
+
+        assert_eq!(backups.len(), 1, "the same path is put back twice");
+        assert_eq!(
+            backups[0].was,
+            Before::Bytes(b"original".to_vec()),
+            "the path went back to the middle of the rewind"
+        );
+    }
+
+    /// The depth is what bounds a record written after every turn, so it holds however many
+    /// turns the session has had. The oldest goes, since a rewind walks back from the newest and
+    /// a stack with a hole in it cannot be walked past one.
+    #[test]
+    fn a_session_keeps_no_more_points_than_it_may() {
+        let mut s = session();
+        for turn in 0..MAX_REWIND_POINTS + 2 {
+            s.open_rewind_point(snapshot_before(turn), format!("thing {turn}"));
+        }
+
+        assert_eq!(s.rewind_points().len(), MAX_REWIND_POINTS);
+        assert_eq!(
+            s.rewind_points()[0].snapshot.turns,
+            2,
+            "the points dropped were not the oldest"
+        );
+    }
+
+    /// The budget is what is held at once rather than what each turn may add, so a turn that
+    /// spends it takes the room from the turns behind it. The newest survives whatever it costs:
+    /// a turn whose own writes fill the budget is the one most likely to be worth undoing.
+    #[test]
+    fn one_turns_writes_can_cost_the_session_the_turns_behind_it() {
+        let mut s = session();
+        s.open_rewind_point(snapshot_before(0), "the first thing".into());
+        s.keep_backups(vec![held("/work/one", Before::Bytes(vec![0; 1024]))]);
+        s.open_rewind_point(snapshot_before(1), "the second thing".into());
+        s.keep_backups(vec![held(
+            "/work/two",
+            Before::Bytes(vec![0; bravebot_agent::workspace::MAX_REWIND_BYTES]),
+        )]);
+
+        assert_eq!(s.rewind_points().len(), 1, "the budget was not held to");
+        assert_eq!(
+            s.rewind_points()[0].snapshot.turns,
+            1,
+            "the turn that spent the budget is the one that was dropped"
+        );
+    }
+
+    /// An index into the transcript belongs to the process that drew it. A resumed session draws
+    /// another, opening with a line saying it was resumed, so a point read off a record has to
+    /// find its place again or a rewind would take the transcript back further than the turn.
+    #[test]
+    fn a_restored_point_finds_its_place_in_the_transcript_it_comes_back_into() {
+        use bravebot_aichat::protocol::Message;
+
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(Message::user("add a line to notes.md"));
+        conversation.push(Message::assistant("added"));
+        conversation.push(Message::user("add a second line"));
+        conversation.push(Message::assistant("added"));
+
+        let mut s = session();
+        s.replay(
+            &conversation,
+            "a title",
+            &crate::sessions::Recalled {
+                trails: Default::default(),
+                todos: Default::default(),
+                asides: Vec::new(),
+            },
+        );
+
+        // Recorded against a transcript that opened with the prompt, where the second turn
+        // began at entry two. This one opens with the resumed line, so it begins at entry three.
+        let mut point = RewindPoint {
+            snapshot: snapshot_before(1),
+            backups: Vec::new(),
+            prompt: "add a second line".into(),
+        };
+        let mut before = bravebot_agent::Conversation::new();
+        before.push(Message::user("add a line to notes.md"));
+        before.push(Message::assistant("added"));
+        point.snapshot.conversation = before.snapshot();
+        point.snapshot.transcript_len = 2;
+
+        s.restore_rewind_points(vec![point], &conversation);
+
+        let at = s.rewind_points()[0].snapshot.transcript_len;
+        assert_eq!(
+            s.transcript[at].speaker,
+            Speaker::User,
+            "the point did not land on the prompt of the turn it undoes"
+        );
+        assert_eq!(s.transcript[at].text, "add a second line");
+    }
+
+    /// A shell-mode command puts a line in the conversation without being a turn, so a replayed
+    /// transcript holds more prompts than the session counted turns. Placing a restored point by
+    /// counting prompts would land it on the shell line and rewind a turn too far.
+    #[test]
+    fn a_shell_command_in_the_conversation_does_not_move_a_restored_point() {
+        use bravebot_aichat::protocol::Message;
+
+        let mut before = bravebot_agent::Conversation::new();
+        before.push(Message::user("add a line to notes.md"));
+        before.push(Message::assistant("added"));
+        before.push(Message::user(
+            "I ran `ls` in the shell myself. It printed: notes.md",
+        ));
+
+        let mut conversation = bravebot_agent::Conversation::restored(before.snapshot());
+        conversation.push(Message::user("add a second line"));
+        conversation.push(Message::assistant("added"));
+
+        let mut s = session();
+        s.replay(
+            &conversation,
+            "a title",
+            &crate::sessions::Recalled {
+                trails: Default::default(),
+                todos: Default::default(),
+                asides: Vec::new(),
+            },
+        );
+
+        let mut point = RewindPoint {
+            snapshot: snapshot_before(1),
+            backups: Vec::new(),
+            prompt: "add a second line".into(),
+        };
+        point.snapshot.conversation = before.snapshot();
+
+        s.restore_rewind_points(vec![point], &conversation);
+
+        let at = s.rewind_points()[0].snapshot.transcript_len;
+        assert_eq!(
+            s.transcript[at].text, "add a second line",
+            "the point landed on the shell line rather than the prompt"
+        );
+    }
+
+    /// A turn whose window something closed while it ran has no point to hang its writes on, and
+    /// keeping them would spend the budget on bytes no rewind can ever read.
+    #[test]
+    fn backups_with_no_point_to_hang_them_on_are_dropped() {
+        let mut s = session();
+        s.keep_backups(vec![held("/work/one", Before::Bytes(vec![0; 1024]))]);
+
+        assert!(s.rewind_points().is_empty());
     }
 
     /// Clearing drops the exchange, which is the whole point: a fresh context.
@@ -7921,10 +8295,9 @@ mod tests {
         assert_eq!(s.tokens, 0, "the spend survived");
         assert_eq!(s.status, Status::Idle);
         assert!(
-            s.previous_turn.is_none(),
-            "the previous turn survived clear"
+            s.rewind_points().is_empty(),
+            "the rewind points survived clear"
         );
-        assert!(s.last_turn_backups.is_empty(), "the backups survived clear");
     }
 
     /// A cache figure describes the exchange that clearing throws away, and the panel prints it

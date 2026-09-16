@@ -675,7 +675,8 @@ command-loop = Renvoyer une consigne encore et encore, à votre intervalle ou au
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-export = Exporter la transcription de la session vers un fichier markdown
-command-undo = Annuler le dernier tour et restaurer les fichiers
+command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
+command-rewind = Lister les tours qu'un rembobinage peut atteindre, ou reculer d'autant
 command-exit = Partir
 
 
@@ -686,10 +687,22 @@ session-renamed = renommée en { $title }
 session-rename-needs-a-name = /rename demande un nom, comme /rename le bug de l'analyseur
 session-rename-needs-something = /rename demande un nom qui contienne quelque chose
 session-cleared = effacée : une nouvelle session, la précédente restant reprenable
-session-last-turn-undone = session rembobinée d'un tour
-session-last-turn-undone-partly =
-    session rembobinée d'un tour, mais ces fichiers gardent ce qu'il a écrit : { $paths }
+session-rewound = session rembobinée avant le tour { $turn }
+session-rewound-partly =
+    session rembobinée avant le tour { $turn }, mais ces fichiers gardent ce qui a été
+    écrit : { $paths }
 session-nothing-to-undo = rien à annuler dans cette session
+session-rewind-points = un rembobinage revient à l'un de ceux-ci, restaurant chaque ligne jusqu'à lui :
+session-rewind-point =
+    { $turns } en arrière : avant le tour { $turn }, { $asked }, restaure { $paths }
+session-rewind-point-wrote-nothing =
+    { $turns } en arrière : avant le tour { $turn }, { $asked }, aucun fichier à restaurer
+session-rewind-needs-a-number = /rewind demande un nombre de tours, comme /rewind 2
+session-rewind-goes-no-further =
+    { $kept ->
+        [one] cette session peut reculer d'un tour, pas plus
+       *[other] cette session peut reculer de { $kept } tours, pas plus
+    }
 session-exported = transcription exportée vers { $path }
 session-export-failed = impossible d'exporter la transcription : { $problem }
 session-add-dir-needs-a-path = /add-dir demande un répertoire, comme /add-dir ~/notes

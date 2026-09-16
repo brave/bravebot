@@ -111,6 +111,13 @@ const EXPORT_COMMAND: &str = "/export";
 /// The line that rewinds the conversation and restores files changed in the last turn.
 const UNDO_COMMAND: &str = "/undo";
 
+/// The line that lists what a rewind would put back, and goes back to one of those points.
+///
+/// A word of its own rather than an argument to `/undo`, because `/undo` deliberately takes none:
+/// the table's empty argument column is what keeps `/undo the last thing I asked for` a prompt
+/// (CMD-2), and a command that takes a number cannot also do that.
+const REWIND_COMMAND: &str = "/rewind";
+
 /// The line that plans one task in full before anything is read, taking the task as its argument.
 ///
 /// Not a mode the session holds. A session is several turns over one conversation and this is one
@@ -134,7 +141,7 @@ pub struct Command {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 17] {
+pub fn commands() -> [Command; 18] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -215,6 +222,11 @@ pub fn commands() -> [Command; 17] {
             name: UNDO_COMMAND,
             argument: "",
             description: t!(command_undo),
+        },
+        Command {
+            name: REWIND_COMMAND,
+            argument: "[turns]",
+            description: t!(command_rewind),
         },
         Command {
             name: EXIT_COMMAND,
@@ -333,6 +345,10 @@ pub enum Action {
     Export(Option<String>),
     /// Undo the last turn. Needs the workspace and conversation.
     Undo,
+    /// List the points a rewind could reach, or go back to one. Needs the same as `Undo`, which
+    /// is why the argument is carried unparsed: a number that is not one is answered with a line
+    /// in the transcript, and the transcript is the loop's.
+    Rewind(String),
     Quit,
 }
 
@@ -1051,6 +1067,9 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
     }
     if line.trim() == UNDO_COMMAND {
         return Action::Undo;
+    }
+    if let Some(turns) = argument_to(line, REWIND_COMMAND) {
+        return Action::Rewind(turns.to_string());
     }
     if let Some(directory) = argument_to(line, ADD_DIR_COMMAND) {
         return Action::AddDirectory(directory.to_string());
@@ -1950,6 +1969,140 @@ fn rewind_point(
     }
 }
 
+/// Say what each point a rewind could reach wrote over, most recent first.
+///
+/// Most recent first because that is the order the numbers run in: `/rewind 1` is the turn that
+/// just ended, so a list starting at the far end would have somebody counting rows backwards to
+/// find the one they mean. It is also what lets each row carry one turn's paths rather than that
+/// turn's and every later turn's: going back to a row puts back every row above it as well,
+/// which the heading says, and repeating the same paths down the list would bury the new ones.
+///
+/// Every path is named rather than counted, for the reason a refused path is: deciding whether
+/// to go back is deciding about those files, and a count of them decides nothing.
+fn list_rewind_points(session: &mut Session) {
+    let lines: Vec<String> = session
+        .rewind_points()
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(back, point)| {
+            let turns = back + 1;
+            let turn = point.snapshot.turns + 1;
+            let asked = crate::sessions::title_from(&point.prompt);
+            if point.backups.is_empty() {
+                t!(
+                    session_rewind_point_wrote_nothing,
+                    turns = turns,
+                    turn = turn,
+                    asked = asked
+                )
+            } else {
+                let paths = point
+                    .backups
+                    .iter()
+                    .map(|backup| backup.path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                t!(
+                    session_rewind_point,
+                    turns = turns,
+                    turn = turn,
+                    asked = asked,
+                    paths = paths
+                )
+            }
+        })
+        .collect();
+    if lines.is_empty() {
+        session.note(t!(session_nothing_to_undo));
+        return;
+    }
+    session.note(t!(session_rewind_points));
+    for line in lines {
+        session.note(line);
+    }
+}
+
+/// Put the session back to where it stood `steps` turns ago, on disk and in the conversation.
+///
+/// Says what happened either way. A rewind that reported nothing would leave somebody who asked
+/// for three turns back and had two believing the tree in front of them is three turns older
+/// than it is.
+fn rewind(
+    session: &mut Session,
+    conversation: &mut Conversation,
+    trust: &mut TrustStore,
+    programs: &mut TrustedPrograms,
+    stored: &mut crate::sessions::Handle,
+    workspace: &Workspace,
+    steps: usize,
+) {
+    let Some((snapshot, backups)) = session.take_rewind(steps) else {
+        // Saying how far back it does go rather than refusing in the abstract, since the next
+        // thing the person types is that number.
+        match session.rewind_points().len() {
+            0 => session.note(t!(session_nothing_to_undo)),
+            kept => session.note(t!(session_rewind_goes_no_further, kept = kept)),
+        }
+        return;
+    };
+    let refused = workspace.restore_backups(backups);
+
+    *conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
+    session.turns = snapshot.turns;
+    session.tokens = snapshot.tokens;
+    session.restore_spend(snapshot.tokens, snapshot.spend);
+    session.restore_timing(snapshot.timing);
+    // With the spend, for the same reason clearing takes it: the figure describes a
+    // prompt that is no longer part of what this session sent.
+    session.restore_cache(snapshot.cached);
+    session.written = 0;
+    session.finished = None;
+    *trust = snapshot.trust;
+    *programs = snapshot.programs;
+
+    session.transcript.truncate(snapshot.transcript_len);
+    stored.truncate_audit(session.turns + 1);
+
+    if snapshot.turns == 0 && !snapshot.was_wrote {
+        stored.discard_unwritten(&snapshot.title);
+    } else {
+        stored.save(
+            &snapshot.title,
+            crate::sessions::Standing {
+                conversation: &conversation.snapshot(),
+                turns: session.turns,
+                tokens: session.tokens,
+                spend: session.spend_by_turn(),
+                timing: session.timing_by_turn(),
+                model: session.served_model(),
+                todos: &session.todos_by_turn(),
+                asides: session.asides(),
+                trust,
+                programs,
+                directories: workspace.added_directories(),
+                manifest: None,
+                rewind: session.rewind_points(),
+            },
+        );
+    }
+    // Where it landed rather than how far it came, because that is the fact a person checks the
+    // tree against, and a count of turns is one they would have to do the arithmetic on.
+    let turn = snapshot.turns + 1;
+    if refused.is_empty() {
+        session.note(t!(session_rewound, turn = turn));
+    } else {
+        // Named rather than counted. A person who has to go and put a file back by
+        // hand needs to know which one, and a count sends them looking.
+        let paths = refused
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        session.note(t!(session_rewound_partly, turn = turn, paths = paths));
+    }
+}
+
 /// Returns the session left behind, where there is one to pick up again.
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -2034,6 +2187,10 @@ fn event_loop(
             for note in record.reopen_added_directories(&mut workspace) {
                 session.note(note);
             }
+            // After the transcript rather than before it, because each point's place in that
+            // transcript is worked out from it: a point is a turn number in the record and an
+            // index in the session, and the list it indexes has to exist first.
+            session.restore_rewind_points(record.rewind_points(workspace.root()), &conversation);
             (conversation, handle, vouched)
         }
     };
@@ -2194,61 +2351,33 @@ fn event_loop(
                 needs_draw = true;
             }
             Action::Undo => {
-                if let Some(snapshot) = session.previous_turn.take() {
-                    let refused =
-                        workspace.restore_backups(std::mem::take(&mut session.last_turn_backups));
-
-                    conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
-                    session.turns = snapshot.turns;
-                    session.tokens = snapshot.tokens;
-                    session.restore_spend(snapshot.tokens, snapshot.spend);
-                    session.restore_timing(snapshot.timing);
-                    // With the spend, for the same reason clearing takes it: the figure describes a
-                    // prompt that is no longer part of what this session sent.
-                    session.restore_cache(snapshot.cached);
-                    session.written = 0;
-                    session.finished = None;
-                    trust = snapshot.trust;
-                    programs = snapshot.programs;
-
-                    session.transcript.truncate(snapshot.transcript_len);
-                    stored.truncate_audit(session.turns + 1);
-
-                    if snapshot.turns == 0 && !snapshot.was_wrote {
-                        stored.discard_unwritten(&snapshot.title);
-                    } else {
-                        stored.save(
-                            &snapshot.title,
-                            crate::sessions::Standing {
-                                conversation: &conversation.snapshot(),
-                                turns: session.turns,
-                                tokens: session.tokens,
-                                spend: session.spend_by_turn(),
-                                timing: session.timing_by_turn(),
-                                model: session.served_model(),
-                                todos: &session.todos_by_turn(),
-                                asides: session.asides(),
-                                trust: &trust,
-                                programs: &programs,
-                                directories: workspace.added_directories(),
-                                manifest: None,
-                            },
-                        );
-                    }
-                    // Named rather than counted. A person who has to go and put a file back by
-                    // hand needs to know which one, and a count sends them looking.
-                    if refused.is_empty() {
-                        session.note(t!(session_last_turn_undone));
-                    } else {
-                        let paths = refused
-                            .iter()
-                            .map(|path| path.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        session.note(t!(session_last_turn_undone_partly, paths = paths));
-                    }
+                rewind(
+                    &mut session,
+                    &mut conversation,
+                    &mut trust,
+                    &mut programs,
+                    &mut stored,
+                    &workspace,
+                    1,
+                );
+                needs_draw = true;
+            }
+            Action::Rewind(turns) => {
+                if turns.is_empty() {
+                    list_rewind_points(&mut session);
                 } else {
-                    session.note(t!(session_nothing_to_undo));
+                    match turns.parse::<usize>() {
+                        Ok(steps) if steps > 0 => rewind(
+                            &mut session,
+                            &mut conversation,
+                            &mut trust,
+                            &mut programs,
+                            &mut stored,
+                            &workspace,
+                            steps,
+                        ),
+                        _ => session.note(t!(session_rewind_needs_a_number)),
+                    }
                 }
                 needs_draw = true;
             }
@@ -2312,6 +2441,7 @@ fn event_loop(
                             programs: &programs,
                             directories: workspace.added_directories(),
                             manifest: None,
+                            rewind: session.rewind_points(),
                         },
                     );
                 }
@@ -2391,6 +2521,7 @@ fn event_loop(
                         programs: &programs,
                         directories: workspace.added_directories(),
                         manifest: None,
+                        rewind: session.rewind_points(),
                     },
                 );
                 stored.append_audit(session.turns, &events);
@@ -2437,6 +2568,7 @@ fn event_loop(
                                 programs: &programs,
                                 directories: workspace.added_directories(),
                                 manifest: None,
+                                rewind: session.rewind_points(),
                             },
                         );
                         stored.append_audit(session.turns, &events);
@@ -2469,7 +2601,7 @@ fn event_loop(
                     // drain is for is the *next* turn, which takes whatever the workspace is
                     // holding as its own. Left here, the run's writes would be attributed to that
                     // turn and `/undo` on it would revert them.
-                    session.last_turn_backups = workspace.take_backups();
+                    let _ = workspace.take_backups();
 
                     // The session's own record, written for the reason an aside's is: the run is
                     // the change, and a session that started one and then slept should resume
@@ -2496,6 +2628,7 @@ fn event_loop(
                                 // record is a conversation that can be resumed; the run has a
                                 // record of its own where that field is filled.
                                 manifest: None,
+                                rewind: session.rewind_points(),
                             },
                         );
                         stored.append_audit(session.turns, &events);
@@ -2549,7 +2682,7 @@ fn event_loop(
                 let mut sending = Some((prompt, Wrote::ThePerson));
                 while let Some((prompt, wrote)) = sending {
                     let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
-                    session.previous_turn = Some(point);
+                    session.open_rewind_point(point, prompt.clone());
                     let _ = workspace.take_backups();
 
                     // Everything the session holds is lent for the turn and taken back: a turn that
@@ -2576,7 +2709,7 @@ fn event_loop(
                     programs = continued.programs;
                     servers = continued.servers;
 
-                    session.last_turn_backups = workspace.take_backups();
+                    session.keep_backups(workspace.take_backups());
 
                     // Written after each turn rather than at the end, because the end may never
                     // come: the session worth resuming is the one whose machine slept and never
@@ -2596,6 +2729,7 @@ fn event_loop(
                             programs: &programs,
                             directories: workspace.added_directories(),
                             manifest: None,
+                            rewind: session.rewind_points(),
                         },
                     );
                     stored.append_audit(session.turns, &events);
@@ -2647,6 +2781,7 @@ fn event_loop(
                         programs: &programs,
                         directories: workspace.added_directories(),
                         manifest: None,
+                        rewind: session.rewind_points(),
                     },
                 );
                 stored.append_audit(session.turns, &events);
@@ -11285,6 +11420,129 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The bare word is the list, which is the surface the command exists for: seeing what a
+    /// rewind would put back before running it.
+    #[test]
+    fn the_bare_rewind_command_asks_for_the_list() {
+        let mut session = Session::new("none");
+        for c in REWIND_COMMAND.chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Rewind(String::new())
+        );
+    }
+
+    /// A number after the word is how many turns to go back.
+    #[test]
+    fn the_rewind_command_carries_how_far_back_to_go() {
+        let mut session = Session::new("none");
+        for c in "/rewind 3".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Rewind("3".to_string())
+        );
+    }
+
+    /// `/rewinding the tape` is a longer word, so it is a prompt, as CMD-2 has it.
+    #[test]
+    fn a_longer_word_starting_with_rewind_is_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "/rewinding the tape".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/rewinding the tape".to_string())
+        );
+    }
+
+    /// `/undo` takes no argument, so a sentence that begins with it is still a prompt. The list
+    /// and the number went to a word of their own to keep that true.
+    #[test]
+    fn undo_with_something_after_it_is_still_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "/undo the last thing I asked for".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/undo the last thing I asked for".to_string())
+        );
+    }
+
+    /// Deciding whether to go back is deciding about the files a turn wrote, so the list names
+    /// them, and names what each turn was asked so the rows can be told apart.
+    #[test]
+    fn the_list_names_what_each_point_would_put_back() {
+        let mut session = Session::new("none");
+        session.open_rewind_point(a_point_before(0), "add a line to notes.md".into());
+        session.keep_backups(vec![bravebot_agent::workspace::Backup {
+            path: std::path::PathBuf::from("/work/notes.md"),
+            was: bravebot_agent::workspace::Before::Nothing,
+        }]);
+        session.open_rewind_point(a_point_before(1), "read the notes back".into());
+
+        list_rewind_points(&mut session);
+
+        let said = session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            said.contains("/work/notes.md"),
+            "the list did not say which file would go back: {said}"
+        );
+        assert!(
+            said.contains("add a line to notes.md"),
+            "the list did not say what the turn was asked: {said}"
+        );
+        let first = said.find("read the notes back").expect("the newest point");
+        let second = said
+            .find("add a line to notes.md")
+            .expect("the older point");
+        assert!(
+            first < second,
+            "the list did not begin at the turn that just ended: {said}"
+        );
+    }
+
+    /// A session with nothing to rewind says so, rather than printing an empty heading.
+    #[test]
+    fn the_list_of_a_session_with_no_points_says_there_is_nothing() {
+        let mut session = Session::new("none");
+
+        list_rewind_points(&mut session);
+
+        assert_eq!(session.transcript.len(), 1, "an empty list still had rows");
+    }
+
+    /// The state before some turn, for a test that only needs a point to exist.
+    fn a_point_before(turns: usize) -> crate::state::TurnSnapshot {
+        crate::state::TurnSnapshot {
+            conversation: Conversation::new().snapshot(),
+            turns,
+            tokens: 0,
+            spend: std::collections::BTreeMap::new(),
+            timing: std::collections::BTreeMap::new(),
+            cached: None,
+            trust: TrustStore::new("/work"),
+            programs: TrustedPrograms::new(),
+            transcript_len: turns,
+            title: "a session".to_string(),
+            was_wrote: true,
+        }
     }
 
     /// Both halves of what `/cd` does, together: the working directory moves, and the directory

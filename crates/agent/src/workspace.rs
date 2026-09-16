@@ -61,13 +61,17 @@ pub fn media_for(path: &str) -> Option<&'static str> {
 /// which is what people attach.
 pub const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 
-/// The most one turn may keep in memory so that it can be rewound.
+/// The most that may be kept in memory so that turns can be rewound.
 ///
-/// Every file a turn writes costs what the file held beforehand, held until the turn after it,
-/// whether or not anybody rewinds. The files a turn writes are files somebody is working on, so
-/// the budget is set well past a tree of source and well short of what a checked-in archive or a
-/// build artefact would cost. Past it the path is still remembered, and a rewind says it did not
-/// go back rather than pretending it did.
+/// Every file a turn writes costs what the file held beforehand, held for as long as the turn is
+/// one a rewind can reach, whether or not anybody rewinds. The files a turn writes are files
+/// somebody is working on, so the budget is set well past a tree of source and well short of what
+/// a checked-in archive or a build artefact would cost. Past it the path is still remembered, and
+/// a rewind says it did not go back rather than pretending it did.
+///
+/// A workspace sees one turn, so this is what it holds one turn to. The caller keeping several
+/// turns' backups holds the whole set to the same figure, dropping the turns furthest back:
+/// the budget is what is held at once, not what each turn may add.
 pub const MAX_REWIND_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug)]

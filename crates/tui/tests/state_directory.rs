@@ -190,6 +190,7 @@ fn writing_a_session_narrows_the_state_directory() {
             programs: &TrustedPrograms::new(),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
 
