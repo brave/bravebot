@@ -61,7 +61,7 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, directory: &Path) -> Option<T
         Err(_) => Answer::Decline,
     };
 
-    trust_for(answer)
+    trust_for(answer, directory)
 }
 
 /// Ask about each directory a settings file named, returning the ones to open.
@@ -112,27 +112,31 @@ fn accepted(directories: &[String], mut answer: impl FnMut(&str) -> Answer) -> O
 /// person who asked to be asked about nothing.
 ///
 /// Separated from the loop so it can be tested without a terminal.
-pub fn answered_by(mode: PermissionMode) -> Option<TrustStore> {
+pub fn answered_by(mode: PermissionMode, directory: &Path) -> Option<TrustStore> {
     match mode {
-        PermissionMode::Bypass => Some(trusting_the_workspace()),
+        PermissionMode::Bypass => Some(trusting_the_workspace(directory)),
         PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => None,
     }
 }
 
 /// The map an answer starts the session with, or `None` for leaving.
-fn trust_for(answer: Answer) -> Option<TrustStore> {
+///
+/// Every map is made against the working directory, declining included: a map is asked about
+/// relative names whatever it holds, and one made against somewhere else would answer about
+/// another project's files.
+fn trust_for(answer: Answer, directory: &Path) -> Option<TrustStore> {
     match answer {
         Answer::Leave => None,
-        Answer::Trust => Some(trusting_the_workspace()),
-        Answer::Decline => Some(TrustStore::new()),
+        Answer::Trust => Some(trusting_the_workspace(directory)),
+        Answer::Decline => Some(TrustStore::new(directory)),
     }
 }
 
 /// The rule trusting the workspace records: the root, which covers everything beneath it.
 ///
 /// One place, so the map reached without the question is the map a yes would have written.
-fn trusting_the_workspace() -> TrustStore {
-    let mut trust = TrustStore::new();
+fn trusting_the_workspace(directory: &Path) -> TrustStore {
+    let mut trust = TrustStore::new(directory);
     trust.trust(".");
     trust
 }
@@ -318,6 +322,11 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
 
+    /// The working directory these answers are about.
+    fn here() -> &'static Path {
+        Path::new("/work")
+    }
+
     /// The characters one question puts on a terminal, in reading order.
     ///
     /// Takes the drawing rather than a path, so both questions are measured by one helper and an
@@ -378,7 +387,8 @@ mod tests {
     /// the planner reads, so the workspace ends up trusted a file at a time regardless.
     #[test]
     fn bypassing_trusts_the_workspace_instead_of_asking() {
-        let trust = answered_by(PermissionMode::Bypass).expect("bypassing answers the question");
+        let trust =
+            answered_by(PermissionMode::Bypass, here()).expect("bypassing answers the question");
 
         assert!(trust.is_trusted("."));
         assert!(trust.is_trusted("src/main.rs"), "the rule covers the tree");
@@ -393,7 +403,7 @@ mod tests {
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
         ] {
-            assert!(answered_by(mode).is_none(), "{mode:?} answered it");
+            assert!(answered_by(mode, here()).is_none(), "{mode:?} answered it");
         }
     }
 
@@ -512,7 +522,7 @@ mod tests {
     /// write would be shown to somebody who said yes.
     #[test]
     fn trusting_covers_the_whole_workspace() {
-        let trust = trust_for(Answer::Trust).expect("trusting starts a session");
+        let trust = trust_for(Answer::Trust, here()).expect("trusting starts a session");
         assert!(trust.is_trusted("."));
         assert!(trust.is_trusted("src/main.rs"));
         assert!(trust.is_trusted("deep/nested/file.txt"));
@@ -551,8 +561,8 @@ mod tests {
     /// never agreed to have.
     #[test]
     fn leaving_starts_no_session() {
-        assert!(trust_for(Answer::Leave).is_none());
-        assert!(trust_for(Answer::Decline).is_some());
+        assert!(trust_for(Answer::Leave, here()).is_none());
+        assert!(trust_for(Answer::Decline, here()).is_some());
     }
 
     /// A plain `c` is not an interrupt, and neither is any other control chord.
@@ -573,7 +583,7 @@ mod tests {
     /// on a decline would have satisfied a test that only built its own empty store.
     #[test]
     fn declining_trusts_nothing() {
-        let trust = trust_for(Answer::Decline).expect("declining still starts a session");
+        let trust = trust_for(Answer::Decline, here()).expect("declining still starts a session");
         assert!(trust.is_empty());
         assert!(!trust.is_trusted("src/main.rs"));
         assert!(!trust.is_trusted("."));

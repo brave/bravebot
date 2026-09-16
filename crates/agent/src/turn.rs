@@ -936,7 +936,7 @@ pub fn run<S: Sink + Send, C: Confirmer + Send>(
         task,
         confirmer,
         sink,
-        TrustStore::new(),
+        TrustStore::new(workspace.root()),
     )
 }
 

@@ -45,7 +45,7 @@ fn routing() -> Routing {
 }
 
 fn policy<'s>(sink: &'s mut RecordingSink, trusted: &[&str]) -> Policy<'s, RecordingSink> {
-    let mut store = TrustStore::new();
+    let mut store = TrustStore::new("/work");
     for path in trusted {
         store.trust(path);
     }

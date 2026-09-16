@@ -371,9 +371,10 @@ for whatever a rule spelled the same way says, because the map compares names by
 climbing path names a file through a directory nobody wrote a rule about.
 
 Each path is asked about under every name the map may hold a rule about it by, and answers as the
-weakest of them. A relative name and an absolute one are separate namespaces
-([trust-map.md](../trust-map.md#TRUST-3)), so a file inside the workspace has one of each, and the
-spelling a line happened to use is not a decision anybody made about the file. A directory the
+weakest of them. A name is reduced to the open directory it lands in before the map sees it, and
+that reduction needs a filesystem ([trust-map.md](../trust-map.md#TRUST-18)), which this road does
+not have: so a file inside the workspace is asked about under the relative name and the full one
+both, and the spelling a line happened to use is not a decision anybody made about the file. A directory the
 project sits in is trusted by an answer about that directory
 ([TRUST-9](../trust-map.md#TRUST-9)), so an absolute name answered alone would give a project file
 the label of a directory it is merely reachable through, and a relative name answered alone would

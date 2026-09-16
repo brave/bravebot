@@ -7850,7 +7850,7 @@ mod tests {
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
             cached: None,
-            trust: bravebot_core::trust::TrustStore::new(),
+            trust: bravebot_core::trust::TrustStore::new("/work"),
             programs: bravebot_core::programs::TrustedPrograms::default(),
             transcript_len: 0,
             title: "a session".to_string(),

@@ -47,12 +47,29 @@ Rules are keyed by path prefix and matched by whole segments. Both polarities ar
 a trusted tree may hold an untrusted subtree, which may hold a trusted path again. Equivalent
 spellings of a path are one rule, and a later decision replaces an earlier one.
 
+**Every key is a full path, and there is one namespace of them.** A caller may name a path
+relatively, which is how a file in the project is named, and the map reads that under the working
+directory it was made with: `src/main.rs` in a session working in `/work` is the rule
+`/work/src/main.rs`, and the working directory's own rule is `/work`. So the project's own rule is
+a path like any other rather than an empty prefix that covers everything, and a rule about a
+directory somebody opened by name (TRUST-9) is in the same map without reaching into the project:
+`/Users/x/notes` does not prefix `/Users/x/proj`, and whole-segment matching is what stops
+`/Users/x/proj` covering `/Users/x/proj-secret`. A rule about a directory that *does* hold the
+project covers the project's files, since the person vouched for a tree the project is in, and the
+project's own rules are the more specific ones wherever they exist.
+
 A rule is about a **path**, not about the files that were in it when the rule was made, and it is
 consulted when a file is read rather than when the rule is written. A file that appears in a
 trusted directory afterwards is therefore read as trusted, whoever put it there.
 
 **Why.** Per-file exceptions in both directions are the only way `@vendor/lib.js` can be trusted
 inside a `vendor` a person marked untrusted, without that answer leaking to its siblings.
+
+**Why one namespace.** Two of them, one for names under the working directory and one for names
+spelled in full, was the arrangement this replaced. It existed to stop the working directory's
+empty prefix covering every absolute path there is, and a rule on `/` covering every relative one.
+Full paths make both unreachable rather than guarded against, and a file that has a name of each
+kind then has one rule instead of two that could disagree.
 
 `verified-by: bravebot_core::trust::the_deepest_rule_wins_at_any_depth`
 `verified-by: bravebot_core::trust::an_untrusted_subpath_overrides_a_trusted_parent`
@@ -62,98 +79,22 @@ inside a `vendor` a person marked untrusted, without that answer leaking to its 
 `verified-by: bravebot_core::trust::every_equivalent_spelling_of_a_path_reaches_the_same_rule`
 `verified-by: bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_core::trust::a_later_decision_replaces_an_earlier_one`
-
-<a id="TRUST-3"></a>
-### TRUST-3: relative and absolute rules are separate namespaces
-
-Keeping two namespaces is a workaround rather than a preference, and
-[issue #24](https://github.com/brave/bravebot/issues/24) proposes replacing both with
-one map of full paths, which would remove this clause.
-
-A rule under the working directory decides nothing about a directory opened by absolute path, and
-the reverse. `/` is never treated as the empty prefix.
-
-**A key is `/`-spelled, and a leading slash is the whole of what makes one absolute.** A drive letter
-is not a root here and a backslash is not a separator: a key arrives spelled from `/`, and a
-backslash is a legal filename byte where paths are, so a file called `C:\notes` is a file in the
-project and its name has to reach the project's rules. Resolving a platform's path into a key
-therefore belongs to the workspace and not to the map, and every door that opens a directory by
-name, `/cd` as much as `/add-dir`, refuses a resolved name it cannot spell that way rather than
-handing over one that would be read as relative. Such a rule falls under the primary root's own
-empty prefix, which is the collapse this clause exists to prevent, reached by a name that never had
-a slash to strip.
-
-An absolute path that names and resolves inside the working directory is not in the absolute
-namespace at all: reading, writing, vouching for or quarantining a file the workspace reaches that
-way asks about its relative name, so those operations answer the same for a project file whichever
-way it was spelled. A `..` component keeps the name it was given, and an absolute rule covering the
-project decides nothing about the files inside it.
-
-Which name a path is asked about follows from what a rule is about. Every rule is written about a
-directory somebody opened, under the name that directory was opened as: the empty prefix for the
-working directory, and the path it resolved to for one opened by name (TRUST-9). A path is therefore
-reduced to the open directory it lands in, taking that directory's recorded name with the rest of
-the path as it was spelled. This is the rule that two spellings of a path are one rule (TRUST-2),
-extended to the spellings only a filesystem can tell apart: a directory named through a link is the
-same directory, and `/tmp` being a link to `/private/tmp` is what a person types rather than a
-corner. A path landing in no open directory is asked about as written, and so is one that reaches an
-open directory by a link straight into the middle of it rather than through that directory's own
-name: neither has a spelling under a recorded name, and nothing covers either.
-
-**Why.** The working directory's own rule is the **empty** prefix, since every path in the project
-is named relative to it. Match absolute paths against that same map and the empty prefix covers
-every one of them, so answering yes at startup would silently vouch for every directory opened
-later and for anything else named by absolute path. The reverse holds too: a rule on `/` would
-cover every relative path in the project. Keeping the two apart is what stops either answer
-reaching where it was never given.
-
-The same relative path also exists in both places and names different files, so even without the
-prefix problem one map could not tell them apart.
-
-The reduction is what keeps that separation from splitting a file the project already holds. Only a
-directory the project sits inside makes such a path reachable at all (TRUST-9, TRUST-10), and after
-that the same file has a name in each namespace: the startup answer covering the workspace
-(TRUST-7) would cover only half of what it named, and a write reconciling under one name would say
-nothing about the other. Which way round the two are reconciled follows from the same clause: an
-absolute rule reaching inside the project is an answer given about a directory and not about the
-work, so the project's own rules decide its files and a directory added above it does not.
-
-Where the path lands decides which directory's name it takes and the spelling decides the rest, and
-each half answers a different question. A name spelled inside the project that lands out of it takes
-the name of the directory it lands in and not the project's, because the project has no rules about
-a file it does not hold and confinement refuses that name's relative spelling outright. Taking only
-the ancestor that reaches an open directory, rather than the whole destination, is what keeps the
-reduction from being a laundering step of its own: resolving the rest would return the rule for a
-*different* name, so a file in an untrusted subtree would be readable as trusted through a link
-inside that subtree. A file with two names of its own therefore still has two rules, which is a cost
-of keying on the name and is written down below.
-
-The reduction is the workspace's, so it holds for what the workspace does: the reads, writes,
-listings, vouches and quarantines that go through it. A proven `run` line has no reduction to make,
-because it need not settle which name is the file's: it asks this map under every name the operand
-has and labels its output from the weakest answer
-([tools/command-line.md](tools/command-line.md#CMDLINE-8)). That is stronger than the reduction
-wherever the two differ, and it is the form that road can hold, since nothing there has a filesystem
-to settle a name with. One thing stays outside both: the prompt before a write asks under the
-spelling it was given, since it also matches the rules a person wrote in advance and those are
-matched on the path as written, so it asks where a reduced name would not have.
-
-`verified-by: bravebot_core::trust::an_absolute_rule_does_not_decide_a_relative_path`
-`verified-by: bravebot_core::trust::a_name_that_is_a_root_on_another_platform_is_a_relative_key`
-`verified-by: bravebot_agent::workspace::a_directory_the_trust_map_cannot_key_is_refused`
+`verified-by: bravebot_core::trust::a_path_named_in_full_reaches_the_rule_its_relative_name_wrote`
+`verified-by: bravebot_core::trust::a_rule_outside_the_working_directory_decides_nothing_inside_it`
 `verified-by: bravebot_core::trust::trusting_the_workspace_says_nothing_about_an_added_directory`
-`verified-by: bravebot_core::trust::trusting_the_filesystem_root_does_not_trust_the_workspace`
-`verified-by: bravebot_core::trust::one_added_directory_does_not_cover_a_sibling`
+`verified-by: bravebot_core::trust::a_directory_vouched_for_above_the_project_covers_the_project`
+`verified-by: bravebot_core::trust::trusting_the_filesystem_root_covers_the_working_directory_too`
 `verified-by: bravebot_core::trust::the_deepest_absolute_rule_wins`
+`verified-by: bravebot_core::trust::one_added_directory_does_not_cover_a_sibling`
 `verified-by: bravebot_core::trust::equivalent_absolute_spellings_are_the_same_rule`
 `verified-by: bravebot_core::trust::every_equivalent_absolute_spelling_reaches_the_same_rule`
-`verified-by: bravebot_agent::workspace::a_project_file_named_absolutely_is_read_under_its_relative_rule`
-`verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
-`verified-by: bravebot_agent::workspace::a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule`
-`verified-by: bravebot_agent::workspace::a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rule`
-`verified-by: bravebot_agent::workspace::a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule`
-`verified-by: bravebot_agent::workspace::a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule`
-`verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
+
+<a id="TRUST-3"></a>
+### TRUST-3: withdrawn, relative and absolute rules are separate namespaces
+
+Replaced by TRUST-2, which keys every rule under a full path, so that the collapse two namespaces
+were kept apart to prevent is unreachable rather than guarded against, and by TRUST-18, which owns
+which name a path is asked about.
 
 ## What a write does
 
@@ -216,12 +157,21 @@ Every session start asks, whatever any earlier session in that directory answere
 a session and therefore asks. `--resume` does not ask, and restores the map from the record of the
 session chosen; a record from before maps were kept has none, and is asked about.
 
+**What the record keeps is the name, not the key.** A rule inside the project is written down
+relative to it and a rule outside is written down in full, and a resume reads the relative ones
+under the directory it is resuming into. The map holds full paths (TRUST-2), and a record of those
+would fail quietly the moment the checkout was moved or renamed: every rule would name a path that
+is no longer there, nothing would match, and the session would resume behaving as though nobody had
+vouched for anything. Recording the name and putting the directory back on it at load is what keeps
+a record about the same files.
+
 **Why.** The question grants standing permission. Honouring last week's answer grants it on behalf
 of a user who was never asked, and trust assumed from silence is not trust granted. A resume is not
 an exception: the answer honoured is the one that session's own user gave, and it carries the rules
 that session's writes recorded, which is what stops a resumed turn reading back a file an earlier
 turn of the same session poisoned.
 
+`verified-by: bravebot_tui::sessions::a_record_resumes_its_rules_under_the_directory_it_is_read_in`
 `verified-by: bravebot_tui::app::a_fresh_session_is_asked_rather_than_inheriting_a_map`
 `verified-by: bravebot_tui::app::a_resume_starts_with_the_map_its_own_record_kept`
 `verified-by: bravebot_tui::app::a_record_from_before_maps_were_kept_is_asked_about`
@@ -317,11 +267,17 @@ any of what it had done. One prompt would have let it read the file.
 <a id="TRUST-9"></a>
 ### TRUST-9: `/add-dir` makes a directory both reachable and trusted, for the session
 
-`/add-dir ~/notes` records an absolute rule (TRUST-3) that does two things together: the directory
-becomes reachable, since an absolute path is otherwise refused whatever the map says, and it is
-recorded as trusted. It lasts the session, `--resume` carries both halves, and `/clear` closes it.
+`/add-dir ~/notes` records a rule under that directory's own path (TRUST-2) that does two things
+together: the directory becomes reachable, since an absolute path is otherwise refused whatever the
+map says, and it is recorded as trusted. It lasts the session, `--resume` carries both halves, and `/clear` closes it.
 A directory already inside the project is refused. A directory a resume cannot open again, because
 it has moved or gone, is said so rather than passed over.
+
+A directory that *holds* the project is not refused, and the rule it records covers the project's
+files as it covers everything else in that tree. Vouching for a directory is a standing statement
+about the place (TRUST-2) and the project is in it, so there is nothing to except. The project's own
+rules are the more specific ones and still decide wherever they exist, which is what keeps a no
+given inside the project from being undone by a yes given above it.
 
 **Why.** Either half alone is no use, one leaving a rule about files nothing can open and the other
 leaving a directory that prompts on every edit. It closes with the session for the reason every
@@ -398,20 +354,21 @@ means from then on, where commands run, and where the project's own instructions
 The directory left behind closes, and so does any directory opened by name that holds the new one
 or sits inside it, each said out loud as it happens.
 
-The map does not travel unchanged. Every rule is re-spelled to say what it always said about the
-same files: a rule inside the new working directory becomes a rule relative to it, and a rule
-outside becomes an absolute one. Only then is the new directory vouched for, on the same footing
-as `/add-dir`: the person typed the path, and a later decision replaces an earlier one.
+The map travels with the session and says what it always said. Every rule is keyed on the full path
+it is about (TRUST-2), so a working directory that moves carries none of them with it: each still
+names the file it always named, and what changes is which of them a relative name reaches and how
+each is spelled back. The new directory is then vouched for, on the same footing as `/add-dir`:
+the person typed the path, and a later decision replaces an earlier one.
 
-**Why.** A relative rule means a path under the working directory, so a working directory that
-moved without them would leave every one of them pointing at a file nobody decided anything about:
-the yes given for one project would vouch for another, and every no given inside the old one would
-be forgotten. Re-spelling grants and withdraws nothing, which is what makes it something this can
-do without asking.
+**Why.** A yes given for one project must not become a yes for another, and a no given inside the
+old one must not be forgotten. Both follow from a rule naming the file rather than the directory it
+was written from, and neither grants nor withdraws anything, which is what makes this something
+that can be done without asking.
 
-Nothing may overlap the new working directory, and that is not tidiness. A file reachable both
-relatively and by absolute path has one rule in each namespace, and the two namespaces are kept
-apart (TRUST-3) precisely so that one file has one answer.
+Nothing may overlap the new working directory, and that is not tidiness: a directory that holds the
+new root, or sits inside it, is reachable through the root already, so leaving it open would record
+a second open directory for a path to be named under (TRUST-18) with nothing to choose between
+them.
 
 `verified-by: bravebot_core::trust::a_yes_for_one_project_does_not_follow_a_move_to_another`
 `verified-by: bravebot_core::trust::a_no_inside_the_new_directory_survives_the_move`
@@ -635,6 +592,71 @@ describes.
 `verified-by: bravebot_agent::exec::a_stage_keeps_the_temporary_directory_this_process_has`
 `verified-by: bravebot_agent::turn::a_program_a_turn_runs_is_told_where_the_sessions_directory_is`
 
+## How a path is named to the map
+
+<a id="TRUST-18"></a>
+### TRUST-18: a path is asked about under the name of the open directory it lands in
+
+**A key is `/`-spelled, and a name that is not one is read under the working directory.** A drive
+letter is not a root here and a backslash is not a separator: a key arrives spelled from `/`, and a
+backslash is a legal filename byte where paths are, so a file called `C:\notes` is a file in the
+project and its name has to reach the project's rules. Resolving a platform's path into a key
+therefore belongs to the workspace and not to the map, and every door that opens a directory by
+name, `/cd` as much as `/add-dir`, refuses a resolved name it cannot spell that way rather than
+handing over one that would be read as a path inside the project.
+
+Every rule is written about a directory somebody opened, under the name that directory was opened
+as: the working directory itself, which is what the startup answer covers (TRUST-7), and the path
+it resolved to for one opened by name (TRUST-9). A path is therefore reduced to the open directory
+it lands in, taking that directory's recorded name with the rest of the path as it was spelled.
+This is the rule that two spellings of a path are one rule (TRUST-2), extended to the spellings
+only a filesystem can tell apart: a directory named through a link is the same directory, and
+`/tmp` being a link to `/private/tmp` is what a person types rather than a corner. A path landing
+in no open directory is asked about as written, and so is one that reaches an open directory by a
+link straight into the middle of it rather than through that directory's own name: neither has a
+spelling under a recorded name, and nothing covers either.
+
+A `..` component keeps the name it was given. Confinement refuses such a path rather than resolving
+it (TRUST-10), so it is refused before anything reads it, and reducing it here would be guessing at
+which file it named.
+
+Where the path lands decides which directory's name it takes and the spelling decides the rest, and
+each half answers a different question. A name spelled inside the project that lands out of it
+takes the name of the directory it lands in and not the project's, because the project has no rules
+about a file it does not hold and confinement refuses that name's relative spelling outright.
+Taking only the ancestor that reaches an open directory, rather than the whole destination, is what
+keeps the reduction from being a laundering step of its own: resolving the rest would return the
+rule for a *different* name, so a file in an untrusted subtree would be readable as trusted through
+a link inside that subtree. A file with two names of its own therefore still has two rules, which
+is a cost of keying on the name and is written down below.
+
+The reduction is the workspace's, so it holds for what the workspace does: the reads, writes,
+listings, vouches and quarantines that go through it. A proven `run` line has no reduction to make,
+because it need not settle which name is the file's: it asks this map under every name the operand
+has and labels its output from the weakest answer
+([tools/command-line.md](tools/command-line.md#CMDLINE-8)). That is stronger than the reduction
+wherever the two differ, and it is the form that road can hold, since nothing there has a filesystem
+to settle a name with. One thing stays outside both: the prompt before a write asks under the
+spelling it was given, since it also matches the rules a person wrote in advance and those are
+matched on the path as written, so it asks where a reduced name would not have.
+
+**Why.** Without the reduction a directory reached by a second spelling of its own name is covered
+by nothing, so a file the user vouched for is quarantined under half its names; on macOS that is
+the ordinary case rather than a corner, since `/tmp` and `$TMPDIR` are both links. And the refusal
+is the fail-closed half of the first paragraph: a rule keyed under a name with no leading slash
+would be read as a path inside the project, where the answer given about the project at startup
+covers it.
+
+`verified-by: bravebot_core::trust::a_name_that_is_a_root_on_another_platform_is_read_under_the_working_directory`
+`verified-by: bravebot_agent::workspace::a_directory_the_trust_map_cannot_key_is_refused`
+`verified-by: bravebot_agent::workspace::a_project_file_named_absolutely_is_read_under_its_relative_rule`
+`verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
+`verified-by: bravebot_agent::workspace::a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule`
+`verified-by: bravebot_agent::workspace::a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rule`
+`verified-by: bravebot_agent::workspace::a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule`
+`verified-by: bravebot_agent::workspace::a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule`
+`verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
+
 ## What the session's directory is still missing
 
 An incognito session has one as well, and [incognito.md](incognito.md) names it among the things
@@ -717,11 +739,12 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   record on the destination instead is what closes it, and that is a change to every rule the map
   holds rather than to confinement.
 - **A platform that spells its paths from a drive letter cannot open a directory by name.** Every
-  rule is keyed under a `/`-spelled name (TRUST-3), so `/add-dir` and `/cd` both refuse a resolved
+  rule is keyed under a `/`-spelled name (TRUST-18), so `/add-dir` and `/cd` both refuse a resolved
   path that is not one, which on Windows is every path there is, until whether that platform is
   supported has an answer ([issue #88](https://github.com/brave/bravebot/issues/88)).
-  Refusing is the closed direction of the two: admitting such a directory puts its rule in the
-  relative namespace, where the answer given about the project at startup covers every file in it.
+  Refusing is the closed direction of the two: admitting such a directory would key its rule under
+  a name read as a path inside the project, where the answer given about the project at startup
+  covers every file in it.
 
   A file inside the project on that platform has the same problem and no refusal to fall back on,
   since a name the workspace hands back below the root carries that platform's separator, and a name
@@ -731,7 +754,5 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   they reach a permission rule the same way, which is matched segment by segment as well, so one
   opaque segment matches nothing a rule a person wrote says about the path they wrote it for
   ([permissions.md](permissions.md) records that half). So the laundering this closes outside the
-  project stays reachable inside it there, and what settles both halves is one canonical key
-  spelling, which is the choice reserved between
-  [issue #24](https://github.com/brave/bravebot/issues/24) and
-  [issue #25](https://github.com/brave/bravebot/issues/25).
+  project stays reachable inside it there, and what settles it is one canonical key spelling on that
+  platform's separator, which is [issue #25](https://github.com/brave/bravebot/issues/25).

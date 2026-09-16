@@ -233,11 +233,12 @@ pub struct Policy<'sink, S: Sink> {
     denials: usize,
     /// Which paths the user vouched for.
     trust: TrustStore,
-    /// The directory [`Policy::trust`] spells its relative rules against.
+    /// The working directory this turn runs in.
     ///
-    /// A rule in the map means a path under this directory, so anything asked about a path has to
-    /// know which directory the path was written relative to. `None` where the caller has not said,
-    /// and then nothing that needs it holds.
+    /// The same directory [`Policy::trust`] was made against: the map reads its own relative names
+    /// under the directory it was given, and a caller installing one made against somewhere else
+    /// would have the gates comparing names to a map about another project's files. `None` where
+    /// the caller has not said, and then nothing that needs it holds.
     root: Option<std::path::PathBuf>,
     /// The session's own directory outside the project, where it has one.
     ///
@@ -292,7 +293,7 @@ pub struct Policy<'sink, S: Sink> {
 /// what a person answered while it ran. Kept as one type rather than two arguments because the
 /// pair is always passed together and a caller that got the order wrong would silently swap a
 /// trust map for a command list.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Vouched {
     /// Which paths the person vouched for.
     pub trust: TrustStore,
@@ -351,7 +352,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             grants: Vec::new(),
             sink,
             denials: 0,
-            trust: TrustStore::new(),
+            // Empty, so nothing is trusted until a caller installs the person's own map with
+            // `with_trust`. The filesystem root is the working directory a map with no project
+            // behind it has to read a relative name under, and an empty map answers `None` about
+            // every path whatever it is read under.
+            trust: TrustStore::new("/"),
             root: None,
             scratch: None,
             programs: crate::programs::TrustedPrograms::new(),
@@ -566,10 +571,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         &self.trust
     }
 
-    /// Say which directory the trust map's relative rules are written against.
+    /// Say which directory this turn runs in.
     ///
-    /// The workspace root. Without it, a gate that has to work out which rule covers a path it was
-    /// handed relative to somewhere else cannot, and refuses rather than guessing.
+    /// The workspace root, which is also the directory the map handed to [`Policy::with_trust`]
+    /// was made against. Without it, a gate that has to compare a directory it was handed against
+    /// the one the turn is in cannot, and refuses rather than guessing.
     pub fn with_root(mut self, root: &std::path::Path) -> Self {
         self.root = Some(root.to_path_buf());
         self
@@ -2290,9 +2296,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// and a vouched program is a command they approved, so both were `(T,pub)` before either run
     /// existed. Nothing a delegate read, produced or was told is in either record.
     pub fn adopt_from_delegate(&mut self, since: &Vouched, ended: &Vouched) {
-        let before: BTreeMap<&str, Integrity> = since.trust.rules().collect();
+        // Under the keys rather than the names: a name is relative to whichever working
+        // directory the map holding it was made with, and the two maps here need not have been.
+        let before: BTreeMap<&str, Integrity> = since.trust.keyed().collect();
         let mut paths = 0;
-        for (path, integrity) in ended.trust.rules() {
+        for (path, integrity) in ended.trust.keyed() {
             if before.get(path) == Some(&integrity) {
                 continue;
             }
@@ -3872,19 +3880,24 @@ fn names_a_path(program: &str) -> bool {
 
 /// Every name the trust map may hold a rule about an operand under.
 ///
-/// A relative name and an absolute one are separate namespaces (TRUST-3), so a file inside the
-/// workspace has a name in each: the one the project's own rules are written against, and the one a
-/// rule about a directory the workspace sits in answers about. The line picked one of them, and the
-/// pick is not a decision anybody made about the file, so both are returned and the caller takes the
-/// weakest answer. That is why this can be right without a filesystem to resolve a name with:
-/// choosing wrongly which spelling is authoritative could only cost a question, never grant trust.
+/// A name is reduced to the open directory it lands in before the map sees it, and that reduction
+/// needs a filesystem (TRUST-18), which this road does not have. So a file inside the workspace is
+/// named both ways here: relatively, which is what the project's own rules are written against, and
+/// in full, which is what a rule about a directory the workspace sits in answers about. The line
+/// picked one of them, and the pick is not a decision anybody made about the file, so both are
+/// returned and the caller takes the weakest answer. That is why this can be right without a
+/// filesystem: choosing wrongly which spelling is authoritative could only cost a question, never
+/// grant trust.
 ///
 /// The name as written is always one of them. An absolute name inside the root adds its relative
-/// one, which is what closes the round trip `/add-dir` opens: a directory above the project is
-/// trusted by an answer about that directory ([TRUST-9]), and a project file labelled from that rule
-/// alone would take the label of a directory it happens to be reachable through. An absolute name
-/// that holds the root adds the empty one, the rule covering the project, since a line reading that
-/// directory whole reads every file the project's own rules bear on.
+/// one, and an absolute name that holds the root adds the empty one, which is the rule covering
+/// the project: a line reading that directory whole reads every file the project's own rules bear
+/// on, and nothing need cover the directory itself for those rules to answer.
+///
+/// The first pair is one key wherever the map was made against the directory the line ran in,
+/// since the map reads a relative name under that directory (TRUST-2). It is spelled both ways
+/// here all the same, because this road does no filesystem work and nothing in it can check that
+/// the two directories agree.
 ///
 /// Nothing is resolved, only re-spelled, so a name outside the root keeps just its own and the rule
 /// about the directory holding it decides.
@@ -4671,7 +4684,7 @@ mod tests {
     #[test]
     fn a_path_that_lost_its_trust_fills_the_slot_untrusted() {
         let mut sink = RecordingSink::new();
-        let mut store = crate::trust::TrustStore::new();
+        let mut store = crate::trust::TrustStore::new("/work");
         store.trust("src");
         let mut policy = Policy::begin(
             routing_with("task", "tidy up"),
@@ -5188,8 +5201,12 @@ mod tests {
     }
 
     /// A store that vouches for the whole project, which is what answering yes at startup writes.
-    fn trusting(paths: &[&str], distrusting: &[&str]) -> TrustStore {
-        let mut trust = TrustStore::new();
+    ///
+    /// `root` is the working directory the relative names are read under, which is the one the
+    /// policy under test is given: a map made against a different directory would write its rules
+    /// about somebody else's files.
+    fn trusting(root: &str, paths: &[&str], distrusting: &[&str]) -> TrustStore {
+        let mut trust = TrustStore::new(root);
         for path in paths {
             trust.trust(path);
         }
@@ -5219,7 +5236,7 @@ mod tests {
         distrusting: &[&str],
     ) -> Policy<'s, RecordingSink> {
         open_policy(sink)
-            .with_trust(trusting(&["."], distrusting))
+            .with_trust(trusting("/work", &["."], distrusting))
             .with_root(std::path::Path::new("/work"))
     }
 
@@ -5457,6 +5474,7 @@ mod tests {
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink)
             .with_trust(trusting(
+                "/work/project",
                 &[".", "/work"],
                 &["vendor", "/work/project/shared/fetched.json"],
             ))
@@ -5505,7 +5523,7 @@ mod tests {
     fn a_line_reading_a_directory_holding_the_project_answers_for_the_project() {
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink)
-            .with_trust(trusting(&[".", "/work"], &["vendor"]))
+            .with_trust(trusting("/work/project", &[".", "/work"], &["vendor"]))
             .with_root(std::path::Path::new("/work/project"));
 
         let the_root_itself = reading_in("/work/project", "/work/project");
@@ -5536,7 +5554,7 @@ mod tests {
     fn a_climbing_operand_is_untrusted_under_a_root_spelled_with_a_climb() {
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink)
-            .with_trust(trusting(&["."], &[]))
+            .with_trust(trusting("/work/../work/project", &["."], &[]))
             .with_root(std::path::Path::new("/work/../work/project"));
 
         let climbing = reading_in("/work/../work/project", "/work/../work/project/src/main.rs");
@@ -7077,7 +7095,7 @@ mod tests {
         sink: &'a mut RecordingSink,
         paths: &[&str],
     ) -> Policy<'a, RecordingSink> {
-        let mut store = TrustStore::new();
+        let mut store = TrustStore::new("/work");
         for p in paths {
             store.trust(p);
         }
@@ -7132,7 +7150,7 @@ mod tests {
     #[test]
     fn trusted_data_into_an_untrusted_path_is_silent_and_trusts_the_path() {
         let mut sink = RecordingSink::new();
-        let mut store = TrustStore::new();
+        let mut store = TrustStore::new("/work");
         store.distrust("vendor");
         let mut policy = Policy::begin(
             routing_with("task", "edit"),
@@ -7159,7 +7177,7 @@ mod tests {
     #[test]
     fn untrusted_data_into_an_untrusted_path_is_silent_and_changes_nothing() {
         let mut sink = RecordingSink::new();
-        let mut store = TrustStore::new();
+        let mut store = TrustStore::new("/work");
         store.distrust("vendor");
         let mut policy = Policy::begin(
             routing_with("task", "edit"),
@@ -7234,7 +7252,7 @@ mod tests {
     #[test]
     fn a_declined_workspace_leaves_the_sessions_own_directory_untrusted() {
         let mut sink = RecordingSink::new();
-        let mut store = TrustStore::new();
+        let mut store = TrustStore::new("/work");
         store.distrust(".");
         let policy = Policy::begin(
             routing_with("task", "edit"),
@@ -7309,7 +7327,7 @@ mod tests {
     #[test]
     fn a_line_reading_the_sessions_own_directory_still_sees_the_rules_inside_it() {
         let mut sink = RecordingSink::new();
-        let mut store = TrustStore::new();
+        let mut store = TrustStore::new("/work");
         store.trust("/tmp/bravebot-scratch-1/workings.txt");
         let mut policy = Policy::begin(
             routing_with("task", "edit"),
@@ -7496,7 +7514,7 @@ mod tests {
     #[test]
     fn a_named_file_is_trusted_inside_an_untrusted_tree() {
         let mut sink = RecordingSink::new();
-        let mut store = TrustStore::new();
+        let mut store = TrustStore::new("/work");
         store.trust(".");
         store.distrust("vendor");
         let mut policy = Policy::begin(

@@ -101,7 +101,7 @@ fn says(text: &str) -> String {
 }
 
 fn trusting_everything() -> bravebot_core::trust::TrustStore {
-    let mut trust = bravebot_core::trust::TrustStore::new();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust(".");
     trust
 }
