@@ -1101,7 +1101,7 @@ fn session_row(highlighted: bool, width: usize) -> Line<'static> {
         Span::styled(about, detail),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1160,7 +1160,7 @@ fn aside_row(aside: &crate::state::Aside, highlighted: bool, width: usize) -> Li
         Span::styled(format!("{standing:<STANDING_COLUMN$}"), standing_style),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1213,7 +1213,7 @@ fn delegate_row(delegate: &Delegate, highlighted: bool, width: usize) -> Line<'s
         Span::styled(calls, detail),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1275,7 +1275,7 @@ fn output_row(output: &Output, highlighted: bool, width: usize) -> Line<'static>
         Span::styled(count, detail),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }

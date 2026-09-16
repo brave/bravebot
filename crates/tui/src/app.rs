@@ -1620,6 +1620,10 @@ pub fn run(
     start: Start,
     skip_permissions: bool,
 ) -> io::Result<Option<crate::sessions::Resumable>> {
+    // Before the terminal is taken, because the request for no colour decides whether it is asked
+    // about its background on the way in, and that question happens inside the takeover.
+    crate::theme::sense_no_color();
+
     let mut stdout = io::stdout();
     take_over_terminal(&mut stdout)?;
 

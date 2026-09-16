@@ -89,7 +89,16 @@ fn top_padding(width: u16, available: u16) -> u16 {
 ///
 /// Mixed in whole channel steps rather than by ratio, since the gradient spans thirty five columns
 /// and twenty two points of green: floating point buys no shade the terminal could show.
-fn brand_at(column: usize) -> Color {
+///
+/// The mark is the largest thing on the screen and the most obviously painted, and its gradient is
+/// written from two literals rather than taken from the palette, so it is where a request for no
+/// colour would go unheeded first. Whether any was wanted is taken as an argument rather than read
+/// here, so the rule can be checked without putting a process-wide switch in force under every
+/// other test in this binary.
+fn brand_at(column: usize, plain: bool) -> Color {
+    if plain {
+        return Color::Reset;
+    }
     let (start, end) = GRADIENT;
     let span = (SEAM - 1) as i32;
     let at = column.min(SEAM - 1) as i32;
@@ -111,7 +120,7 @@ fn ink(column: usize, character: char) -> Style {
     if character == SHADOW {
         Style::default().fg(theme::muted())
     } else if column < SEAM {
-        Style::default().fg(brand_at(column))
+        Style::default().fg(brand_at(column, theme::no_color()))
     } else {
         Style::default()
     }
@@ -301,7 +310,7 @@ mod tests {
     fn the_shadow_is_not_drawn_in_the_letterforms_ink() {
         let _held = theme::exclusive();
         let inks = inks(LOGO[2]);
-        assert_eq!(inks[0], Some(brand_at(0)), "no letterform: {inks:?}");
+        assert_eq!(inks[0], Some(brand_at(0, false)), "no letterform: {inks:?}");
         assert!(inks.contains(&Some(theme::muted())), "no shadow: {inks:?}");
     }
 
@@ -310,7 +319,7 @@ mod tests {
     fn the_orange_stops_at_the_end_of_brave() {
         let _held = theme::exclusive();
         let inks = inks(LOGO[1]);
-        assert_eq!(inks[0], Some(brand_at(0)), "brave lost its ink");
+        assert_eq!(inks[0], Some(brand_at(0, false)), "brave lost its ink");
         let muted = theme::muted();
         assert!(
             inks[SEAM..]
@@ -321,15 +330,25 @@ mod tests {
         );
     }
 
+    /// The mark is the largest painted thing a session opens with, and its gradient is mixed from
+    /// two literals rather than taken from the palette, so it is where a request for no colour
+    /// goes unheeded first.
+    #[test]
+    fn the_wordmark_takes_no_colour_where_none_was_asked_for() {
+        assert_eq!(brand_at(0, true), Color::Reset);
+        assert_eq!(brand_at(SEAM / 2, true), Color::Reset);
+        assert_eq!(brand_at(SEAM - 1, true), Color::Reset);
+    }
+
     /// The gradient is the point: it has to actually travel between the two oranges rather than
     /// round to one of them across the whole word.
     #[test]
     fn the_gradient_runs_from_one_orange_to_the_other() {
         let (start, end) = GRADIENT;
-        assert_eq!(brand_at(0), Color::Rgb(start.0, start.1, start.2));
-        assert_eq!(brand_at(SEAM - 1), Color::Rgb(end.0, end.1, end.2));
+        assert_eq!(brand_at(0, false), Color::Rgb(start.0, start.1, start.2));
+        assert_eq!(brand_at(SEAM - 1, false), Color::Rgb(end.0, end.1, end.2));
 
-        let shades: Vec<Color> = (0..SEAM).map(brand_at).collect();
+        let shades: Vec<Color> = (0..SEAM).map(|column| brand_at(column, false)).collect();
         let steps = shades.windows(2).filter(|pair| pair[0] != pair[1]).count();
         assert!(steps > 4, "the fade is too coarse to read as one: {steps}");
     }
@@ -338,7 +357,7 @@ mod tests {
     /// banding fault rather than as a fade.
     #[test]
     fn the_gradient_only_ever_travels_one_way() {
-        let green = |column: usize| match brand_at(column) {
+        let green = |column: usize| match brand_at(column, false) {
             Color::Rgb(_, green, _) => green,
             other => panic!("not a mixed colour: {other:?}"),
         };

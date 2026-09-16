@@ -488,7 +488,7 @@ fn model_line(model: &Model, selected: bool, current: bool, width: usize) -> Lin
         Span::styled(label, tag),
     ]);
     match selected {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
