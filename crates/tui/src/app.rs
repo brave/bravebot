@@ -2934,6 +2934,25 @@ fn adopt_budget_for_current_model(session: &mut Session, config: &mut Config) {
     session.note_model_reads_effort(reads_effort(&models, session.model()));
 }
 
+/// Take the budget for the model in force where there is no session to tell about it.
+///
+/// A one-shot run puts a model in force without anybody picking one: the command line named it, or
+/// it was read back off disk from a session that has ended. The listing is the only place a window
+/// is ever reported, so this is the only place such a run can learn one, and without it the run
+/// compacts against the default: a figure a narrow window never reaches, so compaction cannot fire
+/// at all, and one a wide window passes three quarters of the way through the conversation it could
+/// have held.
+///
+/// Silent, where [`adopt_budget_for_current_model`] notes the new budget, because a run has nobody
+/// watching and no transcript to put a line in. A listing that cannot be fetched leaves the default
+/// in place for the same reason it does in a session.
+pub fn adopt_budget_for_model(config: &mut Config, model: &str) {
+    let Ok(models) = list_models(config, Some(model)) else {
+        return;
+    };
+    config.adopt_window(advertised_window(&models, Some(model)));
+}
+
 /// Whether the roster says `chosen` reads an effort level.
 ///
 /// Split from the fetch so the matching is testable without a server. True for a model no listing
@@ -4990,6 +5009,56 @@ mod tests {
     fn a_model_that_advertises_nothing_has_no_window() {
         let models = [listed("quiet-model", None)];
         assert_eq!(advertised_window(&models, Some("quiet-model")), None);
+    }
+
+    /// A configuration whose roster is what a settings file named and whose Brave credentials are
+    /// blank, so the listing costs no request and the window under test is the one in the file.
+    fn a_config_with_a_named_roster() -> Config {
+        use bravebot_config::env_var;
+
+        Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            _ => None,
+        })
+        .expect("an account named on its own is a working configuration")
+    }
+
+    /// A run holds no session and opens no picker, so the window of the model it puts in force is
+    /// looked up here or nowhere. Left unlooked up, a run against a model advertising 131,072
+    /// tokens compacts at 24,000, and one advertising less than 24,000 cannot compact at all.
+    #[test]
+    fn a_run_with_no_session_adopts_the_window_of_the_model_in_force() {
+        let mut config = a_config_with_a_named_roster();
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::DEFAULT_CONTEXT_BUDGET
+        );
+
+        adopt_budget_for_model(&mut config, "opus-arn");
+
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::bedrock::CONTEXT_WINDOW
+        );
+        assert!(!config.budget_is_guessed());
+    }
+
+    /// A name no roster describes: a model withdrawn since it was chosen, or one a settings file
+    /// names and no listing offers. The default stands rather than the window of whichever entry
+    /// happened to be first, and the run says nothing about having looked.
+    #[test]
+    fn a_run_whose_model_no_roster_describes_keeps_the_default() {
+        let mut config = a_config_with_a_named_roster();
+
+        adopt_budget_for_model(&mut config, "a-model-nothing-lists");
+
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::DEFAULT_CONTEXT_BUDGET
+        );
+        assert!(config.budget_is_guessed());
     }
 
     /// A reply arrives as hundreds of messages and a draw rebuilds the whole transcript, so a
