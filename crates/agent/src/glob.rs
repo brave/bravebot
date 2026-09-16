@@ -292,8 +292,11 @@ mod tests {
     fn a_question_mark_matches_one_character() {
         assert!(matches("a?.rs", "ab.rs"));
         assert!(!matches("a?.rs", "abc.rs"));
-        // But never a separator, which would let it escape its segment.
+        // But never a separator, which would let it escape its segment. Asked of a path pattern
+        // as well as a bare one: a bare pattern is matched against the file name, which holds no
+        // separator for a `?` to reach in the first place.
         assert!(!matches("a?b", "a/b"));
+        assert!(!matches("src/a?b", "src/a/b"));
     }
 
     /// The spelling everybody reaches for. It used to be matched literally, which found
