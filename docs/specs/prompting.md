@@ -176,6 +176,7 @@ session opens with ends the session and opens nothing, and only Ctrl-C leaves.
 
 `verified-by: bravebot_tui::confirm::saying_no_does_not_stop_the_turn`
 `verified-by: bravebot_tui::confirm::ctrl_c_refuses_the_write_and_stops_the_turn`
+`verified-by: bravebot_tui::confirm::only_the_interrupt_stops_the_turn_at_a_run_prompt`
 `verified-by: bravebot_tui::trust_prompt::ctrl_c_leaves_rather_than_answering_the_question`
 `verified-by: bravebot_tui::trust_prompt::only_ctrl_c_leaves`
 `verified-by: bravebot_tui::trust_prompt::leaving_starts_no_session`

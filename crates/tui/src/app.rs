@@ -4664,7 +4664,7 @@ fn run_turn_animated(
                 let answer = crate::confirm::ask(terminal, &request);
                 // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
                 // Set before the answer goes back, so the worker sees it as soon as it wakes.
-                if answer == crate::confirm::Answer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
                 }
                 // A closed channel means the worker is already gone, so there is nothing to
@@ -4675,7 +4675,7 @@ fn run_turn_animated(
                 let answer = crate::confirm::ask_run(terminal, &request);
                 // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
                 // Set before the answer goes back, so the worker sees it as soon as it wakes.
-                if answer == crate::confirm::RunAnswer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
                 }
                 // What was vouched for travels back with the turn's outcome, exactly as the
@@ -4686,14 +4686,14 @@ fn run_turn_animated(
             }
             crate::remote_confirm::ToMain::ReadOutput(request) => {
                 let answer = crate::confirm::ask_output(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
                 }
                 let _ = answer_tx.send(crate::remote_confirm::Reply::ReadOutput(answer.decision()));
             }
             crate::remote_confirm::ToMain::Fetch(request) => {
                 let answer = crate::confirm::ask_fetch(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
                 }
                 // Nothing is noted on the transcript: an approval covers this one URL and leaves
@@ -4702,7 +4702,7 @@ fn run_turn_animated(
             }
             crate::remote_confirm::ToMain::Vouch(request) => {
                 let answer = crate::confirm::ask_vouch(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
                 }
                 if answer == crate::confirm::Answer::Approve {
@@ -4714,7 +4714,7 @@ fn run_turn_animated(
             }
             crate::remote_confirm::ToMain::Server(request) => {
                 let answer = crate::confirm::ask_server(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
                 }
                 if answer == crate::confirm::Answer::Approve {
@@ -4731,7 +4731,7 @@ fn run_turn_animated(
             }
             crate::remote_confirm::ToMain::Manifest(request) => {
                 let answer = crate::confirm::ask_manifest(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
                 }
                 // Nothing is noted on the transcript. The answer covers this plan and no other, so
