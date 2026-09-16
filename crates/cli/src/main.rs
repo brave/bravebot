@@ -335,7 +335,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let config = match Config::from_env() {
+    let mut config = match Config::from_env() {
         Ok(c) => c,
         Err(err) => {
             eprintln!("{}", t!(cli_configuration_problem, problem = err));
@@ -451,6 +451,14 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         .as_deref()
         .unwrap_or(&config.default_model)
         .to_string();
+
+    // The window the endpoint advertises for that model, which is what compaction measures a
+    // conversation against. A run opens no picker and holds no session, so this is the only place
+    // it can be looked up, and the model is in force here however it got there: named on the
+    // command line, read back off disk, or pinned in the settings file. Without it a run compacts
+    // against a default that a narrow window never reaches, so compaction never fires, while a wide
+    // one reaches it with three quarters of the conversation still to spare.
+    bravebot_tui::app::adopt_budget_for_model(&mut config, &model);
 
     // The sign-in's own lines go to stderr as they arrive, beside every other progress line, which
     // keeps stdout the reply and nothing else. A URL and a code are no use after the fact, so they

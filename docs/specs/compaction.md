@@ -193,6 +193,8 @@ than necessary, which is a mistake this project made before measuring the endpoi
 `verified-by: bravebot_tui::app::nothing_chosen_has_no_advertised_window`
 `verified-by: bravebot_tui::app::a_model_the_listing_no_longer_offers_has_no_window`
 `verified-by: bravebot_tui::app::a_model_that_advertises_nothing_has_no_window`
+`verified-by: bravebot_tui::app::a_run_with_no_session_adopts_the_window_of_the_model_in_force`
+`verified-by: bravebot_tui::app::a_run_whose_model_no_roster_describes_keeps_the_default`
 
 <a id="COMPACT-10"></a>
 ### COMPACT-10: every compaction is recorded, with what it gave up and where it happened
