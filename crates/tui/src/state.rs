@@ -262,9 +262,10 @@ impl Entry {
     }
 
     pub fn stopped(text: impl Into<String>) -> Self {
-        let mut entry = Self::system(text);
-        entry.speaker = Speaker::Stopped;
-        entry
+        Self {
+            speaker: Speaker::Stopped,
+            ..Self::system(text)
+        }
     }
 
     pub fn system(text: impl Into<String>) -> Self {
@@ -404,10 +405,7 @@ pub struct Finished {
     pub tokens: u64,
     /// How long it took, wall clock.
     pub took: Duration,
-    /// How it ended, which decides what is worth saying about it.
-    ///
-    /// Three endings rather than a flag, because the three want three different lines: an answer,
-    /// a stop somebody asked for, and a failure with a reason worth reading.
+    /// Selects the success, cancellation, or failure status.
     pub ending: bravebot_agent::Ending,
 }
 
@@ -4404,12 +4402,7 @@ impl Session {
         }
     }
 
-    /// Why the turn that just ended failed, where it failed.
-    ///
-    /// Read back off the transcript rather than held beside the figures, because the transcript is
-    /// where it has to be anyway: it is part of what the session said, it scrolls back with
-    /// everything else, and it goes into an export. This is the same sentence, for the row that says
-    /// a turn ended, so that the reason is legible whether or not the scrollback still is.
+    /// Reuse the latest failed turn's transcript reason in the fixed status area.
     pub fn failure_said(&self) -> Option<&str> {
         self.finished.filter(|finished| finished.failed())?;
         self.transcript

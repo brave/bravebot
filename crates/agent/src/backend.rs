@@ -58,9 +58,7 @@ impl fmt::Display for BackendError {
                 "no credential for the {provider} gateway: set one of the variables its `env` names, \
                  or `options.apiKey` in its settings block"
             ),
-            // The count is not said. It is a figure for a record and for a line composed from
-            // structure; this is the explanation of what went wrong, and it is the same explanation
-            // whichever attempt it arrived on.
+            // Counts belong to structured diagnostics; preserve the underlying error's display.
             Self::Attempted { cause, .. } => write!(f, "{cause}"),
         }
     }
@@ -101,66 +99,45 @@ impl BackendError {
         }
     }
 
-    /// What is safe to keep about this failure.
-    ///
-    /// Structure only: a category out of the enumerated set, and the status a service answered with
-    /// where one arrived. Nothing here reads a response body, a header, or the address the request
-    /// went to, which is what lets the answer be written into a session record and drawn on a
-    /// screen.
+    /// Classify the error without copying response text, headers, or endpoint URLs.
     pub fn diagnosis(&self) -> Diagnosis {
-        match self {
-            Self::Attempted {
-                attempts, cause, ..
-            } => cause.diagnosis().after(*attempts),
-            Self::NoGatewayToken { .. } => Diagnosis::of(Category::Unconfigured).after(0),
+        let category = match self {
+            Self::Attempted { attempts, cause } => return cause.diagnosis().after(*attempts),
+            Self::NoGatewayToken { .. } => return Diagnosis::of(Category::Unconfigured).after(0),
             Self::Aichat(error) => match error {
-                ChatError::Encode(_) => Diagnosis::of(Category::Internal),
-                ChatError::Subscription(_) => Diagnosis::of(Category::Unauthorized),
-                ChatError::Decode { .. } | ChatError::NoContent => {
-                    Diagnosis::of(Category::Undecodable)
-                }
-                ChatError::Incomplete => Diagnosis::of(Category::Incomplete),
-                // A stop is reported as one rather than diagnosed. Named here so the match stays
-                // exhaustive: a caller that reaches this has already decided it was a failure.
-                ChatError::Cancelled => Diagnosis::of(Category::Internal),
-                ChatError::Egress(egress) => of_egress(egress),
+                // Callers handle cancellation separately; its fallback diagnosis stays internal.
+                ChatError::Encode(_) | ChatError::Cancelled => Category::Internal,
+                ChatError::Subscription(_) => Category::Unauthorized,
+                ChatError::Decode { .. } | ChatError::NoContent => Category::Undecodable,
+                ChatError::Incomplete => Category::Incomplete,
+                ChatError::Egress(egress) => return of_egress(egress),
             },
             Self::Bedrock(error) => match error {
-                BedrockError::Credentials(_) => Diagnosis::of(Category::Unauthorized),
-                BedrockError::Encode(_) => Diagnosis::of(Category::Internal),
+                BedrockError::Credentials(_) => Category::Unauthorized,
+                BedrockError::Encode(_) | BedrockError::Cancelled => Category::Internal,
                 BedrockError::Decode { .. } | BedrockError::Frame(_) | BedrockError::NoContent => {
-                    Diagnosis::of(Category::Undecodable)
+                    Category::Undecodable
                 }
-                // A truncated stream without a protocol exception has no more specific cause.
-                BedrockError::Incomplete => Diagnosis::of(Category::Incomplete),
-                BedrockError::Reported { kind } => Diagnosis::of(match kind.as_str() {
+                BedrockError::Incomplete => Category::Incomplete,
+                BedrockError::Reported { kind } => match kind.as_str() {
                     "validationException" => Category::Refused,
                     "throttlingException" => Category::RateLimited,
                     "internalServerException" | "serviceUnavailableException" => {
                         Category::Unavailable
                     }
-                    // Unknown protocol names remain a cut-off reply. Never persist their text.
+                    // Unknown protocol names must not enter the diagnosis.
                     _ => Category::Incomplete,
-                }),
-                BedrockError::TooLong => Diagnosis::of(Category::TooLong),
-                BedrockError::NoModel => Diagnosis::of(Category::Unconfigured),
-                BedrockError::Cancelled => Diagnosis::of(Category::Internal),
-                // A stale AWS session arrives here rather than above: AWS refuses one with a
-                // status, and the statuses that mean a credential was refused are the ones the
-                // mapping below already reads as a credential having been refused. Keeping the
-                // status with it is what lets a person be told to sign in again rather than to
-                // wait.
-                BedrockError::Egress(egress) => of_egress(egress),
+                },
+                BedrockError::TooLong => Category::TooLong,
+                BedrockError::NoModel => Category::Unconfigured,
+                BedrockError::Egress(egress) => return of_egress(egress),
             },
-        }
+        };
+        Diagnosis::of(category)
     }
 }
 
-/// What is safe to keep about a transport failure.
-///
-/// The status is kept because it is a number the transport read off a response line, and it is the
-/// one figure that tells a rate limit from an outage from a refusal. The address is not: it comes
-/// from a setting, and a setting can hold a credential in a path.
+/// Keep the HTTP status but omit URLs, which may contain credentials.
 fn of_egress(error: &bravebot_net::EgressError) -> Diagnosis {
     use bravebot_net::EgressError;
     match error {

@@ -14,7 +14,10 @@ fn service_exception_keeps_its_actionable_category() {
         let error = BackendError::from(BedrockError::Reported { kind: kind.into() });
         assert_eq!(error.diagnosis().category, expected, "{kind}");
         assert_eq!(error.diagnosis().status, None);
-        let stored = format!("{:?}", error.diagnosis());
-        assert!(!stored.contains(kind), "raw exception name was persisted");
+        let diagnostic = format!("{:?}", error.diagnosis());
+        assert!(
+            !diagnostic.contains(kind),
+            "diagnostic contains raw exception name"
+        );
     }
 }

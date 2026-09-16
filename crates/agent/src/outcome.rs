@@ -1,10 +1,6 @@
 //! Safe failure details and distinct turn endings.
 
-/// What kind of thing went wrong, in the only terms that are safe to keep.
-///
-/// Distinctions are drawn where the remedy differs. A refused credential and an overloaded service
-/// are both "the request failed" and are fixed by completely different acts, so they are two
-/// categories; two shapes of malformed reply are fixed the same way, so they are one.
+/// Fixed failure categories, distinguished by what the user can do about them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
     /// The service would not accept the credentials the request was signed with.
@@ -97,11 +93,7 @@ pub struct Cancellation {
     pub attempts: Option<u32>,
 }
 
-/// How a turn ended.
-///
-/// Three endings rather than a `failed` flag, because a stop is neither of the other two: the
-/// person meant it, so it is not a failure, and there is no answer, so it is not a success. Told
-/// apart wherever a turn is reported or judged.
+/// Distinguish an answer, a deliberate stop, and a failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ending {
     /// It answered.
@@ -117,10 +109,7 @@ pub enum Ending {
 }
 
 impl Ending {
-    /// Whether the turn produced no answer, either way.
-    ///
-    /// What a caller asks when it is deciding whether there is anything to judge or hand on. A stop
-    /// and a failure are the same answer to that question and different answers to every other one.
+    /// Whether the turn ended without an answer for the caller to judge or use.
     pub fn unanswered(self) -> bool {
         !matches!(self, Self::Done)
     }

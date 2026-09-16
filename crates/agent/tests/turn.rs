@@ -15714,7 +15714,6 @@ enum Served {
     /// A status and a short body, which is how a service refuses.
     Status(u16),
     DiagnosticStatus(u16),
-    /// Accepted, read, and hung up on unanswered: a request that died in transit.
     /// A stream that starts and stops without saying the reply is over.
     Unfinished,
 }
@@ -15931,7 +15930,7 @@ fn a_refusal_counts_the_cache_probe_as_a_second_request() {
 
     // Twice, because a refusal on a request's contents is asked once more without its cache
     // breakpoints before the client gives up.
-    let (endpoint, _received) = serve_script(vec![Served::Status(400), Served::Status(400)]);
+    let (endpoint, received) = serve_script(vec![Served::Status(400), Served::Status(400)]);
     let config = config_for(&endpoint);
     let mut conversation = bravebot_agent::Conversation::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -15952,9 +15951,11 @@ fn a_refusal_counts_the_cache_probe_as_a_second_request() {
         "a refusal was reported as something else: {why:?}"
     );
     assert_eq!(why.status, Some(400), "the status was not kept: {why:?}");
+    let requests = received.try_iter().count();
+    assert_eq!(requests, 2);
     assert_eq!(
         why.attempts,
-        Some(2),
+        Some(requests as u32),
         "the cache probe was not counted: {why:?}"
     );
 }
@@ -16009,27 +16010,6 @@ fn a_stop_between_attempts_is_a_stop_rather_than_a_failure() {
         None,
         "a stop was given a reason it failed"
     );
-}
-
-#[test]
-fn regression_probe_requests_are_counted() {
-    let scratch = Scratch::new("review-probe-count");
-    let workspace = Workspace::new(&scratch.path).unwrap();
-    let (url, requests) = serve_script(vec![Served::Status(400), Served::Status(400)]);
-    let mut c = bravebot_agent::Conversation::new();
-    let mut r = bravebot_agent::report::RecordingReporter::default();
-    let e = take_a_turn_reporting(
-        &config_for(&url),
-        &workspace,
-        &mut c,
-        Task::new("work"),
-        &mut r,
-        &bravebot_core::cancel::Cancel::new(),
-    )
-    .unwrap_err();
-    let count = requests.try_iter().count();
-    assert_eq!(count, 2);
-    assert_eq!(why_it_failed(&e).attempts, Some(count as u32));
 }
 
 #[test]
@@ -16186,27 +16166,19 @@ fn regression_processor_failure_keeps_endpoint_credentials_out_of_context() {
         4,
         "the processor request must actually fail"
     );
-    assert!(
-        !requests
-            .last()
-            .unwrap()
-            .contains("PRIVATE_ENDPOINT_SENTINEL"),
-        "next planner request contains the configured endpoint credential"
-    );
+    let next_request = requests.last().unwrap();
     let snapshot = serde_json::to_string(&conversation.snapshot()).unwrap();
     let audit = format!("{audit:?}");
-    assert!(
-        requests
-            .last()
-            .unwrap()
-            .contains("processor request refused")
-    );
+    assert!(next_request.contains("processor request refused"));
     for secret in [
         "PRIVATE_ENDPOINT_SENTINEL",
         "PRIVATE_RESPONSE_SENTINEL",
         "PRIVATE_HEADER_SENTINEL",
     ] {
-        assert!(!requests.last().unwrap().contains(secret));
+        assert!(
+            !next_request.contains(secret),
+            "next planner request leaked {secret}"
+        );
         assert!(
             !snapshot.contains(secret),
             "saved conversation leaked {secret}"
@@ -16274,10 +16246,6 @@ fn regression_cancelled_request_keeps_attempt_count() {
     assert_eq!(
         before_ending,
         bravebot_agent::Ending::Stopped { attempts: Some(0) }
-    );
-    assert_ne!(
-        ending, before_ending,
-        "outcomes lose the difference between one sent request and zero"
     );
 }
 

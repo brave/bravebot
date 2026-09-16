@@ -1985,9 +1985,7 @@ pub fn as_markdown(session: &Session, title: &str) -> String {
             // Notes are left out: they are this program talking about itself, and an export is a
             // record of the exchange.
             crate::state::Speaker::System => {}
-            // A reason is the exception, and the reason it is a speaker of its own. An export of a
-            // session whose last turn failed used to end at the prompt that failed, which reads as
-            // a question nobody answered rather than as one that could not be.
+            // Include outcomes so an unanswered prompt has an explanation in the export.
             crate::state::Speaker::Failure | Speaker::Stopped => {
                 out.push_str(if entry.speaker == crate::state::Speaker::Stopped {
                     "## Cancelled\n\n"
@@ -2039,7 +2037,7 @@ fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) -> Laid {
     let offset = if session.scrolling() || session.scroll > 0 {
         session.top_row().min(max_offset)
     } else {
-        max_offset.saturating_sub(session.scroll.min(max_offset))
+        max_offset
     };
 
     frame.render_widget(paragraph.scroll((offset, 0)), area);
@@ -2093,11 +2091,7 @@ fn status_height(session: &Session, width: u16, height: u16) -> u16 {
         Status::Working => (1 + session.todos.len()).min(ceiling) as u16,
         // A command spends no tokens and keeps no task list, so one line says everything.
         Status::Running => 1,
-        // Idle, but with a turn just finished to report. The row that says a turn ended, and under
-        // it the reason where it failed: only until the next turn starts, and drawn here rather
-        // than left to the scrollback because this area is drawn wherever the transcript happens to
-        // be scrolled to. A reason in the scrollback alone is a reason a long audit trail pushes
-        // off the screen at the moment somebody needs it.
+        // Keep the failure reason visible even when its transcript entry is off screen.
         Status::Idle if session.finished.is_some() => {
             (1 + failure_rows(session, width).len()).min(ceiling) as u16
         }
@@ -2105,11 +2099,7 @@ fn status_height(session: &Session, width: u16, height: u16) -> u16 {
     }
 }
 
-/// How many rows of the status area a reason may take.
-///
-/// A cap rather than the whole of it, because the row above carries the part that cannot be lost:
-/// which turn ended and that it failed. A reason long enough to fill the screen is read in the
-/// scrollback or in an export, where the whole of it is.
+/// Limit the reason's height so the turn status and input remain visible.
 const REASON_ROWS: usize = 3;
 
 /// Why the turn that just ended failed, wrapped for the status area, or nothing.
@@ -2119,11 +2109,9 @@ fn failure_rows(session: &Session, width: u16) -> Vec<String> {
     };
     // Indented to the width the row above it starts at, so the reason reads as belonging to it.
     let room = (width as usize).saturating_sub(4).max(8);
-    wrap::wrap(reason, room, 0)
-        .rows
-        .into_iter()
-        .take(REASON_ROWS)
-        .collect()
+    let mut rows = wrap::wrap(reason, room, 0).rows;
+    rows.truncate(REASON_ROWS);
+    rows
 }
 
 /// Rows the input box needs, borders included.
@@ -2288,9 +2276,7 @@ fn draw_status(frame: &mut Frame, area: Rect, session: &Session) {
     if working {
         lines.extend(todo_lines(&session.todos).into_iter().take(room));
     }
-    // Under the row that says the turn failed, and inside what this area was given: a reason
-    // trimmed to the rows there are is the first part of it, which is the part that says what
-    // happened. The whole of it is in the transcript and in an export.
+    // Fit the reason below the status; the transcript and export retain the full text.
     lines.extend(
         failure_rows(session, area.width)
             .into_iter()

@@ -4910,8 +4910,7 @@ fn run_turn_animated(
         )
     });
 
-    // A cancelled turn returns the prompt for editing instead of recording a failure: the user
-    // stopped it deliberately, so there is nothing to report.
+    // Record cancellation separately from failure, then restore the prompt when possible.
     let events = sink.events().to_vec();
 
     if let Err(turn::TurnError::Cancelled { attempts }) = &outcome {
