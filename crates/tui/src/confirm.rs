@@ -1469,6 +1469,7 @@ fn centred(area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use ratatui::backend::TestBackend;
 
     fn request(contents: &str, existing: Option<&str>) -> WriteRequest {
@@ -2304,6 +2305,10 @@ mod tests {
         );
     }
 
+    /// A prompt that panics on a small terminal takes the session with it, and one that drops the
+    /// question is worse: it blocks everything else while showing nothing to answer, and a key
+    /// pressed at it answers a question that was never on the screen. So the small case is held to
+    /// what it asks about and the key that answers, not merely to surviving the draw.
     #[test]
     fn a_tiny_terminal_still_renders_the_prompt() {
         let mut terminal = Terminal::new(TestBackend::new(20, 8)).expect("terminal");
@@ -2312,6 +2317,22 @@ mod tests {
                 draw(frame, &request("x", None), 0);
             })
             .expect("must not panic on a small area");
+
+        let drawn: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            drawn.contains("src/main.rs"),
+            "the prompt did not say what it was asking about: {drawn}"
+        );
+        assert!(
+            drawn.contains("write it"),
+            "the key that approves the write was drawn out of view: {drawn}"
+        );
     }
 
     /// The bar the renderer draws down the margin.

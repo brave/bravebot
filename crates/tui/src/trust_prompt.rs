@@ -505,15 +505,42 @@ mod tests {
     }
 
     /// Both questions, since either can be the first thing a session draws on a small terminal.
+    ///
+    /// Surviving the draw is half of it. These two are asked before a session exists, and nothing
+    /// else is on the screen to say what the keys mean, so a small terminal that drew the border
+    /// and lost the question would leave somebody pressing `y` at a panel that never said what it
+    /// was about.
     #[test]
     fn a_tiny_terminal_still_renders() {
         let mut terminal = Terminal::new(TestBackend::new(24, 8)).expect("terminal");
         terminal
             .draw(|frame| draw(frame, Path::new("/tmp/x")))
             .expect("must not panic on a small area");
+        assert!(
+            drawn_on(&terminal).contains("Trust /tmp/x?"),
+            "the question was drawn out of view: {}",
+            drawn_on(&terminal)
+        );
+
         terminal
             .draw(|frame| draw_named(frame, "/tmp/x"))
             .expect("must not panic on a small area");
+        assert!(
+            drawn_on(&terminal).contains("Open /tmp/x?"),
+            "the question was drawn out of view: {}",
+            drawn_on(&terminal)
+        );
+    }
+
+    /// The characters on a terminal that has already been drawn to.
+    fn drawn_on(terminal: &Terminal<TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
     }
 
     /// Trusting records the root, which covers the whole tree. Asked of the answer rather than of
