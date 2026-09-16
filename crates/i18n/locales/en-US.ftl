@@ -732,6 +732,7 @@ command-btw = Ask something beside the work, without putting it in the conversat
 command-clear = Start a new session here, keeping this one resumable
 command-loop = Send a prompt again and again, on your interval or at a pace each turn sets
 command-goal = Keep working until a condition you set is judged met
+command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-export = Export the session transcript to a markdown file
 command-undo = Rewind the last turn and restore files
 command-exit = Leave
@@ -916,6 +917,16 @@ btw-uninterruptible = the question cannot be interrupted; it takes one request
 btw-ended-unexpectedly = the question ended unexpectedly
 btw-answered = asked beside the work, and answered there; { $chord } opens it again
 btw-failed = the question could not be answered: { $problem }
+
+# What the session says about a manifest run started from it. A run is not a turn of the
+# conversation: nothing about it goes into the exchange, so these lines and the run's own record
+# are the whole of what is left afterwards.
+manifest-needs-a-task = /manifest takes the task to plan, as in /manifest summarise the docs
+manifest-began = planning the whole task first; the session waits here until the run ends
+manifest-ended-unexpectedly = the run ended unexpectedly
+manifest-finished = the run finished; nothing from it joins this conversation
+manifest-failed = the run stopped: { $problem }
+manifest-recorded = recorded as { $id }; read it with bravebot --resume { $id }
 
 
 ## The opening screen

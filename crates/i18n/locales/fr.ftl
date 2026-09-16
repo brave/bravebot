@@ -672,6 +672,7 @@ command-btw = Demander quelque chose à côté du travail, sans le mettre dans l
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
 command-loop = Renvoyer une consigne encore et encore, à votre intervalle ou au rythme de chaque tour
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
+command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-export = Exporter la transcription de la session vers un fichier markdown
 command-undo = Annuler le dernier tour et restaurer les fichiers
 command-exit = Partir
@@ -841,6 +842,16 @@ btw-uninterruptible = la question ne peut pas être interrompue ; elle prend une
 btw-ended-unexpectedly = la question s'est terminée de façon inattendue
 btw-answered = demandé à côté du travail, et répondu là ; { $chord } l'ouvre à nouveau
 btw-failed = la question n'a pas pu recevoir de réponse : { $problem }
+
+# Ce que la session dit d'une exécution planifiée lancée depuis elle. Une telle exécution n'est
+# pas un tour de la conversation : rien n'en entre dans l'échange, donc ces lignes et
+# l'enregistrement de l'exécution sont tout ce qu'il en reste.
+manifest-needs-a-task = /manifest prend la tâche à planifier, comme /manifest résume la documentation
+manifest-began = la tâche entière est planifiée d'abord ; la session attend ici jusqu'à la fin de l'exécution
+manifest-ended-unexpectedly = l'exécution s'est terminée de façon inattendue
+manifest-finished = l'exécution est terminée ; rien de ce qui en vient ne rejoint cette conversation
+manifest-failed = l'exécution s'est arrêtée : { $problem }
+manifest-recorded = enregistré sous { $id } ; à lire avec bravebot --resume { $id }
 
 
 ## L'écran d'accueil

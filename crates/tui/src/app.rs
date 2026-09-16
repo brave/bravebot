@@ -110,6 +110,13 @@ const EXPORT_COMMAND: &str = "/export";
 /// The line that rewinds the conversation and restores files changed in the last turn.
 const UNDO_COMMAND: &str = "/undo";
 
+/// The line that plans one task in full before anything is read, taking the task as its argument.
+///
+/// Not a mode the session holds. A session is several turns over one conversation and this is one
+/// run with a frozen plan, so the word starts a run and the session comes back to the turn loop
+/// when it ends. See [`manifest_animated`] and `docs/specs/manifest.md`.
+const MANIFEST_COMMAND: &str = "/manifest";
+
 /// One command, and what it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Command {
@@ -126,7 +133,7 @@ pub struct Command {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 16] {
+pub fn commands() -> [Command; 17] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -192,6 +199,11 @@ pub fn commands() -> [Command; 16] {
             name: GOAL_COMMAND,
             argument: "[<condition> | clear]",
             description: t!(command_goal),
+        },
+        Command {
+            name: MANIFEST_COMMAND,
+            argument: "<task>",
+            description: t!(command_manifest),
         },
         Command {
             name: EXPORT_COMMAND,
@@ -302,6 +314,9 @@ pub enum Action {
     /// Ask something beside the work, over a copy of the conversation. Needs the conversation and
     /// the network, which the loop owns, and gives the conversation nothing back.
     Aside(String),
+    /// Plan this task in full and then walk it. Needs the workspace, the trust map and the
+    /// network, which the loop owns, and gives the conversation nothing back.
+    Manifest(String),
     /// Start a new session here. Needs the conversation and the session record, which the loop owns.
     Clear,
     /// Call this session something else. Needs the session record, which the loop owns.
@@ -1044,6 +1059,13 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
     }
     if let Some(name) = argument_to(line, RENAME_COMMAND) {
         return Action::Rename(name.to_string());
+    }
+    // The command that starts the other kind of run. The task is taken verbatim and is never sent
+    // as a prompt: the planner that reads it is a fresh one with nothing but the task and the
+    // driver's own words in its context, so the conversation neither goes into the run nor hears
+    // anything back from it.
+    if let Some(task) = argument_to(line, MANIFEST_COMMAND) {
+        return Action::Manifest(task.to_string());
     }
     // The command that sends a prompt rather than the line it was typed on. `/loop 5m check the
     // deploy` arms the loop and hands back "check the deploy", which is what every tick sends from
@@ -2379,6 +2401,65 @@ fn event_loop(
                 }
                 needs_draw = true;
             }
+            Action::Manifest(task) => {
+                if task.is_empty() {
+                    session.note(t!(manifest_needs_a_task));
+                } else {
+                    // The snapshot holds the spend and the timing as they were before the turn,
+                    // and this run is charged to that turn, exactly as an aside is: rewinding to
+                    // it would un-charge requests that really went out, and steps that really
+                    // wrote to the tree are not something the rewind window covers.
+                    session.close_rewind_window();
+                    let events = manifest_animated(
+                        terminal,
+                        &mut session,
+                        config,
+                        &workspace,
+                        &task,
+                        &trust,
+                        &permissions,
+                    )?;
+
+                    // Taken off the workspace rather than kept for anything: a run is not a turn of
+                    // this conversation, and `close_rewind_window` above already shut the window
+                    // that could have rewound to one, so nothing will put these back. What the
+                    // drain is for is the *next* turn, which takes whatever the workspace is
+                    // holding as its own. Left here, the run's writes would be attributed to that
+                    // turn and `/undo` on it would revert them.
+                    session.last_turn_backups = workspace.take_backups();
+
+                    // The session's own record, written for the reason an aside's is: the run is
+                    // the change, and a session that started one and then slept should resume
+                    // with the note saying where it went still in the transcript. The run's own
+                    // record is a separate file that `manifest_animated` already wrote.
+                    if session.turns > 0 {
+                        let title = stored.title().to_string();
+                        stored.save(
+                            &title,
+                            crate::sessions::Standing {
+                                conversation: &conversation.snapshot(),
+                                turns: session.turns,
+                                tokens: session.tokens,
+                                spend: session.spend_by_turn(),
+                                timing: session.timing_by_turn(),
+                                model: session.served_model(),
+                                todos: &session.todos_by_turn(),
+                                asides: session.asides(),
+                                trust: &trust,
+                                programs: &programs,
+                                directories: workspace.added_directories(),
+                                // None, and it stays none however many runs this session starts.
+                                // Its presence is what makes a record a manifest run, and this
+                                // record is a conversation that can be resumed; the run has a
+                                // record of its own where that field is filled.
+                                manifest: None,
+                            },
+                        );
+                        stored.append_audit(session.turns, &events);
+                    }
+                }
+                needs_draw = true;
+            }
             Action::Clear => {
                 // A new handle means a new id, so the session so far keeps its own files and stays
                 // resumable. Nothing is deleted: what the user asked for is a clean context, and
@@ -3638,6 +3719,296 @@ fn aside_animated(
     }
 
     Ok(sink.events().to_vec())
+}
+
+/// Plan one task in full, put the frozen plan to the person, and walk it, redrawing throughout.
+///
+/// The other kind of run, started from a session rather than from the command line. Between
+/// [`run_turn_animated`] and [`aside_animated`] in what it needs: it asks about a plan and about
+/// every write a step reaches, so it has the turn's answer channel, and it gives the conversation
+/// nothing, so it takes none.
+///
+/// **The session is blocked for the duration.** A manifest run is one run with a frozen plan, and
+/// there is no planner in it to hand a line to: the person cannot interleave a turn with it, and
+/// the loop below refuses to send. What they can still do is everything the turn loop lets them do
+/// while a turn runs, which is read the transcript, edit the box, and stop what is in flight.
+///
+/// **The conversation is neither read nor written.** It is not lent here at all, which is stronger
+/// than an aside's promise to hand it back unchanged: the planner that reads the task is a fresh
+/// one whose context holds the task string and the driver's own words (MANIFEST-1), so sending the
+/// conversation would break the gate rather than merely widen it, and a step's result is
+/// quarantined (MANIFEST-8) so there is nothing it could give back. What the transcript shows is
+/// the goal as the planner understood it, the frozen plan, each step as it runs, and the reply, all
+/// of it released for a screen and none of it in the exchange a later turn resumes.
+///
+/// **The run is written down as its own record**, by the same function the command line uses, and
+/// the session notes the id. That keeps the presence of `manifest` in a record the thing that makes
+/// it a manifest run: this session's own record stays a conversation, so it still resumes, and the
+/// run's record still has no conversation, so the picker still refuses it for the right reason.
+///
+/// The trust map is lent and comes back unused. A grant a step was given belongs to the run, and
+/// travels into the run's own record with everything else it produced; folding it into the session
+/// would leave the conversation holding a yes that was given about a plan it never saw.
+#[allow(clippy::too_many_arguments)]
+fn manifest_animated(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
+    config: &Config,
+    workspace: &Workspace,
+    task: &str,
+    trust: &TrustStore,
+    permissions: &Permissions,
+) -> io::Result<Vec<Stamped>> {
+    // For the reason a turn does it: a sign-in needs the terminal, and this is the thread that has
+    // it. Left to the worker, the URL and code the AWS CLI prints would land nowhere anyone reads.
+    sign_in_if_needed(terminal, session, config)?;
+
+    let (to_main, from_worker) = mpsc::channel::<crate::remote_confirm::ToMain>();
+    let (answer_tx, answer_rx) = mpsc::channel::<crate::remote_confirm::Reply>();
+
+    // A fresh token, as a turn takes: reusing one could stop a run before it started.
+    let cancel = Cancel::new();
+    let worker_cancel = cancel.clone();
+
+    let worker_config = config.clone();
+    let worker_workspace = workspace.clone();
+    let worker_trust = trust.clone();
+    // The mode as it stands now. A run keeps the one it began with, for the reason a turn does: a
+    // key pressed while it walks describes what comes after it, and a plan already on the screen
+    // must not have the question withdrawn from under the person answering it.
+    let permission_mode = session.permission_mode();
+    // No files, no attachments and no pasted pictures. Every one of those is context, and this mode
+    // fixes its plan before it observes anything; the task string is the whole of the input, which
+    // is the same reason a pipe is refused (MANIFEST-9).
+    let worker_task = Task::new(task)
+        .with_home(bravebot_agent::home::directory())
+        .with_model(session.model().map(str::to_string))
+        .with_effort(session.effort_in_force())
+        .with_permissions(permissions.clone())
+        .with_permission_mode(permission_mode);
+    // Nothing is said about the standing form of a write answer, so nothing offers it. A plan has
+    // no standing answer at all (MANIFEST-10), and a run whose steps were fixed before anything was
+    // read is the worst place to record one: the key would be pressed about a step in a plan that
+    // is written afresh for every run.
+    let asked = task.to_string();
+
+    session.begin_aside();
+    session.note(t!(manifest_began));
+
+    let worker = thread::spawn(move || {
+        let mut sink = Trail::new();
+        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main.clone());
+        // A queue of its own, and empty. A line typed while a run walks is not something the run
+        // can take: there is no planner in it to hand one to, so the queue the session holds stays
+        // the session's and the next turn sends it.
+        let mut asking = crate::remote_confirm::RemoteConfirmer::new(
+            to_main,
+            answer_rx,
+            crate::remote_confirm::Interjections::new(),
+        );
+        let mut confirmer = bravebot_agent::Confining::new(&mut asking, permission_mode);
+        let egress = Egress::new();
+        let outcome = bravebot_agent::manifest::run(
+            &worker_config,
+            &egress,
+            &worker_workspace,
+            &worker_task,
+            &mut confirmer,
+            &mut reporter,
+            &mut sink,
+            worker_trust,
+            &worker_cancel,
+        );
+        (outcome, sink)
+    });
+
+    loop {
+        redraw(terminal, session)?;
+
+        // Read here rather than in the outer loop, which is blocked for the duration, and for the
+        // reason a turn reads it here: a run that walks for ten minutes must not leave the
+        // interface deaf, and the frame's waiting is done here so a key press wakes the loop.
+        if event::poll(FRAME)? {
+            while event::poll(Duration::ZERO)? {
+                match event::read()? {
+                    TermEvent::Key(key) if key.kind == KeyEventKind::Release => {}
+                    // Both keys stop the run and neither leaves, exactly as in a turn. A person
+                    // watching a plan go wrong is asking for the plan to stop; the next press, at
+                    // the box, is the one that leaves.
+                    TermEvent::Key(key) if stops_the_turn(session, key) => {
+                        cancel.cancel();
+                    }
+                    TermEvent::Key(key) => {
+                        handle_key_while_working(session, key);
+                    }
+                    TermEvent::Paste(text) => handle_paste_while_working(session, &text),
+                    TermEvent::Mouse(mouse) => {
+                        let action = handle_mouse(session, mouse);
+                        if action == Action::Copy {
+                            copy_selection(terminal, session)?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| match message {
+            // The one question this mode asks that a turn does not, and the reason the session
+            // prompt is worth reaching: it is drawn and scrolled rather than printed and read off
+            // a line, so a plan longer than the window can be walked back through before it is
+            // answered.
+            crate::remote_confirm::ToMain::Manifest(request) => {
+                let answer = crate::confirm::ask_manifest(terminal, &request);
+                if answer == crate::confirm::Answer::Interrupt {
+                    cancel.cancel();
+                }
+                // Nothing is noted on the transcript, for the reason a turn notes nothing: the
+                // answer covers this plan and no other, so there is no standing decision to
+                // record, and the plan is about to be walked in the open where the transcript
+                // shows every step of it.
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Manifest(answer.decision()));
+            }
+            // Approving the plan was not approving its writes, so each one is still put to the
+            // person as its step reaches it.
+            crate::remote_confirm::ToMain::Write(request) => {
+                let answer = crate::confirm::ask(terminal, &request);
+                if answer == crate::confirm::Answer::Interrupt {
+                    cancel.cancel();
+                }
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Write(answer.decision()));
+            }
+            crate::remote_confirm::ToMain::Fetch(request) => {
+                let answer = crate::confirm::ask_fetch(terminal, &request);
+                if answer == crate::confirm::Answer::Interrupt {
+                    cancel.cancel();
+                }
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Fetch(answer.decision()));
+            }
+            crate::remote_confirm::ToMain::Vouch(request) => {
+                let answer = crate::confirm::ask_vouch(terminal, &request);
+                if answer == crate::confirm::Answer::Interrupt {
+                    cancel.cancel();
+                }
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Vouch(answer.decision()));
+            }
+            // Progress, with no reply to give. The goal as the planner understood it and the frozen
+            // plan both arrive as narration, and each step as an activity, so the transcript of a
+            // run reads the way the transcript of a turn does.
+            crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
+            crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
+            crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
+            crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
+            crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
+            crate::remote_confirm::ToMain::Started(activity) => session.start_activity(activity),
+            crate::remote_confirm::ToMain::Finished(activity) => session.finish_activity(activity),
+            crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
+            crate::remote_confirm::ToMain::Landed(landing) => session.landed(landing),
+            // The questions a turn asks that this mode cannot. There is no shell and no `run` in
+            // the schema (MANIFEST-5), so no pipeline is proposed and no output is read back, and
+            // there is no planner left to pose a question. None of the three can arrive, and each
+            // of them is a question the worker is *blocked* on, so silence here would be a hang
+            // nothing can break: the loop would go round forever with the worker waiting on a
+            // reply and the cancel token never looked at. Answered the way every other failure to
+            // carry a question is answered, with the negative one.
+            crate::remote_confirm::ToMain::Run(_) => {
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Run(
+                    bravebot_agent::confirm::RunDecision::reject(),
+                ));
+            }
+            crate::remote_confirm::ToMain::ReadOutput(_) => {
+                let _ = answer_tx.send(crate::remote_confirm::Reply::ReadOutput(
+                    bravebot_agent::confirm::Decision::Reject,
+                ));
+            }
+            crate::remote_confirm::ToMain::Server(_) => {
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Server(
+                    bravebot_agent::confirm::Decision::Reject,
+                ));
+            }
+            crate::remote_confirm::ToMain::Ask(_) => {
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Ask(Vec::new()));
+            }
+            // What is left announces rather than asks, so nothing waits on it. The manifest is the
+            // task list, so no list changes; there is no planner to delegate or to be interjected
+            // at; and a run's steps report through `Started` and `Finished` above.
+            _ => {}
+        });
+
+        if !carrying_on {
+            break;
+        }
+    }
+
+    let (outcome, sink) = worker.join().unwrap_or_else(|_| {
+        (
+            Err(bravebot_agent::TurnError::Precommit(
+                t!(manifest_ended_unexpectedly).to_string(),
+            )),
+            Trail::new(),
+        )
+    });
+
+    let stopped_by_the_person = was_stopped(&outcome, &cancel);
+
+    // Only from a run that finished. A run that stopped comes back as an error carrying what it
+    // produced (MANIFEST-3) and no figures, so the tokens it did spend are not recoverable here,
+    // and the breakdown is absent rather than guessed.
+    let (tokens, spent) = match &outcome {
+        Ok(finished) => (finished.tokens, Some(finished.timing)),
+        Err(_) => (0, None),
+    };
+    session.end_run(tokens, spent);
+
+    // Nothing for a run the person stopped, which is what the command line does with one too: it
+    // has nothing in it anybody needs to read, and a record per interrupted run would fill the
+    // picker with rows whose whole content is that somebody changed their mind. Every other
+    // outcome is written before anything is said, so the note can name it.
+    let recorded = match stopped_by_the_person {
+        true => None,
+        false => crate::sessions::record_manifest_run(workspace.root(), &asked, &outcome),
+    };
+
+    match &outcome {
+        Ok(finished) => {
+            // Released for a screen, exactly as a turn's reply is, and into the transcript rather
+            // than into the conversation: what this run said is not something a later turn holds.
+            session.narrate(finished.reply_for_display());
+            session.note(t!(manifest_finished));
+        }
+        // Stopped by the person, so there is nothing to report. The transcript already holds the
+        // steps that ran, and a complaint about a run they turned off themselves is noise.
+        Err(_) if stopped_by_the_person => {}
+        Err(failure) => {
+            session.note(t!(manifest_failed, problem = failure.to_string()));
+        }
+    }
+    // Last, so it is the line under whichever of those was said. The run's own record is where the
+    // plan, the proposal and the steps are kept in full, and this is the only place its name
+    // appears: without it a person would have to find the run in the picker to read it.
+    if let Some(id) = recorded {
+        session.note(t!(manifest_recorded, id = &id));
+    }
+
+    Ok(sink.events().to_vec())
+}
+
+/// Whether a manifest run ended because the person stopped it.
+///
+/// Read off the token they set rather than off the error that came back, and that is the whole of
+/// why this is a function. The two keys that stop a run reach it as two different things: pressed at
+/// the plan prompt they are answered as a decline, so the run reports a plan nobody approved, and
+/// pressed a step later they are a cancellation. Matching on `Cancelled` would therefore make the
+/// same key mean two things depending on the moment it was pressed, and the person who pressed it
+/// asked for the same thing at both.
+///
+/// A run that finished is never this, however late the key arrived: the work is done, and throwing
+/// away the record of a run that completed would lose what it did.
+fn was_stopped(
+    outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
+    cancel: &Cancel,
+) -> bool {
+    outcome.is_err() && cancel.is_cancelled()
 }
 
 /// Interpret a key press while the goal check is out.
@@ -8083,6 +8454,98 @@ mod tests {
             Action::Submit("/goals are useful".to_string())
         );
         assert!(session.goal().is_none());
+    }
+
+    /// MANIFEST-9's other half: a session can reach the planning mode, so the word has to start a
+    /// run and carry the whole task. The task is a sentence, like a goal's condition, so nothing
+    /// may be cut off it: what the planner is shown is what it plans, and the planner is shown
+    /// this and nothing else.
+    #[test]
+    fn a_session_can_ask_for_a_manifest_run() {
+        let mut session = Session::new("none");
+        for c in "/manifest summarise every doc under docs/specs".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Manifest("summarise every doc under docs/specs".to_string())
+        );
+        assert!(
+            session.input().is_empty(),
+            "the command is still in the box"
+        );
+    }
+
+    /// The bare word plans nothing. There is no default task and there could not be one: the task
+    /// string is the whole of a manifest run's input, so a run started without one would plan
+    /// against nothing at all.
+    #[test]
+    fn a_manifest_run_needs_a_task_to_plan() {
+        let mut session = Session::new("none");
+        for c in MANIFEST_COMMAND.chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Manifest(String::new()),
+            "the bare word has to reach the loop, which says what it needs"
+        );
+        assert!(
+            t!(manifest_needs_a_task).contains(MANIFEST_COMMAND),
+            "the answer does not name the command it is about"
+        );
+    }
+
+    /// MANIFEST-11. Escape at the plan prompt is answered as a decline, so a run stopped there
+    /// comes back saying the plan was not approved rather than saying it was cancelled. Read off
+    /// the error, the key would mean "leave no record" one moment and "write one" the moment
+    /// before, for a person who pressed the same key asking for the same thing.
+    #[test]
+    fn a_run_the_person_stopped_is_read_off_the_key_and_not_off_the_error() {
+        let declined = || {
+            Err(bravebot_agent::TurnError::Precommit(
+                "the plan was not approved, so nothing ran".to_string(),
+            ))
+        };
+        let cancelled = || Err(bravebot_agent::TurnError::Cancelled);
+
+        let pressed = Cancel::new();
+        pressed.cancel();
+        assert!(
+            was_stopped(&declined(), &pressed),
+            "a decline the person's own key produced was not read as a stop"
+        );
+        assert!(was_stopped(&cancelled(), &pressed));
+
+        let untouched = Cancel::new();
+        assert!(
+            !was_stopped(&declined(), &untouched),
+            "a plan declined at the prompt is a run worth recording"
+        );
+    }
+
+    /// A sentence that merely mentions the word is a prompt. Starting a run from one would plan a
+    /// whole run's worth of effects off a line somebody meant to say.
+    #[test]
+    fn a_manifest_run_is_not_a_prompt() {
+        for line in [
+            "/manifests are the other mode",
+            "what does /manifest do",
+            "explain the /manifest command",
+        ] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string()),
+                "{line} started a run"
+            );
+        }
     }
 
     /// The key that stops things has to stop this one too, or a person watching a goal go wrong
