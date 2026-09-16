@@ -2172,7 +2172,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// trail says what was dropped.
     pub fn before_delegate(
         &mut self,
-        id: &str,
+        id: crate::delegate::DelegateId,
         kind: &Labelled<String>,
         task: &Labelled<String>,
     ) -> Gated<crate::delegate::DelegateSpec> {
@@ -8756,7 +8756,7 @@ mod tests {
 
     mod delegates {
         use super::*;
-        use crate::delegate::Kind;
+        use crate::delegate::{DelegateId, Kind};
 
         /// What a planner's own words look like by the time a tool hands them over: the tool layer
         /// labels every argument pessimistically, because it cannot know where one came from.
@@ -8781,7 +8781,11 @@ mod tests {
             .resuming(Integrity::Untrusted);
 
             let err = policy
-                .before_delegate("delegate", &argument("reader"), &argument("find the bug"))
+                .before_delegate(
+                    DelegateId::nth(1),
+                    &argument("reader"),
+                    &argument("find the bug"),
+                )
                 .expect_err("a fallen context must not steer a second planner");
             assert_eq!(err.principle, Principle::IntegrityGate);
             assert!(!policy.finish());
@@ -8795,7 +8799,11 @@ mod tests {
             let mut policy = open_policy(&mut sink);
 
             let spec = policy
-                .before_delegate("delegate", &argument("reader"), &argument("find the bug"))
+                .before_delegate(
+                    DelegateId::nth(1),
+                    &argument("reader"),
+                    &argument("find the bug"),
+                )
                 .expect("a clean context may delegate");
             assert_eq!(spec.kind(), Kind::Reader);
             assert_eq!(spec.task(), "find the bug");
@@ -8813,7 +8821,7 @@ mod tests {
                 Label::untrusted_private(),
             );
             let err = policy
-                .before_delegate("delegate", &argument("reader"), &private)
+                .before_delegate(DelegateId::nth(1), &argument("reader"), &private)
                 .expect_err("private content must not become a prompt");
             assert_eq!(err.principle, Principle::Confinement);
             assert!(!policy.finish());
@@ -8829,7 +8837,7 @@ mod tests {
                 let mut policy = open_policy(&mut sink);
 
                 let err = policy
-                    .before_delegate("delegate", &argument(name), &argument("do it"))
+                    .before_delegate(DelegateId::nth(1), &argument(name), &argument("do it"))
                     .expect_err("a name nobody enumerated must reach no capability set");
                 assert_eq!(err.principle, Principle::Capability, "for '{name}'");
                 assert!(!policy.finish());
@@ -8851,7 +8859,7 @@ mod tests {
             .unwrap();
 
             let spec = policy
-                .before_delegate("delegate", &argument("worker"), &argument("fix it"))
+                .before_delegate(DelegateId::nth(1), &argument("worker"), &argument("fix it"))
                 .expect("a narrow run may still delegate");
 
             assert!(spec.capabilities().contains(Capability::FileRead));
@@ -8874,7 +8882,7 @@ mod tests {
                 let mut policy = open_policy(&mut sink);
 
                 let spec = policy
-                    .before_delegate("delegate", &argument(name), &argument("do it"))
+                    .before_delegate(DelegateId::nth(1), &argument(name), &argument("do it"))
                     .expect("an enumerated kind");
                 let kind = Kind::from_name(name).expect("enumerated");
                 assert_eq!(spec.rounds(), kind.rounds(), "{name} was bounded elsewhere");

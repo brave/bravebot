@@ -911,20 +911,28 @@ fn print_trace(output: &mut impl Write, sink: &RecordingSink) {
     }
 
     trace!("audit trail");
-    for event in sink.events() {
+    for (delegate, event) in sink.recorded() {
+        // Which run took the decision, in front of what it decided. A turn and the delegates it
+        // spawned record into this one trail, and two delegates of the same kind decide alike.
+        let run = match delegate {
+            Some(delegate) => format!("{delegate} "),
+            None => String::new(),
+        };
         match event {
-            Event::GatePassed { gate, detail } => trace!("  ok      {gate}: {detail}"),
-            Event::GateBlocked { gate, reason, .. } => trace!("  BLOCK   {gate}: {reason}"),
+            Event::GatePassed { gate, detail } => trace!("  ok      {run}{gate}: {detail}"),
+            Event::GateBlocked { gate, reason, .. } => trace!("  BLOCK   {run}{gate}: {reason}"),
             Event::Observed { capability, label } => {
-                trace!("  observe {capability} produced {label}")
+                trace!("  observe {run}{capability} produced {label}")
             }
-            Event::SlotWritten { slot, label } => trace!("  slot    {slot} at {label}"),
+            Event::SlotWritten { slot, label } => trace!("  slot    {run}{slot} at {label}"),
             Event::SlotDeferred {
                 slot,
                 label,
                 origin,
-            } => trace!("  defer   {slot} holds {origin}, unread, at {label}"),
-            Event::Declassified { slot, from, to, .. } => trace!("  release {slot} {from} -> {to}"),
+            } => trace!("  defer   {run}{slot} holds {origin}, unread, at {label}"),
+            Event::Declassified { slot, from, to, .. } => {
+                trace!("  release {run}{slot} {from} -> {to}")
+            }
             Event::ActionField {
                 tool,
                 field,
@@ -937,7 +945,7 @@ fn print_trace(output: &mut impl Write, sink: &RecordingSink) {
                     Role::Routing => "routing",
                     Role::Content => "content",
                 };
-                trace!("  {mark} {tool}.{field} [{role}] {label}");
+                trace!("  {mark} {run}{tool}.{field} [{role}] {label}");
             }
         }
     }

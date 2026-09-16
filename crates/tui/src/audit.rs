@@ -16,16 +16,22 @@
 //! Nothing in here is content. Every field is a gate name, a capability, a label, a path or a
 //! slot id, which is the same reason the trail can be shown on a screen without a release.
 
+use bravebot_agent::report::DelegateId;
 use bravebot_core::event::{Event, Role, Sink};
 use bravebot_core::label::{Confidentiality, Integrity, Label};
 use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// An event, and when it happened.
+/// An event, when it happened, and which run took it.
 #[derive(Debug, Clone)]
 pub struct Stamped {
     /// Seconds since the epoch, taken as the event was emitted.
     pub at: u64,
+    /// The delegate whose gate decided it, where the turn did not decide it itself.
+    ///
+    /// A turn and its delegates record here together, so a record that did not say which run it
+    /// came from would leave the two interleaved with nothing telling them apart.
+    pub from: Option<DelegateId>,
     pub event: Event,
 }
 
@@ -41,6 +47,8 @@ pub struct Stamped {
 #[derive(Debug, Default)]
 pub struct Trail {
     events: Vec<Stamped>,
+    /// Whose events are arriving, until something says otherwise.
+    recording: Option<DelegateId>,
 }
 
 impl Trail {
@@ -52,15 +60,26 @@ impl Trail {
         &self.events
     }
 
-    /// The events alone, for a reader that does not care when they happened.
-    pub fn bare(&self) -> Vec<Event> {
-        self.events.iter().map(|s| s.event.clone()).collect()
+    /// Every event as the transcript shows it, each named with the run whose gate took it.
+    pub fn lines(&self) -> Vec<TrailLine> {
+        self.events
+            .iter()
+            .map(|stamped| as_line(&stamped.event, stamped.from))
+            .collect()
     }
 }
 
 impl Sink for Trail {
     fn emit(&mut self, event: Event) {
-        self.events.push(Stamped { at: now(), event });
+        self.events.push(Stamped {
+            at: now(),
+            from: self.recording,
+            event,
+        });
+    }
+
+    fn recording_for(&mut self, delegate: Option<DelegateId>) {
+        self.recording = delegate;
     }
 }
 
@@ -85,11 +104,23 @@ pub struct TrailLine {
     pub blocked: bool,
 }
 
-/// One event, as the transcript shows it.
+/// One event, as the transcript shows it, named with the run whose gate took it.
+///
+/// The turn's own records are left unnamed: naming every line would name the whole of the common
+/// case in order to tell apart the part of it that has more than one run in it.
+pub fn as_line(event: &Event, from: Option<DelegateId>) -> TrailLine {
+    let line = worded(event);
+    match from {
+        Some(delegate) => line.attributed_to(&delegate.to_string()),
+        None => line,
+    }
+}
+
+/// One event, in words.
 ///
 /// The wording lives here rather than in the renderer so that [`recalled`] can produce the same
 /// words for the same event. Two spellings of one line would drift the moment either changed.
-pub fn as_line(event: &Event) -> TrailLine {
+fn worded(event: &Event) -> TrailLine {
     match event {
         Event::GatePassed { gate, detail } => TrailLine::passed(format!("{gate}: {detail}")),
         Event::GateBlocked { gate, reason, .. } => TrailLine::blocked(format!("{gate}: {reason}")),
@@ -127,6 +158,15 @@ pub fn as_line(event: &Event) -> TrailLine {
 /// `None` for a line this build does not recognise, which is left out rather than shown as a
 /// mangled one: an audit that cannot be read faithfully should say less, not say it wrong.
 pub fn recalled(event: &Value) -> Option<TrailLine> {
+    let line = read_back(event)?;
+    Some(match event["delegate"].as_str() {
+        Some(delegate) => line.attributed_to(delegate),
+        None => line,
+    })
+}
+
+/// The words for a stored event, before the run that took it is put in front of them.
+fn read_back(event: &Value) -> Option<TrailLine> {
     let text = match event["kind"].as_str()? {
         "gate_passed" => format!("{}: {}", event["gate"].as_str()?, event["detail"].as_str()?),
         "gate_blocked" => {
@@ -179,6 +219,17 @@ pub fn recalled(event: &Value) -> Option<TrailLine> {
 }
 
 impl TrailLine {
+    /// The same line, said to be a delegate's.
+    ///
+    /// The name is taken as text because half of these are read back off disk, where a run's
+    /// number is a string that only looks like one this process minted.
+    fn attributed_to(self, delegate: &str) -> Self {
+        Self {
+            text: format!("{delegate} {}", self.text),
+            blocked: self.blocked,
+        }
+    }
+
     fn passed(text: String) -> Self {
         Self {
             text,
@@ -220,8 +271,20 @@ fn label_text(label: &Value) -> String {
     format!("({integrity},{confidentiality})")
 }
 
-/// One event, as it is written down.
-pub fn as_json(event: &Event) -> Value {
+/// One event, as it is written down, with the run whose gate took it where that was a delegate.
+///
+/// The field is left out of the turn's own records rather than written as null, so the trail of a
+/// turn that spawned nothing is the file it always was.
+pub fn as_json(event: &Event, from: Option<DelegateId>) -> Value {
+    let mut written = shaped(event);
+    if let Some(delegate) = from {
+        written["delegate"] = Value::String(delegate.to_string());
+    }
+    written
+}
+
+/// What a gate decided, as its own fields.
+fn shaped(event: &Event) -> Value {
     match event {
         Event::GatePassed { gate, detail } => json!({
             "kind": "gate_passed",
@@ -311,17 +374,23 @@ mod tests {
     /// list of gate names with no answer to the question it exists for.
     #[test]
     fn both_axes_are_written_out_in_words() {
-        let written = as_json(&Event::Observed {
-            capability: Capability::FileRead,
-            label: Label::untrusted_private(),
-        });
+        let written = as_json(
+            &Event::Observed {
+                capability: Capability::FileRead,
+                label: Label::untrusted_private(),
+            },
+            None,
+        );
         assert_eq!(written["label"]["integrity"], "untrusted");
         assert_eq!(written["label"]["confidentiality"], "private");
 
-        let written = as_json(&Event::Observed {
-            capability: Capability::FileRead,
-            label: Label::trusted_public(),
-        });
+        let written = as_json(
+            &Event::Observed {
+                capability: Capability::FileRead,
+                label: Label::trusted_public(),
+            },
+            None,
+        );
         assert_eq!(written["label"]["integrity"], "trusted");
         assert_eq!(written["label"]["confidentiality"], "public");
     }
@@ -329,11 +398,14 @@ mod tests {
     /// A refusal is the line an audit is read for, and it has to say what was refused and why.
     #[test]
     fn a_refusal_records_what_it_refused_and_why() {
-        let written = as_json(&Event::GateBlocked {
-            gate: "trusted-read",
-            detail: "edit_file".to_string(),
-            reason: "content is untrusted".to_string(),
-        });
+        let written = as_json(
+            &Event::GateBlocked {
+                gate: "trusted-read",
+                detail: "edit_file".to_string(),
+                reason: "content is untrusted".to_string(),
+            },
+            None,
+        );
         assert_eq!(written["kind"], "gate_blocked");
         assert_eq!(written["gate"], "trusted-read");
         assert_eq!(written["reason"], "content is untrusted");
@@ -343,12 +415,15 @@ mod tests {
     /// and to what.
     #[test]
     fn a_release_records_both_ends_of_it() {
-        let written = as_json(&Event::Declassified {
-            slot: SlotId::new("ref:3"),
-            from: Label::untrusted_private(),
-            to: Label::untrusted_public(),
-            reason: "shown to the user",
-        });
+        let written = as_json(
+            &Event::Declassified {
+                slot: SlotId::new("ref:3"),
+                from: Label::untrusted_private(),
+                to: Label::untrusted_public(),
+                reason: "shown to the user",
+            },
+            None,
+        );
         assert_eq!(written["slot"], "ref:3");
         assert_eq!(written["from"]["confidentiality"], "private");
         assert_eq!(written["to"]["confidentiality"], "public");
@@ -356,13 +431,16 @@ mod tests {
 
     #[test]
     fn a_field_check_records_the_role_it_was_checked_as() {
-        let written = as_json(&Event::ActionField {
-            tool: "write_file".to_string(),
-            field: "path".to_string(),
-            role: Role::Routing,
-            label: Label::trusted_public(),
-            allowed: true,
-        });
+        let written = as_json(
+            &Event::ActionField {
+                tool: "write_file".to_string(),
+                field: "path".to_string(),
+                role: Role::Routing,
+                label: Label::trusted_public(),
+                allowed: true,
+            },
+            None,
+        );
         assert_eq!(written["role"], "routing");
         assert_eq!(written["allowed"], true);
     }
@@ -414,37 +492,105 @@ mod tests {
     /// one line is the failure this guards: the file and the screen would drift apart the moment
     /// either was reworded, and nobody would notice until they compared a resumed session with a
     /// live one.
+    ///
+    /// The run that took the decision is part of that. A resumed session whose delegates' records
+    /// had lost their names would show one run's decisions where there were three.
     #[test]
     fn a_stored_event_reads_back_as_the_line_it_was() {
         for event in every_kind() {
-            assert_eq!(
-                recalled(&as_json(&event)),
-                Some(as_line(&event)),
-                "{event:?} did not come back as the line it was shown as"
-            );
+            for from in [None, Some(DelegateId::nth(2))] {
+                assert_eq!(
+                    recalled(&as_json(&event, from)),
+                    Some(as_line(&event, from)),
+                    "{event:?} did not come back as the line it was shown as"
+                );
+            }
         }
+    }
+
+    /// Records from a turn and from the delegates it spawned land in one trail, so a record that
+    /// did not name its run would leave the two interleaved and unattributable, and two delegates
+    /// of the same kind would read identically.
+    #[test]
+    fn a_delegates_records_are_named_and_the_turns_own_are_not() {
+        let mut trail = Trail::new();
+        let gate = |detail: &str| Event::GatePassed {
+            gate: "precommit",
+            detail: detail.to_string(),
+        };
+
+        trail.emit(gate("the turn fixed its routing"));
+        trail.recording_for(Some(DelegateId::nth(1)));
+        trail.emit(gate("the first delegate fixed its routing"));
+        trail.recording_for(Some(DelegateId::nth(2)));
+        trail.emit(gate("the second delegate fixed its routing"));
+        trail.recording_for(None);
+        trail.emit(gate("the turn carried on"));
+
+        let said: Vec<String> = trail.lines().into_iter().map(|line| line.text).collect();
+        assert_eq!(
+            said,
+            vec![
+                "precommit: the turn fixed its routing",
+                "d1 precommit: the first delegate fixed its routing",
+                "d2 precommit: the second delegate fixed its routing",
+                "precommit: the turn carried on",
+            ]
+        );
+    }
+
+    /// The file is what somebody reads months later, and a name only on the screen would answer
+    /// the question for the session that is still open and not for the one that is not.
+    #[test]
+    fn the_written_record_names_the_delegate_that_took_the_decision() {
+        let written = as_json(
+            &Event::GatePassed {
+                gate: "precommit",
+                detail: "routing fixed".to_string(),
+            },
+            Some(DelegateId::nth(3)),
+        );
+        assert_eq!(written["delegate"], "d3");
+
+        let turns_own = as_json(
+            &Event::GatePassed {
+                gate: "precommit",
+                detail: "routing fixed".to_string(),
+            },
+            None,
+        );
+        assert!(
+            turns_own.get("delegate").is_none(),
+            "a turn's own record must not claim to be a delegate's: {turns_own}"
+        );
     }
 
     /// A refusal must still be a refusal after the round trip, since that is what colours it red
     /// and a refusal drawn as an ordinary line is the one thing the trail exists to make loud.
     #[test]
     fn a_refusal_is_still_a_refusal_when_it_is_read_back() {
-        let blocked = as_json(&Event::GateBlocked {
-            gate: "action",
-            detail: String::new(),
-            reason: "injection blocked".to_string(),
-        });
+        let blocked = as_json(
+            &Event::GateBlocked {
+                gate: "action",
+                detail: String::new(),
+                reason: "injection blocked".to_string(),
+            },
+            None,
+        );
         let line = recalled(&blocked).expect("a refusal reads back");
         assert!(line.blocked);
         assert!(line.text.contains("injection blocked"));
 
-        let refused_field = as_json(&Event::ActionField {
-            tool: "fetch".to_string(),
-            field: "url".to_string(),
-            role: Role::Routing,
-            label: Label::untrusted_public(),
-            allowed: false,
-        });
+        let refused_field = as_json(
+            &Event::ActionField {
+                tool: "fetch".to_string(),
+                field: "url".to_string(),
+                role: Role::Routing,
+                label: Label::untrusted_public(),
+                allowed: false,
+            },
+            None,
+        );
         assert!(
             recalled(&refused_field)
                 .expect("a field reads back")
@@ -490,10 +636,13 @@ mod tests {
     /// One line per event, so a file can be read with ordinary tools.
     #[test]
     fn an_event_fits_on_one_line() {
-        let written = as_json(&Event::GatePassed {
-            gate: "capability",
-            detail: "file_read granted".to_string(),
-        })
+        let written = as_json(
+            &Event::GatePassed {
+                gate: "capability",
+                detail: "file_read granted".to_string(),
+            },
+            None,
+        )
         .to_string();
         assert!(!written.contains('\n'));
     }

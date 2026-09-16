@@ -103,9 +103,18 @@ impl<T: ?Sized> Clone for Borrowed<'_, '_, T> {
 impl<T: ?Sized> Copy for Borrowed<'_, '_, T> {}
 
 impl<T: Sink + ?Sized> Sink for Borrowed<'_, '_, T> {
+    /// Both under one lock, so a record and the run it belongs to cannot be separated by another
+    /// run recording in between. The same reason the reports below announce whose they are.
     fn emit(&mut self, event: Event) {
-        self.lent.hold().emit(event);
+        let mut held = self.lent.hold();
+        held.recording_for(self.from);
+        held.emit(event);
     }
+
+    /// Passed on rather than remembered, so a handle for a delegate cannot be talked into
+    /// recording as the turn. A delegate's own turn lends this handle onward and hands its own
+    /// work a handle for the turn, which is that turn rather than this one.
+    fn recording_for(&mut self, _delegate: Option<DelegateId>) {}
 }
 
 /// Forward one report, saying whose it is first.

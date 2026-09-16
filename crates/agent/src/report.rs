@@ -12,7 +12,6 @@
 use crate::diff::Change;
 use bravebot_core::todo::Row;
 use bravebot_i18n::t;
-use std::fmt;
 
 /// One thing the turn did, shaped for the person watching.
 ///
@@ -417,36 +416,9 @@ impl Landing {
 
 /// Which run a report describes.
 ///
-/// Minted by the driver, one per delegate, counting from one in the order they were spawned. It
-/// is the driver's own number and nothing a model wrote: several delegates report at once, and an
-/// interface working out whose line it was holding would be taking that decision from prose.
-///
-/// Small and copyable because everything carrying one is on a hot path, and ordered because the
-/// order they were spawned in is the order anything showing them uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DelegateId(u32);
-
-impl DelegateId {
-    /// The `n`th delegate of a turn, counting from one.
-    pub fn nth(n: u32) -> Self {
-        Self(n)
-    }
-
-    /// Its position, counting from one.
-    pub fn position(self) -> u32 {
-        self.0
-    }
-}
-
-/// How a planner names one when it asks about it again.
-///
-/// Short because it is typed back into a tool call, and prefixed because a bare number in an
-/// argument reads as a count of something.
-impl fmt::Display for DelegateId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "d{}", self.0)
-    }
-}
+/// The kernel's own number, because a gate records under it too: the audit trail names the run
+/// whose decision it holds with the same number the screen names the run whose work it shows.
+pub use bravebot_core::delegate::DelegateId;
 
 /// One delegate, for the person watching it work.
 ///

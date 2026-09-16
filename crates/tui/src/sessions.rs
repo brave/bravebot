@@ -784,7 +784,7 @@ impl Handle {
             let line = serde_json::json!({
                 "at": stamped.at,
                 "turn": turn,
-                "event": crate::audit::as_json(&stamped.event),
+                "event": crate::audit::as_json(&stamped.event, stamped.from),
             });
             body.push_str(&line.to_string());
             body.push('\n');
@@ -2057,6 +2057,7 @@ mod tests {
         let handle = Handle::begin(&root);
         let stamped = crate::audit::Stamped {
             at: 1,
+            from: None,
             event: bravebot_core::event::Event::GatePassed {
                 gate: "file_read",
                 detail: "secret.txt".to_string(),
@@ -2110,6 +2111,7 @@ mod tests {
             1,
             &[crate::audit::Stamped {
                 at: 1,
+                from: None,
                 event: bravebot_core::event::Event::GatePassed {
                     gate: "file_read",
                     detail: "secret.txt".to_string(),

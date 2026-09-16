@@ -12976,27 +12976,47 @@ fn a_delegates_write_is_refused_when_the_person_refuses() {
     );
 }
 
-/// One record, covering the part of the turn nobody watched. The delegate's own gates report into
-/// the trail the turn opened, so a person reading it afterwards can see what the delegate was
-/// allowed to hold and what it did.
+/// One record, covering the part of the turn nobody watched. The delegate's own gates report
+/// into the trail the turn opened, and each record says which run took it: a trail holding a
+/// turn's decisions and two delegates' interleaved, with nothing naming any of them, cannot
+/// answer the question it is kept for.
 #[test]
 fn one_trail_records_the_delegate_and_the_turn_that_spawned_it() {
     let scratch = Scratch::new("delegate-trail");
+    std::fs::write(scratch.path.join("a.txt"), "the first file").expect("written");
+    std::fs::write(scratch.path.join("b.txt"), "the second file").expect("written");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, _received) = serve_by_marker(vec![
         (
-            "DELEGATE-SOMETHING",
+            "DELEGATE-TWICE",
             vec![
                 tool_request(
                     "spawn_agent",
-                    r#"{"kind":"checker","task":"SAY-SOMETHING"}"#,
+                    r#"{"kind":"reader","task":"READ-THE-FIRST"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"READ-THE-SECOND"}"#,
                 ),
                 reply_with("waiting"),
                 reply_with("relayed"),
             ],
         ),
-        ("SAY-SOMETHING", vec![reply_with("said")]),
+        (
+            "READ-THE-FIRST",
+            vec![
+                tool_request("read_file", r#"{"path":"a.txt"}"#),
+                reply_with("the first said something"),
+            ],
+        ),
+        (
+            "READ-THE-SECOND",
+            vec![
+                tool_request("read_file", r#"{"path":"b.txt"}"#),
+                reply_with("the second said something"),
+            ],
+        ),
     ]);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
@@ -13006,13 +13026,19 @@ fn one_trail_records_the_delegate_and_the_turn_that_spawned_it() {
         &config,
         &egress,
         &workspace,
-        &Task::new("DELEGATE-SOMETHING"),
+        &Task::new("DELEGATE-TWICE"),
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut sink,
     )
     .expect("turn runs");
 
-    let described: Vec<String> = sink
+    let first = bravebot_agent::report::DelegateId::nth(1);
+    let second = bravebot_agent::report::DelegateId::nth(2);
+
+    // What each was approved to hold, recorded by the turn that asked for it. Two delegates of
+    // one kind describe themselves identically, so the number is the whole of what tells the two
+    // records apart.
+    let approved: Vec<String> = sink
         .events()
         .iter()
         .filter_map(|e| match e {
@@ -13021,23 +13047,33 @@ fn one_trail_records_the_delegate_and_the_turn_that_spawned_it() {
         })
         .collect();
     assert!(
-        described
+        approved
             .iter()
-            .any(|d| d.contains("checker") && d.contains("file_read")),
-        "the trail does not say what the delegate was allowed to hold: {described:?}"
+            .any(|d| d.starts_with("d1 ") && d.contains("reader") && d.contains("file_read")),
+        "the trail does not say what the first delegate was allowed to hold: {approved:?}"
+    );
+    assert!(
+        approved.iter().any(|d| d.starts_with("d2 ")),
+        "the second delegate's approval is not told apart from the first's: {approved:?}"
     );
 
-    // And the delegate's own turn precommitted its routing into the same trail, which is what
-    // makes the record continuous rather than two records with a gap between them.
-    let precommits = sink
-        .events()
-        .iter()
-        .filter(|e| matches!(e, Event::GatePassed { gate, .. } if *gate == "precommit"))
-        .count();
+    // And each delegate's own turn precommitted its routing into the same trail, under its own
+    // number, which is what makes the record continuous rather than three records in a heap.
+    let precommitted: Vec<Option<bravebot_agent::report::DelegateId>> = sink
+        .recorded()
+        .filter(|(_, e)| matches!(e, Event::GatePassed { gate, .. } if *gate == "precommit"))
+        .map(|(from, _)| from)
+        .collect();
     assert!(
-        precommits >= 2,
-        "the delegate's own run recorded nothing in the turn's trail"
+        precommitted.contains(&None),
+        "the turn's own precommit was recorded as somebody else's: {precommitted:?}"
     );
+    for delegate in [first, second] {
+        assert!(
+            precommitted.contains(&Some(delegate)),
+            "{delegate} recorded nothing of its own in the turn's trail: {precommitted:?}"
+        );
+    }
 }
 
 /// Four near-identical paragraphs are model output on the critical path: nothing starts until

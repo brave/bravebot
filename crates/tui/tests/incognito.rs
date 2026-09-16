@@ -259,6 +259,7 @@ fn no_audit_trail_is_written() {
         1,
         &[bravebot_tui::audit::Stamped {
             at: 1_700_000_000,
+            from: None,
             event: bravebot_core::event::Event::GatePassed {
                 gate: "a-gate",
                 detail: "a decision worth recording".to_string(),
