@@ -1182,7 +1182,16 @@ impl Workspace {
     /// The first write of a turn is the one worth keeping: a path written twice was already
     /// changed by the first, so the second write's contents are this turn's doing and rewinding
     /// to them would leave the turn half undone.
+    ///
+    /// Nothing is kept for the session's own directory. What a turn writes there is what it wrote
+    /// for its own use, in a directory that is empty when the session begins and gone when it
+    /// ends, so there is nothing anybody would ask to have back. Keeping it would spend
+    /// [`MAX_REWIND_BYTES`] on a file nobody wants rewound, and what that budget runs out on is
+    /// the next file in the project the turn writes.
     fn record_backup(&self, resolved: &Path) {
+        if self.reaches_scratch(resolved) {
+            return;
+        }
         let Ok(mut backups) = self.backups.lock() else {
             return;
         };
