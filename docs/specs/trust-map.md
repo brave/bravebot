@@ -657,6 +657,40 @@ covers it.
 `verified-by: bravebot_agent::workspace::a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule`
 `verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
 
+## What a rewind puts back
+
+<a id="TRUST-19"></a>
+### TRUST-19: what a turn writes in the session's own directory is not rewound
+
+A write through a file tool into the session's own directory keeps nothing to put back. Undoing the
+turn neither restores such a file nor removes one the turn created, does not name it among the paths
+it could not put back, and leaves the bytes it would have kept to the files the turn wrote in the
+project.
+
+**Why.** What one turn keeps so that it can be undone is bounded, and the bound is shared by every
+file that turn wrote ([sessions.md](sessions.md)). An intermediate file is the size of thing that
+bound is set to stay clear of, so keeping one spends what a source file's own copy needed and leaves
+that file unable to go back: the file somebody wants undone loses to the file nobody does.
+
+There is nothing there anybody has open either. The directory holds what a turn wrote for its own
+use, it is empty when the session begins, and it goes when the session ends, so a file in it is
+nobody's work in progress. What the undone turn wrote there stays until the session ends, and a
+later turn in the same session can read it.
+
+Removing what the turn created there, which costs none of the budget, is the alternative and is
+refused for what it makes the report say. What a turn overwrote there cannot go back, since those
+bytes are the ones this declines to keep, so a path in the directory would have to be named on the
+line reporting the rewind, and that line would carry intermediate files for as long as the list of
+them ran. A stale intermediate file in a directory whose whole purpose is intermediate files is the
+smaller cost of the two.
+
+This is what being outside the project buys rather than a carve-out inside it. The rule is that what
+an undo keeps is what is in the project, and a directory the user opened by name is in the project
+for this purpose: those are files somebody has open, which is the whole reason the bytes are kept.
+
+`verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo`
+`verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project`
+
 ## What the session's directory is still missing
 
 An incognito session has one as well, and [incognito.md](incognito.md) names it among the things
@@ -681,12 +715,6 @@ ran at this time rather than that a session ran in this project at this time.
   account's own at the mode it should have. `flock` is reached through `rustix`, which is already a
   dependency; the Windows equivalent is `LockFileEx` and nothing here offers it today, so the sweep
   begins as Unix's and Windows leans on its own cleaner until it does.
-- A write into it through the file tools is one the turn can rewind, and the bytes kept to do that
-  come out of a single bounded per-turn budget shared with every other file the turn wrote
-  ([sessions.md](sessions.md)). An intermediate file is the size of thing that budget is set to stay
-  clear of, so a large one written there spends what a source file's own backup needed and leaves
-  that file unable to go back. Being outside the workspace makes the answer the ordinary one rather
-  than a carve-out: what a rewind keeps is what is in the project.
 
 ## Known costs
 
@@ -725,6 +753,12 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   second paragraph covers less of the traffic than it does elsewhere. No rule about that would
   help, since the same writes to the same effect are available one directory up: it is the standing
   statement about the place, met more often.
+- **An undone turn's intermediate files stay until the session ends.** Nothing written in the
+  session's own directory goes back (TRUST-19), so a turn that wrote one there and was undone has
+  left a file a later turn in the same session can read. The directory is removed when the session
+  is, and what is in it is the workings of a turn rather than anybody's work in progress, which is
+  what makes this smaller than the two things keeping it would cost: the budget the file in the
+  project needs, and a rewind naming every intermediate file it could not put back.
 - **Confinement is decided before an operation runs, not while it runs.** Where a path lands is
   worked out by resolving it, and the operation happens after that, so a component that is a
   directory when it is resolved and a symlink when the file is opened carries the bytes with it.

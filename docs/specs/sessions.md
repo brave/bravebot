@@ -399,14 +399,16 @@ the invariant that finished autonomous runs have a definite end.
 <a id="SESSION-19"></a>
 ### SESSION-19: the last turn can be rewound, on disk and in the conversation together
 
-`/undo` puts the session back where it stood before the most recent turn. Every path that turn
-wrote through a file tool goes back to what it held first, and one the turn created is removed.
-The conversation returns to its pre-turn snapshot, and with it the turn count, the spend, the
-timing, the trust map, the trusted programs, and the transcript. The turn's audit lines are
+`/undo` puts the session back where it stood before the most recent turn. Every path in the project
+that turn wrote through a file tool goes back to what it held first, and one the turn created is
+removed. The conversation returns to its pre-turn snapshot, and with it the turn count, the spend,
+the timing, the trust map, the trusted programs, and the transcript. The turn's audit lines are
 dropped, since they decided about a turn that is no longer in the conversation. A rewind that
 goes back past the session's first turn removes its record rather than leaving one with nothing
 in it, and a name the user gave the session before that turn stays with it: the name was not the
-turn's to give, so it is not the rewind's to take.
+turn's to give, so it is not the rewind's to take. The directory the session was given of its own is
+not in the project: what a turn wrote there is neither put back nor counted against the budget
+below, for the reasons [trust-map.md](trust-map.md) gives.
 
 What one turn keeps is bounded. Past that budget a path is still remembered, but what it held is
 not, and a rewind treats it as a path that will not go back rather than as a file that was never

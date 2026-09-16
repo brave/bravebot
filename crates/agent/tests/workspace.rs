@@ -4182,6 +4182,111 @@ fn a_file_in_the_sessions_own_directory_is_reachable_by_its_absolute_path() {
     );
 }
 
+/// An undo puts the project back, and a file the turn wrote for its own use is not the project.
+/// Restoring one would restore a file whose only reader was the turn being undone, and a rewind
+/// that reported it as a file it could not put back would be reporting every intermediate file a
+/// turn wrote.
+#[test]
+fn a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo() {
+    let project = Scratch::new("scratch-not-rewound");
+    let given = SessionScratch::create().expect("a directory of its own");
+    std::fs::write(given.path().join("workings.txt"), "the first pass").expect("already there");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(Some(given.path().to_path_buf()));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    for name in ["workings.txt", "another.txt"] {
+        let named = given.path().join(name).display().to_string();
+        policy.issue_grant("file_write", "path", named.clone());
+        workspace
+            .write_endorsed(
+                &mut policy,
+                &Labelled::new(named, Label::untrusted_public()),
+                &Labelled::trusted("the second pass".to_string()),
+            )
+            .expect("a write in the session's own directory");
+    }
+
+    assert!(
+        workspace.take_backups().is_empty(),
+        "an intermediate file was kept for an undo nobody would ask for"
+    );
+    assert_eq!(
+        std::fs::read_to_string(given.path().join("workings.txt")).expect("still there"),
+        "the second pass",
+        "the write did not happen"
+    );
+}
+
+/// What the budget is for: the file somebody wants back. An intermediate file is the size of thing
+/// the bound is set to stay clear of, so one spending the budget leaves the source file the turn
+/// wrote next unable to go back.
+#[test]
+fn a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project() {
+    use bravebot_agent::workspace::{Before, MAX_REWIND_BYTES};
+
+    let project = Scratch::new("scratch-not-in-the-budget");
+    let source = project.path.join("source.txt");
+    std::fs::write(&source, "what the turn is about to change").expect("a file in the project");
+    let given = SessionScratch::create().expect("a directory of its own");
+    let heavy = given.path().join("heavy.bin");
+    std::fs::write(&heavy, vec![b'x'; MAX_REWIND_BYTES]).expect("an intermediate file");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(Some(given.path().to_path_buf()));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let named = heavy.display().to_string();
+    policy.issue_grant("file_write", "path", named.clone());
+    workspace
+        .write_endorsed(
+            &mut policy,
+            &Labelled::new(named, Label::untrusted_public()),
+            &Labelled::trusted("the next pass".to_string()),
+        )
+        .expect("the intermediate file is written");
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted("source.txt".to_string()),
+            &Labelled::trusted("what the turn made of it".to_string()),
+        )
+        .expect("and so is the source file");
+
+    let backups = workspace.take_backups();
+    // The paths on their own, because what a heavy one holds is what the report of a failure here
+    // would otherwise be made of.
+    let kept: Vec<_> = backups.iter().map(|backup| backup.path.clone()).collect();
+    assert_eq!(kept, vec![source.canonicalize().expect("canonical")]);
+    assert!(
+        matches!(&backups[0].was, Before::Bytes(bytes) if bytes == b"what the turn is about to change"),
+        "the source file lost its place in the budget to an intermediate file"
+    );
+
+    assert!(workspace.restore_backups(backups).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(&source).expect("the source file"),
+        "what the turn is about to change"
+    );
+}
+
 /// Given, not opened by name. It is not among the directories the user asked for, because `/status`
 /// says what it is instead of listing it as somewhere they chose to reach.
 #[test]
