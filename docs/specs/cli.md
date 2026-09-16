@@ -4,6 +4,8 @@ title: The command line
 status: normative
 governs:
   - crates/cli/src/main.rs
+  - crates/cli/src/exit.rs
+  - crates/cli/src/json.rs
 ---
 
 ## Scope
@@ -90,7 +92,8 @@ having seen part of.
 
 Progress, errors and the audit trail go to stderr, so a one-shot run is pipeable. `--trace` puts
 the trail on stderr beside it: which gate checked what, the label every value carried, and what
-was released.
+was released. The one thing that may take the reply's place on that stream is the result object in
+CLI-12, and it is still the only thing on it.
 
 **Why.** A progress line mixed into stdout would corrupt whatever the user piped the reply into.
 
@@ -99,14 +102,52 @@ was released.
 `verified-by: bravebot_cli::main::the_trail_renders_a_line_for_every_event`
 
 <a id="CLI-6"></a>
-### CLI-6: a failure exits non-zero
+### CLI-6: a failure exits with a status that says which failure, and says an identifier
 
 A configuration error, a refused argument, and a turn that could not run all fail rather than
-exiting successfully with an explanation on stdout.
+exiting successfully with an explanation on stdout, and each of them has a status of its own:
+
+| Status | Identifier | The run |
+|---|---|---|
+| 0 | | did what it was asked |
+| 1 | `BB1001` | failed for a reason none of the others name |
+| 2 | `BB1002` | refused an argument, so nothing ran |
+| 3 | `BB1003` | cannot use the configuration, so nothing ran |
+| 4 | `BB1004` | had an effect refused by a gate |
+| 5 | `BB1005` | never reached the backend |
+
+A status is never renumbered and never given a second meaning. A failure kind nothing here names
+is 1, and one worth telling apart takes the next number.
+
+The identifier is printed in front of the message on stderr, never instead of it, and is the same
+whatever language the message is in.
+
+**Why.** A caller cannot act on a run it cannot classify. "The endpoint was not there, try again",
+"the configuration is wrong, fail the build" and "a gate refused the write, this needs a person"
+are three different things to do about a failed run, and with one status for all of them a script
+can do none of them. Which of these a failure is, is something the program knows at the moment it
+exits, so the alternative to saying it is throwing it away.
+
+Only the transport's own failures are a backend that was not there. A non-success status is the
+service answering, and a caller that read a refused credential as a connection to try again would
+retry it until it gave up.
+
+The identifier exists because the message does not survive being passed on. A sentence in the
+reader's own language is the right thing to print and the wrong thing to search for: pasted into a
+bug report it reaches somebody who cannot grep it, and the status was never part of the text at
+all. It is derived from the status rather than allocated separately, because two numbering schemes
+over one set of failures is one of them going out of date.
 
 `verified-by: bravebot_cli::running::a_configuration_error_exits_non_zero`
 `verified-by: bravebot_cli::running::a_refused_argument_exits_non_zero`
 `verified-by: bravebot_cli::running::a_turn_that_could_not_run_exits_non_zero`
+`verified-by: bravebot_cli::running::each_kind_of_failure_has_a_status_of_its_own`
+`verified-by: bravebot_cli::running::a_failure_says_a_stable_identifier_whatever_language_it_explains_itself_in`
+`verified-by: bravebot_cli::exit::every_ending_has_a_status_of_its_own`
+`verified-by: bravebot_cli::exit::a_failure_is_identified_and_a_success_is_not`
+`verified-by: bravebot_cli::exit::a_failure_says_its_identifier_in_front_of_the_message`
+`verified-by: bravebot_cli::exit::a_manifest_run_is_classified_by_what_stopped_it`
+`verified-by: bravebot_agent::backend::a_request_that_never_left_is_told_apart_from_one_that_was_answered`
 `verified-by: bravebot_cli::main::a_turn_something_was_refused_in_does_not_succeed`
 
 <a id="CLI-7"></a>
@@ -344,3 +385,45 @@ in, over a file it was told it could open.
 `verified-by: bravebot_cli::main::a_directory_the_command_line_named_is_reachable`
 `verified-by: bravebot_cli::main::a_directory_that_cannot_be_opened_stops_the_run`
 `verified-by: bravebot_core::trust::an_empty_store_trusts_nothing`
+
+<a id="CLI-12"></a>
+### CLI-12: `--json` puts one result object on stdout, in the reply's place
+
+A run given the flag writes one object, on one line, whether it finished, failed before the turn
+began, or was refused something along the way. It holds how the run ended, the status and
+identifier of CLI-6, the message where there is one, the reply, the model that answered, how many
+rounds it took, what it cost in tokens, every tool it called with what it acted on and whether that
+call was refused, and every refusal with the principle it upholds. A tool is named as the driver
+matched it rather than by the word a person is shown. What a call acted on is the name it was given
+rather than a resolved path, since the driver carries that argument without reading it.
+
+The object takes the reply's place on stdout and nothing else goes there. Progress, the message and
+the trail stay on stderr, exactly as they are without the flag.
+
+It carries a schema number. Within one number a field may be added, and never removed, renamed or
+given a different meaning, so a caller reading the fields it knows keeps working.
+
+**Why.** The prose reply is written for a person, and a program can recover almost nothing from it:
+which files changed, what the turn cost, which tools ran and why an effect was refused are either
+absent or recoverable only by reading English that changes with the reader's language. Distinct
+statuses say which kind of failure a run had; this says what happened in it, which is the other
+half of being able to act on a result.
+
+A separate flag rather than a replacement, because the prose contract in CLI-5 is right for the
+person who typed the command, and a surface that served both would serve neither.
+
+Written on every run rather than only on the ones that got as far as a turn, and a run that stopped
+part way through still says what it had done by then. A caller that had to tell an empty stdout from
+a result would be back to deciding from the shape of the output, which is the thing this removes,
+and a run reporting nothing about calls it had already made would be worse than saying nothing at
+all.
+
+The schema number is what makes the object an interface rather than a rendering. A consumer in a CI
+job is code somebody else wrote against fields this program chose, and without a stated rule about
+what may change, every field is either frozen by accident or broken without warning.
+
+`verified-by: bravebot_cli::running::a_run_asked_for_a_result_object_puts_one_on_stdout`
+`verified-by: bravebot_cli::json::a_finished_run_says_what_it_did_in_fields_a_program_can_read`
+`verified-by: bravebot_cli::json::a_failure_before_the_turn_is_still_a_result_object`
+`verified-by: bravebot_cli::json::a_refusal_names_the_principle_it_upholds`
+`verified-by: bravebot_cli::json::content_cannot_break_out_of_the_object_it_is_written_in`

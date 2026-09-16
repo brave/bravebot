@@ -2,8 +2,11 @@
 
 #![forbid(unsafe_code)]
 
+mod exit;
+mod json;
 mod progress;
 
+use crate::exit::{Ending, fail};
 use bravebot_agent::confirm::{
     Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RunDecision, RunRequest,
     ServerRequest, VouchRequest, WriteRequest,
@@ -75,22 +78,19 @@ fn main() -> ExitCode {
         // Fork a session, creating a new session record that starts with the same transcript.
         Some("--fork" | "-f") => match args.get(1) {
             Some(id) => fork_named(id, skip_permissions),
-            None => {
-                eprintln!("{}", t!(cli_fork_needs_a_name));
-                ExitCode::FAILURE
-            }
+            None => fail(Ending::Argument, t!(cli_fork_needs_a_name)),
         },
         // The task flags may lead: `bravebot -p "task"` and `bravebot --mode manifest "task"`
         // would otherwise be caught below as unknown options.
-        Some("-p" | "--print" | "--mode" | "--model" | "--file" | "--add-dir" | "--trace") => {
-            run_task(&args, skip_permissions)
-        }
+        Some(
+            "-p" | "--print" | "--mode" | "--model" | "--file" | "--add-dir" | "--trace" | "--json",
+        ) => run_task(&args, skip_permissions),
         Some("doctor") => doctor(),
         Some("import-leo-creds") => import_leo_creds(&args[1..]),
         Some(flag) if flag.starts_with('-') => {
-            eprintln!("{}", t!(cli_unknown_option, flag = flag));
+            let refused = fail(Ending::Argument, t!(cli_unknown_option, flag = flag));
             print_help();
-            ExitCode::FAILURE
+            refused
         }
         // Anything else is treated as the task prompt.
         Some(_) => run_task(&args, skip_permissions),
@@ -180,6 +180,7 @@ fn print_help() {
         ("--model <name>", t!(cli_option_model)),
         ("-p, --print", t!(cli_option_print)),
         ("--trace", t!(cli_option_trace)),
+        ("--json", t!(cli_option_json)),
         ("--incognito", t!(cli_option_incognito)),
         (
             "--dangerously-skip-permissions",
@@ -220,10 +221,12 @@ struct Invocation {
     directories: Vec<String>,
     trace: bool,
     print: bool,
+    /// Whether stdout carries the result object rather than the prose reply.
+    json: bool,
 }
 
 /// Parse `<prompt> [--file path]... [--add-dir path]... [--mode name] [--model name]
-/// [--trace] [-p]`.
+/// [--trace] [--json] [-p]`.
 fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut prompt = String::new();
     let mut files = Vec::new();
@@ -232,6 +235,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut directories = Vec::new();
     let mut trace = false;
     let mut print = false;
+    let mut json = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -277,6 +281,10 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 trace = true;
                 index += 1;
             }
+            "--json" => {
+                json = true;
+                index += 1;
+            }
             "-p" | "--print" => {
                 print = true;
                 index += 1;
@@ -297,16 +305,17 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         directories,
         trace,
         print,
+        json,
     })
 }
 
 fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     let invocation = match parse_invocation(args) {
         Ok(invocation) => invocation,
-        Err(err) => {
-            eprintln!("{err}");
-            return ExitCode::FAILURE;
-        }
+        // Whether a result object was asked for is read off the raw arguments here, because the
+        // parse that would otherwise have said is the thing that just failed, and a caller that
+        // asked for one asked for this one too.
+        Err(err) => return stopped_before_the_turn(wants_json(args), Ending::Argument, err),
     };
     let Invocation {
         prompt,
@@ -316,6 +325,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         directories,
         trace,
         print,
+        json: as_json,
     } = invocation;
 
     // Read before the emptiness check below, since `cat notes.md | bravebot -p` is a complete
@@ -325,25 +335,24 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         let is_tty = stdin.is_terminal();
         match piped_input(stdin.lock(), is_tty) {
             Ok(text) => text,
-            Err(err) => {
-                eprintln!("{err}");
-                return ExitCode::FAILURE;
-            }
+            Err(err) => return stopped_before_the_turn(as_json, Ending::Argument, err),
         }
     } else {
         None
     };
 
     if prompt.is_empty() && piped.is_none() {
-        eprintln!("{}", t!(cli_task_required));
-        return ExitCode::FAILURE;
+        return stopped_before_the_turn(as_json, Ending::Argument, t!(cli_task_required));
     }
 
     let mut config = match Config::from_env() {
         Ok(c) => c,
         Err(err) => {
-            eprintln!("{}", t!(cli_configuration_problem, problem = err));
-            return ExitCode::FAILURE;
+            return stopped_before_the_turn(
+                as_json,
+                Ending::Configuration,
+                t!(cli_configuration_problem, problem = err),
+            );
         }
     };
 
@@ -352,8 +361,11 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     let mut workspace = match current_workspace(&settings) {
         Ok(w) => w,
         Err(err) => {
-            eprintln!("{}", t!(cli_workspace_problem, problem = err));
-            return ExitCode::FAILURE;
+            return stopped_before_the_turn(
+                as_json,
+                Ending::Failed,
+                t!(cli_workspace_problem, problem = err),
+            );
         }
     };
 
@@ -361,8 +373,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     // script that asked to reach a directory and did not gets a turn that fails somewhere further
     // in, over a file it was told it could open.
     if let Err(problem) = open_directories(&mut workspace, &directories) {
-        eprintln!("{problem}");
-        return ExitCode::FAILURE;
+        return stopped_before_the_turn(as_json, Ending::Argument, problem);
     }
 
     // A run is a session for this: it is given somewhere of its own to write what is not part of
@@ -541,30 +552,55 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             );
             let not_served = model_not_served(&asked, comparable, &outcome.model);
 
+            let ending = ending_of_a_turn(
+                outcome.clean,
+                named_on_the_command_line,
+                not_served.is_some(),
+            );
+
+            // Built before the reply is chosen, because with `--json` the result object is what
+            // goes on stdout in the reply's place and it has to hold the reply itself.
+            let rendered = as_json.then(|| {
+                json::render(&json::Report {
+                    ending,
+                    message: failure_of_a_turn(ending, not_served.as_deref()),
+                    reply: outcome.reply_for_display(),
+                    model: &outcome.model,
+                    steps: outcome.steps,
+                    tokens: json::Tokens {
+                        total: outcome.tokens,
+                        output: outcome.output_tokens,
+                        context: outcome.context_tokens,
+                        cache_read: outcome.cached.read_tokens,
+                        cache_written: outcome.cached.written_tokens,
+                    },
+                    calls: reporter.calls(),
+                    refusals: &refusals(&sink),
+                    notices: &outcome.notices,
+                })
+            });
+
             let finished = Finished {
-                reply: outcome.reply_for_display(),
+                reply: rendered.as_deref().unwrap_or(outcome.reply_for_display()),
                 notices: &outcome.notices,
                 attempt: attempt.as_deref(),
                 trail: trace.then_some((&sink, outcome.model.as_str())),
                 clean: outcome.clean,
                 not_served: not_served.as_deref(),
-                named_on_the_command_line,
             };
             report(
                 &mut std::io::stdout().lock(),
                 &mut std::io::stderr().lock(),
                 &finished,
             );
-            match finished.succeeded() {
-                true => ExitCode::SUCCESS,
-                false => ExitCode::FAILURE,
-            }
+            ending.code()
         }
         // A run that stopped is the one worth looking at, so what it produced is printed
         // whether or not --trace was asked for. Without it a failed plan is a one-line
         // complaint about a document nobody can see.
-        Err(bravebot_agent::TurnError::Manifest { attempt, detail }) => {
-            eprintln!("{detail}");
+        Err(bravebot_agent::TurnError::Manifest { attempt, cause }) => {
+            let ending = exit::ending_of(&cause);
+            let stopped = fail(ending, &cause);
             let report = attempt.describe();
             if !report.is_empty() {
                 eprintln!();
@@ -574,13 +610,132 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
                 eprintln!();
                 print_trace(&mut std::io::stderr().lock(), &sink);
             }
-            ExitCode::FAILURE
+            if as_json {
+                say_the_result(&what_ran(
+                    ending,
+                    &cause.to_string(),
+                    reporter.calls(),
+                    &refusals(&sink),
+                ));
+            }
+            stopped
         }
         Err(err) => {
-            eprintln!("{err}");
-            ExitCode::FAILURE
+            let ending = exit::ending_of(&err);
+            let stopped = fail(ending, &err);
+            if as_json {
+                say_the_result(&what_ran(
+                    ending,
+                    &err.to_string(),
+                    reporter.calls(),
+                    &refusals(&sink),
+                ));
+            }
+            stopped
         }
     }
+}
+
+/// Whether a result object was asked for, read straight off the command line.
+///
+/// Only for the case where the parse failed, which is the one moment the parsed invocation cannot
+/// answer.
+fn wants_json(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--json")
+}
+
+/// Stop before the turn: the identifier and the message on stderr, and a result object on stdout
+/// where one was asked for.
+fn stopped_before_the_turn(
+    as_json: bool,
+    ending: Ending,
+    message: impl std::fmt::Display,
+) -> ExitCode {
+    let message = message.to_string();
+    let stopped = fail(ending, &message);
+    if as_json {
+        say_the_result(&what_ran(ending, &message, &[], &[]));
+    }
+    stopped
+}
+
+/// Put a result object on stdout.
+///
+/// A failed write is dropped, as it is for the reply: a closed stdout is a caller that stopped
+/// reading, and a run that has already finished should not die reporting what it did.
+fn say_the_result(result: &str) {
+    let _ = writeln!(std::io::stdout().lock(), "{result}");
+}
+
+/// How a turn that ran ended.
+///
+/// A turn something was refused in did not do what it was asked, and neither did one answered by
+/// a model other than the one the command line named. Both are invisible to a script reading the
+/// reply, which is what makes the status the only thing that can carry them.
+fn ending_of_a_turn(clean: bool, named_on_the_command_line: bool, not_served: bool) -> Ending {
+    if !clean {
+        return Ending::Refused;
+    }
+    if named_on_the_command_line && not_served {
+        return Ending::Failed;
+    }
+    Ending::Done
+}
+
+/// The sentence a result object explains a finished turn's failure with, if it has one.
+///
+/// The same words the run said on stderr, so the two surfaces do not disagree about why a turn
+/// that produced a reply is still a failure.
+fn failure_of_a_turn(ending: Ending, not_served: Option<&str>) -> Option<&str> {
+    match ending {
+        Ending::Done => None,
+        Ending::Refused => Some(t!(cli_something_was_refused)),
+        _ => not_served,
+    }
+}
+
+/// Every refusal the trail holds, as a result object lists them.
+fn refusals(sink: &RecordingSink) -> Vec<json::Refusal> {
+    sink.blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate,
+                reason,
+                principle,
+                ..
+            } => Some(json::Refusal {
+                gate,
+                principle: principle.name(),
+                reason: reason.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The result object for a run with no reply to report.
+///
+/// Written even where nothing ran at all, because the alternative is a caller having to tell an
+/// empty stdout from a result, which is the prose surface again with an extra step. A run that
+/// failed part way through still says what it had done by then: the calls are what a caller needs
+/// to know which of them to undo.
+fn what_ran(
+    ending: Ending,
+    message: &str,
+    calls: &[json::Call],
+    refusals: &[json::Refusal],
+) -> String {
+    json::render(&json::Report {
+        ending,
+        message: Some(message),
+        reply: "",
+        model: "",
+        steps: 0,
+        tokens: json::Tokens::default(),
+        calls,
+        refusals,
+        notices: &[],
+    })
 }
 
 /// The rules a one-shot run works under.
@@ -839,6 +994,8 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
 
 /// What a finished turn has to say, before anything decides where it goes.
 struct Finished<'a> {
+    /// What goes on stdout: the released reply, or the result object `--json` asked for in its
+    /// place.
     reply: &'a str,
     /// The driver's own words about what loaded and what did not, never anything read out of a
     /// file.
@@ -852,25 +1009,6 @@ struct Finished<'a> {
     clean: bool,
     /// What to say where one model was asked for and another one answered.
     not_served: Option<&'a str>,
-    /// Whether the command line named the model, which is what makes a substitution a failed run
-    /// rather than a thing to report.
-    named_on_the_command_line: bool,
-}
-
-impl Finished<'_> {
-    /// Whether the run did what it was asked, which is what the process exits on.
-    ///
-    /// A turn that was refused something did not, and neither did one answered by a model other
-    /// than the one the command line named. Both are invisible to a script reading stdout, which
-    /// is what makes the status the only thing that can carry them.
-    ///
-    /// A substitution of a model the command line did not name is reported and not failed. Below
-    /// the flag the model is whatever was recorded or configured, so failing there would have a
-    /// script that names no model start exiting non-zero over a choice made in a terminal, and the
-    /// flag is what a script that cannot tolerate a substitution has.
-    fn succeeded(&self) -> bool {
-        self.clean && !(self.named_on_the_command_line && self.not_served.is_some())
-    }
 }
 
 /// Write a finished turn: the reply to `reply`, every other word to `beside`.
@@ -957,8 +1095,7 @@ fn print_trace(output: &mut impl Write, sink: &RecordingSink) {
 
 fn resume_named(id: &str, skip_permissions: bool) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
-        eprintln!("{}", t!(cli_directory_unknown));
-        return ExitCode::FAILURE;
+        return fail(Ending::Failed, t!(cli_directory_unknown));
     };
     match bravebot_tui::sessions::load(&directory, id) {
         // Printing what a run produced is what naming one here is for (SESSION-10), and a session
@@ -980,21 +1117,17 @@ fn resume_named(id: &str, skip_permissions: bool) -> ExitCode {
             bravebot_tui::app::Start::Resuming(Box::new(record)),
             skip_permissions,
         ),
-        None => {
-            eprintln!("{}", t!(cli_no_such_session, id = id));
-            ExitCode::FAILURE
-        }
+        None => fail(Ending::Argument, t!(cli_no_such_session, id = id)),
     }
 }
 
 fn fork_named(id: &str, skip_permissions: bool) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
-        eprintln!("{}", t!(cli_directory_unknown));
-        return ExitCode::FAILURE;
+        return fail(Ending::Failed, t!(cli_directory_unknown));
     };
     match bravebot_tui::sessions::load(&directory, id) {
         Some(record) if record.manifest.is_some() => {
-            eprintln!("{}", bravebot_tui::resume::manifest_note());
+            let refused = fail(Ending::Failed, bravebot_tui::resume::manifest_note());
             if let Some(stored) = &record.manifest {
                 let report = stored.describe();
                 if !report.is_empty() {
@@ -1002,22 +1135,16 @@ fn fork_named(id: &str, skip_permissions: bool) -> ExitCode {
                     eprint!("{report}");
                 }
             }
-            ExitCode::FAILURE
+            refused
         }
         Some(_) => match bravebot_tui::sessions::fork(&directory, id) {
             Some(record) => interactive(
                 bravebot_tui::app::Start::Resuming(Box::new(record)),
                 skip_permissions,
             ),
-            None => {
-                eprintln!("{}", t!(cli_no_such_session, id = id));
-                ExitCode::FAILURE
-            }
+            None => fail(Ending::Argument, t!(cli_no_such_session, id = id)),
         },
-        None => {
-            eprintln!("{}", t!(cli_no_such_session, id = id));
-            ExitCode::FAILURE
-        }
+        None => fail(Ending::Argument, t!(cli_no_such_session, id = id)),
     }
 }
 
@@ -1028,17 +1155,13 @@ fn fork_named(id: &str, skip_permissions: bool) -> ExitCode {
 /// somebody who meant to carry on and got an empty transcript has lost the thing they asked for.
 fn continue_here(skip_permissions: bool) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
-        eprintln!("{}", t!(cli_directory_unknown));
-        return ExitCode::FAILURE;
+        return fail(Ending::Failed, t!(cli_directory_unknown));
     };
     match bravebot_tui::sessions::most_recent(&directory) {
         // By the id, so this arrives at the interface the way a named resume does, down to a
         // record that went away between the list and the read.
         Some(session) => resume_named(&session.id, skip_permissions),
-        None => {
-            eprintln!("{}", t!(cli_nothing_to_continue));
-            ExitCode::FAILURE
-        }
+        None => fail(Ending::Failed, t!(cli_nothing_to_continue)),
     }
 }
 
@@ -1046,17 +1169,16 @@ fn interactive(start: bravebot_tui::app::Start, skip_permissions: bool) -> ExitC
     let mut config = match Config::from_env() {
         Ok(c) => c,
         Err(err) => {
-            eprintln!("{}", t!(cli_configuration_problem, problem = err));
-            return ExitCode::FAILURE;
+            return fail(
+                Ending::Configuration,
+                t!(cli_configuration_problem, problem = err),
+            );
         }
     };
 
     let workspace = match current_workspace(&bravebot_config::Settings::load()) {
         Ok(w) => w,
-        Err(err) => {
-            eprintln!("{}", t!(cli_workspace_problem, problem = err));
-            return ExitCode::FAILURE;
-        }
+        Err(err) => return fail(Ending::Failed, t!(cli_workspace_problem, problem = err)),
     };
 
     // Reported in the status bar so the guarantee in force is visible for the whole
@@ -1082,10 +1204,7 @@ fn interactive(start: bravebot_tui::app::Start, skip_permissions: bool) -> ExitC
             ExitCode::SUCCESS
         }
         Ok(None) => ExitCode::SUCCESS,
-        Err(err) => {
-            eprintln!("{}", t!(cli_interface_problem, problem = err));
-            ExitCode::FAILURE
-        }
+        Err(err) => fail(Ending::Failed, t!(cli_interface_problem, problem = err)),
     }
 }
 
@@ -1176,15 +1295,14 @@ fn import_leo_creds(args: &[String]) -> ExitCode {
         match arg.as_str() {
             "--forget" => forget = true,
             other if other.starts_with('-') => {
-                eprintln!("{}", t!(cli_unknown_option, flag = other));
-                return ExitCode::FAILURE;
+                return fail(Ending::Argument, t!(cli_unknown_option, flag = other));
             }
             other => match bravebot_skus::Channel::parse(other) {
                 Some(parsed) => channel = Some(parsed),
                 None => {
-                    eprintln!("{}", t!(leo_unknown_channel, channel = other));
+                    let refused = fail(Ending::Argument, t!(leo_unknown_channel, channel = other));
                     eprintln!("{}", t!(leo_expected_channel));
-                    return ExitCode::FAILURE;
+                    return refused;
                 }
             },
         }
@@ -1201,10 +1319,7 @@ fn import_leo_creds(args: &[String]) -> ExitCode {
                 println!("{}", t!(leo_forgotten));
                 ExitCode::SUCCESS
             }
-            Err(err) => {
-                eprintln!("{err}");
-                ExitCode::FAILURE
-            }
+            Err(err) => fail(Ending::Failed, err),
         };
     }
 
@@ -1214,8 +1329,7 @@ fn import_leo_creds(args: &[String]) -> ExitCode {
     // one command an incognito session cannot carry out rather than merely decline to record.
     // Forgetting above is allowed: removing a stored secret leaves less behind, not more.
     if bravebot_core::incognito::engaged() {
-        eprintln!("{}", t!(leo_not_while_incognito));
-        return ExitCode::FAILURE;
+        return fail(Ending::Failed, t!(leo_not_while_incognito));
     }
 
     // Warned about early: the import would otherwise succeed and then never be used, since a
@@ -1238,10 +1352,7 @@ fn import_leo_creds(args: &[String]) -> ExitCode {
 
     let order = match bravebot_skus::find_leo_order(channel) {
         Ok(order) => order,
-        Err(err) => {
-            eprintln!("{err}");
-            return ExitCode::FAILURE;
-        }
+        Err(err) => return fail(Ending::Failed, err),
     };
 
     println!(
@@ -1265,10 +1376,7 @@ fn import_leo_creds(args: &[String]) -> ExitCode {
         Transport::shared().agent_config_builder(),
     ) {
         Ok(registration) => registration,
-        Err(err) => {
-            eprintln!("{err}");
-            return ExitCode::FAILURE;
-        }
+        Err(err) => return fail(Ending::Failed, err),
     };
 
     let credentials: bravebot_skus::StoredCredentials = registration.into();
@@ -1282,18 +1390,14 @@ fn import_leo_creds(args: &[String]) -> ExitCode {
         .to_string();
 
     if let Err(err) = bravebot_skus::store::save(&credentials) {
-        eprintln!("{err}");
-        return ExitCode::FAILURE;
+        return fail(Ending::Failed, err);
     }
 
     // Named so the user knows where the secret went: it is an ordinary file now, and one they may
     // want to inspect, exclude from a backup, or delete by hand.
     let where_stored = match bravebot_skus::store::path() {
         Ok(path) => path.display().to_string(),
-        Err(err) => {
-            eprintln!("{err}");
-            return ExitCode::FAILURE;
-        }
+        Err(err) => return fail(Ending::Failed, err),
     };
 
     println!(
@@ -2358,7 +2462,6 @@ mod tests {
             trail: Some((&sink, "qwen-3-235b")),
             clean: false,
             not_served: None,
-            named_on_the_command_line: false,
         });
 
         assert_eq!(reply, "ok\n");
@@ -2378,7 +2481,6 @@ mod tests {
             trail: None,
             clean: true,
             not_served: None,
-            named_on_the_command_line: false,
         });
 
         assert_eq!(reply, "ok\n");
@@ -2398,6 +2500,7 @@ mod tests {
                 gate: "network",
                 detail: "egress".into(),
                 reason: "host not allowed".into(),
+                principle: bravebot_core::event::Principle::Confinement,
             },
             Event::Observed {
                 capability: Capability::FileRead,
@@ -2858,7 +2961,6 @@ mod tests {
             trail: None,
             clean: true,
             not_served: Some("a-premium-model was not served"),
-            named_on_the_command_line: true,
         });
 
         assert_eq!(reply, "ok\n");
@@ -2873,46 +2975,28 @@ mod tests {
     /// its own.
     #[test]
     fn a_run_answered_by_a_model_other_than_the_one_it_named_does_not_succeed() {
-        let substituted = Finished {
-            reply: "ok",
-            notices: &[],
-            attempt: None,
-            trail: None,
-            clean: true,
-            not_served: Some("a-premium-model was not served"),
-            named_on_the_command_line: true,
-        };
-        let served = Finished {
-            not_served: None,
-            ..substituted
-        };
+        let substituted = ending_of_a_turn(true, true, true);
+        assert!(!substituted.ok());
+        assert_eq!(substituted.status(), 1);
 
-        assert!(!substituted.succeeded());
-        assert!(served.succeeded());
+        assert!(ending_of_a_turn(true, true, false).ok());
     }
 
     /// A turn that was refused something did not do what it was asked, however much of a reply it
     /// produced on the way. The refusal is a line on stderr and the reply still goes to stdout, so
     /// a script piping one command into the next has only the status to tell it that the work it
     /// asked for did not all happen.
+    ///
+    /// Its own status rather than the catch-all, because a policy refusal is the one failure that
+    /// needs a person rather than another attempt.
     #[test]
     fn a_turn_something_was_refused_in_does_not_succeed() {
-        let refused = Finished {
-            reply: "ok",
-            notices: &[],
-            attempt: None,
-            trail: None,
-            clean: false,
-            not_served: None,
-            named_on_the_command_line: false,
-        };
-        let allowed = Finished {
-            clean: true,
-            ..refused
-        };
+        let refused = ending_of_a_turn(false, false, false);
+        assert!(!refused.ok());
+        assert_eq!(refused, Ending::Refused);
+        assert_eq!(refused.status(), 4);
 
-        assert!(!refused.succeeded());
-        assert!(allowed.succeeded());
+        assert!(ending_of_a_turn(true, false, false).ok());
     }
 
     /// Below the flag the model is whatever was recorded or configured, so failing here would have
@@ -2927,13 +3011,12 @@ mod tests {
             trail: None,
             clean: true,
             not_served: Some("a-premium-model was not served"),
-            named_on_the_command_line: false,
         };
 
         let (reply, beside) = written(&substituted);
         assert_eq!(reply, "ok\n");
         assert!(beside.contains("was not served"), "{beside}");
-        assert!(substituted.succeeded());
+        assert!(ending_of_a_turn(true, false, true).ok());
     }
 
     #[test]
@@ -3041,7 +3124,6 @@ mod tests {
             trail: None,
             clean: true,
             not_served: None,
-            named_on_the_command_line: false,
         });
         assert_eq!(reply, "ok\n");
         assert!(beside.contains("not usable"), "got: {beside}");

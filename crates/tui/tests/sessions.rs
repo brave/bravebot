@@ -232,6 +232,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
                 gate: "trusted-read",
                 detail: "edit_file".to_string(),
                 reason: "content is untrusted".to_string(),
+                principle: bravebot_core::event::Principle::IntegrityGate,
             },
         ]),
     );

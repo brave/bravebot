@@ -368,9 +368,13 @@ pub enum TurnError {
     ///
     /// Carries what the run produced so a caller can still look at it. A plan that would not
     /// parse has no rendered form, so the model's own words are the only thing left.
+    ///
+    /// The failure itself travels rather than a sentence about it, so what stopped the run is
+    /// still something a caller can decide from. Flattened to a sentence, a step that lost the
+    /// backend and a plan that would not parse arrive indistinguishable.
     Manifest {
         attempt: Box<crate::manifest::Attempt>,
-        detail: String,
+        cause: Box<TurnError>,
     },
 }
 
@@ -381,7 +385,7 @@ impl fmt::Display for TurnError {
             Self::Precommit(detail) => write!(f, "{detail}"),
             Self::Workspace(e) => write!(f, "{e}"),
             Self::Chat(e) => write!(f, "{e}"),
-            Self::Manifest { detail, .. } => write!(f, "{detail}"),
+            Self::Manifest { cause, .. } => write!(f, "{cause}"),
         }
     }
 }

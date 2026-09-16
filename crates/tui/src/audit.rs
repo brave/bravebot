@@ -295,6 +295,9 @@ fn shaped(event: &Event) -> Value {
             gate,
             detail,
             reason,
+            // Left out of the record on purpose. What is written here is read back as a line for
+            // a person, and a name for a program has nobody to read it there.
+            principle: _,
         } => json!({
             "kind": "gate_blocked",
             "gate": gate,
@@ -403,6 +406,7 @@ mod tests {
                 gate: "trusted-read",
                 detail: "edit_file".to_string(),
                 reason: "content is untrusted".to_string(),
+                principle: bravebot_core::event::Principle::IntegrityGate,
             },
             None,
         );
@@ -456,6 +460,7 @@ mod tests {
                 gate: "trusted-read",
                 detail: "edit_file".to_string(),
                 reason: "content is untrusted".to_string(),
+                principle: bravebot_core::event::Principle::IntegrityGate,
             },
             Event::Observed {
                 capability: Capability::FileRead,
@@ -574,6 +579,7 @@ mod tests {
                 gate: "action",
                 detail: String::new(),
                 reason: "injection blocked".to_string(),
+                principle: bravebot_core::event::Principle::IntegrityGate,
             },
             None,
         );

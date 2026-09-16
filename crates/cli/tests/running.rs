@@ -178,6 +178,127 @@ fn a_turn_that_could_not_run_exits_non_zero() {
     );
 }
 
+/// The whole of the reported defect: a configuration that cannot be used, an argument the program
+/// does not have, and a backend nothing is listening on all exited 1, so a caller could not tell
+/// "fix the config" from "try again in a minute" without reading English.
+///
+/// The statuses are asserted as the numbers a script writes, not as "not zero": the number is what
+/// this program promised, and a test that only checked for a failure would pass again the day they
+/// all collapsed back into one.
+#[test]
+fn each_kind_of_failure_has_a_status_of_its_own() {
+    let scratch = Scratch::new("cli-running-status-per-failure");
+    let usable = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+    ];
+
+    let argument = bravebot(&scratch.path, &usable, &["--not-an-option"]);
+    assert_eq!(argument.status.code(), Some(2), "{:?}", said(&argument));
+
+    let configuration = bravebot(
+        &scratch.path,
+        // Complete but for the endpoint, which names no scheme.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "ai-chat.example.invalid"),
+        ],
+        &["-p", "say something"],
+    );
+    assert_eq!(
+        configuration.status.code(),
+        Some(3),
+        "{:?}",
+        said(&configuration)
+    );
+
+    // Port 1 takes privileges the machine running tests does not give away, so the connection is
+    // refused at once rather than timing out or reaching a real service.
+    let unreachable = bravebot(&scratch.path, &usable, &["-p", "say something"]);
+    assert_eq!(
+        unreachable.status.code(),
+        Some(5),
+        "{:?}",
+        said(&unreachable)
+    );
+}
+
+/// A message is in the reader's own language, so a bug report carries a sentence nobody receiving
+/// it can search for. The identifier is the same failure said in a form that does not change.
+#[test]
+fn a_failure_says_a_stable_identifier_whatever_language_it_explains_itself_in() {
+    let scratch = Scratch::new("cli-running-identifier");
+    // Complete but for the endpoint, which names no scheme.
+    let broken = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "ai-chat.example.invalid"),
+    ];
+    let mut in_french = broken.to_vec();
+    // Applied after the locale the helper sets, so this is the one in force.
+    in_french.push(("BRAVEBOT_LOCALE", "fr"));
+
+    let (_, english) = said(&bravebot(&scratch.path, &broken, &["-p", "say something"]));
+    let (_, french) = said(&bravebot(
+        &scratch.path,
+        &in_french,
+        &["-p", "say something"],
+    ));
+
+    assert!(
+        english.contains("configuration error"),
+        "the run failed over something else: {english}"
+    );
+    assert!(
+        french.contains("erreur de configuration"),
+        "the message was not in the reader's language: {french}"
+    );
+    assert!(
+        english.contains("BB1003") && french.contains("BB1003"),
+        "the identifier changed with the language: {english} / {french}"
+    );
+}
+
+/// The point of the flag: one object on stdout, in the reply's place, holding what a caller would
+/// otherwise have had to read out of English on stderr. A failure before the turn is a result too,
+/// since a caller that had to tell an empty stdout from a result has the prose surface back.
+#[test]
+fn a_run_asked_for_a_result_object_puts_one_on_stdout() {
+    let scratch = Scratch::new("cli-running-json");
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "ai-chat.example.invalid"),
+        ],
+        &["--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert_eq!(
+        stdout.lines().count(),
+        1,
+        "the result is not one object on one line: {stdout}"
+    );
+    for field in [
+        r#""ok":false"#,
+        r#""status":3"#,
+        r#""reason":"configuration""#,
+        r#""identifier":"BB1003""#,
+    ] {
+        assert!(stdout.contains(field), "{field} is missing from {stdout}");
+    }
+    // The prose is still on stderr, where a person reads it.
+    assert!(
+        stderr.contains("ai-chat.example.invalid"),
+        "the explanation went nowhere: {stderr}"
+    );
+}
+
 /// An import is a write by definition, so an incognito session refuses it rather than doing it
 /// and discarding the result: that would mint a batch on Brave's service that nothing could ever
 /// spend. Refused before the device is registered, which is what the empty reply stream says:

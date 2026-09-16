@@ -523,8 +523,8 @@ pub fn record_manifest_run(
                 .map(|attempt| StoredManifest::of(attempt, None)),
             finished.trust.clone(),
         ),
-        Err(bravebot_agent::TurnError::Manifest { attempt, detail }) => (
-            Some(StoredManifest::of(attempt, Some(detail.clone()))),
+        Err(bravebot_agent::TurnError::Manifest { attempt, cause }) => (
+            Some(StoredManifest::of(attempt, Some(cause.to_string()))),
             TrustStore::new(project),
         ),
         // Cancelled, or a failure with nothing to show. Nothing worth a record.
@@ -2241,7 +2241,9 @@ mod tests {
                 plan: Some("1. [read] read docs/specs/manifest.md".to_string()),
                 steps: vec!["1. [read] read docs/specs/manifest.md: 4kB".to_string()],
             }),
-            detail: "step 2 had nothing to write".to_string(),
+            cause: Box::new(bravebot_agent::TurnError::Precommit(
+                "step 2 had nothing to write".to_string(),
+            )),
         })
     }
 

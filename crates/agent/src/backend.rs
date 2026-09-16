@@ -80,6 +80,26 @@ impl BackendError {
             Self::Aichat(ChatError::Cancelled) | Self::Bedrock(BedrockError::Cancelled)
         )
     }
+
+    /// Whether the request never reached the service.
+    ///
+    /// Worth telling apart from every other failure because it is the one a caller can do
+    /// something about without a person: a service that was not there a moment ago may be there
+    /// on the next attempt, while a refused model or an unusable configuration will not be.
+    ///
+    /// The transport's own failures and no others. A non-success status is the service answering,
+    /// and a caller that read a refused credential as a connection to try again would retry it
+    /// until it gave up.
+    pub fn is_unreachable(&self) -> bool {
+        matches!(
+            self,
+            Self::Aichat(ChatError::Egress(
+                bravebot_net::EgressError::Transport { .. }
+            )) | Self::Bedrock(BedrockError::Egress(
+                bravebot_net::EgressError::Transport { .. }
+            ))
+        )
+    }
 }
 
 /// The backend this configuration selects, ready to be asked for one reply.
@@ -727,6 +747,40 @@ mod tests {
     fn a_stop_from_either_backend_is_recognised_as_a_stop() {
         assert!(BackendError::from(ChatError::Cancelled).is_cancelled());
         assert!(BackendError::from(BedrockError::Cancelled).is_cancelled());
+    }
+
+    /// A request that never left is the one failure a caller can retry without a person, so it
+    /// cannot arrive looking like a model that refused or a configuration that cannot be signed.
+    #[test]
+    fn a_request_that_never_left_is_told_apart_from_one_that_was_answered() {
+        let refused = bravebot_net::EgressError::Transport {
+            url: "http://127.0.0.1:1/v1".to_string(),
+            detail: "connection refused".to_string(),
+            transient: true,
+        };
+        assert!(BackendError::from(ChatError::Egress(refused)).is_unreachable());
+
+        let dropped = bravebot_net::EgressError::Transport {
+            url: "https://bedrock.example/invoke".to_string(),
+            detail: "connection reset".to_string(),
+            transient: true,
+        };
+        assert!(BackendError::from(BedrockError::Egress(dropped)).is_unreachable());
+
+        // The service answered, so there is nothing to reach again: a caller that read this as a
+        // connection to retry would retry a refused credential until it gave up.
+        let refused_credential = bravebot_net::EgressError::Status {
+            url: "https://ai-chat.example/v1".to_string(),
+            status: 401,
+        };
+        assert!(!BackendError::from(ChatError::Egress(refused_credential)).is_unreachable());
+        assert!(!BackendError::from(ChatError::NoContent).is_unreachable());
+        assert!(
+            !BackendError::NoGatewayToken {
+                provider: "openai".to_string()
+            }
+            .is_unreachable()
+        );
     }
 
     /// Anything else is a real failure and must not be mistaken for a stop, or a turn that broke

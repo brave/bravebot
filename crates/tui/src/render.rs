@@ -6233,6 +6233,7 @@ mod tests {
                     gate: "action",
                     detail: String::new(),
                     reason: "injection blocked".into(),
+                    principle: bravebot_core::event::Principle::IntegrityGate,
                 },
                 None,
             )],

@@ -28,6 +28,12 @@ pub struct Activity {
     pub verb: &'static str,
     /// What is being acted on, as the model named it. Empty where there is nothing to name.
     pub target: String,
+    /// The tool's own name, as dispatch matched it. Empty where nothing set one.
+    ///
+    /// Beside [`Activity::verb`] rather than instead of it, because the two have different
+    /// audiences: the verb is a word in the reader's own language, and this is what a program
+    /// matches on. A surface that offered only the verb would have a script keying off French.
+    pub tool: String,
     /// What came of it, in a few words. `None` while the call is still running, which is what
     /// makes an unfinished line distinguishable from one that finished with nothing to say.
     pub note: Option<String>,
@@ -52,11 +58,18 @@ impl Activity {
         Self {
             verb,
             target: target.into(),
+            tool: String::new(),
             note: None,
             failed: false,
             changes: Vec::new(),
             untrusted: false,
         }
+    }
+
+    /// Say which tool this is, by the name dispatch matched rather than the word shown.
+    pub fn of_tool(mut self, tool: &str) -> Self {
+        self.tool = tool.to_string();
+        self
     }
 
     /// The same call, finished, with what came of it.
