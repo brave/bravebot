@@ -128,6 +128,7 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::os::unix::fs::MetadataExt;
     use std::process::Stdio;
 
     /// `CURLE_COULDNT_CONNECT`: curl reached the connection and was refused it. Any other code
@@ -376,5 +377,65 @@ mod tests {
             Some(CURL_COULDNT_CONNECT),
             "the connection was not what failed, so this says nothing about network denial"
         );
+    }
+
+    /// Writing a temporary file and renaming it into place is how a compiler, a package
+    /// manager and an editor write anything at all, so a confinement that denies the move
+    /// holds an ordinary build to less than the paths its policy granted. A write grant
+    /// here is a subpath rule covering every operation on what is under it, so this
+    /// backend needs nothing beyond the grant to permit the move; the other one needs the
+    /// kernel right that governs it, and the two are held to one rule.
+    ///
+    /// The inode is what the assertion is on, because `mv` answers a refused rename by
+    /// copying the file and unlinking the original: the destination exists either way, and
+    /// only a preserved inode says the move happened rather than a copy that is neither
+    /// atomic nor cheap.
+    #[test]
+    fn a_confined_process_can_rename_a_file_between_two_granted_directories() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-rename");
+        let _ = std::fs::remove_dir_all(&dir);
+        let source = dir.join("from").join("moved");
+        let destination = dir.join("to").join("moved");
+        std::fs::create_dir_all(dir.join("from")).expect("the scratch directory is creatable");
+        std::fs::create_dir_all(dir.join("to")).expect("the scratch directory is creatable");
+        std::fs::write(&source, b"contents").expect("the file is writable");
+        let inode = std::fs::metadata(&source).expect("the file is there").ino();
+
+        // Read as well as write: mv stats both ends before it moves anything, so a profile
+        // granting only the write fails over the stat and says nothing about the move.
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&dir)
+            .allow_write(&dir);
+        let mut child = sandbox
+            .command(
+                "/bin/mv",
+                &[
+                    source.display().to_string(),
+                    destination.display().to_string(),
+                ],
+                &policy,
+            )
+            .expect("command builds")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("should spawn");
+        assert!(
+            child.wait().expect("should wait").success(),
+            "a move inside one granted directory failed"
+        );
+        assert_eq!(
+            std::fs::metadata(&destination)
+                .expect("the destination is there")
+                .ino(),
+            inode,
+            "the file was copied and unlinked rather than moved, so the move was denied"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
