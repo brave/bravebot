@@ -4,7 +4,7 @@
 //! headers the server verifies, that it reaches the right path, and that the reply
 //! arrives labelled untrusted.
 
-use bravebot_aichat::protocol::{ChatRequest, Message};
+use bravebot_aichat::protocol::{ChatRequest, Effort, Message};
 use bravebot_aichat::{AichatClient, ChatError};
 use bravebot_config::Config;
 use bravebot_config::DEFAULT_MODEL;
@@ -331,6 +331,30 @@ fn config_for(endpoint: &str) -> Config {
         _ => None,
     })
     .expect("config")
+}
+
+/// A settings block naming one model at `endpoint`, which is the shape somebody writes for a
+/// gateway of their own: a base URL, a model list, and nothing about what the model reads. No
+/// roster is fetched for such a block, so nothing anywhere describes the model's parameters.
+fn gateway_naming(endpoint: &str, model: &str) -> bravebot_config::provider::Provider {
+    let block = format!(
+        r#"{{"provider": {{"a-gateway": {{
+            "options": {{"baseURL": "{endpoint}"}},
+            "models": {{"{model}": {{}}}}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+/// A request that names how hard to think, which is what a turn sends once somebody has chosen a
+/// level.
+fn asking_a_level(model: &str) -> ChatRequest {
+    ChatRequest::new(model, vec![Message::user("hi")]).with_effort(Some(Effort::Xhigh))
 }
 
 fn routing() -> Routing {
@@ -1439,6 +1463,277 @@ fn a_refusal_the_retry_did_not_fix_is_not_remembered() {
         asked_again.body.contains("cache_control"),
         "a refusal that proved nothing stopped the asking: {}",
         asked_again.body
+    );
+}
+
+/// A gateway declared in settings names its models and never their parameters, so the level goes
+/// out to be judged there. One that refuses the field refuses every request a turn can make, and
+/// the level is a concession nobody asked for: giving it up costs a level, keeping it costs the
+/// conversation.
+#[test]
+fn a_level_a_gateway_refuses_costs_the_field_and_not_the_turn() {
+    let model = "a-model-that-refuses-a-level";
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ]),
+    ]);
+    let config = config_for(&endpoint);
+    let gateway = gateway_naming(&endpoint, model);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let completion = AichatClient::new(&config, &egress)
+        .for_gateway(&gateway, model, None)
+        .complete_streaming(&mut policy, &asking_a_level(model), |_| {})
+        .expect("the turn survives the refusal");
+    assert_eq!(completion.model, "served-model");
+
+    let first = received.recv().expect("a first request");
+    let second = received.recv().expect("a second request");
+    let third = received.recv().expect("a third request");
+    assert!(
+        first.body.contains("cache_control") && first.body.contains("reasoning_effort"),
+        "the first request went out short of a concession: {}",
+        first.body
+    );
+    // The breakpoints go first and the level second, either being refused with the same status: a
+    // request that gave up the level while still marking a prefix would read a refusal of the
+    // caching as the model refusing to be told how hard to think.
+    assert!(
+        !second.body.contains("cache_control") && second.body.contains("reasoning_effort"),
+        "the second request was not the first one without its breakpoints: {}",
+        second.body
+    );
+    assert!(
+        !third.body.contains("reasoning_effort"),
+        "the level was sent to a service that had refused the body without its breakpoints: {}",
+        third.body
+    );
+    // And what the service finally took is otherwise the request it refused, down to the words.
+    assert!(third.body.contains(r#""content":"hi""#), "{}", third.body);
+}
+
+/// What a gateway refused outlives the client that found out. A client is built per request, so a
+/// refusal remembered by that client alone would cost two refused round trips on every turn of
+/// every conversation somebody chose a level for.
+#[test]
+fn a_gateway_that_refused_a_level_is_not_sent_one_again() {
+    let model = "a-model-that-remembers-refusing-a-level";
+    let reply = || {
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ])
+    };
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        reply(),
+        reply(),
+        reply(),
+    ]);
+    let config = config_for(&endpoint);
+    let gateway = gateway_naming(&endpoint, model);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    for _ in 0..3 {
+        AichatClient::new(&config, &egress)
+            .for_gateway(&gateway, model, None)
+            .complete_streaming(&mut policy, &asking_a_level(model), |_| {})
+            .expect("each turn is answered");
+    }
+
+    received.recv().expect("the request it refused");
+    received
+        .recv()
+        .expect("the same request without breakpoints");
+    received.recv().expect("the request it took");
+    for turn in 2..=3 {
+        let sent = received.recv().expect("a later turn's request");
+        assert!(
+            !sent.body.contains("reasoning_effort"),
+            "turn {turn} asked a gateway that had already refused: {}",
+            sent.body
+        );
+    }
+}
+
+/// The status a gateway refuses a field with is also the status a prompt too long for the model
+/// comes back as, so a request refused with the level gone too says nothing about the level.
+/// Concluding a refusal from one would withhold what somebody asked for, for the rest of the
+/// process, from a model that reads it.
+#[test]
+fn a_level_refusal_the_retry_did_not_fix_is_not_remembered() {
+    let model = "a-model-that-refuses-for-its-own-reasons";
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ]),
+    ]);
+    let config = config_for(&endpoint);
+    let gateway = gateway_naming(&endpoint, model);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    AichatClient::new(&config, &egress)
+        .for_gateway(&gateway, model, None)
+        .complete_streaming(&mut policy, &asking_a_level(model), |_| {})
+        .expect_err("a request refused without either concession stays refused");
+    AichatClient::new(&config, &egress)
+        .for_gateway(&gateway, model, None)
+        .complete_streaming(&mut policy, &asking_a_level(model), |_| {})
+        .expect("the next turn is answered");
+
+    received.recv().expect("the request that was refused");
+    received
+        .recv()
+        .expect("the same request without breakpoints");
+    received.recv().expect("the same request without the level");
+    let asked_again = received.recv().expect("the next turn's request");
+    assert!(
+        asked_again.body.contains("reasoning_effort") && asked_again.body.contains("cache_control"),
+        "a refusal that proved nothing stopped the asking: {}",
+        asked_again.body
+    );
+}
+
+/// One gateway answers for every model behind it, and each of them answers for itself. A refusal
+/// recorded against the service alone would take the level away from models that never refused one,
+/// which on a gateway serving hundreds is most of them.
+#[test]
+fn one_model_refusing_a_level_says_nothing_about_another_on_the_same_gateway() {
+    let refuser = "a-model-of-its-own-that-refuses";
+    let other = "another-model-the-same-gateway-serves";
+    let reply = || {
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ])
+    };
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        reply(),
+        reply(),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    AichatClient::new(&config, &egress)
+        .for_gateway(&gateway_naming(&endpoint, refuser), refuser, None)
+        .complete_streaming(&mut policy, &asking_a_level(refuser), |_| {})
+        .expect("the refusing model is answered without the level");
+    AichatClient::new(&config, &egress)
+        .for_gateway(&gateway_naming(&endpoint, other), other, None)
+        .complete_streaming(&mut policy, &asking_a_level(other), |_| {})
+        .expect("the other model is answered");
+
+    received.recv().expect("the request it refused");
+    received
+        .recv()
+        .expect("the same request without breakpoints");
+    received.recv().expect("the request it took");
+    let for_the_other = received.recv().expect("the other model's request");
+    assert!(
+        for_the_other.body.contains("reasoning_effort")
+            && for_the_other.body.contains("cache_control"),
+        "one model's refusal was read as the whole gateway's: {}",
+        for_the_other.body
+    );
+}
+
+/// A block's options reach the body as they stand, so a level written into one is not a concession
+/// this program made and not one it takes back. What is given up is the level somebody chose in the
+/// interface; a field a settings file states outlives it, and a service refusing that field refuses
+/// the request as it would refuse any other option it does not take.
+#[test]
+fn a_level_a_block_wrote_down_is_not_given_up() {
+    let model = "a-model-whose-block-writes-a-level";
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Status(400),
+    ]);
+    let block = format!(
+        r#"{{"provider": {{"a-gateway": {{
+            "options": {{"baseURL": "{endpoint}"}},
+            "models": {{"{model}": {{"options": {{"reasoning_effort": "high"}}}}}}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    let gateway = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    AichatClient::new(&config, &egress)
+        .for_gateway(&gateway, model, None)
+        .complete_streaming(&mut policy, &asking_a_level(model), |_| {})
+        .expect_err("a service refusing an option somebody wrote refuses the request");
+
+    let first = received.recv().expect("a first request");
+    received
+        .recv()
+        .expect("the same request without breakpoints");
+    let third = received.recv().expect("a third request");
+    assert!(
+        first.body.contains(r#""reasoning_effort":"xhigh""#),
+        "the level somebody chose lost to the one the block states: {}",
+        first.body
+    );
+    assert!(
+        third.body.contains(r#""reasoning_effort":"high""#),
+        "the level the block states went the way of the one somebody chose: {}",
+        third.body
     );
 }
 

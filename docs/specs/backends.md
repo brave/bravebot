@@ -585,19 +585,45 @@ get, reported to them as in force. Where a roster answers the question there is 
 and where it does not, withholding what somebody asked for on the strength of a listing that never
 mentioned the subject would be deciding against them from silence.
 
-**Where there is no listing, a refusal is the answer.** AWS Bedrock describes no model's parameters,
-so nothing can be consulted before a level is sent and the level goes out to be judged. A model that
-refuses the field has answered the same question the listing answers elsewhere: no later request
-carries a level to it, and it is reported as reading none rather than as having one in force.
+**Where there is no listing, a refusal is the answer.** Neither AWS Bedrock nor a settings block
+naming its models says which parameters a model takes, and a fetched roster need not say either, so
+where nothing describes the field the level goes out to be judged. A model that refuses the field has
+answered the same question the listing answers elsewhere: no later request carries a level to it, and
+it is reported as reading none rather than as having one in force. What one model refused says nothing
+about another, and a request refused with the level gone as well settles nothing and is not
+remembered, that status being also what a prompt too long for the model comes back as.
 
-**Why.** The judgment is the only description this service offers, and throwing it away leaves the
+**A level a block wrote down is not this program's to give up.** BACKEND-15 carries a configured
+model's options into the body as they stand, so a level written there fills the field again after this
+concession has been given up, and a service that refuses it refuses the request as it would refuse
+any other option it does not take. What is given up is the level somebody chose in the interface,
+that being the one this program decided to send.
+
+**The level is the last concession given up.** A request also carries cache breakpoints nobody asked
+for, and either field is refused with the same status, so the two are given up in order: a request
+still marking a prefix is sent again without the marks first, and the level goes only where that
+request is refused too. Giving up the level first would read a refusal of the caching as the model
+refusing to be told how hard to think, and stop sending a level to a model that reads one. Where the
+request that answered had given up both, both are remembered, the status naming no field: a service
+that reads a breakpoint and refuses a level gives up the caching as well for the life of the process.
+
+**Why.** The judgment is the only description these services offer, and throwing it away leaves the
 interface reporting a charge somebody chose and stopped getting, which is the thing this clause
-exists to prevent. Learned rather than declared because an inference-profile ARN does not say which
-provider is behind it, and a settings file cannot state what its author does not know either.
+exists to prevent. It is also all that stands between a service that refuses the field and a
+conversation in which no turn can succeed, the level being in every request such a turn makes.
+Learned rather than declared because an inference-profile ARN does not say which provider is behind
+it, and a settings file cannot state what its author does not know either.
 
 `verified-by: bravebot_bedrock::lib::what_a_model_refused_outlives_the_client_that_found_out`
 `verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_is_not_remembered`
 `verified-by: bravebot_bedrock::lib::one_model_refusing_says_nothing_about_another`
+`verified-by: bravebot_aichat::client::a_level_a_gateway_refuses_costs_the_field_and_not_the_turn`
+`verified-by: bravebot_aichat::client::a_gateway_that_refused_a_level_is_not_sent_one_again`
+`verified-by: bravebot_aichat::client::a_level_refusal_the_retry_did_not_fix_is_not_remembered`
+`verified-by: bravebot_aichat::client::one_model_refusing_a_level_says_nothing_about_another_on_the_same_gateway`
+`verified-by: bravebot_aichat::client::a_level_a_block_wrote_down_is_not_given_up`
+`verified-by: bravebot_aichat::lib::a_model_whose_service_refused_a_level_is_reported_as_reading_none`
+`verified-by: bravebot_aichat::models::a_row_whose_service_refused_a_level_reads_none_however_silent_the_roster`
 `verified-by: bravebot_aichat::models::a_gateway_model_that_does_not_take_the_effort_parameter_says_so`
 `verified-by: bravebot_aichat::models::a_gateway_that_states_no_parameters_is_not_taken_to_read_no_level`
 `verified-by: bravebot_tui::app::a_level_is_withheld_from_a_model_that_reads_none`
@@ -1004,10 +1030,12 @@ again by a request that never asked for it, and against a service that had alrea
 this endpoint's roster nor a gateway's says whether a model's service reads a breakpoint, so the
 request asks. A service that will not take the body answers an invalid-request status, and that
 request is sent once more with no breakpoints on it; where that answers, no later request in the
-process marks anything for that model on that service. A retry that failed too proves nothing, an
-invalid-request status being also what a prompt too long for the model is answered with, so nothing
-is remembered and the next request asks again. This is BACKEND-27's rule and its reason, in the
-statuses this protocol says it with.
+process marks anything for that model on that service. Where that retry is refused as well and still
+carried an effort level, the level is what is given up next, and a request that answers with both
+gone is remembered as having had both refused: BACKEND-22 states that order and the caching it costs.
+A refusal with nothing further to give up proves nothing, an invalid-request status being also what a
+prompt too long for the model is answered with, so nothing is remembered and the next request asks
+again. This is BACKEND-27's rule and its reason, in the statuses this protocol says it with.
 
 **Remembered against the service as well as the model.** A model id says nothing about who serves
 it: two gateways can offer the same name, and one of them can be the name Brave's own endpoint
@@ -1038,6 +1066,7 @@ sent.
 `verified-by: bravebot_aichat::client::a_service_that_refused_the_breakpoints_is_not_asked_for_them_again`
 `verified-by: bravebot_aichat::client::a_refusal_on_one_service_does_not_stop_the_asking_on_another`
 `verified-by: bravebot_aichat::client::a_refusal_the_retry_did_not_fix_is_not_remembered`
+`verified-by: bravebot_aichat::client::a_level_a_gateway_refuses_costs_the_field_and_not_the_turn`
 `verified-by: bravebot_aichat::client::a_request_the_server_refused_is_not_sent_again_unchanged`
 `verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
 

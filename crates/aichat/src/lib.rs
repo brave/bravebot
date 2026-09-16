@@ -161,6 +161,13 @@ pub struct AichatClient<'a> {
     /// extra round trip against a service that refuses, once per process; not asking costs the
     /// whole prompt on every request against every service that would have cached it.
     breakpoints: bool,
+    /// Whether to send the level somebody asked for, where they asked for one.
+    ///
+    /// On until a service refuses the field, for the same reason breakpoints are: a settings block
+    /// names its models and never their parameters, so nothing can be consulted before the level is
+    /// sent and it goes out to be judged. Leaving it out costs the level on a service that would
+    /// have read it; sending it to a service that refuses the field costs every turn.
+    effort: bool,
 }
 
 /// Where a request goes when a configured gateway serves the model, rather than Brave's endpoint.
@@ -191,6 +198,7 @@ impl<'a> AichatClient<'a> {
             cancel: None,
             gateway: None,
             breakpoints: true,
+            effort: true,
         }
     }
 
@@ -265,40 +273,40 @@ impl<'a> AichatClient<'a> {
         }
     }
 
-    /// The body this request goes out as, asking the service to cache the prefix unless it has
-    /// already refused to.
+    /// The body this request goes out as, asking the service to cache the prefix and carrying the
+    /// level somebody asked for, less whichever of those it has already refused.
     ///
     /// Marked on a copy on its way out rather than in the request the caller holds, so nothing a
     /// turn built and nothing a session records carries a breakpoint: the mark belongs to this
-    /// request only.
+    /// request only. The level is dropped from the encoded body for the same reason, the request the
+    /// caller holds still being the level they asked for.
     fn body(&self, request: &ChatRequest) -> Result<serde_json::Value, ChatError> {
-        match self.breakpoints {
+        let mut body = match self.breakpoints {
             true => request.marked_body(),
             false => serde_json::to_value(request),
         }
-        .map_err(|e| ChatError::Encode(e.to_string()))
+        .map_err(|e| ChatError::Encode(e.to_string()))?;
+        if !self.effort
+            && let Some(fields) = body.as_object_mut()
+        {
+            fields.remove(protocol::EFFORT_FIELD);
+        }
+        Ok(body)
     }
 
     /// What a refusal is remembered against: the service, and the name the model goes out under.
-    ///
-    /// The service as well as the model, because a model id is only unique within one of them. Two
-    /// gateways can serve the same id, and one gateway refusing would otherwise stop the asking
-    /// everywhere, Brave's endpoint included. Both of Brave's tiers answer to the free host here,
-    /// being one deployment rather than two services.
     fn refusal_key(&self, request: &ChatRequest) -> String {
-        let (service, model) = match self.gateway.as_ref() {
-            Some(gateway) => (
-                gateway.provider.chat_completions_url(),
-                gateway.model.as_str(),
-            ),
-            None => (self.config.chat_completions_url(), request.model.as_str()),
-        };
-        format!("{service}\n{model}")
+        match self.gateway.as_ref() {
+            Some(gateway) => learned_key(&gateway.provider.chat_completions_url(), &gateway.model),
+            None => learned_key(&self.config.chat_completions_url(), &request.model),
+        }
     }
 
-    /// Ask for no breakpoint from a service that has already refused one for this model.
+    /// Ask this service for nothing it has already refused for this model.
     fn recall(&mut self, key: &str) {
-        self.breakpoints = !refused(key);
+        let refusals = remembered(key);
+        self.breakpoints = !refusals.caching;
+        self.effort = !refusals.effort;
     }
 
     /// Whether this failure is worth sending the request again without the breakpoints.
@@ -309,16 +317,38 @@ impl<'a> AichatClient<'a> {
         self.breakpoints && refuses_the_body(error)
     }
 
-    /// Record what dropping the breakpoints proved, once the request has finished either way.
+    /// Whether this failure is worth sending the request again without the level.
     ///
-    /// Only a probe that answered says anything: the service took the request without the
-    /// breakpoints, having refused it with them. A probe that failed too proves nothing, an
+    /// Only where the request carries a level to drop, so a service that answers this status for its
+    /// own reasons cannot make a retry loop out of it. Second in both loops rather than competing
+    /// with the breakpoints: either field is refused with the same status, so a request still
+    /// carrying breakpoints gives up those first, and reading a breakpoint refusal as a refusal of
+    /// the level would stop sending a level to a model that reads one.
+    fn worth_dropping_effort(&self, request: &ChatRequest, error: &ChatError) -> bool {
+        self.effort && request.effort.is_some() && refuses_the_body(error)
+    }
+
+    /// Record what dropping a field proved, once the request has finished either way.
+    ///
+    /// Only a probe that answered says anything: the service took the request without what it was
+    /// sent again without, having refused it with. A probe that failed too proves nothing, an
     /// invalid-request status being also what a prompt too long for the model is answered with, and
     /// concluding a refusal from one would stop asking a service that caches happily. Nothing is
-    /// remembered from one, so the next request marks its prefixes and asks again.
+    /// remembered from one, so the next request marks its prefixes, carries its level, and asks
+    /// again.
+    ///
+    /// Both fields are recorded as the answering request found them, because the status names no
+    /// field: where the level went only after the breakpoints had already gone, a service that reads
+    /// a breakpoint and refuses a level gives up both for the life of the process.
     fn probe_settled(&self, key: &str, probed: bool, failed: bool) {
         if probed && !failed {
-            remember_refusal(key);
+            remember(
+                key,
+                Refusals {
+                    caching: !self.breakpoints,
+                    effort: !self.effort,
+                },
+            );
         }
     }
 
@@ -411,6 +441,11 @@ impl<'a> AichatClient<'a> {
                     self.breakpoints = false;
                     probed = true;
                 }
+                // Then the level, the body having been refused without the breakpoints as well.
+                Err(error) if self.worth_dropping_effort(request, &error) => {
+                    self.effort = false;
+                    probed = true;
+                }
                 Err(error) if worth_another_attempt(attempt, &error) => {
                     std::thread::sleep(backoff(attempt));
                     attempt += 1;
@@ -491,6 +526,11 @@ impl<'a> AichatClient<'a> {
                 // so this retry is invisible rather than a reply that starts over.
                 Err(error) if self.worth_dropping_breakpoints(&error) => {
                     self.breakpoints = false;
+                    probed = true;
+                }
+                // Then the level, the body having been refused without the breakpoints as well.
+                Err(error) if self.worth_dropping_effort(&request, &error) => {
+                    self.effort = false;
                     probed = true;
                 }
                 Err(error) if worth_another_attempt(attempt, &error) => {
@@ -772,28 +812,67 @@ fn refuses_the_body(error: &ChatError) -> bool {
     )
 }
 
-/// The service-and-model pairs a breakpoint has been refused for.
+/// What a service has refused to be asked for, for one of the models it serves.
+///
+/// Nothing a service declares: what it answered a request with. Both fields are concessions nobody
+/// asked for, so a refusal costs the concession rather than the turn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Refusals {
+    /// It will not take a request that marks a prefix to cache.
+    pub caching: bool,
+    /// It will not take a request that names how hard to think.
+    pub effort: bool,
+}
+
+/// What each service-and-model pair has refused.
 ///
 /// Process-wide, because a client is built per request and would otherwise re-learn the same
 /// refusal for every turn, which is the round trip this is here to spend once. Forgotten when the
-/// process ends, which is also when a service that has since started reading breakpoints gets
-/// asked again.
-fn refusers() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
-    static REFUSERS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
-        std::sync::OnceLock::new();
-    REFUSERS.get_or_init(Default::default)
+/// process ends, which is also when a service that has since started reading one of these fields
+/// gets asked again.
+fn learned() -> &'static std::sync::Mutex<std::collections::HashMap<String, Refusals>> {
+    static LEARNED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Refusals>>,
+    > = std::sync::OnceLock::new();
+    LEARNED.get_or_init(Default::default)
 }
 
-fn refused(key: &str) -> bool {
-    refusers()
+/// What a refusal is remembered against: the service, and the name the model goes out under.
+///
+/// The service as well as the model, because a model id is only unique within one of them. Two
+/// gateways can serve the same id, and one gateway refusing would otherwise stop the asking
+/// everywhere, Brave's endpoint included. Both of Brave's tiers answer to the free host here,
+/// being one deployment rather than two services.
+fn learned_key(service: &str, model: &str) -> String {
+    format!("{service}\n{model}")
+}
+
+fn remembered(key: &str) -> Refusals {
+    learned()
         .lock()
-        .is_ok_and(|refusers| refusers.contains(key))
+        .ok()
+        .and_then(|learned| learned.get(key).copied())
+        .unwrap_or_default()
 }
 
-fn remember_refusal(key: &str) {
-    if let Ok(mut refusers) = refusers().lock() {
-        refusers.insert(key.to_string());
+fn remember(key: &str, refusals: Refusals) {
+    if let Ok(mut learned) = learned().lock() {
+        learned.insert(key.to_string(), refusals);
     }
+}
+
+/// What this service has refused for this model, in the name the model goes out under.
+pub fn refusals(service: &str, model: &str) -> Refusals {
+    remembered(&learned_key(service, model))
+}
+
+/// Whether a level sent to this model at this service is read, as far as anything here knows.
+///
+/// True until the service has refused one, because a settings block names its models and never
+/// their parameters: a refusal is the only answer such a service gives, and reporting a level as
+/// unread before there is one would report a charge as off on a model that reads it.
+pub fn reads_effort(service: &str, model: &str) -> bool {
+    !refusals(service, model).effort
 }
 
 #[cfg(test)]
@@ -960,6 +1039,29 @@ mod tests {
             "a signed request does not bearer-authenticate"
         );
         assert_eq!(header(&http, "Brave-Product"), Some("brave-bot"));
+    }
+
+    /// The interface reports what a request carries, and once a service has refused the field no
+    /// request to that model carries a level. Reporting one as in force names a charge somebody
+    /// chose and stopped getting, and the refusal is the only description a settings-declared
+    /// gateway offers.
+    #[test]
+    fn a_model_whose_service_refused_a_level_is_reported_as_reading_none() {
+        let service = "https://reported.example.invalid/v1/chat/completions";
+        remember(
+            &learned_key(service, "the-model-that-refused"),
+            Refusals {
+                caching: true,
+                effort: true,
+            },
+        );
+
+        assert!(!reads_effort(service, "the-model-that-refused"));
+        assert!(reads_effort(service, "a-model-that-has-not"));
+        assert!(reads_effort(
+            "https://elsewhere.example.invalid/v1/chat/completions",
+            "the-model-that-refused"
+        ));
     }
 
     /// The escape hatch the block exists for: a gateway's routing controls are its own invention, so
