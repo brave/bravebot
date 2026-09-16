@@ -158,6 +158,27 @@ impl RunRequest {
         self.plan.releases_private()
     }
 
+    /// Whether the line writes an environment assignment in front of one of its programs.
+    ///
+    /// The second reason the prompt cannot offer to stop asking: an entry records a program and its
+    /// exact arguments, and an assignment is in neither, so [`RunRequest::would_vouch_for`] cannot
+    /// represent one. An entry made here would be a bare entry covering the same program under no
+    /// assignment at all, and the screen would be claiming a grant nothing recorded.
+    ///
+    /// Asked apart from [`RunRequest::can_be_remembered`] because that one decides whether to offer
+    /// anything and this one decides what to say about not offering it.
+    pub fn carries_an_assignment(&self) -> bool {
+        self.plan.carries_an_assignment()
+    }
+
+    /// Whether an entry could record this line at all, which is what `a` would make.
+    ///
+    /// One question rather than a list of reasons repeated at each place that asks, so a reason
+    /// added later cannot reach the drawing and miss the layer that acts on the answer.
+    pub fn can_be_remembered(&self) -> bool {
+        self.plan.can_be_remembered()
+    }
+
     /// A short description for a prompt line.
     pub fn summary(&self) -> String {
         format!(
@@ -174,7 +195,9 @@ impl RunRequest {
     /// stopped asking, and its output would still be untrusted.
     ///
     /// Each entry is a program **and its exact arguments**. Vouching for `git log` says nothing
-    /// about `git push`.
+    /// about `git push`, and an entry can hold nothing else: an assignment written in front of a
+    /// step is not in it, which is why [`RunRequest::carries_an_assignment`] is asked separately
+    /// rather than answered from this list.
     pub fn would_vouch_for(&self) -> Vec<bravebot_core::programs::Command> {
         let mut named: Vec<bravebot_core::programs::Command> = Vec::new();
         for step in self.plan.steps() {
