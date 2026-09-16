@@ -143,6 +143,7 @@ fn stamped(events: Vec<Event>) -> Vec<bravebot_tui::audit::Stamped> {
         .enumerate()
         .map(|(n, event)| bravebot_tui::audit::Stamped {
             at: 1_700_000_000 + n as u64,
+            from: None,
             event,
         })
         .collect()
@@ -505,6 +506,7 @@ fn the_audit_keeps_the_time_each_event_happened() {
         &[
             bravebot_tui::audit::Stamped {
                 at: 1_700_000_000,
+                from: None,
                 event: Event::GatePassed {
                     gate: "capability",
                     detail: "file_read granted".to_string(),
@@ -512,6 +514,7 @@ fn the_audit_keeps_the_time_each_event_happened() {
             },
             bravebot_tui::audit::Stamped {
                 at: 1_700_000_042,
+                from: None,
                 event: Event::GatePassed {
                     gate: "capability",
                     detail: "file_write granted".to_string(),

@@ -7,7 +7,6 @@
 use crate::audit::TrailLine;
 use bravebot_agent::report::{Activity, Landing, Phase, Printed, Reported, Shown};
 use bravebot_aichat::protocol::Effort;
-use bravebot_core::event::Event;
 use bravebot_i18n::t;
 use std::time::{Duration, Instant};
 
@@ -4745,8 +4744,12 @@ impl Session {
     }
 
     /// Record a completed turn, and what it cost.
-    pub fn complete(&mut self, reply: impl Into<String>, trail: Vec<Event>, tokens: u64) {
-        let trail = trail.iter().map(crate::audit::as_line).collect();
+    pub fn complete(
+        &mut self,
+        reply: impl Into<String>,
+        trail: Vec<crate::audit::TrailLine>,
+        tokens: u64,
+    ) {
         // The list moves onto the entry rather than being dropped, so what the turn set out to do
         // stays in the scrollback next to the answer it produced.
         let todos = std::mem::take(&mut self.todos);
@@ -7788,10 +7791,13 @@ mod tests {
         s.submit();
         s.complete(
             "reply",
-            vec![Event::Observed {
-                capability: bravebot_core::capability::Capability::FileRead,
-                label: Label::untrusted_private(),
-            }],
+            vec![crate::audit::as_line(
+                &bravebot_core::event::Event::Observed {
+                    capability: bravebot_core::capability::Capability::FileRead,
+                    label: Label::untrusted_private(),
+                },
+                None,
+            )],
             0,
         );
         assert_eq!(s.transcript[1].trail.len(), 1);

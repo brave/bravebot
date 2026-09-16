@@ -3854,25 +3854,27 @@ fn spawn_agent<S: Sink, R: Reporter>(
     let mut kind_name = "";
 
     for task in &tasks {
-        // The trail's name for it is the driver's own word, not the task: a task is a paragraph,
-        // and it would be in every line of the trail that mentions this run.
+        // Numbered by the driver, in the order this turn spawned them, and numbered before the
+        // gate rather than after it so that the record of the gate names the delegate it
+        // approved. Everything recorded or reported about this delegate carries the number, which
+        // is the only thing saying whose a line is: the alternative is reading the line, which is
+        // prose a model wrote. A fan-out is exactly where two of them read alike, and a refusal
+        // is numbered for the same reason a permission is.
+        //
+        // The trail's name for it is that number, not the task: a task is a paragraph, and it
+        // would be in every line of the trail that mentions this run.
         //
         // Gated once per delegate rather than once per call. A fan-out is several runs, and a
         // gate that saw one of them would be approving the others on the strength of a sibling.
-        let spec = match policy.before_delegate("delegate", &kind, task) {
+        *tools.spawned += 1;
+        let id = crate::report::DelegateId::nth(*tools.spawned);
+        let spec = match policy.before_delegate(id, &kind, task) {
             Ok(spec) => spec,
             Err(denial) => return problem(format!("refused: {denial}")),
         };
 
-        // Numbered by the driver, in the order this turn spawned them. Everything reported about
-        // this delegate carries the number, which is the only thing saying whose a line is: the
-        // alternative is reading the line, which is prose a model wrote.
-        //
-        // The task goes with it, released for a screen the way the target of any other call is. A
-        // person watching several delegates has nothing else to tell them apart by, and a fan-out
-        // is exactly where several of them read alike.
-        *tools.spawned += 1;
-        let id = crate::report::DelegateId::nth(*tools.spawned);
+        // The task is released for a screen the way the target of any other call is. A person
+        // watching several delegates has nothing else to tell them apart by.
         let asked = {
             let proof = policy.authorise_display_release("what a delegate was asked to do");
             task.clone().declassify(&proof)

@@ -6079,10 +6079,13 @@ mod tests {
         session.submit();
         session.complete(
             "reply",
-            vec![Event::Observed {
-                capability: Capability::FileRead,
-                label: Label::untrusted_private(),
-            }],
+            vec![crate::audit::as_line(
+                &Event::Observed {
+                    capability: Capability::FileRead,
+                    label: Label::untrusted_private(),
+                },
+                None,
+            )],
             0,
         );
 
@@ -6162,10 +6165,13 @@ mod tests {
 
         session.complete(
             "reply",
-            vec![Event::Observed {
-                capability: Capability::FileRead,
-                label: Label::untrusted_private(),
-            }],
+            vec![crate::audit::as_line(
+                &Event::Observed {
+                    capability: Capability::FileRead,
+                    label: Label::untrusted_private(),
+                },
+                None,
+            )],
             0,
         );
         assert!(
@@ -6181,10 +6187,13 @@ mod tests {
         session.submit();
         session.complete(
             "reply",
-            vec![Event::Observed {
-                capability: Capability::FileRead,
-                label: Label::untrusted_private(),
-            }],
+            vec![crate::audit::as_line(
+                &Event::Observed {
+                    capability: Capability::FileRead,
+                    label: Label::untrusted_private(),
+                },
+                None,
+            )],
             0,
         );
         session
@@ -6199,11 +6208,14 @@ mod tests {
         session.submit();
         session.complete(
             "refused",
-            vec![Event::GateBlocked {
-                gate: "action",
-                detail: String::new(),
-                reason: "injection blocked".into(),
-            }],
+            vec![crate::audit::as_line(
+                &Event::GateBlocked {
+                    gate: "action",
+                    detail: String::new(),
+                    reason: "injection blocked".into(),
+                },
+                None,
+            )],
             0,
         );
 

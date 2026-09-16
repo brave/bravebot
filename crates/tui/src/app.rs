@@ -4410,7 +4410,7 @@ fn fold_outcome(
 ) -> Carried {
     match outcome {
         Ok(outcome) => {
-            let trail = sink.bare();
+            let trail = sink.lines();
             session.complete(
                 outcome.reply_for_display().to_string(),
                 trail,
@@ -4498,11 +4498,7 @@ fn fold_outcome(
 
             // The trail is kept on failure too: a refusal is exactly when a user wants
             // to see what happened.
-            let trail = sink
-                .events()
-                .iter()
-                .map(|stamped| crate::audit::as_line(&stamped.event))
-                .collect();
+            let trail = sink.lines();
             session.fail(t!(session_error, problem = error));
             // The panel reports the last turn's cache split, and this turn is now the last one. It
             // measured nothing, so leaving the turn before it on the panel would report a figure
