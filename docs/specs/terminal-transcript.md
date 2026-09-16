@@ -102,6 +102,7 @@ question out of view.
 
 `verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_still_renders`
 `verified-by: bravebot_tui::confirm::a_tiny_terminal_still_renders_the_prompt`
+`verified-by: bravebot_tui::render::a_tiny_terminal_renders`
 
 <a id="VIEW-6"></a>
 ### VIEW-6: a reply is drawn as it arrives, and the round that ends replaces it

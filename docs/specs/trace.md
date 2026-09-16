@@ -130,6 +130,9 @@ one gate that ran: what it checked, the label it saw, and what it allowed. It is
 find out why something was refused.
 
 `verified-by: bravebot_tui::app::ctrl_t_toggles_the_trail`
+`verified-by: bravebot_tui::render::the_trail_is_hidden_by_default`
+`verified-by: bravebot_tui::render::a_blocked_gate_is_shown_in_the_trail`
+`verified-by: bravebot_cli::main::the_trail_renders_a_line_for_every_event`
 
 <a id="TRACE-6"></a>
 ### TRACE-6: each planning call is recorded, like any other gate

@@ -99,6 +99,19 @@ impl Answer {
             Answer::Reject | Answer::Interrupt => Decision::Reject,
         }
     }
+
+    /// Whether the turn that asked stops as well as being refused.
+    ///
+    /// The one place this is decided, so that the difference between saying no and interrupting is
+    /// a property of the answer rather than a comparison repeated at every prompt the event loop
+    /// waits on. [`Self::decision`] cannot carry it: both answers refuse, and refusing is all the
+    /// turn is told.
+    pub fn stops_the_turn(self) -> bool {
+        match self {
+            Answer::Approve | Answer::Reject => false,
+            Answer::Interrupt => true,
+        }
+    }
 }
 
 /// Draw the prompt and wait for an answer.
@@ -358,6 +371,19 @@ impl RunAnswer {
             RunAnswer::ApproveAlways => RunDecision::approve_always(),
             RunAnswer::ApproveAndRecord => RunDecision::approve_and_record(),
             RunAnswer::Reject | RunAnswer::Interrupt => RunDecision::reject(),
+        }
+    }
+
+    /// Whether the turn that asked stops as well as being refused. As [`Answer::stops_the_turn`],
+    /// and for the same reason: the run prompt offers more answers, and all but one of them leave
+    /// the turn running.
+    pub fn stops_the_turn(self) -> bool {
+        match self {
+            RunAnswer::Approve
+            | RunAnswer::ApproveAlways
+            | RunAnswer::ApproveAndRecord
+            | RunAnswer::Reject => false,
+            RunAnswer::Interrupt => true,
         }
     }
 }
@@ -1476,6 +1502,7 @@ fn centred(area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use ratatui::backend::TestBackend;
 
     fn request(contents: &str, existing: Option<&str>) -> WriteRequest {
@@ -2189,14 +2216,43 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(answer_for(key), Some(Response::Answer(Answer::Interrupt)));
         assert_eq!(Answer::Interrupt.decision(), Decision::Reject);
+        assert!(
+            Answer::Interrupt.stops_the_turn(),
+            "the interrupt refused the write and left the turn running"
+        );
     }
 
     /// Refusing one write leaves the turn running, which is what makes it different from
-    /// interrupting.
+    /// interrupting. The decision the turn is told is `Reject` either way, so the key mapping
+    /// alone says nothing about which of the two happened: what separates them is here.
     #[test]
     fn saying_no_does_not_stop_the_turn() {
         let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
         assert_eq!(answer_for(key), Some(Response::Answer(Answer::Reject)));
+        assert_eq!(Answer::Reject.decision(), Decision::Reject);
+        assert!(
+            !Answer::Reject.stops_the_turn(),
+            "saying no to one write ended the turn"
+        );
+    }
+
+    /// The same at the run prompt, which has three ways of approving and one of refusing before
+    /// the interrupt. Every one of them leaves the turn running, so a person who declines a
+    /// command keeps the work that was going to use it.
+    #[test]
+    fn only_the_interrupt_stops_the_turn_at_a_run_prompt() {
+        for answer in [
+            RunAnswer::Approve,
+            RunAnswer::ApproveAlways,
+            RunAnswer::ApproveAndRecord,
+            RunAnswer::Reject,
+        ] {
+            assert!(
+                !answer.stops_the_turn(),
+                "{answer:?} ended the turn that asked"
+            );
+        }
+        assert!(RunAnswer::Interrupt.stops_the_turn());
     }
 
     #[test]
@@ -2355,6 +2411,10 @@ mod tests {
         );
     }
 
+    /// A prompt that panics on a small terminal takes the session with it, and one that drops the
+    /// question is worse: it blocks everything else while showing nothing to answer, and a key
+    /// pressed at it answers a question that was never on the screen. So the small case is held to
+    /// what it asks about and the key that answers, not merely to surviving the draw.
     #[test]
     fn a_tiny_terminal_still_renders_the_prompt() {
         let mut terminal = Terminal::new(TestBackend::new(20, 8)).expect("terminal");
@@ -2363,6 +2423,22 @@ mod tests {
                 draw(frame, &request("x", None), 0);
             })
             .expect("must not panic on a small area");
+
+        let drawn: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            drawn.contains("src/main.rs"),
+            "the prompt did not say what it was asking about: {drawn}"
+        );
+        assert!(
+            drawn.contains("write it"),
+            "the key that approves the write was drawn out of view: {drawn}"
+        );
     }
 
     /// The bar the renderer draws down the margin.

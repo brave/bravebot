@@ -6344,15 +6344,34 @@ mod tests {
     }
 
     /// A narrow terminal is a normal condition, not a crash.
+    ///
+    /// And not a reason to drop the box either: the transcript can be squeezed to nothing, since
+    /// what it holds has scrolled past anyway, but a session drawn without the line somebody is
+    /// typing into is a session they cannot use.
     #[test]
     fn a_tiny_terminal_renders() {
-        let session = Session::new("none");
+        let mut session = Session::new("none");
+        for c in "hello".chars() {
+            session.type_char(c);
+        }
         let mut terminal = Terminal::new(TestBackend::new(10, 5)).expect("terminal");
         terminal
             .draw(|frame| {
                 draw(frame, &session);
             })
             .expect("draw must not panic on a small area");
+
+        let drawn: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            drawn.contains("> hello"),
+            "the box the person is typing into was drawn out of view: {drawn}"
+        );
     }
 
     /// The end of a reply that wraps must be on the screen when it arrives.

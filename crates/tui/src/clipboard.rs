@@ -123,13 +123,28 @@ pub struct Image {
 /// none. Command-V still pastes the text flavour, works everywhere, and is what the fingers already
 /// know, so preferring it here would leave one of the two flavours reachable by nothing at all.
 pub fn paste() -> Pasted {
-    match image_on_clipboard() {
+    chosen(image_on_clipboard(), text_on_clipboard)
+}
+
+/// Which flavour a read of the clipboard becomes, given what each flavour had on it.
+///
+/// Apart from the reads themselves, because the reads are the one part of this that cannot be
+/// exercised: they shell out to whatever the desktop session happens to have installed, so a test
+/// driving [`paste`] would report what the machine it ran on had on its clipboard rather than
+/// which of the two flavours this prefers. The tie-break is the whole of the decision, and it is
+/// here.
+///
+/// Text arrives as a closure rather than as a value so that a picture still costs one process
+/// instead of two: finding one means the text is never wanted, and reading it would be a second
+/// tool spawned for an answer nothing looks at.
+fn chosen(image: Option<(&'static str, Vec<u8>)>, text: impl FnOnce() -> Option<String>) -> Pasted {
+    match image {
         Some((_, bytes)) if bytes.len() > MAX_IMAGE_BYTES => return Pasted::TooLarge(bytes.len()),
         Some((media_type, bytes)) => return Pasted::Image(Image { media_type, bytes }),
         None => {}
     }
 
-    match text_on_clipboard() {
+    match text() {
         Some(text) if !text.is_empty() => Pasted::Text(text),
         _ => Pasted::Nothing,
     }
@@ -338,5 +353,70 @@ mod tests {
     #[test]
     fn a_missing_tool_reads_as_nothing_on_the_clipboard() {
         assert_eq!(run_text("a-clipboard-tool-that-does-not-exist", &[]), None);
+    }
+
+    /// Copying an image in a browser leaves the page's URL behind as the text flavour, so the
+    /// clipboard holding both is the ordinary case rather than the odd one. Text has Command-V,
+    /// which works everywhere; a picture has this and nothing else, so preferring text here would
+    /// leave the picture reachable by no key at all.
+    #[test]
+    fn a_picture_wins_over_the_text_beside_it() {
+        let chosen = chosen(Some(("image/png", b"pixels".to_vec())), || {
+            Some("https://example.invalid/the-page".to_string())
+        });
+
+        assert_eq!(
+            chosen,
+            Pasted::Image(Image {
+                media_type: "image/png",
+                bytes: b"pixels".to_vec(),
+            })
+        );
+    }
+
+    /// The text beside a picture is not read at all when the picture is there to be had. Reading
+    /// it is another process spawned for an answer nothing goes on to look at, and the keypress
+    /// waits on it.
+    #[test]
+    fn the_text_beside_a_picture_is_never_read() {
+        let mut asked = false;
+        let chosen = chosen(Some(("image/png", b"pixels".to_vec())), || {
+            asked = true;
+            None
+        });
+
+        assert!(matches!(chosen, Pasted::Image(_)));
+        assert!(!asked, "the clipboard's text was read for nothing");
+    }
+
+    /// A picture over the cap is refused as the picture it is, not quietly replaced by whatever
+    /// text was beside it. Falling through would paste a page's URL in place of the screenshot
+    /// somebody meant, with nothing said about the one they asked for.
+    #[test]
+    fn a_picture_over_the_cap_is_refused_rather_than_swapped_for_the_text() {
+        let oversized = vec![0u8; MAX_IMAGE_BYTES + 1];
+        let chosen = chosen(Some(("image/png", oversized)), || {
+            Some("https://example.invalid/the-page".to_string())
+        });
+
+        assert_eq!(chosen, Pasted::TooLarge(MAX_IMAGE_BYTES + 1));
+    }
+
+    /// With no picture, the text is the paste. This is what the ordinary case reduces to, and it
+    /// is what makes the preference above a preference rather than a rule that drops text.
+    #[test]
+    fn text_alone_is_the_paste() {
+        let chosen = chosen(None, || Some("some words".to_string()));
+
+        assert_eq!(chosen, Pasted::Text("some words".to_string()));
+    }
+
+    /// A tool that ran and found an empty string has answered, and the answer is that there is
+    /// nothing. Carried through as text it would be a paste that inserts nothing, which reads to
+    /// the user as the key having failed.
+    #[test]
+    fn an_empty_clipboard_reads_as_nothing_rather_than_as_empty_text() {
+        assert_eq!(chosen(None, || Some(String::new())), Pasted::Nothing);
+        assert_eq!(chosen(None, || None), Pasted::Nothing);
     }
 }
