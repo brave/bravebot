@@ -187,7 +187,7 @@ fn run(
         skipping_permissions!(),
         &mut bravebot_agent::IgnoreReports,
         sink,
-        TrustStore::new(),
+        TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
 }
@@ -211,7 +211,7 @@ fn piped_input_is_refused_rather_than_dropped() {
         skipping_permissions!(),
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        TrustStore::new(),
+        TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect_err("must refuse");
@@ -354,7 +354,7 @@ fn a_plan_nobody_approved_runs_nothing() {
         &mut nobody,
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        TrustStore::new(),
+        TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect_err("a plan nobody approved must not run");
@@ -800,7 +800,7 @@ fn approving_a_plan_is_not_approving_its_writes() {
         &mut ApprovesThePlanOnly,
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        TrustStore::new(),
+        TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect_err("must refuse");
@@ -1063,7 +1063,7 @@ fn the_goal_and_the_steps_are_both_reported_before_any_step_runs() {
         skipping_permissions!(),
         &mut reporter,
         &mut sink,
-        TrustStore::new(),
+        TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("runs");
@@ -1339,7 +1339,7 @@ fn a_cancelled_run_is_not_reported_as_a_failed_attempt() {
         skipping_permissions!(),
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        TrustStore::new(),
+        TrustStore::new("/work"),
         &cancel,
     )
     .expect_err("a cancelled run does not finish");

@@ -106,7 +106,7 @@ fn a_second_spelling_of_a_distrusted_file_is_read_as_untrusted() {
 
     // The state a turn leaves behind after writing a fetched page into a vouched-for tree: the
     // workspace is trusted, and the file that page landed in is not.
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(".");
     trust.distrust("src/fetched.json");
 
@@ -133,11 +133,11 @@ fn a_second_spelling_of_a_distrusted_file_is_read_as_untrusted() {
     assert!(policy.finish());
 }
 
-/// The other half of that rule, at the spelling the two namespaces meet on. A relative rule and an
-/// absolute rule are separate (TRUST-3), and `/add-dir` will accept a directory the project sits
-/// inside, so from then on a project file has an absolute name that resolves. If the map is asked
-/// about that name as written it finds nothing, and the answer the user gave at startup about the
-/// whole workspace (TRUST-7) covers only half of what it named.
+/// The other half of that rule, at the spelling the reduction exists for. `/add-dir` will accept a
+/// directory the project sits inside, so from then on a project file has an absolute name that
+/// resolves through a directory other than the project. Asked under that name as written, a file
+/// the person marked untrusted inside the project would be answered by the rule about the
+/// directory above it instead (TRUST-18).
 #[test]
 fn a_project_file_named_absolutely_is_read_under_its_relative_rule() {
     let scratch = Scratch::new("absolute-inside-the-project");
@@ -152,7 +152,7 @@ fn a_project_file_named_absolutely_is_read_under_its_relative_rule() {
         .expect("a directory the project sits inside is added");
 
     // The startup answer: the workspace is the user's own.
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(".");
 
     let mut sink = RecordingSink::new();
@@ -216,7 +216,7 @@ fn a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule() {
         .join("shared/fetched.json")
         .display()
         .to_string();
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(".");
     trust.trust(&added.display().to_string());
     trust.distrust(&added.join("fetched.json").display().to_string());
@@ -271,7 +271,7 @@ fn a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rul
 
     // Only the answer that opened the holder, so the project's rule cannot stand in for it: a name
     // wrongly reduced to a relative one would be covered by nothing and read untrusted.
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(&added.display().to_string());
 
     let mut sink = RecordingSink::new();
@@ -306,10 +306,10 @@ fn a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rul
 }
 
 /// The same substitution where the name lands in the project instead of beside it. The workspace
-/// canonicalises its root, so reducing an absolute name by string prefix reaches the project's own
-/// rule only for the spellings that already match that canonical form: a name through a symlinked
-/// ancestor lands in the project and is answered by nothing, which is the startup answer covering
-/// half of what it named (TRUST-3).
+/// canonicalises its root, so an absolute name reaches the project's own rules by string prefix
+/// only for the spellings that already match that canonical form: a name through a symlinked
+/// ancestor lands in the project and would be answered by nothing without the reduction
+/// (TRUST-18).
 #[cfg(unix)]
 #[test]
 fn a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule() {
@@ -328,7 +328,7 @@ fn a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_
         .expect("a directory the project sits inside is added");
 
     // The startup answer, and nothing about the holder, so only the project's rule can answer.
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(".");
 
     let mut sink = RecordingSink::new();
@@ -359,7 +359,7 @@ fn a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_
 /// link into the middle of an open directory reaches it without naming it, so there is no ancestor
 /// to replace and no spelling under the recorded name. Answering from where the path ends instead
 /// would be keying on the destination, which is what would let a link hand back the rule for a
-/// different name (TRUST-3), so the name stands as written and nothing covers it.
+/// different name (TRUST-18), so the name stands as written and nothing covers it.
 #[cfg(unix)]
 #[test]
 fn a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule() {
@@ -376,7 +376,7 @@ fn a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered
         .add_directory(holder.to_str().expect("utf-8 path"))
         .expect("a directory beside the project is added");
 
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(".");
     trust.trust(&added.display().to_string());
 
@@ -2844,8 +2844,8 @@ fn moving_closes_the_directory_left_behind() {
 }
 
 /// An added directory that holds the new working directory closes with it. Leaving it open would
-/// give every file under the new root two spellings, one relative and one absolute, and the trust
-/// map keeps those in separate namespaces precisely so that one file has one answer.
+/// record a second open directory for every file under the new root to be named under, and which
+/// of the two a name took would then decide which rule answered for the file.
 #[test]
 fn moving_closes_an_added_directory_that_overlaps_the_new_one() {
     let scratch = Scratch::new("moved-overlap");
@@ -4163,7 +4163,7 @@ fn a_second_spelling_of_a_file_in_the_sessions_own_directory_reaches_the_same_ru
 
     // A rule about the canonical name and nothing else. The workspace was answered about nothing, so
     // a name that reaches no rule reads untrusted and the reduction is the whole of what is tested.
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(&holder.join("given/fetched.json").display().to_string());
 
     let mut sink = RecordingSink::new();

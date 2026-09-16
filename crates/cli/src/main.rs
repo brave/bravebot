@@ -474,7 +474,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             &mut confirmer,
             &mut reporter,
             &mut sink,
-            TrustStore::new(),
+            TrustStore::new(workspace.root()),
             &Cancel::new(),
         ),
         Mode::Manifest => bravebot_agent::manifest::run(
@@ -485,7 +485,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             &mut confirmer,
             &mut reporter,
             &mut sink,
-            TrustStore::new(),
+            TrustStore::new(workspace.root()),
             &Cancel::new(),
         ),
     };
@@ -956,10 +956,10 @@ fn record_manifest_run(
         ),
         Err(bravebot_agent::TurnError::Manifest { attempt, detail }) => (
             Some(StoredManifest::of(attempt, Some(detail.clone()))),
-            TrustStore::new(),
+            TrustStore::new(workspace.root()),
         ),
         // Cancelled, or a failure with nothing to show. Nothing worth a record.
-        Err(_) => (None, TrustStore::new()),
+        Err(_) => (None, TrustStore::new(workspace.root())),
     };
 
     let Some(stored) = stored else {

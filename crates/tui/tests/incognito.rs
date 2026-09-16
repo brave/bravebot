@@ -210,7 +210,7 @@ fn no_session_record_is_written() {
             model: None,
             todos: &BTreeMap::new(),
             asides: &[],
-            trust: &bravebot_core::trust::TrustStore::new(),
+            trust: &bravebot_core::trust::TrustStore::new("/work"),
             programs: &bravebot_core::programs::TrustedPrograms::from_iter([]),
             directories: &[],
             manifest: None,

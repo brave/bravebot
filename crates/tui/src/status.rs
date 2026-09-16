@@ -560,7 +560,7 @@ mod tests {
         std::sync::LazyLock::new(TrustedPrograms::new);
 
     fn trusting() -> TrustStore {
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new("/work");
         trust.trust(".");
         trust
     }
@@ -980,7 +980,7 @@ mod tests {
         let shown = rendered(&report(&facts(&config, &trusted)));
         assert!(shown.contains("trusted"), "{shown}");
 
-        let declined = TrustStore::new();
+        let declined = TrustStore::new("/work");
         let shown = rendered(&report(&facts(&config, &declined)));
         assert!(shown.contains("not trusted"), "{shown}");
         assert!(shown.contains("every write is shown"), "{shown}");

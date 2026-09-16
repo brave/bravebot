@@ -114,7 +114,7 @@ fn a_time_breakdown() -> BTreeMap<usize, bravebot_agent::timing::Timing> {
 /// A map with both polarities, so the round trip is tested on the case that matters: a path a
 /// write marked untrusted inside a tree the user vouched for.
 fn a_trust_map() -> TrustStore {
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new("/work");
     trust.trust(".");
     trust.distrust("src/fetched.json");
     trust
@@ -322,7 +322,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             model: None,
             todos: &BTreeMap::new(),
             asides: &[],
-            trust: &TrustStore::new(),
+            trust: &TrustStore::new("/work"),
             programs: &TrustedPrograms::new(),
             directories: &[],
             manifest: None,
@@ -397,7 +397,9 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
 
     // The trust map goes with the session, so picking it up carries the answer its own user gave
     // and the rules its writes recorded. Both polarities, with the deeper one still winning.
-    let restored = record.trust_map().expect("the session recorded a map");
+    let restored = record
+        .trust_map(&record.directory)
+        .expect("the session recorded a map");
     assert!(restored.is_trusted("src/main.rs"));
     assert!(
         !restored.is_trusted("src/fetched.json"),
@@ -418,7 +420,9 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
     // A session that declined recorded that it declined, which is not the same as a record that
     // predates the map. Both trust nothing; only the second is asked about again.
     let declined = sessions::load(&elsewhere, &sessions::list(&elsewhere)[0].id).expect("loads");
-    let declined_map = declined.trust_map().expect("declining is still an answer");
+    let declined_map = declined
+        .trust_map(&declined.directory)
+        .expect("declining is still an answer");
     assert!(declined_map.is_empty());
 
     // A record from a build that never wrote a plan is not a broken record.
@@ -656,7 +660,7 @@ fn a_resumed_session_can_still_open_the_directory_it_added() {
         .expect("the directory is added");
     let todo = added.join("todo.md").display().to_string();
 
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new("/work");
     trust.trust(&added.display().to_string());
 
     let conversation = a_conversation();
@@ -699,7 +703,7 @@ fn a_resumed_session_can_still_open_the_directory_it_added() {
     );
     assert!(
         record
-            .trust_map()
+            .trust_map(&record.directory)
             .expect("the session recorded a map")
             .is_trusted(&todo),
         "the rule half of what /add-dir granted"
@@ -738,7 +742,7 @@ fn a_directory_that_has_gone_since_is_reported_on_resume() {
             model: None,
             todos: &BTreeMap::new(),
             asides: &[],
-            trust: &TrustStore::new(),
+            trust: &TrustStore::new("/work"),
             programs: &TrustedPrograms::new(),
             directories: workspace.added_directories(),
             manifest: None,
@@ -790,7 +794,7 @@ fn a_manifest_run_is_recorded_and_cannot_be_resumed() {
             model: None,
             todos: &BTreeMap::new(),
             asides: &[],
-            trust: &TrustStore::new(),
+            trust: &TrustStore::new("/work"),
             programs: &TrustedPrograms::new(),
             directories: &[],
             manifest: Some(&stored),
@@ -874,7 +878,7 @@ fn the_session_continued_is_the_one_written_here() {
             model: None,
             todos: &BTreeMap::new(),
             asides: &[],
-            trust: &TrustStore::new(),
+            trust: &TrustStore::new("/work"),
             programs: &TrustedPrograms::new(),
             directories: &[],
             manifest: Some(&stored),
@@ -926,12 +930,12 @@ fn a_session_that_changes_directory_is_recorded_where_it_moved_to() {
         manifest: None,
     };
 
-    let nothing_vouched_for = TrustStore::new();
+    let nothing_vouched_for = TrustStore::new("/work");
     let mut handle = Handle::begin(&scratch.project);
     handle.save("start here", standing(&nothing_vouched_for));
 
     // The map as it is once the working directory has moved: about the new directory.
-    let mut moved_map = TrustStore::new();
+    let mut moved_map = TrustStore::new("/work");
     moved_map.trust(".");
 
     handle.move_to(&elsewhere, standing(&moved_map));
@@ -946,7 +950,7 @@ fn a_session_that_changes_directory_is_recorded_where_it_moved_to() {
     assert_eq!(moved.directory, elsewhere.display().to_string());
     assert!(
         moved
-            .trust_map()
+            .trust_map(&moved.directory)
             .expect("the map was written")
             .is_trusted("."),
         "the map that moved with the session was not the one written down"
@@ -957,7 +961,7 @@ fn a_session_that_changes_directory_is_recorded_where_it_moved_to() {
     let left = sessions::load(&scratch.project, handle.id()).expect("the record loads");
     assert!(
         !left
-            .trust_map()
+            .trust_map(&left.directory)
             .expect("the map was written")
             .is_trusted("."),
         "the new directory's answer was left in the old directory's list"
@@ -983,7 +987,7 @@ fn a_session_that_moves_before_anything_is_written_is_recorded_where_it_moved_to
     let todos = BTreeMap::new();
     let programs = TrustedPrograms::new();
     // The map as it is once the working directory has moved: about the new directory.
-    let mut moved_map = TrustStore::new();
+    let mut moved_map = TrustStore::new("/work");
     moved_map.trust(".");
     let standing = |turns| Standing {
         conversation: &snapshot,
@@ -1028,7 +1032,7 @@ fn a_session_that_moves_before_anything_is_written_is_recorded_where_it_moved_to
     assert_eq!(record.directory, elsewhere.display().to_string());
     assert!(
         record
-            .trust_map()
+            .trust_map(&record.directory)
             .expect("the map was written")
             .is_trusted("."),
         "the map about the new directory was filed somewhere else"
@@ -1053,7 +1057,7 @@ fn a_record_written_before_the_first_turn_follows_the_session_when_it_moves() {
     let timing = BTreeMap::new();
     let todos = BTreeMap::new();
     let programs = TrustedPrograms::new();
-    let trust = TrustStore::new();
+    let trust = TrustStore::new("/work");
     let standing = || Standing {
         conversation: &snapshot,
         turns: 0,
@@ -1104,7 +1108,7 @@ fn session_records_and_audit_trails_are_written_mode_0600() {
     let todos = a_plan();
     let spend = BTreeMap::new();
     let timing = BTreeMap::new();
-    let trust = TrustStore::new();
+    let trust = TrustStore::new("/work");
 
     handle.save(
         "private work",
@@ -1210,7 +1214,7 @@ fn pre_existing_session_files_and_directories_are_tightened_on_write() {
     let todos = a_plan();
     let spend = BTreeMap::new();
     let timing = BTreeMap::new();
-    let trust = TrustStore::new();
+    let trust = TrustStore::new("/work");
 
     handle.save(
         "tighten work",
@@ -1295,7 +1299,7 @@ fn forking_narrows_the_session_directory_it_writes_into() {
     let todos = a_plan();
     let spend = BTreeMap::new();
     let timing = BTreeMap::new();
-    let trust = TrustStore::new();
+    let trust = TrustStore::new("/work");
 
     handle.save(
         "work to fork",

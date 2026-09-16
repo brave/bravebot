@@ -186,7 +186,7 @@ fn writing_a_session_narrows_the_state_directory() {
             model: None,
             todos: &BTreeMap::new(),
             asides: &[],
-            trust: &TrustStore::new(),
+            trust: &TrustStore::new("/work"),
             programs: &TrustedPrograms::new(),
             directories: &[],
             manifest: None,

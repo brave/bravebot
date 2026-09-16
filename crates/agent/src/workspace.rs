@@ -225,18 +225,18 @@ fn overlaps(one: &Path, other: &Path) -> bool {
 /// Refuse a directory whose resolved name the trust map cannot key a rule under.
 ///
 /// A directory is opened by handing the map the name it resolved to, and the map reads a name
-/// without a leading slash as a path under the primary root (TRUST-3), where the root's own empty
-/// prefix covers it. So a rule about a directory named any other way would land in the relative
-/// namespace and the answer given about the project at startup would decide files in a directory
-/// nobody vouched for. Refusing is the fail-closed half of that clause, and it is here rather than
-/// in the map because canonicalising a name is filesystem work.
+/// without a leading slash as a path under the working directory (TRUST-18), where the rule
+/// covering the project covers it. So a rule about a directory named any other way would be keyed
+/// inside the project, and the answer given about the project at startup would decide files in a
+/// directory nobody vouched for. Refusing is the fail-closed half of that clause, and it is here
+/// rather than in the map because canonicalising a name is filesystem work.
 ///
 /// Every door that opens a directory by name has to refuse it, `/cd` as much as `/add-dir`: the
-/// rules of a working directory left behind are re-keyed against the one replacing it, so a
-/// destination the map cannot key re-spells them into the wrong namespace instead.
+/// working directory a map reads its relative names under is replaced by the destination, so one
+/// the map cannot key would read every one of them under a name inside the project instead.
 ///
 /// The name is rendered the way a caller renders it to build the key, so the two cannot disagree
-/// about which namespace the directory is in.
+/// about whether the directory has one.
 fn refuse_unkeyable(canonical: &Path, named: &str) -> Result<(), WorkspaceError> {
     match is_absolute_key(&canonical.to_string_lossy()) {
         true => Ok(()),
@@ -477,11 +477,10 @@ impl Workspace {
     /// somebody will discover by being refused a file they could read a minute ago.
     ///
     /// **Nothing may overlap the new root.** The directory left behind is closed, and so is any
-    /// added directory inside the new root or containing it. That is not tidiness: a file inside
-    /// two open directories has two spellings, one relative and one absolute, and the two are
-    /// separate namespaces in the trust map. A tree reachable by both spellings could be read
-    /// under whichever rule was more permissive, which is the one thing keeping the namespaces
-    /// apart exists to prevent. An added directory that overlaps nothing is left open, since the
+    /// added directory inside the new root or containing it. That is not tidiness: a directory the
+    /// root reaches is reachable already, and leaving it open would record a second open directory
+    /// for a path under the root to be named under, with nothing to choose between them
+    /// ([`Workspace::trust_key`]). An added directory that overlaps nothing is left open, since the
     /// user opened it by name and moving elsewhere does not withdraw that.
     ///
     /// **The session's own directory is not a working directory.** It is removed when the session
@@ -2048,8 +2047,8 @@ impl Workspace {
     /// Relative to the primary root for a file in the project, and absolute for one in an added
     /// directory. That is the same spelling each would have to be given to reach the file again, so
     /// a listing can be read and acted on without knowing which tree an entry came from, and it is
-    /// the spelling the trust map keys a rule about that file under: the two namespaces it keeps
-    /// apart are exactly these.
+    /// the spelling the trust map is asked about that file under: relative names it reads under the
+    /// primary root, which is how it arrives at the same key either way.
     pub(crate) fn relative_display(&self, path: &Path) -> String {
         match path.strip_prefix(&self.root) {
             Ok(relative) => relative.to_string_lossy().to_string(),
@@ -2060,13 +2059,14 @@ impl Workspace {
     /// The name the trust map holds a rule about `named` under.
     ///
     /// Every rule is recorded about a directory a person opened, under the name that directory was
-    /// opened as: the empty prefix for the primary root, which is what the startup answer covers
-    /// (TRUST-7), and the canonical path for one added by name (TRUST-9). An absolute name is
+    /// opened as: the relative name for the primary root, which the map reads under that root and
+    /// which is what the startup answer covers (TRUST-7), and the canonical path for one added by
+    /// name (TRUST-9). An absolute name is
     /// therefore spelled under the open directory it lands in, taking that directory's recorded
     /// name with the rest of the name as it was written. Without that a directory reached by
     /// a second spelling of its own name is covered by nothing, so a file the user vouched for is
-    /// quarantined under half its names (TRUST-3); on macOS that is the ordinary case rather than a
-    /// corner, since `/tmp` and `$TMPDIR` are both links.
+    /// quarantined under half its names (TRUST-18); on macOS that is the ordinary case rather than
+    /// a corner, since `/tmp` and `$TMPDIR` are both links.
     ///
     /// Where the path lands decides *which* name is substituted, and the spelling decides the rest.
     /// Both halves are load bearing. A name spelled inside the root that lands outside it is named
@@ -2100,11 +2100,10 @@ impl Workspace {
     ///
     /// That is a name landing in no open directory, one reaching an open directory other than
     /// through an ancestor of its own, and the root named as itself. The first two are the same
-    /// answer confinement gives: nothing is trusted that no rule covers. The last is the root's
-    /// alone: its relative name is the empty prefix, which is the rule covering the whole project,
-    /// and that rule is the startup question's to write (TRUST-7) rather than something one path's
-    /// spelling can reach. An added directory named as itself has a recorded name to be asked
-    /// about, so it gets one.
+    /// answer confinement gives: nothing is trusted that no rule covers. The last has nothing to
+    /// re-spell to, since the root's own relative name is the empty one, so the name stands as
+    /// written and the map reads it as the rule covering the whole project either way. An added
+    /// directory named as itself has a recorded name to be asked about, so it gets one.
     fn recorded_name(&self, candidate: &Path) -> Option<String> {
         let opened = self.landed_in(&destination(candidate)?)?;
         let below = written_below(candidate, opened)?;
@@ -2121,9 +2120,10 @@ impl Workspace {
     /// name that holds it, or the session's own.
     ///
     /// The root before any added directory, rather than whichever of them is deepest. An added
-    /// directory may hold the project, and an absolute rule reaching inside the project is an
-    /// answer given about a directory rather than about the work, so the project's own rules decide
-    /// its files (TRUST-3).
+    /// directory may hold the project, and naming a project file under that directory instead would
+    /// leave the name it was reached by deciding which rule answers. Under the project's own name
+    /// the project's own rules are the most specific ones that cover it, which is what decides its
+    /// files either way (TRUST-2).
     ///
     /// The session's own directory among them, on the same terms as one the user added: it is
     /// reached by its absolute name, so a name that reaches it by another spelling has to come back
@@ -2173,8 +2173,8 @@ mod tests {
     use super::*;
 
     /// A door that opens a directory by name hands the trust map the name it resolved to, so a name
-    /// the map cannot key a rule under is one no door may open: the rule would land in the relative
-    /// namespace, where the answer given about the project at startup covers it (TRUST-3). Said
+    /// the map cannot key a rule under is one no door may open: the rule would be keyed inside the
+    /// project, where the answer given about the project at startup covers it (TRUST-18). Said
     /// about the resolved name directly, because canonicalising on a platform that spells its paths
     /// from `/` always hands back a name that is a key, so neither door can reach its own refusal
     /// where the tests run.
@@ -2183,7 +2183,7 @@ mod tests {
         assert!(refuse_unkeyable(Path::new("/other"), "/other").is_ok());
 
         let refused = refuse_unkeyable(Path::new("C:\\other"), "C:\\other")
-            .expect_err("a directory keyed in the relative namespace was opened");
+            .expect_err("a directory whose rule could not be keyed was opened");
         assert_eq!(
             refused.to_string(),
             "'C:\\other' is not usable: is not spelled from '/', so no trust rule can be keyed under it"

@@ -339,9 +339,15 @@ impl Record {
     /// spelling decide. A record written before every spelling of a path became one rule can hold
     /// both, and the file the session marked untrusted is the one a resume must not read back as
     /// trusted.
-    pub fn trust_map(&self) -> Option<TrustStore> {
+    ///
+    /// `root` is the directory the resumed session works in, and the rules inside the project come
+    /// back under it. The map holds full paths, and a record keeps the ones inside the project
+    /// relative, so re-prefixing here is what lets a record survive the checkout being moved or
+    /// renamed: the rules still mean the same files. A rule outside the project is recorded in
+    /// full and comes back as it was written.
+    pub fn trust_map(&self, root: impl AsRef<std::path::Path>) -> Option<TrustStore> {
         let rules = self.trust.as_ref()?;
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new(root);
         for rule in rules.iter().filter(|rule| rule.integrity == TRUSTED) {
             trust.trust(&rule.path);
         }
@@ -1393,7 +1399,7 @@ mod tests {
             "conversation": {"messages": [], "context": "trusted"},
         });
         let record: Record = serde_json::from_value(older).expect("an older record still loads");
-        assert!(record.trust_map().is_none());
+        assert!(record.trust_map(&record.directory).is_none());
     }
 
     /// Whatever a record says that this build does not recognise, the answer is untrusted. A
@@ -1406,12 +1412,56 @@ mod tests {
                 path: ".".to_string(),
                 integrity: word.to_string(),
             }]);
-            let map = record.trust_map().expect("a map was recorded");
+            let map = record
+                .trust_map(&record.directory)
+                .expect("a map was recorded");
             assert!(
                 !map.is_trusted("src/main.rs"),
                 "{word:?} was read as trusted"
             );
         }
+    }
+
+    /// A record keeps the name a rule was written under, not the key the map holds it by, and the
+    /// two differ for every rule inside the project. So a checkout that was moved or renamed since
+    /// resumes with its rules about the same files: they are read under the directory being
+    /// resumed into. Recording the key instead would fail quietly, every rule naming a path that
+    /// is not there any more and the session behaving as though nobody had vouched for anything.
+    #[test]
+    fn a_record_resumes_its_rules_under_the_directory_it_is_read_in() {
+        let mut record = a_record();
+        record.trust = Some(vec![
+            StoredRule {
+                path: String::new(),
+                integrity: "trusted".to_string(),
+            },
+            StoredRule {
+                path: "src/fetched.json".to_string(),
+                integrity: "untrusted".to_string(),
+            },
+            StoredRule {
+                path: "/Users/me/notes".to_string(),
+                integrity: "trusted".to_string(),
+            },
+        ]);
+
+        let map = record
+            .trust_map("/tmp/moved-since")
+            .expect("a map was recorded");
+        assert!(
+            map.is_trusted("src/main.rs"),
+            "the yes given for the project was lost by the project moving"
+        );
+        assert!(
+            !map.is_trusted("src/fetched.json"),
+            "a no given inside the project was lost by the project moving"
+        );
+        assert!(
+            map.is_trusted("/Users/me/notes/todo.md"),
+            "a rule recorded in full was re-read as a path inside the project"
+        );
+        // And the rules are about the directory resumed into rather than the one recorded.
+        assert_eq!(map.integrity_of("/tmp/x/src/main.rs"), None);
     }
 
     /// The rule the whole map turns on has to survive being written down: a path a write marked
@@ -1430,7 +1480,9 @@ mod tests {
             },
         ]);
 
-        let map = record.trust_map().expect("a map was recorded");
+        let map = record
+            .trust_map(&record.directory)
+            .expect("a map was recorded");
         assert!(map.is_trusted("src/main.rs"));
         assert!(!map.is_trusted("src/fetched.json"));
     }
@@ -1454,7 +1506,9 @@ mod tests {
             },
         ]);
 
-        let map = record.trust_map().expect("a map was recorded");
+        let map = record
+            .trust_map(&record.directory)
+            .expect("a map was recorded");
         assert!(
             !map.is_trusted("src/fetched.json"),
             "a resume upgraded a file the session had marked untrusted"
@@ -1483,7 +1537,7 @@ mod tests {
         let record: Record = serde_json::from_value(with_a_mode).expect("the record loads");
         // Nothing on a record answers the question, so nothing can restore an answer to it. The
         // trust map and the programs are the two grants that do come back, and they are separate.
-        assert!(record.trust_map().is_none());
+        assert!(record.trust_map(&record.directory).is_none());
         assert!(record.trusted_programs().is_empty());
     }
 
@@ -1833,7 +1887,7 @@ mod tests {
                 model: None,
                 todos: &BTreeMap::new(),
                 asides: &[],
-                trust: &TrustStore::new(),
+                trust: &TrustStore::new("/work"),
                 programs: &TrustedPrograms::default(),
                 directories: &[],
                 manifest: None,

@@ -3305,8 +3305,8 @@ fn run<S: Sink, C: Confirmer>(
     // What the run reports opening, never the plan's write set. The set names every branch, so a
     // destination a line decided against is in it, and a rule about a file nothing wrote would
     // quarantine a file the planner can read today. Spelled the way a read of the file is
-    // spelled, because relative and absolute rules are separate namespaces in the map and a rule
-    // in the wrong one decides nothing.
+    // spelled, because a name is reduced to the open directory it lands in before the map sees it
+    // and a rule written under an unreduced name decides nothing.
     let mut opened: Vec<std::path::PathBuf> = Vec::new();
     let ran = crate::exec::run_plan(
         &plan,
@@ -5722,7 +5722,7 @@ mod tests {
         /// Run the tool against a fresh policy in a workspace the user vouched for.
         fn call<C: Confirmer>(confirmer: &mut C, arguments: Value) -> Labelled<String> {
             let mut sink = RecordingSink::new();
-            let mut trust = TrustStore::new();
+            let mut trust = TrustStore::new("/work");
             trust.trust(".");
             let mut policy = Policy::begin(
                 routing(),
@@ -6566,7 +6566,7 @@ mod tests {
         /// the same kind: an absolute rule would be dead here and the tests would be passing
         /// for a reason nobody wrote down.
         fn policy_vouching(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
-            let mut store = TrustStore::new();
+            let mut store = TrustStore::new("/work");
             store.trust(".");
             Policy::begin(
                 routing(),

@@ -1929,7 +1929,7 @@ fn event_loop(
 
     // What the session begins holding, which is what decides whether the startup question is put
     // to its user at all. Read off `start` before the match below consumes it.
-    let beginning = beginning_of(&start);
+    let beginning = beginning_of(&start, workspace.root());
 
     // Outlives every turn, which is the point: a turn begins with the exchange so far rather
     // than with nothing, so the user can say "try that again" and be understood. A resumed
@@ -2597,7 +2597,6 @@ fn change_directory(
     // command that only took an absolute path would refuse `/cd crates/tui` and `/cd ..`, which are
     // the two ways anybody would think to say it.
     let named = against_workspace(workspace.root(), &expand_home(directory));
-    let from = workspace.root().to_path_buf();
 
     let moved = match workspace.change_root(&named) {
         Ok(moved) => moved,
@@ -2611,7 +2610,7 @@ fn change_directory(
         }
     };
 
-    *trust = trust.rebased(&from, &moved.root);
+    *trust = trust.rebased(&moved.root);
     trust.trust(".");
     session.now_in_workspace(&moved.root);
     session.note(t!(
@@ -3192,11 +3191,13 @@ enum Beginning {
 /// up, so the answer honoured is the one that session's own user gave. The directory's other
 /// records are not read: a map taken from one of those would be standing permission granted on
 /// behalf of somebody who was never asked.
-fn beginning_of(start: &Start) -> Beginning {
+fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
     match start {
         // Choosing has already resolved into one of the other two by the time this runs.
         Start::Fresh | Start::Choose => Beginning::New,
-        Start::Resuming(record) => Beginning::Resumed(record.trust_map()),
+        // Read under the directory being resumed into rather than the one recorded, so a project
+        // that was moved or renamed since resumes with its rules about the same files.
+        Start::Resuming(record) => Beginning::Resumed(record.trust_map(root)),
     }
 }
 
@@ -3213,15 +3214,21 @@ enum Opening {
 ///
 /// Everything about the answer bar the terminal it is put on, separated from [`opening_trust`] so
 /// it can be decided without one, the way [`crate::trust_prompt::answered_by`] is.
-fn opening_for(beginning: Beginning, mode: bravebot_agent::PermissionMode) -> Opening {
+fn opening_for(
+    beginning: Beginning,
+    mode: bravebot_agent::PermissionMode,
+    root: &std::path::Path,
+) -> Opening {
     match beginning {
         // Before the mode is consulted, because the question is not being put in either case and
         // the map this session's own user gave is the more specific record.
         Beginning::Resumed(Some(trust)) => Opening::Settled(trust, Whence::Resumed),
-        Beginning::New | Beginning::Resumed(None) => match crate::trust_prompt::answered_by(mode) {
-            Some(trust) => Opening::Settled(trust, Whence::Unasked),
-            None => Opening::Ask,
-        },
+        Beginning::New | Beginning::Resumed(None) => {
+            match crate::trust_prompt::answered_by(mode, root) {
+                Some(trust) => Opening::Settled(trust, Whence::Unasked),
+                None => Opening::Ask,
+            }
+        }
     }
 }
 
@@ -3247,7 +3254,7 @@ fn opening_trust(
     root: &std::path::Path,
     beginning: Beginning,
 ) -> Option<(TrustStore, Whence)> {
-    let (trust, whence) = match opening_for(beginning, session.permission_mode()) {
+    let (trust, whence) = match opening_for(beginning, session.permission_mode(), root) {
         Opening::Settled(trust, whence) => (trust, whence),
         Opening::Ask => (crate::trust_prompt::ask(terminal, root)?, Whence::Asked),
     };
@@ -10209,7 +10216,7 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new("/work");
 
         // Named the way a settings file names it, relative to the project.
         let asked = named_to_open(&mut session, &workspace, &["../shared".to_string()]);
@@ -10245,7 +10252,7 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new("/work");
 
         let asked = named_to_open(
             &mut session,
@@ -10394,6 +10401,11 @@ mod tests {
         );
     }
 
+    /// The directory those sessions ran in, which is the one their rules are read under.
+    fn here() -> &'static std::path::Path {
+        std::path::Path::new("/tmp/x")
+    }
+
     /// A session that ran in this directory and vouched for it, which is what an earlier answer
     /// of yes leaves behind in the directory's list of sessions.
     fn a_record_that_answered_yes_here() -> Box<crate::sessions::Record> {
@@ -10422,7 +10434,11 @@ mod tests {
 
         assert!(
             matches!(
-                opening_for(beginning_of(&Start::Fresh), PermissionMode::Ask),
+                opening_for(
+                    beginning_of(&Start::Fresh, here()),
+                    PermissionMode::Ask,
+                    here(),
+                ),
                 Opening::Ask
             ),
             "a session started fresh took an answer its own user never gave",
@@ -10437,7 +10453,11 @@ mod tests {
         use bravebot_agent::PermissionMode;
 
         let record = a_record_that_answered_yes_here();
-        match opening_for(beginning_of(&Start::Resuming(record)), PermissionMode::Ask) {
+        match opening_for(
+            beginning_of(&Start::Resuming(record), here()),
+            PermissionMode::Ask,
+            here(),
+        ) {
             Opening::Settled(trust, Whence::Resumed) => {
                 assert!(trust.is_trusted("."));
                 assert!(trust.is_trusted("src/main.rs"), "the rule covers the tree");
@@ -10457,7 +10477,11 @@ mod tests {
 
         assert!(
             matches!(
-                opening_for(beginning_of(&Start::Resuming(record)), PermissionMode::Ask),
+                opening_for(
+                    beginning_of(&Start::Resuming(record), here()),
+                    PermissionMode::Ask,
+                    here(),
+                ),
                 Opening::Ask
             ),
             "a record that answered nothing was resumed as an answer",
@@ -10484,8 +10508,9 @@ mod tests {
         ]);
 
         match opening_for(
-            beginning_of(&Start::Resuming(record)),
+            beginning_of(&Start::Resuming(record), here()),
             PermissionMode::Bypass,
+            here(),
         ) {
             Opening::Settled(trust, Whence::Resumed) => assert!(
                 !trust.is_trusted("vendor/lib.js"),
@@ -10506,7 +10531,7 @@ mod tests {
 
         let mut session = Session::new("none");
         let conversation = Conversation::new();
-        let trust = TrustStore::new();
+        let trust = TrustStore::new("/work");
         let programs = TrustedPrograms::new();
         let stored = crate::sessions::Handle::begin(&root);
 
@@ -10553,7 +10578,7 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new("/work");
 
         assert!(change_directory(
             &mut session,
@@ -10585,7 +10610,7 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new(workspace.root());
         trust.trust(".");
         trust.distrust("vendor");
 
@@ -10625,7 +10650,7 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new(workspace.root());
         trust.trust(".");
         trust.distrust("src/vendor");
 
@@ -10657,7 +10682,7 @@ mod tests {
 
         let mut workspace = Workspace::new(&root).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new("/work");
         let before = workspace.root().to_path_buf();
 
         assert!(!change_directory(
@@ -10686,7 +10711,7 @@ mod tests {
     fn a_failed_turn_measures_context_if_requests_were_sent() {
         let mut session = Session::new("none");
         let sink = Trail::new();
-        let fallback = TrustStore::new();
+        let fallback = TrustStore::new("/work");
         let fallback_programs = TrustedPrograms::new();
         let asked = Asked {
             name: "test-model".to_string(),
@@ -10758,7 +10783,7 @@ mod tests {
             Err(turn::TurnError::Cancelled),
             Trail::new(),
             Carried {
-                trust: TrustStore::new(),
+                trust: TrustStore::new("/work"),
                 programs: TrustedPrograms::new(),
             },
             Occupied {
@@ -10800,7 +10825,7 @@ mod tests {
             Err(turn::TurnError::Precommit("failed".to_string())),
             Trail::new(),
             Carried {
-                trust: TrustStore::new(),
+                trust: TrustStore::new("/work"),
                 programs: TrustedPrograms::new(),
             },
             Occupied {
@@ -10825,7 +10850,7 @@ mod tests {
     fn a_failed_turn_with_no_requests_sent_remains_unmeasured() {
         let mut session = Session::new("none");
         let sink = Trail::new();
-        let fallback = TrustStore::new();
+        let fallback = TrustStore::new("/work");
         let fallback_programs = TrustedPrograms::new();
         let asked = Asked {
             name: "test-model".to_string(),

@@ -1850,7 +1850,7 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
 
 /// A trust map vouching for the whole workspace, as the startup prompt would produce.
 fn trusting_the_workspace() -> bravebot_core::trust::TrustStore {
-    let mut trust = bravebot_core::trust::TrustStore::new();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust(".");
     trust
 }
@@ -3132,7 +3132,7 @@ fn an_edit_is_reviewed_as_a_diff() {
 
     // Trusted so the passage can be located, but a rule requires approval for the write,
     // so the write itself is still reviewed as a diff.
-    let mut trust = bravebot_core::trust::TrustStore::new();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust("a.txt");
 
     let task = Task::new("edit a.txt").with_permissions(rules(&[], &["Edit(a.txt)"], &[]));
@@ -3186,7 +3186,7 @@ fn a_reviewed_edit_carries_both_sides_of_the_diff() {
 
     // The file is readable as trusted, but a fetch taints the context, so the resulting data
     // is untrusted and the write must be reviewed.
-    let mut trust = bravebot_core::trust::TrustStore::new();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust(".");
 
     let task = Task::new("edit a.txt");
@@ -4329,7 +4329,7 @@ fn trusted_data_into_a_distrusted_path_is_silent_and_trusts_the_path() {
     // Rejects everything, so the write happening proves nothing was asked.
     let mut confirmer = RecordingConfirmer::rejecting();
 
-    let mut trust = bravebot_core::trust::TrustStore::new();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust(".");
     trust.distrust("vendor");
 
@@ -4383,7 +4383,7 @@ fn untrusted_data_into_an_untrusted_path_is_silent() {
     let mut sink = RecordingSink::new();
     let mut confirmer = RecordingConfirmer::rejecting();
 
-    let mut trust = bravebot_core::trust::TrustStore::new();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust(".");
     trust.distrust("vendor");
 
@@ -4485,7 +4485,7 @@ fn untrusted_bytes_written_into_a_trusted_tree_are_reviewed() {
     let mut sink = RecordingSink::new();
     let mut confirmer = RecordingConfirmer::approving();
 
-    let mut trust = bravebot_core::trust::TrustStore::new();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust(".");
     trust.distrust("vendor");
 
@@ -4536,7 +4536,7 @@ fn what_the_planner_writes_after_a_quarantined_read_stays_trusted() {
     let mut sink = RecordingSink::new();
     let mut confirmer = RecordingConfirmer::approving();
 
-    let mut trust = bravebot_core::trust::TrustStore::new();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust(".");
     trust.distrust("vendor");
 
@@ -4942,7 +4942,7 @@ fn a_cancelled_turn_stops_before_the_first_request() {
         &mut bravebot_agent::Unattended,
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         &cancel,
     )
     .expect_err("a cancelled turn must not succeed");
@@ -5062,7 +5062,7 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
         &mut confirmer,
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         &cancel,
     )
     .expect_err("a cancelled turn must not succeed");
@@ -5102,7 +5102,7 @@ fn an_uncancelled_turn_completes_normally() {
         &mut bravebot_agent::Unattended,
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("an uncancelled turn runs");
@@ -5132,7 +5132,7 @@ fn output_tokens_are_reported_as_the_reply_arrives() {
         &mut bravebot_agent::Unattended,
         &mut reporter,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -5178,7 +5178,7 @@ fn output_tokens_accumulate_across_tool_rounds() {
         &mut bravebot_agent::Unattended,
         &mut reporter,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -5250,7 +5250,7 @@ fn a_turn_survives_a_connection_that_died_mid_request() {
         &mut bravebot_agent::Unattended,
         &mut reporter,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("the turn survives the lost connection");
@@ -5393,7 +5393,7 @@ fn an_answer_is_read_back_even_after_a_quarantined_read() {
         &config,
         &workspace,
         &mut conversation,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         Task::new("summarise this").with_piped_input("notes from elsewhere"),
     )
     .expect("the first turn runs");
@@ -5402,7 +5402,7 @@ fn an_answer_is_read_back_even_after_a_quarantined_read() {
         &config,
         &workspace,
         &mut conversation,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         Task::new("and again"),
     )
     .expect("the second turn runs");
@@ -5483,7 +5483,7 @@ fn a_session_shown_only_references_keeps_writing_trusted_output() {
         &config,
         &workspace,
         &mut conversation,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         Task::new("summarise this").with_piped_input("notes from elsewhere"),
     )
     .expect("the first turn runs");
@@ -5492,7 +5492,7 @@ fn a_session_shown_only_references_keeps_writing_trusted_output() {
         &config,
         &workspace,
         &mut conversation,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         Task::new("now write out.txt"),
     )
     .expect("the second turn runs");
@@ -5656,7 +5656,7 @@ fn a_round_is_read_back_even_after_a_quarantined_read() {
         &Task::new("summarise this"),
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
     )
     .expect("turn runs");
 
@@ -5914,7 +5914,7 @@ fn a_file_nobody_may_name_is_fixed_through_its_reference() {
         &mut confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -5977,7 +5977,7 @@ fn every_write_through_a_reference_is_shown() {
         &mut confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -6212,7 +6212,7 @@ fn quarantined_content_reaches_the_person_and_not_the_planner() {
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut reporter,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -6292,7 +6292,7 @@ fn the_terminal_names_the_file_and_says_who_read_it() {
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut reporter,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -6368,7 +6368,7 @@ fn a_file_a_processor_left_alone_stays_exactly_as_it_was() {
         &mut confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -6414,7 +6414,7 @@ fn each_result_says_whether_the_model_can_read_it() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     // The directory is vouched for, one file in it is not: both kinds in one turn.
-    let mut trust = bravebot_core::trust::TrustStore::new();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust(".");
     trust.distrust("fetched.md");
 
@@ -6469,7 +6469,7 @@ fn each_result_says_whether_the_model_can_read_it() {
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut again,
         &mut RecordingSink::new(),
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -6533,7 +6533,7 @@ fn what_a_processor_says_reaches_the_person_and_no_model() {
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut reporter,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -6607,7 +6607,7 @@ fn an_answer_about_nothing_in_particular_can_be_written_nowhere() {
         &mut confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -6703,7 +6703,7 @@ fn an_answer_that_names_no_document_is_written_nowhere() {
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut reporter,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -6757,7 +6757,7 @@ fn a_processors_output_cannot_be_a_destination() {
         &mut confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -7897,7 +7897,7 @@ fn an_untrusted_workspace_agents_file_never_reaches_the_system_prompt() {
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -8169,7 +8169,7 @@ fn an_untrusted_directory_is_not_reported_as_a_refusal() {
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -8206,7 +8206,7 @@ fn a_single_skipped_skill_is_counted_in_the_singular() {
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -8759,7 +8759,7 @@ fn a_referenced_file_is_trusted_though_the_workspace_is_not() {
         &task,
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
     )
     .expect("turn runs");
     assert!(outcome.clean, "a gate refused the referenced file");
@@ -9457,7 +9457,7 @@ fn a_line_a_person_vouched_for_does_not_trust_the_file_it_wrote() {
     // Answering "always" vouches for the line, so what it prints is trusted.
     let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
 
-    let mut trust = bravebot_core::trust::TrustStore::new();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust(".");
     trust.distrust("vendor");
 
@@ -10276,7 +10276,7 @@ fn a_quarantined_file_cannot_be_read_through_the_output_route() {
         &mut confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -10516,7 +10516,7 @@ fn a_quarantined_read_offers_the_user_the_chance_to_vouch() {
         &mut confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -10546,8 +10546,9 @@ fn a_quarantined_read_offers_the_user_the_chance_to_vouch() {
 
 /// Vouching answers about a file, not about a spelling of one. The offer is made because the map
 /// says nothing about the path, so the rule it records has to be the one the next read looks up:
-/// under the absolute name it would be in the other namespace (TRUST-3), leaving the same file
-/// quarantined every other time it is named and the user asked again for what they just allowed.
+/// under the absolute name it would be answered by the rule about the directory above the project
+/// (TRUST-18), leaving the same file quarantined every other time it is named and the user asked
+/// again for what they just allowed.
 #[test]
 fn vouching_for_a_project_file_named_absolutely_records_its_relative_rule() {
     let scratch = Scratch::new("vouch-absolute");
@@ -10579,7 +10580,7 @@ fn vouching_for_a_project_file_named_absolutely_records_its_relative_rule() {
         &mut VouchesForFiles::new(true),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -10617,7 +10618,7 @@ fn declining_to_vouch_leaves_the_file_quarantined() {
         &mut VouchesForFiles::new(false),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -10703,7 +10704,7 @@ fn the_same_file_is_offered_once_per_turn() {
         &mut confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -10745,7 +10746,7 @@ fn a_quarantined_file_with_nothing_in_it_is_still_offered_for_vouching() {
         &mut confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -10799,7 +10800,7 @@ fn a_path_that_names_no_file_is_not_offered_for_vouching() {
             &mut confirmer,
             &mut bravebot_agent::report::RecordingReporter::default(),
             &mut sink,
-            bravebot_core::trust::TrustStore::new(),
+            bravebot_core::trust::TrustStore::new("/work"),
             bravebot_core::programs::TrustedPrograms::new(),
             &bravebot_core::cancel::Cancel::new(),
         )
@@ -10865,7 +10866,7 @@ fn a_picture_is_not_offered_for_vouching() {
         &mut confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         bravebot_core::programs::TrustedPrograms::new(),
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -10965,7 +10966,7 @@ fn attaching_a_file_vouches_for_it_the_way_naming_one_does() {
         &mut confirmer,
         &mut sink,
         // Nothing vouched for, which is what declining at startup leaves.
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
     )
     .expect("turn runs");
 
@@ -11007,7 +11008,7 @@ fn a_dropped_text_file_from_outside_the_workspace_becomes_context() {
         &mut confirmer,
         &mut sink,
         // Nothing vouched for, which is what declining at startup leaves.
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
     )
     .expect("a drop from outside the workspace must not fail the turn");
 
@@ -11056,7 +11057,7 @@ fn dropping_a_text_file_does_not_reach_anything_beside_it() {
         &task,
         &mut confirmer,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
     )
     .expect("turn runs");
 
@@ -11162,7 +11163,7 @@ fn a_conversation_past_the_budget_is_summarised_before_the_next_request() {
         &config,
         &workspace,
         &mut conversation,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         Task::new("finish it"),
     )
     .expect("turn runs");
@@ -11203,7 +11204,7 @@ fn the_summariser_asks_for_no_cache_of_the_exchange_it_gives_up() {
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
     )
     .expect("compacting runs")
     .expect("a long conversation has something to summarise");
@@ -11251,7 +11252,7 @@ fn a_compaction_leaves_the_prompt_a_breakpoint_covers_alone() {
         &roomy,
         &workspace,
         &mut conversation,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         Task::new("keep going"),
     )
     .expect("turn runs");
@@ -11264,7 +11265,7 @@ fn a_compaction_leaves_the_prompt_a_breakpoint_covers_alone() {
         &tight,
         &workspace,
         &mut conversation,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         Task::new("finish it"),
     )
     .expect("turn runs");
@@ -11303,7 +11304,7 @@ fn the_summariser_is_offered_no_tools() {
         &config,
         &workspace,
         &mut conversation,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         Task::new("finish it"),
     )
     .expect("turn runs");
@@ -11340,7 +11341,7 @@ fn a_summary_of_an_untrusted_conversation_leaves_the_conversation_whole() {
         &config,
         &workspace,
         &mut conversation,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         Task::new("finish it"),
     )
     .expect("turn runs");
@@ -11374,7 +11375,7 @@ fn a_conversation_nobody_has_measured_is_not_compacted() {
         &config,
         &workspace,
         &mut bravebot_agent::Conversation::new(),
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         Task::new("what is 2 + 2?"),
     )
     .expect("turn runs");
@@ -11476,7 +11477,7 @@ fn compacting_on_request_reaches_the_model_and_shortens_the_conversation() {
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
     )
     .expect("compacting on request must not be refused")
     .expect("a long conversation has something to summarise");
@@ -11514,7 +11515,7 @@ fn the_trail_says_what_a_compaction_gave_up_and_what_it_cost() {
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
     )
     .expect("compacting runs")
     .expect("a long conversation has something to summarise");
@@ -11588,7 +11589,7 @@ fn a_goal_check_reaches_the_model_and_comes_back_as_a_verdict() {
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
     )
     .expect("judging a stopping condition must not be refused");
 
@@ -11630,7 +11631,7 @@ fn asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone() 
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         |written| watched.push_str(written),
     )
     .expect("asking beside the work must not be refused");
@@ -11676,7 +11677,7 @@ fn an_answer_over_a_trusted_exchange_may_be_written_down() {
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
     )
     .expect("asking beside the work must not be refused");
@@ -11708,7 +11709,7 @@ fn an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down() {
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
     )
     .expect("asking beside the work must not be refused");
@@ -11804,7 +11805,7 @@ fn compacting_on_request_grants_itself_nothing_but_reaching_the_model() {
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
     )
     .expect("compacting runs");
 
@@ -11860,7 +11861,7 @@ fn what_a_delegate_read_never_reaches_the_planner_that_asked() {
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
-    let mut trust = bravebot_core::trust::TrustStore::new();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust(".");
 
     turn::run_with_trust(
@@ -12905,7 +12906,7 @@ fn a_delegates_write_is_approved_on_its_own() {
         &Task::new("HAVE-A-DELEGATE-WRITE-IT"),
         &mut confirmer,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
     )
     .expect("turn runs");
 
@@ -12964,7 +12965,7 @@ fn a_delegates_write_is_refused_when_the_person_refuses() {
         &Task::new("HAVE-A-DELEGATE-WRITE-IT"),
         &mut confirmer,
         &mut sink,
-        bravebot_core::trust::TrustStore::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
     )
     .expect("turn runs");
 
