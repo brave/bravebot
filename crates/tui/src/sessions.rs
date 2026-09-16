@@ -188,7 +188,79 @@ pub struct Record {
     /// one that stopped.
     #[serde(default)]
     pub manifest: Option<StoredManifest>,
+    /// The turns a rewind can go back to, oldest first.
+    ///
+    /// Here rather than only in memory because a mistake is often noticed after closing the
+    /// program and opening it again, and a resumed session with nothing to undo is a session
+    /// whose whole history of what it wrote has been thrown away while the transcript describing
+    /// it was kept.
+    ///
+    /// Empty for a record written before this was kept, and for a session that has had no turn
+    /// a rewind may reach.
+    #[serde(default)]
+    pub rewind: Vec<StoredRewind>,
 }
+
+/// One point a rewind can go back to, as it is written down.
+///
+/// Its own type rather than the interface's, for the reason [`StoredAside`] is: a record on disk
+/// outlives the shape of a struct in memory. The conversation is the same [`Snapshot`] the record
+/// keeps for the session itself, since it is the same thing a turn earlier.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredRewind {
+    /// The exchange as it stood before the turn.
+    pub conversation: Snapshot,
+    /// Completed turns before the turn.
+    pub turns: usize,
+    /// Cumulative tokens before the turn.
+    pub tokens: u64,
+    #[serde(default)]
+    pub spend: BTreeMap<usize, u64>,
+    #[serde(default)]
+    pub timing: BTreeMap<usize, bravebot_agent::timing::Timing>,
+    /// What the turn before this one read out of the cache, where there was one.
+    #[serde(default)]
+    pub cached: Option<bravebot_aichat::protocol::Cached>,
+    /// The trust map before the turn, written the way [`Record::trust`] is.
+    ///
+    /// `None` reads as a map with nothing in it rather than as a question, unlike the record's
+    /// own: a point that recorded no rules is one nothing had been vouched for before, and a
+    /// rewind that put back the live map instead would keep a permission the turn granted.
+    #[serde(default)]
+    pub trust: Option<Vec<StoredRule>>,
+    /// The programs vouched for before the turn.
+    #[serde(default)]
+    pub programs: Vec<StoredCommand>,
+    /// The session's name before the turn.
+    pub title: String,
+    /// Whether a record for this session was on disk before the turn.
+    #[serde(default)]
+    pub wrote: bool,
+    /// What the turn was asked, for the line that lists this point.
+    pub prompt: String,
+    /// What the files the turn wrote to held before it wrote to them.
+    #[serde(default)]
+    pub wrote_over: Vec<StoredBackup>,
+}
+
+/// What one path held before a turn wrote to it, as it is written down.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredBackup {
+    /// The file, relative to the project where it is inside it, so a record survives the
+    /// checkout being moved the way [`Record::trust`] does.
+    pub path: String,
+    /// What was there: [`NOTHING`] for a path the turn created, [`BYTES`] for one whose contents
+    /// are here, and anything else for one this session did not keep.
+    pub before: String,
+    /// Those contents, base64, where `before` says they are here.
+    #[serde(default)]
+    pub bytes: Option<String>,
+}
+
+/// The word for a path the turn created, so a rewind removes it again.
+const NOTHING: &str = "nothing";
+/// The word for a path whose contents are in the record.
+const BYTES: &str = "bytes";
 
 /// A question asked beside the work, as it is written down.
 ///
@@ -206,6 +278,148 @@ pub struct StoredAside {
     /// is worth keeping even where what came back is not.
     #[serde(default)]
     pub answer: Option<String>,
+}
+
+impl StoredRewind {
+    /// Write one down, with the paths inside the project kept relative to it.
+    fn of(point: &crate::state::RewindPoint, project: &Path) -> Self {
+        use base64::Engine;
+        use bravebot_agent::workspace::Before;
+
+        let snapshot = &point.snapshot;
+        Self {
+            conversation: snapshot.conversation.clone(),
+            turns: snapshot.turns,
+            tokens: snapshot.tokens,
+            spend: snapshot.spend.clone(),
+            timing: snapshot.timing.clone(),
+            cached: snapshot.cached,
+            trust: Some(stored_rules(&snapshot.trust)),
+            programs: stored_programs(&snapshot.programs),
+            title: snapshot.title.clone(),
+            wrote: snapshot.was_wrote,
+            prompt: point.prompt.clone(),
+            wrote_over: point
+                .backups
+                .iter()
+                .map(|backup| {
+                    let path = backup
+                        .path
+                        .strip_prefix(project)
+                        .unwrap_or(&backup.path)
+                        .display()
+                        .to_string();
+                    let (before, bytes) = match &backup.was {
+                        Before::Nothing => (NOTHING, None),
+                        Before::Bytes(held) => (
+                            BYTES,
+                            Some(base64::engine::general_purpose::STANDARD.encode(held)),
+                        ),
+                        Before::NotKept => ("not-kept", None),
+                    };
+                    StoredBackup {
+                        path,
+                        before: before.to_string(),
+                        bytes,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// Read one back, for a session working in `root`.
+    ///
+    /// Anything this build cannot read means the path will not go back: a word it does not know,
+    /// and base64 it cannot decode, both land there rather than on "the file was never here",
+    /// which is the direction that would have a rewind delete work it merely could not hold.
+    ///
+    /// The place in the transcript is not read from here and is left at nothing. It is an index
+    /// into the list one process drew, and the session reading this draws another; the turn
+    /// number is the fact that survives, and [`crate::state::Session::restore_rewind_points`]
+    /// finds the index again from it.
+    fn into_point(self, root: &Path) -> crate::state::RewindPoint {
+        use base64::Engine;
+        use bravebot_agent::workspace::{Backup, Before};
+
+        let mut trust = TrustStore::new(root);
+        for rule in self.trust.iter().flatten() {
+            if rule.integrity == TRUSTED {
+                trust.trust(&rule.path);
+            }
+        }
+        for rule in self.trust.iter().flatten() {
+            if rule.integrity != TRUSTED {
+                trust.distrust(&rule.path);
+            }
+        }
+
+        crate::state::RewindPoint {
+            snapshot: crate::state::TurnSnapshot {
+                conversation: self.conversation,
+                turns: self.turns,
+                tokens: self.tokens,
+                spend: self.spend,
+                timing: self.timing,
+                cached: self.cached,
+                trust,
+                programs: TrustedPrograms::from_iter(self.programs.iter().map(|c| {
+                    bravebot_core::programs::Command::new(c.program.clone(), c.args.clone())
+                })),
+                transcript_len: 0,
+                title: self.title,
+                was_wrote: self.wrote,
+            },
+            backups: self
+                .wrote_over
+                .into_iter()
+                .map(|held| {
+                    let was = match held.before.as_str() {
+                        NOTHING => Before::Nothing,
+                        BYTES => held
+                            .bytes
+                            .and_then(|encoded| {
+                                base64::engine::general_purpose::STANDARD
+                                    .decode(encoded)
+                                    .ok()
+                            })
+                            .map_or(Before::NotKept, Before::Bytes),
+                        _ => Before::NotKept,
+                    };
+                    Backup {
+                        path: root.join(held.path),
+                        was,
+                    }
+                })
+                .collect(),
+            prompt: self.prompt,
+        }
+    }
+}
+
+/// A trust map as it is written down.
+fn stored_rules(trust: &TrustStore) -> Vec<StoredRule> {
+    trust
+        .rules()
+        .map(|(path, integrity)| StoredRule {
+            path: path.to_string(),
+            integrity: match integrity {
+                Integrity::Trusted => TRUSTED,
+                Integrity::Untrusted => UNTRUSTED,
+            }
+            .to_string(),
+        })
+        .collect()
+}
+
+/// A list of vouched-for commands as it is written down.
+fn stored_programs(programs: &TrustedPrograms) -> Vec<StoredCommand> {
+    programs
+        .iter()
+        .map(|c| StoredCommand {
+            program: c.program.clone(),
+            args: c.args.clone(),
+        })
+        .collect()
 }
 
 impl StoredAside {
@@ -352,6 +566,9 @@ pub fn record_manifest_run(
             programs: &programs,
             directories: &[],
             manifest: Some(&stored),
+            // None, on the same footing as the asides: a manifest run plans its whole sequence
+            // in advance and is not resumed, so there is no session for a rewind to go back in.
+            rewind: &[],
         },
     );
     Some(handle.id().to_string())
@@ -467,6 +684,22 @@ impl Record {
             .collect()
     }
 
+    /// The turns a rewind can go back to, oldest first.
+    ///
+    /// `root` is the directory the resumed session works in, and the paths inside the project
+    /// come back under it, as the trust map's rules do: a rewind is about the files this
+    /// checkout has, not the ones the machine that wrote the record had.
+    pub fn rewind_points(
+        &self,
+        root: impl AsRef<std::path::Path>,
+    ) -> Vec<crate::state::RewindPoint> {
+        self.rewind
+            .iter()
+            .cloned()
+            .map(|point| point.into_point(root.as_ref()))
+            .collect()
+    }
+
     /// The task lists this session kept, shaped for a screen.
     ///
     /// A status this build does not recognise parses as outstanding work, which is
@@ -526,6 +759,8 @@ pub struct Standing<'a> {
     /// What a manifest run produced. `None` for a turn session, which is every session the
     /// interactive interface writes.
     pub manifest: Option<&'a StoredManifest>,
+    /// The turns a rewind can go back to, oldest first.
+    pub rewind: &'a [crate::state::RewindPoint],
 }
 
 /// A session worth picking up again, and where to pick it up.
@@ -719,28 +954,8 @@ impl Handle {
                 .iter()
                 .map(|(turn, rows)| (*turn, rows.iter().map(StoredTask::of).collect()))
                 .collect(),
-            trust: Some(
-                standing
-                    .trust
-                    .rules()
-                    .map(|(path, integrity)| StoredRule {
-                        path: path.to_string(),
-                        integrity: match integrity {
-                            Integrity::Trusted => TRUSTED,
-                            Integrity::Untrusted => UNTRUSTED,
-                        }
-                        .to_string(),
-                    })
-                    .collect(),
-            ),
-            programs: standing
-                .programs
-                .iter()
-                .map(|c| StoredCommand {
-                    program: c.program.clone(),
-                    args: c.args.clone(),
-                })
-                .collect(),
+            trust: Some(stored_rules(standing.trust)),
+            programs: stored_programs(standing.programs),
             directories: standing
                 .directories
                 .iter()
@@ -750,6 +965,11 @@ impl Handle {
             conversation: standing.conversation.clone(),
             asides: standing.asides.iter().map(StoredAside::of).collect(),
             manifest: standing.manifest.cloned(),
+            rewind: standing
+                .rewind
+                .iter()
+                .map(|point| StoredRewind::of(point, &self.project))
+                .collect(),
         };
 
         let Ok(body) = serde_json::to_vec_pretty(&record) else {
@@ -860,16 +1080,16 @@ pub fn list(project: &Path) -> Vec<Summary> {
         .filter_map(Result::ok)
         .filter(|entry| entry.path().extension().is_some_and(|e| e == "json"))
         .filter_map(|entry| {
-            let record = read(&entry.path())?;
-            let audit = directory.join(format!("{}.audit.jsonl", record.id));
+            let listed = read_listing(&entry.path())?;
+            let audit = directory.join(format!("{}.audit.jsonl", listed.id));
             let bytes = size_of(&entry.path()) + size_of(&audit);
             Some(Summary {
-                id: record.id,
-                title: record.title,
-                branch: record.branch,
-                updated: record.updated,
+                id: listed.id,
+                title: listed.title,
+                branch: listed.branch,
+                updated: listed.updated,
                 bytes,
-                manifest: record.manifest.is_some(),
+                manifest: listed.manifest.is_some(),
             })
         })
         .collect();
@@ -1116,6 +1336,31 @@ pub fn size(bytes: u64) -> String {
 }
 
 fn read(path: &Path) -> Option<Record> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+/// The five fields a row of the picker needs, and nothing else.
+///
+/// Its own shape rather than [`Record`], because a record holds the conversation, what compaction
+/// archived out of it, and the turns a rewind can go back to, each of which carries a copy of the
+/// conversation and the bytes that turn wrote over. Every one of those would be parsed and
+/// allocated to draw one line of a list, once per session in the directory, before the interface
+/// has drawn anything at all. As fields nothing here names, they cost the scan over their text.
+#[derive(Deserialize)]
+struct Listed {
+    id: String,
+    title: String,
+    #[serde(default)]
+    branch: Option<String>,
+    updated: u64,
+    /// Whether the record has one, which is what makes it a manifest run. What is in it is not
+    /// read: the row says only that the session cannot be continued.
+    #[serde(default)]
+    manifest: Option<serde::de::IgnoredAny>,
+}
+
+fn read_listing(path: &Path) -> Option<Listed> {
     let contents = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&contents).ok()
 }
@@ -1704,6 +1949,66 @@ mod tests {
         assert_eq!(build_note(None, "0.1.0 (bbbbbbb)"), None);
     }
 
+    /// A point whose contents a rewind cannot produce must not read as a file that was never
+    /// there: the two states differ by whether the rewind deletes the person's work.
+    #[test]
+    fn a_kept_file_this_build_cannot_read_will_not_go_back_rather_than_being_deleted() {
+        use bravebot_agent::workspace::Before;
+
+        let point = a_stored_point(vec![
+            StoredBackup {
+                path: "notes.md".to_string(),
+                before: "some word from a later build".to_string(),
+                bytes: None,
+            },
+            StoredBackup {
+                path: "draft.md".to_string(),
+                before: BYTES.to_string(),
+                bytes: Some("not base64 at all !!".to_string()),
+            },
+            StoredBackup {
+                path: "made.md".to_string(),
+                before: NOTHING.to_string(),
+                bytes: None,
+            },
+        ])
+        .into_point(Path::new("/work"));
+
+        assert_eq!(
+            point.backups[0].was,
+            Before::NotKept,
+            "a word this build does not know was read as a file that was never there"
+        );
+        assert_eq!(
+            point.backups[1].was,
+            Before::NotKept,
+            "contents that would not decode were read as a file that was never there"
+        );
+        assert_eq!(
+            point.backups[2].was,
+            Before::Nothing,
+            "a file the turn created is no longer removed by a rewind"
+        );
+    }
+
+    /// One point as a record holds it, with the paths a test wants to read back.
+    fn a_stored_point(wrote_over: Vec<StoredBackup>) -> StoredRewind {
+        StoredRewind {
+            conversation: bravebot_agent::Conversation::new().snapshot(),
+            turns: 1,
+            tokens: 0,
+            spend: BTreeMap::new(),
+            timing: BTreeMap::new(),
+            cached: None,
+            trust: None,
+            programs: Vec::new(),
+            title: "a session".to_string(),
+            wrote: true,
+            prompt: "write the notes".to_string(),
+            wrote_over,
+        }
+    }
+
     fn a_record() -> Record {
         Record {
             id: "1-2".to_string(),
@@ -1731,6 +2036,7 @@ mod tests {
                 measured: 0,
             },
             manifest: None,
+            rewind: Vec::new(),
         }
     }
 
@@ -1919,6 +2225,7 @@ mod tests {
                 programs: &TrustedPrograms::default(),
                 directories: &[],
                 manifest: None,
+                rewind: &[],
             },
         );
     }
@@ -2105,6 +2412,7 @@ mod tests {
                 programs: &TrustedPrograms::default(),
                 directories: &[],
                 manifest: None,
+                rewind: &[],
             },
         );
         handle.append_audit(

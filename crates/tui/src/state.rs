@@ -1477,9 +1477,42 @@ impl Session {
         &self.rewind_points
     }
 
-    /// Put back the points a record was holding, oldest first.
-    pub fn restore_rewind_points(&mut self, points: Vec<RewindPoint>) {
+    /// Put back the points a record was holding, oldest first, into the transcript `conversation`
+    /// was just replayed into.
+    ///
+    /// Each point's place in the transcript is found again here rather than read off the record.
+    /// An index into the transcript is a fact about the list one process drew, and a resumed
+    /// session draws another: it opens with a line saying it was resumed, and it carries each
+    /// turn's trail where the live session carried events.
+    ///
+    /// It is found by measuring the point's own conversation against the one replayed, rather
+    /// than by counting turns. The transcript holds one entry per thing the conversation
+    /// recounts, so a point whose conversation recounts that many fewer begins that many entries
+    /// from the end, whatever else is above it. Turn numbers do not answer it: a shell-mode
+    /// command puts a line in the conversation without being a turn, so a replayed transcript can
+    /// hold more prompts than the session ever counted turns.
+    pub fn restore_rewind_points(
+        &mut self,
+        points: Vec<RewindPoint>,
+        conversation: &bravebot_agent::Conversation,
+    ) {
+        let whole = conversation.recounted().len();
+        let places: Vec<usize> = points
+            .iter()
+            .map(|point| {
+                let theirs =
+                    bravebot_agent::Conversation::restored(point.snapshot.conversation.clone())
+                        .recounted()
+                        .len();
+                self.transcript
+                    .len()
+                    .saturating_sub(whole.saturating_sub(theirs))
+            })
+            .collect();
         self.rewind_points = points;
+        for (point, at) in self.rewind_points.iter_mut().zip(places) {
+            point.snapshot.transcript_len = at;
+        }
         self.hold_rewind_points();
     }
 
@@ -8141,6 +8174,99 @@ mod tests {
             s.rewind_points()[0].snapshot.turns,
             1,
             "the turn that spent the budget is the one that was dropped"
+        );
+    }
+
+    /// An index into the transcript belongs to the process that drew it. A resumed session draws
+    /// another, opening with a line saying it was resumed, so a point read off a record has to
+    /// find its place again or a rewind would take the transcript back further than the turn.
+    #[test]
+    fn a_restored_point_finds_its_place_in_the_transcript_it_comes_back_into() {
+        use bravebot_aichat::protocol::Message;
+
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(Message::user("add a line to notes.md"));
+        conversation.push(Message::assistant("added"));
+        conversation.push(Message::user("add a second line"));
+        conversation.push(Message::assistant("added"));
+
+        let mut s = session();
+        s.replay(
+            &conversation,
+            "a title",
+            &crate::sessions::Recalled {
+                trails: Default::default(),
+                todos: Default::default(),
+                asides: Vec::new(),
+            },
+        );
+
+        // Recorded against a transcript that opened with the prompt, where the second turn
+        // began at entry two. This one opens with the resumed line, so it begins at entry three.
+        let mut point = RewindPoint {
+            snapshot: snapshot_before(1),
+            backups: Vec::new(),
+            prompt: "add a second line".into(),
+        };
+        let mut before = bravebot_agent::Conversation::new();
+        before.push(Message::user("add a line to notes.md"));
+        before.push(Message::assistant("added"));
+        point.snapshot.conversation = before.snapshot();
+        point.snapshot.transcript_len = 2;
+
+        s.restore_rewind_points(vec![point], &conversation);
+
+        let at = s.rewind_points()[0].snapshot.transcript_len;
+        assert_eq!(
+            s.transcript[at].speaker,
+            Speaker::User,
+            "the point did not land on the prompt of the turn it undoes"
+        );
+        assert_eq!(s.transcript[at].text, "add a second line");
+    }
+
+    /// A shell-mode command puts a line in the conversation without being a turn, so a replayed
+    /// transcript holds more prompts than the session counted turns. Placing a restored point by
+    /// counting prompts would land it on the shell line and rewind a turn too far.
+    #[test]
+    fn a_shell_command_in_the_conversation_does_not_move_a_restored_point() {
+        use bravebot_aichat::protocol::Message;
+
+        let mut before = bravebot_agent::Conversation::new();
+        before.push(Message::user("add a line to notes.md"));
+        before.push(Message::assistant("added"));
+        before.push(Message::user(
+            "I ran `ls` in the shell myself. It printed: notes.md",
+        ));
+
+        let mut conversation = bravebot_agent::Conversation::restored(before.snapshot());
+        conversation.push(Message::user("add a second line"));
+        conversation.push(Message::assistant("added"));
+
+        let mut s = session();
+        s.replay(
+            &conversation,
+            "a title",
+            &crate::sessions::Recalled {
+                trails: Default::default(),
+                todos: Default::default(),
+                asides: Vec::new(),
+            },
+        );
+
+        let mut point = RewindPoint {
+            snapshot: snapshot_before(1),
+            backups: Vec::new(),
+            prompt: "add a second line".into(),
+        };
+        point.snapshot.conversation = before.snapshot();
+
+        s.restore_rewind_points(vec![point], &conversation);
+
+        let at = s.rewind_points()[0].snapshot.transcript_len;
+        assert_eq!(
+            s.transcript[at].text, "add a second line",
+            "the point landed on the shell line rather than the prompt"
         );
     }
 

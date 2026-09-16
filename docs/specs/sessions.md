@@ -536,6 +536,51 @@ takes a number cannot also have it, so the number is on a word that has one.
 `verified-by: bravebot_tui::state::going_back_further_than_the_session_remembers_rewinds_nothing`
 
 
+<a id="SESSION-22"></a>
+### SESSION-22: the turns a rewind can reach are kept with the record
+
+A session's rewind points are written into its record along with the conversation, and a resume
+brings them back: the exchange each one goes back to, the counts, the trust map and the programs
+that stood before its turn, what that turn was asked, and what its writes overwrote. `/undo` and
+`/rewind` after a resume reach the same turns they reached before the program was closed.
+
+What a path held is written base64 in the record, so the record carries the rewind budget as well
+as the conversation. Paths inside the project are recorded relative to it and come back under the
+directory the resumed session works in, as trust rules do.
+
+Only the points a rewind can still reach are written. A record holds what the session holds, so a
+point that ages out of the session's depth or budget, and every point given up when something
+changes the session outside a turn, is gone from the record at the next write. What a turn
+overwrote therefore leaves the record a few turns after that turn rather than accumulating for the
+life of the session. SESSION-16's 0600 covers it while it is there, as it covers the conversation
+beside it.
+
+Anything read back that this build cannot make sense of means the path will not go back: a word
+for what was there that it does not know, and contents that will not decode, both land there
+rather than on the path having been absent. A resumed point's place in the transcript is worked
+out from its turn number rather than read from the record, since the transcript a resume draws is
+not the one the point was taken against.
+
+**Why.** A mistake is often noticed after closing the program and opening it again, which is the
+same case SESSION-19 exists for a few minutes later. A resume that brought back the transcript
+describing what those turns wrote, and nothing to put any of it back, made the record a
+description of a tree it could no longer restore.
+
+**Why in the record rather than beside it.** The record already holds the conversation, which is
+the bulk of a point, and it is written atomically and read privately (SESSION-16). A file of its
+own would need both of those again, and would let a session exist whose record and whose rewind
+points disagree about how many turns it has had.
+
+**Why the safe direction is "will not go back".** The two states a rewind can be wrong about are
+not symmetrical. Treating a path it cannot restore as one that was never there would delete a
+file somebody was working on; treating it as one that will not go back leaves the file alone and
+names it on the line that reports the rewind.
+
+`verified-by: bravebot_tui::sessions::a_rewind_point_survives_being_written_and_read_back`
+`verified-by: bravebot_tui::sessions::a_kept_file_this_build_cannot_read_will_not_go_back_rather_than_being_deleted`
+`verified-by: bravebot_tui::state::a_restored_point_finds_its_place_in_the_transcript_it_comes_back_into`
+
+
 ## Known costs
 
 - **Two working directories can share a session store.** The directory name is derived by mapping
@@ -547,6 +592,28 @@ takes a number cannot also have it, so the number is on a word that has one.
   The record does hold the true path, so the fix is to filter on it. `two_directories_do_not_share_a_key`
   does not cover this: it compares `/a/one` with `/a/two`, which differ before the mapping is
   applied.
+
+- **A record grows with what its turns wrote over.** Every rewind point carries a copy of the
+  conversation and the bytes the turn overwrote, and the whole record is rewritten after every
+  turn. A session whose turns rewrite large files therefore writes a large record repeatedly,
+  whether or not anything is ever rewound. The memory budget bounds it, and nothing smaller does:
+  storing diffs between consecutive points rather than copies would, at the cost of a mechanism
+  that has to be right about every write a turn makes.
+
+- **A record holds what the last few turns overwrote, whoever wrote it.** A turn that replaces a
+  file puts that file's previous contents in the record, and those contents were not necessarily
+  ever shown to the planner: overwriting a file of credentials copies them out of the project and
+  into the state directory. They leave the record once the point ages out, and 0600 covers them
+  while they are there, but a session that ends on such a turn leaves them in its record until the
+  record is deleted. Nothing here distinguishes a file worth keeping from one that is not, because
+  nothing here reads the bytes.
+
+- **A record grows with what its turns wrote over.** Every rewind point carries a copy of the
+  conversation and the bytes the turn overwrote, and the whole record is rewritten after every
+  turn. A session whose turns rewrite large files therefore writes a large record repeatedly,
+  whether or not anything is ever rewound. The memory budget bounds it and nothing smaller does;
+  storing the difference between consecutive points rather than copies would, at the cost of a
+  mechanism that has to be right about every write a turn makes.
 
 - **A rewind sees file-tool writes and nothing else.** The backups are taken inside the workspace,
   so a turn that changed a file by running a program instead (`run`, per [run.md](tools/run.md))

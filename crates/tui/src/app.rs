@@ -2082,6 +2082,7 @@ fn rewind(
                 programs,
                 directories: workspace.added_directories(),
                 manifest: None,
+                rewind: session.rewind_points(),
             },
         );
     }
@@ -2186,6 +2187,10 @@ fn event_loop(
             for note in record.reopen_added_directories(&mut workspace) {
                 session.note(note);
             }
+            // After the transcript rather than before it, because each point's place in that
+            // transcript is worked out from it: a point is a turn number in the record and an
+            // index in the session, and the list it indexes has to exist first.
+            session.restore_rewind_points(record.rewind_points(workspace.root()), &conversation);
             (conversation, handle, vouched)
         }
     };
@@ -2436,6 +2441,7 @@ fn event_loop(
                             programs: &programs,
                             directories: workspace.added_directories(),
                             manifest: None,
+                            rewind: session.rewind_points(),
                         },
                     );
                 }
@@ -2515,6 +2521,7 @@ fn event_loop(
                         programs: &programs,
                         directories: workspace.added_directories(),
                         manifest: None,
+                        rewind: session.rewind_points(),
                     },
                 );
                 stored.append_audit(session.turns, &events);
@@ -2561,6 +2568,7 @@ fn event_loop(
                                 programs: &programs,
                                 directories: workspace.added_directories(),
                                 manifest: None,
+                                rewind: session.rewind_points(),
                             },
                         );
                         stored.append_audit(session.turns, &events);
@@ -2620,6 +2628,7 @@ fn event_loop(
                                 // record is a conversation that can be resumed; the run has a
                                 // record of its own where that field is filled.
                                 manifest: None,
+                                rewind: session.rewind_points(),
                             },
                         );
                         stored.append_audit(session.turns, &events);
@@ -2720,6 +2729,7 @@ fn event_loop(
                             programs: &programs,
                             directories: workspace.added_directories(),
                             manifest: None,
+                            rewind: session.rewind_points(),
                         },
                     );
                     stored.append_audit(session.turns, &events);
@@ -2771,6 +2781,7 @@ fn event_loop(
                         programs: &programs,
                         directories: workspace.added_directories(),
                         manifest: None,
+                        rewind: session.rewind_points(),
                     },
                 );
                 stored.append_audit(session.turns, &events);
