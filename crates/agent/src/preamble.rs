@@ -6,9 +6,10 @@
 //! load. These are exactly the kind of input this repository is careful about, and they go through
 //! the gate below.
 //!
-//! **Facts about where it is working**, which are the working directory, the platform and the
-//! date. These are not instructions and there is no file behind them: see [`environment`] for why
-//! they do not go through the gate, and why nothing read out of the workspace may join them.
+//! **Facts about where it is working**, which are the working directory, the platform, the date,
+//! and the directory this session has to itself. These are not instructions and there is no file
+//! behind them: see [`environment`] for why they do not go through the gate, and why nothing read
+//! out of the workspace may join them.
 //!
 //! # One way in, and it refuses
 //!
@@ -174,6 +175,11 @@ pub fn compose<S: Sink>(
 /// that does not know its own working directory reaches for `pwd` to find out, which is a poor
 /// trade for a value the driver has had all along.
 ///
+/// The session's own directory is the one of these no `run` could discover: nothing names it but
+/// this process, so a planner not told of it writes what is not part of the project into the
+/// project. A session that has none has nothing said about one, since a path to a directory that
+/// is not there costs a turn the run that finds out.
+///
 /// **Not read through the trust gate, and that is the point.** Everything else here is file
 /// content somebody may have written into the tree, so it goes through
 /// `Policy::read_trusted_content` and may be refused. None of this is: the root is where the user
@@ -199,10 +205,23 @@ fn environment(workspace: &Workspace) -> String {
     }
     out.push_str(&format!("- Shell: {}\n", crate::shell::shell()));
     out.push_str(&format!("- Today's date: {}\n", today()));
+    let scratch = workspace.scratch();
+    if let Some(directory) = scratch {
+        out.push_str(&format!("- Scratch directory: {}\n", directory.display()));
+    }
     out.push_str(
         "\nA relative path means one under the working directory, and `run` compiles a line \
          there. You do not need to run `pwd`, `uname` or `date` to learn any of the above.\n",
     );
+    if scratch.is_some() {
+        out.push_str(
+            "\nThe scratch directory is this session's own: put a file there that the work needs \
+             on disk but nobody is asking to keep, such as output to grep or an archive to look \
+             inside, rather than in the project where somebody has to notice it and delete it. It \
+             is removed when this session ends, and a program a `run` starts reads the same path \
+             from BRAVEBOT_SCRATCH_DIR.\n",
+        );
+    }
     out
 }
 
