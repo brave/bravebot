@@ -35,7 +35,7 @@ guards:
       - crates/agent/src/aside.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 2
-      - crates/agent/src/turn.rs: 8
+      - crates/agent/src/turn.rs: 9
       - crates/core/src/policy.rs: 8
   - symbol: Policy::label_model_output
     sites:

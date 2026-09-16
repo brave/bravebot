@@ -210,6 +210,12 @@ leo-browser-untouched =
 subscription-unusable =
     the imported subscription could not be used ({ $problem }), so this turn runs on the free tier
 
+# Said when a background job exits. The line drawn when it started said only that something had
+# been started, and nothing else in the transcript ever says it is over, so a build that failed
+# while the turn was doing something else would leave nothing on the screen about it. What it
+# printed goes to the view a person can open; this is the sentence saying the thing has ended.
+background-job-finished = `{ $command }` finished in the background: { $outcome }
+
 
 ## Vouching for a directory, asked once when a session starts somewhere new
 
