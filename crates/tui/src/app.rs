@@ -3251,9 +3251,13 @@ fn provider_models(
             // Stated or assumed, never absent: a window is what the budget is taken from, and
             // reporting nothing would leave the session on a default chosen for a different service.
             conversation_tokens: Some(model.window()),
-            // A block names models and never their parameters, so nothing here states the subject
-            // and the level goes out to be judged at the far end.
-            reads_effort: true,
+            // A block names models and never their parameters, so the level goes out to be judged
+            // at the far end and the judgment is the only description there is: read one where
+            // this service has already refused the field for this model.
+            reads_effort: bravebot_aichat::reads_effort(
+                &provider.chat_completions_url(),
+                &model.id,
+            ),
         })
         .collect()
 }

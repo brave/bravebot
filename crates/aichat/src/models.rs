@@ -290,9 +290,13 @@ fn offered_by_gateway(
             // A gateway states its parameters per model, and reasoning is not one field but two:
             // many rows take the gateway's own reasoning parameter and not this one, so a model
             // that reasons is not thereby a model that reads a level sent this way.
+            // A roster that says nothing about the field describes it no better than a settings
+            // block does, so the answer is the one this service has already given: a model whose
+            // service refused the field reads no level, and one that has refused nothing takes
+            // the level to be read until it says otherwise.
             reads_effort: match entry.supported_parameters.as_ref() {
                 Some(parameters) => parameters.iter().any(|it| it == EFFORT_PARAMETER),
-                None => true,
+                None => crate::reads_effort(&provider.chat_completions_url(), &entry.id),
             },
         })
         .collect()
@@ -639,6 +643,46 @@ mod tests {
     fn a_gateway_that_states_no_parameters_is_not_taken_to_read_no_level() {
         let models = from_gateway(&gateway(), r#"{"data": [{"id": "unstated"}]}"#);
         assert!(models[0].reads_effort);
+    }
+
+    /// A roster describing no parameters leaves the level to be judged by the service, and the
+    /// judgment is the only description of the field there is. A row that went on claiming a level
+    /// is read after the service refused it would show somebody a charge they chose and stopped
+    /// getting, which is what consulting a listing is for in the first place.
+    #[test]
+    fn a_row_whose_service_refused_a_level_reads_none_however_silent_the_roster() {
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"refuser": {
+                "options": {"baseURL": "https://refuser.example.invalid/v1"}
+            }}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        let provider = bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider");
+        crate::remember(
+            &crate::learned_key(&provider.chat_completions_url(), "refused-the-field"),
+            crate::Refusals {
+                caching: true,
+                effort: true,
+            },
+        );
+
+        let models = from_gateway(
+            &provider,
+            r#"{"data": [{"id": "refused-the-field"}, {"id": "refused-nothing"}]}"#,
+        );
+
+        assert!(
+            !models[0].reads_effort,
+            "a model whose service refused the field was still offered as reading a level"
+        );
+        assert!(
+            models[1].reads_effort,
+            "one model's refusal was read as the whole gateway refusing"
+        );
     }
 
     #[test]
