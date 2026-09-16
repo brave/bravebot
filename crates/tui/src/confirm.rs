@@ -99,6 +99,19 @@ impl Answer {
             Answer::Reject | Answer::Interrupt => Decision::Reject,
         }
     }
+
+    /// Whether the turn that asked stops as well as being refused.
+    ///
+    /// The one place this is decided, so that the difference between saying no and interrupting is
+    /// a property of the answer rather than a comparison repeated at every prompt the event loop
+    /// waits on. [`Self::decision`] cannot carry it: both answers refuse, and refusing is all the
+    /// turn is told.
+    pub fn stops_the_turn(self) -> bool {
+        match self {
+            Answer::Approve | Answer::Reject => false,
+            Answer::Interrupt => true,
+        }
+    }
 }
 
 /// Draw the prompt and wait for an answer.
@@ -328,14 +341,22 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
 
 /// What the user did with a run question.
 ///
-/// Three answers rather than the write prompt's two. "Yes, and stop asking" is a different thing
+/// Four answers rather than the write prompt's two. "Yes, and stop asking" is a different thing
 /// from "yes", and it is the one that changes what happens next time, so it is a key of its own
-/// rather than a follow-up question nobody would read.
+/// rather than a follow-up question nobody would read. "Yes, and stop asking tomorrow as well" is a
+/// different thing again, and it is a third key rather than a wider reading of the second: the two
+/// grant different things and last different lengths of time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunAnswer {
     Approve,
     /// Run it, and vouch for its programs for the rest of the session.
     ApproveAlways,
+    /// Run it, and record this exact line so every session in this directory runs it unasked.
+    ///
+    /// A different thing from `ApproveAlways` and never a wider version of it: it decides how long
+    /// an answer lasts, where the other decides what a label is. The row says so in as many words,
+    /// because one word saying `always` is what could be read as either.
+    ApproveAndRecord,
     Reject,
     /// Refuse the run and stop the turn that asked for it.
     Interrupt,
@@ -348,7 +369,21 @@ impl RunAnswer {
         match self {
             RunAnswer::Approve => RunDecision::approve(),
             RunAnswer::ApproveAlways => RunDecision::approve_always(),
+            RunAnswer::ApproveAndRecord => RunDecision::approve_and_record(),
             RunAnswer::Reject | RunAnswer::Interrupt => RunDecision::reject(),
+        }
+    }
+
+    /// Whether the turn that asked stops as well as being refused. As [`Answer::stops_the_turn`],
+    /// and for the same reason: the run prompt offers more answers, and all but one of them leave
+    /// the turn running.
+    pub fn stops_the_turn(self) -> bool {
+        match self {
+            RunAnswer::Approve
+            | RunAnswer::ApproveAlways
+            | RunAnswer::ApproveAndRecord
+            | RunAnswer::Reject => false,
+            RunAnswer::Interrupt => true,
         }
     }
 }
@@ -358,11 +393,16 @@ impl RunAnswer {
 /// Separated from the loop so it can be tested without a terminal.
 ///
 /// Takes the request and not only the key, because which keys the prompt offers depends on what
-/// is being asked. A run that releases private data is asked about every time whatever is
-/// remembered, so the prompt neither draws `a` nor promises anything about it, and the answer has
-/// to agree with the drawing: a key that grants a standing permission the same screen says cannot
-/// be granted is worse than an unbound one. Unbound is what it becomes, for the reason Enter is:
-/// this prompt starts a program, and a key pressed out of habit from the previous prompt must not.
+/// is being asked. A run an entry could not record is asked about every time whatever is remembered,
+/// so the prompt neither draws `a` nor promises anything about it, and the answer has to agree with
+/// the drawing: a key that grants a standing permission the same screen says cannot be granted is
+/// worse than an unbound one. Unbound is what it becomes, for the reason Enter is: this prompt starts
+/// a program, and a key pressed out of habit from the previous prompt must not. Which runs those are
+/// is [`RunRequest::can_be_remembered`], asked here and again where the prompt is drawn.
+///
+/// `r` is the same rule over the wider of the two lifetimes: it is bound only where the request
+/// says where the answer would be written, which is the driver having decided the key would stop a
+/// later prompt at all.
 fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
     // The prompt blocks the whole interface, so without this Ctrl-C would do nothing at the one
     // moment a user is most likely to press it.
@@ -375,8 +415,14 @@ fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
 
     match key.code {
         KeyCode::Char('y' | 'Y') => Some(RunResponse::Answer(RunAnswer::Approve)),
-        KeyCode::Char('a' | 'A') if !request.releases_private() => {
+        KeyCode::Char('a' | 'A') if request.can_be_remembered() => {
             Some(RunResponse::Answer(RunAnswer::ApproveAlways))
+        }
+        // Unbound where the prompt did not draw it, for the reason `a` is: a key granting something
+        // the same screen says cannot be granted is worse than an unbound one, and this key's grant
+        // outlives the session that could have corrected it.
+        KeyCode::Char('r' | 'R') if request.may_record() => {
+            Some(RunResponse::Answer(RunAnswer::ApproveAndRecord))
         }
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(RunResponse::Answer(RunAnswer::Reject)),
         KeyCode::Up => Some(RunResponse::Scroll(-1)),
@@ -442,6 +488,11 @@ pub fn ask_run<B: Backend>(terminal: &mut Terminal<B>, request: &RunRequest) -> 
 fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u16 {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::accent(), t!(run_title));
+
+    // Worked out once and read by both the explanation and the key row, so a drawing cannot offer a
+    // key it has just said is unavailable. [`run_answer_for`] asks the same question again rather
+    // than being told the answer, because a grant must not rest on a drawing.
+    let offers_always = request.can_be_remembered();
 
     let steps = request.plan.steps();
     let mut lines = vec![
@@ -546,8 +597,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
     // is the one nothing else in the interface would tell them: what the command prints stops
     // being quarantined and the model reads it. Nothing checks that assertion, so the person
     // making it has to be asked for it in those terms.
-    let vouching = request.would_vouch_for();
-    if !request.releases_private() {
+    if offers_always {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
             format!("  {}", t!(run_always_explained)),
@@ -555,7 +605,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         )));
         // The command first, then what trusting it means. The claims are about this, so a reader
         // should have it in front of them before reading them.
-        for command in &vouching {
+        for command in request.would_vouch_for() {
             lines.push(Line::from(Span::styled(
                 format!("       {}", command.display()),
                 Style::default().add_modifier(Modifier::BOLD),
@@ -580,11 +630,86 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
             Style::default().fg(theme::muted()),
         )));
     } else {
-        // Private input asks every time whatever is remembered, so offering to stop asking would
-        // be offering something that will not happen.
+        // Each of these asks every time whatever is remembered, so offering to stop asking would be
+        // offering something that will not happen. Every reason that holds is given, not the first
+        // one: a reader who acts on the only reason they were shown and still sees no `a` has been
+        // told to change the wrong thing about the line.
+        lines.push(Line::raw(""));
+        let mut why = Vec::new();
+        if request.releases_private() {
+            why.push(t!(run_private_not_remembered));
+        }
+        if request.carries_an_assignment() {
+            why.push(t!(run_assignment_not_remembered));
+        }
+        for reason in why {
+            lines.push(Line::from(Span::styled(
+                format!("  {reason}"),
+                Style::default().fg(theme::muted()),
+            )));
+        }
+    }
+
+    // What `r` would grant, where it is offered. Three things a reader cannot get from the key's
+    // one word: that it lasts past this session, that every session in this directory reads it, and
+    // that it stops the asking without making anything readable. The place it is written down is
+    // part of the grant rather than a footnote, because nobody can endorse a record they were not
+    // shown, and deleting the line from that file is the way back.
+    if let Some(path) = &request.record {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
-            format!("  {}", t!(run_private_not_remembered)),
+            format!("  {}", t!(run_remember_explained)),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_remember_every_session)),
+            Style::default().fg(theme::muted()),
+        )));
+        // The half a person is most likely to assume the other way, since the key beside it does
+        // grant it, so it is the half that is coloured.
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_remember_only_asking)),
+            Style::default().fg(theme::running()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_remember_where)),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("       {}", path.display()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    // What answers a line whose arguments differ from one run to the next, since no key on this
+    // screen does. Drawn only where the person has already answered a prompt for this binary under
+    // other arguments, so it is not a sentence every prompt carries. It names the file rather than
+    // a pattern to put in it: which argument held the message is a judgment about the program, and
+    // a box with a pattern already filled in would be this system making that judgment. The costs
+    // are given with it because a pattern grants more than anything here, and somebody answering
+    // the same shape of prompt all day would otherwise learn the durable form from nowhere.
+    if let Some(path) = &request.pattern {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", t!(run_pattern_varies)),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_pattern_where)),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("       {}", path.display()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        // The half that makes a pattern a wider grant than any key here, so it is the half that is
+        // coloured.
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_pattern_covers_unread)),
+            Style::default().fg(theme::running()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_pattern_only_asking)),
             Style::default().fg(theme::muted()),
         )));
     }
@@ -598,9 +723,9 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         ),
         Span::raw(format!(" {}    ", t!(run_yes))),
     ];
-    // Offered only where it would do something. Private input asks every time whatever is
-    // remembered, so the key would promise something that will not happen.
-    if !request.releases_private() {
+    // Offered only where it would do something. A line no entry could record asks every time
+    // whatever is remembered, so the key would promise something that will not happen.
+    if offers_always {
         key_spans.push(Span::styled(
             "a",
             Style::default()
@@ -608,6 +733,18 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
                 .add_modifier(Modifier::BOLD),
         ));
         key_spans.push(Span::raw(format!(" {}    ", t!(run_always))));
+    }
+    // Drawn only where the driver said where the answer would go. `a` keeps its place on a prompt
+    // that offers no `r`, and its label still says which of the two lifetimes it is: the relabelling
+    // is what stops one word meaning either, so it is not conditional on this key being there.
+    if request.may_record() {
+        key_spans.push(Span::styled(
+            "r",
+            Style::default()
+                .fg(theme::running())
+                .add_modifier(Modifier::BOLD),
+        ));
+        key_spans.push(Span::raw(format!(" {}    ", t!(run_remember))));
     }
     key_spans.extend([
         Span::styled(
@@ -1365,6 +1502,7 @@ fn centred(area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use ratatui::backend::TestBackend;
 
     fn request(contents: &str, existing: Option<&str>) -> WriteRequest {
@@ -1428,6 +1566,10 @@ mod tests {
             append: false,
         }];
         RunRequest {
+            // A line naming a file to write is asked about however it was answered, so the prompt
+            // offers no key that would outlive the session.
+            record: None,
+            pattern: None,
             plan: bravebot_core::command::Plan {
                 line: "git log --oneline | tee > out.txt".to_string(),
                 directory: std::path::PathBuf::from("/home/someone/project"),
@@ -1627,6 +1769,9 @@ mod tests {
             }],
         };
         RunRequest {
+            // Private input is asked about every time, so neither standing key is offered.
+            record: None,
+            pattern: None,
             plan: bravebot_core::command::Plan {
                 line: "cat < /home/someone/.ssh/id_rsa".to_string(),
                 directory: std::path::PathBuf::from("/home/someone/project"),
@@ -1635,6 +1780,84 @@ mod tests {
                 reads: vec![secret],
                 stdin: None,
             },
+        }
+    }
+
+    /// A line carrying an assignment asks every time whatever is remembered, because an entry
+    /// records a program and its exact arguments and an assignment is in neither. The drawing and
+    /// the handler both have to withhold `a`, and the sentence has to give this reason rather than
+    /// the private-input one: a reader told the wrong reason cannot tell what to change about the
+    /// line.
+    #[test]
+    fn a_run_carrying_an_environment_assignment_offers_no_standing_permission() {
+        let drawn = rendered_run(&a_run_with_an_assignment());
+        assert!(
+            drawn.contains("cannot be remembered"),
+            "the prompt offered to remember a run that will always ask: {drawn}"
+        );
+        assert!(
+            drawn.contains("an assignment in front of a program"),
+            "the prompt did not say which of the two reasons this is: {drawn}"
+        );
+
+        let pressed = run_answer_for(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            &a_run_with_an_assignment(),
+        );
+        assert_eq!(
+            pressed, None,
+            "`a` answered a prompt that does not offer it"
+        );
+
+        let shouted = run_answer_for(
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE),
+            &a_run_with_an_assignment(),
+        );
+        assert_eq!(shouted, None, "the shifted spelling still answered");
+    }
+
+    /// Both reasons at once, as `LD_PRELOAD=./evil.so cat < secret.txt` is. A reader given only the
+    /// first one acts on it, sees no `a` appear, and has nothing left to tell them why: the two
+    /// reasons are independent, so the screen has to name every one that holds.
+    #[test]
+    fn a_run_that_is_private_and_carries_an_assignment_gives_both_reasons() {
+        let mut request = a_run_with_an_assignment();
+        request.plan.stdin = Some(bravebot_core::label::Label::trusted_private());
+
+        let drawn = rendered_run(&request);
+        assert!(
+            drawn.contains("private input is asked"),
+            "the prompt dropped the private-input reason: {drawn}"
+        );
+        assert!(
+            drawn.contains("an assignment in front of a program"),
+            "the prompt dropped the assignment reason: {drawn}"
+        );
+    }
+
+    /// A compiled plan with an assignment written in front of its program, as
+    /// `LD_PRELOAD=./evil.so git log` compiles.
+    fn a_run_with_an_assignment() -> RunRequest {
+        let step = bravebot_core::command::Step {
+            program: "git".to_string(),
+            resolved: std::path::PathBuf::from("/usr/bin/git"),
+            args: vec!["log".to_string()],
+            environment: vec![("LD_PRELOAD".to_string(), "./evil.so".to_string())],
+            routes: Vec::new(),
+        };
+        RunRequest {
+            plan: bravebot_core::command::Plan {
+                line: "LD_PRELOAD=./evil.so git log".to_string(),
+                directory: std::path::PathBuf::from("/home/someone/project"),
+                steps: bravebot_core::command::Steps::Pipeline(vec![step]),
+                writes: Vec::new(),
+                reads: Vec::new(),
+                stdin: None,
+            },
+            // What the driver hands over for such a line: it is asked about whatever is recorded,
+            // so there is nowhere an answer to it would be written.
+            record: None,
+            pattern: None,
         }
     }
 
@@ -1675,6 +1898,212 @@ mod tests {
         );
         assert_eq!(always, Some(RunResponse::Answer(RunAnswer::ApproveAlways)));
         assert!(RunAnswer::ApproveAlways.decision().remember);
+    }
+
+    /// A run prompt that may record its answer, as one in a session with somewhere to keep the
+    /// record looks. The path is what the prompt has to show, since nobody can endorse a record
+    /// they were not shown.
+    fn a_recordable_run() -> RunRequest {
+        RunRequest {
+            record: Some(std::path::PathBuf::from(
+                "/home/someone/.bravebot/remembered/-home-someone-project.jsonl",
+            )),
+            ..a_run(false)
+        }
+    }
+
+    /// RUN-19, PROMPT-6: the third answer has a key of its own. Pressing it approves the run and
+    /// records the line, and it vouches for nothing, which is the half `a` grants and this does not.
+    #[test]
+    fn the_run_keys_separate_this_session_from_every_session() {
+        let recorded = run_answer_for(
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+            &a_recordable_run(),
+        );
+        assert_eq!(
+            recorded,
+            Some(RunResponse::Answer(RunAnswer::ApproveAndRecord))
+        );
+
+        let decision = RunAnswer::ApproveAndRecord.decision();
+        assert!(decision.approved());
+        assert!(decision.record);
+        assert!(
+            !decision.remember,
+            "the key that decides a lifetime also vouched for the programs"
+        );
+        assert!(
+            !RunAnswer::ApproveAlways.decision().record,
+            "the key that decides a label also recorded an answer past the session"
+        );
+    }
+
+    /// RUN-19: the key is unbound where the prompt did not draw it. A key granting something the
+    /// same screen says cannot be granted is worse than an unbound one, and this key's grant
+    /// outlives the session that could have corrected it.
+    #[test]
+    fn a_prompt_that_offers_no_record_binds_no_key_to_one() {
+        for request in [a_run(false), a_run(true), a_compiled_run()] {
+            assert!(!request.may_record());
+            assert_eq!(
+                run_answer_for(
+                    KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+                    &request
+                ),
+                None,
+                "a key recorded an answer the prompt did not offer"
+            );
+        }
+    }
+
+    /// PROMPT-6: Enter does not reach the key whose grant outlives the session either.
+    #[test]
+    fn enter_does_not_record_a_run_past_the_session() {
+        assert_eq!(
+            run_answer_for(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &a_recordable_run()
+            ),
+            None
+        );
+    }
+
+    /// RUN-19: declining and Ctrl-C record nothing, which is what every standing grant here
+    /// requires. A refusal is not a reason to answer for anything past this moment.
+    #[test]
+    fn refusing_a_run_records_nothing_past_the_session() {
+        for answer in [RunAnswer::Reject, RunAnswer::Interrupt] {
+            let decision = answer.decision();
+            assert!(!decision.approved());
+            assert!(!decision.record, "{answer:?} recorded an answer");
+        }
+    }
+
+    /// The same drawing on a terminal tall enough to hold the whole body, for a test about what the
+    /// prompt says rather than about what scrolls.
+    fn fully_rendered_run(request: &RunRequest) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(160, 48)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw_run(frame, request, 0);
+            })
+            .expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    /// RUN-19: the prompt shows what would be recorded and where. The line is already on the
+    /// screen; the file is the part nothing else would tell them, and deleting a line from it is
+    /// the way back.
+    #[test]
+    fn a_prompt_offering_to_remember_says_where_the_record_goes() {
+        let drawn = fully_rendered_run(&a_recordable_run());
+        assert!(drawn.contains("remember it"), "{drawn}");
+        assert!(
+            drawn.contains("/home/someone/.bravebot/remembered"),
+            "the prompt offered a record without saying where it goes: {drawn}"
+        );
+        assert!(
+            drawn.contains("stays quarantined"),
+            "the prompt did not say the key leaves the output where it was: {drawn}"
+        );
+    }
+
+    /// RUN-19, PROMPT-6: the row is where the two lifetimes are told apart, and it says so on every
+    /// run prompt, including the ones that offer no `r`. A bare `always` is the one word this
+    /// relabelling exists to stop meaning two different things.
+    #[test]
+    fn the_row_says_which_lifetime_the_always_key_grants() {
+        for request in [a_run(false), a_recordable_run()] {
+            let drawn = rendered_run(&request);
+            assert!(
+                drawn.contains("always this session"),
+                "the row left `always` saying either lifetime: {drawn}"
+            );
+        }
+    }
+
+    /// RUN-19: a prompt with no record to offer draws no key for one, so nothing on the screen
+    /// promises something that will not happen.
+    #[test]
+    fn a_prompt_with_no_record_to_offer_draws_no_key_for_one() {
+        let drawn = rendered_run(&a_run(false));
+        assert!(!drawn.contains("remember it"), "{drawn}");
+    }
+
+    /// A run prompt for a line whose arguments have already differed, as the driver hands one over
+    /// once the same binary has been put to the person twice.
+    fn a_varying_run() -> RunRequest {
+        RunRequest {
+            pattern: Some(std::path::PathBuf::from(
+                "/home/someone/.bravebot/settings.json",
+            )),
+            ..a_recordable_run()
+        }
+    }
+
+    /// RUN-20: a line whose arguments differ next time is asked about again however it is answered
+    /// here, so the prompt says where the durable answer is written. Naming the file is the whole
+    /// of the advice: somebody told only that a pattern exists has been handed a chore without the
+    /// one fact they cannot get from the screen.
+    #[test]
+    fn a_prompt_for_a_line_whose_arguments_vary_names_the_settings_file() {
+        let drawn = fully_rendered_run(&a_varying_run());
+        assert!(
+            drawn.contains("/home/someone/.bravebot/settings.json"),
+            "the prompt advised a pattern without saying which file holds one: {drawn}"
+        );
+    }
+
+    /// RUN-20: a pattern grants more than any key on this screen, so the advice carries what it
+    /// costs. Advice that named only the relief would have somebody widening a grant on the
+    /// strength of a sentence that described half of it.
+    #[test]
+    fn a_prompt_for_a_line_whose_arguments_vary_says_what_a_pattern_costs() {
+        let drawn = fully_rendered_run(&a_varying_run());
+        assert!(
+            drawn.contains("covers lines nobody has read"),
+            "the advice left out what a pattern reaches that no key here does: {drawn}"
+        );
+        assert!(
+            drawn.contains("stays quarantined"),
+            "the advice left out that a pattern makes nothing readable: {drawn}"
+        );
+    }
+
+    /// RUN-20: no key here covers a family, so the advice must not read as one being offered. The
+    /// keys on the row are the same four whether the advice is drawn or not.
+    #[test]
+    fn advising_a_pattern_offers_no_key_that_grants_one() {
+        let drawn = fully_rendered_run(&a_varying_run());
+        assert!(
+            !drawn.contains("git commit *"),
+            "the prompt put a pattern on screen for somebody to accept: {drawn}"
+        );
+        assert_eq!(
+            run_answer_for(
+                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+                &a_varying_run()
+            ),
+            None,
+            "a key granted the family the advice says a file has to be edited for"
+        );
+    }
+
+    /// RUN-20: the advice is for the line whose arguments move, and saying it on every prompt would
+    /// be noise that hides the case it is for. A first prompt has nothing to compare against.
+    #[test]
+    fn a_prompt_for_a_line_nothing_has_varied_says_nothing_about_a_pattern() {
+        let drawn = fully_rendered_run(&a_recordable_run());
+        assert!(
+            !drawn.contains("settings.json"),
+            "a prompt advised a pattern for a line that repeats exactly: {drawn}"
+        );
     }
 
     /// Enter is the key most likely to be pressed out of habit, and this prompt starts a program.
@@ -1787,14 +2216,43 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(answer_for(key), Some(Response::Answer(Answer::Interrupt)));
         assert_eq!(Answer::Interrupt.decision(), Decision::Reject);
+        assert!(
+            Answer::Interrupt.stops_the_turn(),
+            "the interrupt refused the write and left the turn running"
+        );
     }
 
     /// Refusing one write leaves the turn running, which is what makes it different from
-    /// interrupting.
+    /// interrupting. The decision the turn is told is `Reject` either way, so the key mapping
+    /// alone says nothing about which of the two happened: what separates them is here.
     #[test]
     fn saying_no_does_not_stop_the_turn() {
         let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
         assert_eq!(answer_for(key), Some(Response::Answer(Answer::Reject)));
+        assert_eq!(Answer::Reject.decision(), Decision::Reject);
+        assert!(
+            !Answer::Reject.stops_the_turn(),
+            "saying no to one write ended the turn"
+        );
+    }
+
+    /// The same at the run prompt, which has three ways of approving and one of refusing before
+    /// the interrupt. Every one of them leaves the turn running, so a person who declines a
+    /// command keeps the work that was going to use it.
+    #[test]
+    fn only_the_interrupt_stops_the_turn_at_a_run_prompt() {
+        for answer in [
+            RunAnswer::Approve,
+            RunAnswer::ApproveAlways,
+            RunAnswer::ApproveAndRecord,
+            RunAnswer::Reject,
+        ] {
+            assert!(
+                !answer.stops_the_turn(),
+                "{answer:?} ended the turn that asked"
+            );
+        }
+        assert!(RunAnswer::Interrupt.stops_the_turn());
     }
 
     #[test]
@@ -1953,6 +2411,10 @@ mod tests {
         );
     }
 
+    /// A prompt that panics on a small terminal takes the session with it, and one that drops the
+    /// question is worse: it blocks everything else while showing nothing to answer, and a key
+    /// pressed at it answers a question that was never on the screen. So the small case is held to
+    /// what it asks about and the key that answers, not merely to surviving the draw.
     #[test]
     fn a_tiny_terminal_still_renders_the_prompt() {
         let mut terminal = Terminal::new(TestBackend::new(20, 8)).expect("terminal");
@@ -1961,6 +2423,22 @@ mod tests {
                 draw(frame, &request("x", None), 0);
             })
             .expect("must not panic on a small area");
+
+        let drawn: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            drawn.contains("src/main.rs"),
+            "the prompt did not say what it was asking about: {drawn}"
+        );
+        assert!(
+            drawn.contains("write it"),
+            "the key that approves the write was drawn out of view: {drawn}"
+        );
     }
 
     /// The bar the renderer draws down the margin.

@@ -477,6 +477,23 @@ answered.
 `verified-by: bravebot_tui::sessions::an_answer_the_planner_could_not_have_held_is_not_written_down`
 `verified-by: bravebot_agent::turn::an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down`
 
+<a id="WATCH-21"></a>
+### WATCH-21: a question asks for no cache of the exchange it is asked beside
+
+An aside's request marks its own instructions for caching and marks nothing on the end of the
+exchange it carries.
+
+**Why.** A cache write is charged above the fresh tokens it covers, and it buys something only where
+a later request sends the same prefix again. A mark would sit at the end of everything the request
+holds, which is the question the person typed, and an aside adds nothing to the exchange it was
+asked beside, so what the write stored could only be read back by a later question repeating those
+words. Nothing sends that prefix again.
+
+**The instructions keep their mark**, being the same bytes every question, which is what marking a
+prompt is for. What is given up is a write and no read.
+
+`verified-by: bravebot_agent::turn::a_question_asked_beside_the_work_asks_for_no_cache_of_the_exchange`
+
 ## Known costs
 
 - **A delegate that runs long enough loses its oldest work.** Several hundred calls in, the start

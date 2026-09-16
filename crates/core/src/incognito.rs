@@ -33,7 +33,7 @@
 //! directory this process owns. [`bravebot-sandbox`] is the crate that confines somebody else's
 //! code, and it confines subprocesses rather than this one.
 //!
-//! [`bravebot-sandbox`]: https://github.com/brave-experiments/bravebot
+//! [`bravebot-sandbox`]: https://github.com/brave/bravebot
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

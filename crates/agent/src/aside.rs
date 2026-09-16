@@ -176,7 +176,10 @@ pub fn ask<S: Sink>(
     // below adds to it. A question that could call a tool would be a turn, and a turn is the
     // thing this exists to avoid being.
     let model = chat.model.unwrap_or(&chat.config.default_model);
-    let request = ChatRequest::new(model, question.messages);
+    // The exchange is given up once this answers, so nothing asks for a cache of it: a mark would
+    // sit on the question at the end of the request, which only a later question repeating those
+    // words could read back. The instructions keep their mark, being the same bytes every question.
+    let request = ChatRequest::new(model, question.messages).giving_up_its_conversation();
 
     let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
     if let Some(cancel) = chat.cancel {

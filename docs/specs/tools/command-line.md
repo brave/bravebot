@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/cmdline.rs
   - crates/agent/src/exec.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/turn.rs
   - crates/agent/src/programs.rs
   - crates/core/src/command.rs
   - crates/core/src/pure.rs
@@ -371,9 +372,10 @@ for whatever a rule spelled the same way says, because the map compares names by
 climbing path names a file through a directory nobody wrote a rule about.
 
 Each path is asked about under every name the map may hold a rule about it by, and answers as the
-weakest of them. A relative name and an absolute one are separate namespaces
-([trust-map.md](../trust-map.md#TRUST-3)), so a file inside the workspace has one of each, and the
-spelling a line happened to use is not a decision anybody made about the file. A directory the
+weakest of them. A name is reduced to the open directory it lands in before the map sees it, and
+that reduction needs a filesystem ([trust-map.md](../trust-map.md#TRUST-18)), which this road does
+not have: so a file inside the workspace is asked about under the relative name and the full one
+both, and the spelling a line happened to use is not a decision anybody made about the file. A directory the
 project sits in is trusted by an answer about that directory
 ([TRUST-9](../trust-map.md#TRUST-9)), so an absolute name answered alone would give a project file
 the label of a directory it is merely reachable through, and a relative name answered alone would
@@ -527,7 +529,8 @@ Absent one, a line runs where the last one ran, and the first runs at the worksp
 
 Nothing else carries over. `NAME=value` on one line does not affect the next, because there is no
 shell process between calls to hold it: each stage is spawned fresh with the process environment,
-less this agent's own credentials. A planner that needs a variable set puts it on the line that
+less this agent's own credentials and with the session's own directory named
+([TRUST-17](../trust-map.md#TRUST-17)). A planner that needs a variable set puts it on the line that
 needs it.
 
 **Why the asymmetry.** A directory is a routing field, shown at every prompt and endorsed with the
@@ -583,11 +586,22 @@ earned. A background run that is still going when the session ends is killed.
 The output of a background run obeys every other clause here. Backgrounding changes when the planner
 is told, never what it is allowed to read.
 
+**How the turn is told.** The turn asks its jobs between rounds whether any has ended, and puts the
+handle, the exit status and what it printed since anybody last looked into the conversation as a
+message of its own. Asking is polling and costs nothing: a job still running answers immediately,
+and nothing waits here, because a background job is for the program meant to keep going and a turn
+that waited would wait out a server. The account is given once, by whichever of the two routes got
+there first: a `job_output` call that already said the job had ended is the account, and the look
+between rounds passes over it rather than repeating it with the output gone.
+
 **Why this is a parameter and not the `&` token.** As syntax it would be one more thing the compiler
 has to model and one more thing a reader has to spot in a line. As a parameter it is a field on the
 call, visible in the prompt, and impossible to hide inside an argument.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_background_jobs_finish_reaches_the_turn_without_the_planner_asking`
+`verified-by: bravebot_agent::turn::a_silent_background_jobs_exit_code_reaches_the_turn_by_itself`
+`verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_quarantined_where_nobody_vouched_for_the_line`
+`verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept`
 
 <a id="CMDLINE-15"></a>
 ### CMDLINE-15: a program that wants a terminal is refused before it starts

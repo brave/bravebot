@@ -122,8 +122,11 @@ beside it. The channel names where to read the order id from, which is a fact ab
 browsers rather than about the agent. `--forget` therefore takes no channel.
 
 The file is created 0600 before anything is written to it, and is still 0600 after a re-import over
-an existing file. With no `HOME` there is nowhere a secret belongs, and that is reported rather than
-guessed at. `--forget` removes the file and is not an error when there is nothing to remove.
+an existing file. A platform with no way to restrict a file to one account has the import refused
+rather than written unrestricted, since what is kept here is a bearer token. The files beside it are
+written either way, which [state-directory.md](state-directory.md) records as the cost it is. With no
+profile directory named there is nowhere a secret belongs, and that is reported rather than guessed
+at. `--forget` removes the file and is not an error when there is nothing to remove.
 
 A malformed or empty file is reported as such rather than treated as absent credentials, and a
 credential without a token is rejected on load.

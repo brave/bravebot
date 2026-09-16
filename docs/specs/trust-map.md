@@ -9,6 +9,9 @@ governs:
   - crates/tui/src/sessions.rs
   - crates/tui/src/dropped.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/scratch.rs
+  - crates/cli/src/main.rs
+  - crates/tui/src/app.rs
 guards:
   - symbol: TrustStore::trust
   - symbol: TrustStore::distrust
@@ -44,12 +47,29 @@ Rules are keyed by path prefix and matched by whole segments. Both polarities ar
 a trusted tree may hold an untrusted subtree, which may hold a trusted path again. Equivalent
 spellings of a path are one rule, and a later decision replaces an earlier one.
 
+**Every key is a full path, and there is one namespace of them.** A caller may name a path
+relatively, which is how a file in the project is named, and the map reads that under the working
+directory it was made with: `src/main.rs` in a session working in `/work` is the rule
+`/work/src/main.rs`, and the working directory's own rule is `/work`. So the project's own rule is
+a path like any other rather than an empty prefix that covers everything, and a rule about a
+directory somebody opened by name (TRUST-9) is in the same map without reaching into the project:
+`/Users/x/notes` does not prefix `/Users/x/proj`, and whole-segment matching is what stops
+`/Users/x/proj` covering `/Users/x/proj-secret`. A rule about a directory that *does* hold the
+project covers the project's files, since the person vouched for a tree the project is in, and the
+project's own rules are the more specific ones wherever they exist.
+
 A rule is about a **path**, not about the files that were in it when the rule was made, and it is
 consulted when a file is read rather than when the rule is written. A file that appears in a
 trusted directory afterwards is therefore read as trusted, whoever put it there.
 
 **Why.** Per-file exceptions in both directions are the only way `@vendor/lib.js` can be trusted
 inside a `vendor` a person marked untrusted, without that answer leaking to its siblings.
+
+**Why one namespace.** Two of them, one for names under the working directory and one for names
+spelled in full, was the arrangement this replaced. It existed to stop the working directory's
+empty prefix covering every absolute path there is, and a rule on `/` covering every relative one.
+Full paths make both unreachable rather than guarded against, and a file that has a name of each
+kind then has one rule instead of two that could disagree.
 
 `verified-by: bravebot_core::trust::the_deepest_rule_wins_at_any_depth`
 `verified-by: bravebot_core::trust::an_untrusted_subpath_overrides_a_trusted_parent`
@@ -59,98 +79,22 @@ inside a `vendor` a person marked untrusted, without that answer leaking to its 
 `verified-by: bravebot_core::trust::every_equivalent_spelling_of_a_path_reaches_the_same_rule`
 `verified-by: bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_core::trust::a_later_decision_replaces_an_earlier_one`
-
-<a id="TRUST-3"></a>
-### TRUST-3: relative and absolute rules are separate namespaces
-
-Keeping two namespaces is a workaround rather than a preference, and
-[issue #24](https://github.com/brave-experiments/bravebot/issues/24) proposes replacing both with
-one map of full paths, which would remove this clause.
-
-A rule under the working directory decides nothing about a directory opened by absolute path, and
-the reverse. `/` is never treated as the empty prefix.
-
-**A key is `/`-spelled, and a leading slash is the whole of what makes one absolute.** A drive letter
-is not a root here and a backslash is not a separator: a key arrives spelled from `/`, and a
-backslash is a legal filename byte where paths are, so a file called `C:\notes` is a file in the
-project and its name has to reach the project's rules. Resolving a platform's path into a key
-therefore belongs to the workspace and not to the map, and every door that opens a directory by
-name, `/cd` as much as `/add-dir`, refuses a resolved name it cannot spell that way rather than
-handing over one that would be read as relative. Such a rule falls under the primary root's own
-empty prefix, which is the collapse this clause exists to prevent, reached by a name that never had
-a slash to strip.
-
-An absolute path that names and resolves inside the working directory is not in the absolute
-namespace at all: reading, writing, vouching for or quarantining a file the workspace reaches that
-way asks about its relative name, so those operations answer the same for a project file whichever
-way it was spelled. A `..` component keeps the name it was given, and an absolute rule covering the
-project decides nothing about the files inside it.
-
-Which name a path is asked about follows from what a rule is about. Every rule is written about a
-directory somebody opened, under the name that directory was opened as: the empty prefix for the
-working directory, and the path it resolved to for one opened by name (TRUST-9). A path is therefore
-reduced to the open directory it lands in, taking that directory's recorded name with the rest of
-the path as it was spelled. This is the rule that two spellings of a path are one rule (TRUST-2),
-extended to the spellings only a filesystem can tell apart: a directory named through a link is the
-same directory, and `/tmp` being a link to `/private/tmp` is what a person types rather than a
-corner. A path landing in no open directory is asked about as written, and so is one that reaches an
-open directory by a link straight into the middle of it rather than through that directory's own
-name: neither has a spelling under a recorded name, and nothing covers either.
-
-**Why.** The working directory's own rule is the **empty** prefix, since every path in the project
-is named relative to it. Match absolute paths against that same map and the empty prefix covers
-every one of them, so answering yes at startup would silently vouch for every directory opened
-later and for anything else named by absolute path. The reverse holds too: a rule on `/` would
-cover every relative path in the project. Keeping the two apart is what stops either answer
-reaching where it was never given.
-
-The same relative path also exists in both places and names different files, so even without the
-prefix problem one map could not tell them apart.
-
-The reduction is what keeps that separation from splitting a file the project already holds. Only a
-directory the project sits inside makes such a path reachable at all (TRUST-9, TRUST-10), and after
-that the same file has a name in each namespace: the startup answer covering the workspace
-(TRUST-7) would cover only half of what it named, and a write reconciling under one name would say
-nothing about the other. Which way round the two are reconciled follows from the same clause: an
-absolute rule reaching inside the project is an answer given about a directory and not about the
-work, so the project's own rules decide its files and a directory added above it does not.
-
-Where the path lands decides which directory's name it takes and the spelling decides the rest, and
-each half answers a different question. A name spelled inside the project that lands out of it takes
-the name of the directory it lands in and not the project's, because the project has no rules about
-a file it does not hold and confinement refuses that name's relative spelling outright. Taking only
-the ancestor that reaches an open directory, rather than the whole destination, is what keeps the
-reduction from being a laundering step of its own: resolving the rest would return the rule for a
-*different* name, so a file in an untrusted subtree would be readable as trusted through a link
-inside that subtree. A file with two names of its own therefore still has two rules, which is a cost
-of keying on the name and is written down below.
-
-The reduction is the workspace's, so it holds for what the workspace does: the reads, writes,
-listings, vouches and quarantines that go through it. A proven `run` line has no reduction to make,
-because it need not settle which name is the file's: it asks this map under every name the operand
-has and labels its output from the weakest answer
-([tools/command-line.md](tools/command-line.md#CMDLINE-8)). That is stronger than the reduction
-wherever the two differ, and it is the form that road can hold, since nothing there has a filesystem
-to settle a name with. One thing stays outside both: the prompt before a write asks under the
-spelling it was given, since it also matches the rules a person wrote in advance and those are
-matched on the path as written, so it asks where a reduced name would not have.
-
-`verified-by: bravebot_core::trust::an_absolute_rule_does_not_decide_a_relative_path`
-`verified-by: bravebot_core::trust::a_name_that_is_a_root_on_another_platform_is_a_relative_key`
-`verified-by: bravebot_agent::workspace::a_directory_the_trust_map_cannot_key_is_refused`
+`verified-by: bravebot_core::trust::a_path_named_in_full_reaches_the_rule_its_relative_name_wrote`
+`verified-by: bravebot_core::trust::a_rule_outside_the_working_directory_decides_nothing_inside_it`
 `verified-by: bravebot_core::trust::trusting_the_workspace_says_nothing_about_an_added_directory`
-`verified-by: bravebot_core::trust::trusting_the_filesystem_root_does_not_trust_the_workspace`
-`verified-by: bravebot_core::trust::one_added_directory_does_not_cover_a_sibling`
+`verified-by: bravebot_core::trust::a_directory_vouched_for_above_the_project_covers_the_project`
+`verified-by: bravebot_core::trust::trusting_the_filesystem_root_covers_the_working_directory_too`
 `verified-by: bravebot_core::trust::the_deepest_absolute_rule_wins`
+`verified-by: bravebot_core::trust::one_added_directory_does_not_cover_a_sibling`
 `verified-by: bravebot_core::trust::equivalent_absolute_spellings_are_the_same_rule`
 `verified-by: bravebot_core::trust::every_equivalent_absolute_spelling_reaches_the_same_rule`
-`verified-by: bravebot_agent::workspace::a_project_file_named_absolutely_is_read_under_its_relative_rule`
-`verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
-`verified-by: bravebot_agent::workspace::a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule`
-`verified-by: bravebot_agent::workspace::a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rule`
-`verified-by: bravebot_agent::workspace::a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule`
-`verified-by: bravebot_agent::workspace::a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule`
-`verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
+
+<a id="TRUST-3"></a>
+### TRUST-3: withdrawn, relative and absolute rules are separate namespaces
+
+Replaced by TRUST-2, which keys every rule under a full path, so that the collapse two namespaces
+were kept apart to prevent is unreachable rather than guarded against, and by TRUST-18, which owns
+which name a path is asked about.
 
 ## What a write does
 
@@ -213,12 +157,21 @@ Every session start asks, whatever any earlier session in that directory answere
 a session and therefore asks. `--resume` does not ask, and restores the map from the record of the
 session chosen; a record from before maps were kept has none, and is asked about.
 
+**What the record keeps is the name, not the key.** A rule inside the project is written down
+relative to it and a rule outside is written down in full, and a resume reads the relative ones
+under the directory it is resuming into. The map holds full paths (TRUST-2), and a record of those
+would fail quietly the moment the checkout was moved or renamed: every rule would name a path that
+is no longer there, nothing would match, and the session would resume behaving as though nobody had
+vouched for anything. Recording the name and putting the directory back on it at load is what keeps
+a record about the same files.
+
 **Why.** The question grants standing permission. Honouring last week's answer grants it on behalf
 of a user who was never asked, and trust assumed from silence is not trust granted. A resume is not
 an exception: the answer honoured is the one that session's own user gave, and it carries the rules
 that session's writes recorded, which is what stops a resumed turn reading back a file an earlier
 turn of the same session poisoned.
 
+`verified-by: bravebot_tui::sessions::a_record_resumes_its_rules_under_the_directory_it_is_read_in`
 `verified-by: bravebot_tui::app::a_fresh_session_is_asked_rather_than_inheriting_a_map`
 `verified-by: bravebot_tui::app::a_resume_starts_with_the_map_its_own_record_kept`
 `verified-by: bravebot_tui::app::a_record_from_before_maps_were_kept_is_asked_about`
@@ -314,11 +267,17 @@ any of what it had done. One prompt would have let it read the file.
 <a id="TRUST-9"></a>
 ### TRUST-9: `/add-dir` makes a directory both reachable and trusted, for the session
 
-`/add-dir ~/notes` records an absolute rule (TRUST-3) that does two things together: the directory
-becomes reachable, since an absolute path is otherwise refused whatever the map says, and it is
-recorded as trusted. It lasts the session, `--resume` carries both halves, and `/clear` closes it.
+`/add-dir ~/notes` records a rule under that directory's own path (TRUST-2) that does two things
+together: the directory becomes reachable, since an absolute path is otherwise refused whatever the
+map says, and it is recorded as trusted. It lasts the session, `--resume` carries both halves, and `/clear` closes it.
 A directory already inside the project is refused. A directory a resume cannot open again, because
 it has moved or gone, is said so rather than passed over.
+
+A directory that *holds* the project is not refused, and the rule it records covers the project's
+files as it covers everything else in that tree. Vouching for a directory is a standing statement
+about the place (TRUST-2) and the project is in it, so there is nothing to except. The project's own
+rules are the more specific ones and still decide wherever they exist, which is what keeps a no
+given inside the project from being undone by a yes given above it.
 
 **Why.** Either half alone is no use, one leaving a rule about files nothing can open and the other
 leaving a directory that prompts on every edit. It closes with the session for the reason every
@@ -338,8 +297,9 @@ outlive the answer that allowed it.
 ### TRUST-10: no rule extends reach; reading, writing and listing stay confined
 
 Reading, writing, editing, listing and searching are confined to the working directory and to
-whatever has been opened beside it. `..` and an absolute path outside those are refused rather than
-resolved, in an added directory exactly as in the project, and a symlink leaving one is refused.
+whatever has been opened beside it, the directory the session was given among them (TRUST-16). `..`
+and an absolute path outside those are refused rather than resolved, in an added directory exactly as
+in the project, and a symlink leaving one is refused.
 A relative path always means the project, so no file has two spellings. Naming a directory
 includes nothing, since a directory is somewhere to type through rather than a file to read.
 
@@ -394,20 +354,21 @@ means from then on, where commands run, and where the project's own instructions
 The directory left behind closes, and so does any directory opened by name that holds the new one
 or sits inside it, each said out loud as it happens.
 
-The map does not travel unchanged. Every rule is re-spelled to say what it always said about the
-same files: a rule inside the new working directory becomes a rule relative to it, and a rule
-outside becomes an absolute one. Only then is the new directory vouched for, on the same footing
-as `/add-dir`: the person typed the path, and a later decision replaces an earlier one.
+The map travels with the session and says what it always said. Every rule is keyed on the full path
+it is about (TRUST-2), so a working directory that moves carries none of them with it: each still
+names the file it always named, and what changes is which of them a relative name reaches and how
+each is spelled back. The new directory is then vouched for, on the same footing as `/add-dir`:
+the person typed the path, and a later decision replaces an earlier one.
 
-**Why.** A relative rule means a path under the working directory, so a working directory that
-moved without them would leave every one of them pointing at a file nobody decided anything about:
-the yes given for one project would vouch for another, and every no given inside the old one would
-be forgotten. Re-spelling grants and withdraws nothing, which is what makes it something this can
-do without asking.
+**Why.** A yes given for one project must not become a yes for another, and a no given inside the
+old one must not be forgotten. Both follow from a rule naming the file rather than the directory it
+was written from, and neither grants nor withdraws anything, which is what makes this something
+that can be done without asking.
 
-Nothing may overlap the new working directory, and that is not tidiness. A file reachable both
-relatively and by absolute path has one rule in each namespace, and the two namespaces are kept
-apart (TRUST-3) precisely so that one file has one answer.
+Nothing may overlap the new working directory, and that is not tidiness: a directory that holds the
+new root, or sits inside it, is reachable through the root already, so leaving it open would record
+a second open directory for a path to be named under (TRUST-18) with nothing to choose between
+them.
 
 `verified-by: bravebot_core::trust::a_yes_for_one_project_does_not_follow_a_move_to_another`
 `verified-by: bravebot_core::trust::a_no_inside_the_new_directory_survives_the_move`
@@ -423,9 +384,9 @@ apart (TRUST-3) precisely so that one file has one answer.
 
 ## A scratch directory outside the workspace
 
-An intermediate file has nowhere to go. TRUST-10 confines reading, writing, editing, listing and
-searching to the working directory and to whatever was opened beside it, and decides confinement by
-where an operation lands rather than by how a path is spelled. A redirection target on a command
+Without a directory of its own a session has nowhere to put an intermediate file. TRUST-10 confines
+reading, writing, editing, listing and searching to the working directory and to whatever was opened
+beside it, and decides confinement by where an operation lands rather than by how a path is spelled. A redirection target on a command
 line is a write destination held to that same confinement
 ([tools/command-line.md](tools/command-line.md)), so `cargo metadata > /tmp/meta.json` is refused
 before the map is consulted at all. That is not a missing grant. The map decides which reachable
@@ -436,114 +397,306 @@ machine has left in a world-writable directory as trusted input in the same acti
 writing into the project, where the file is untracked and a build, a test run, a `git add -A` and a
 reviewer each have to deal with it, and somebody has to remember to delete it.
 
-The decision is that a session is given a directory of its own in the system temporary directory,
-that its reach is granted without asking while the label on it is the workspace's own, and that
-nothing in it outlives the session. Nothing in this section is in force, and no session has such a
-directory. The clauses above are what one is held to once a session has it.
+<a id="TRUST-14"></a>
+### TRUST-14: a session is given a directory of its own, outside the project
 
-**Where it lives.** In the system temporary directory, under a name carrying this program's own
-prefix and enough besides to tell two apart, created rather than opened so that a name already taken
-is refused. This is what the editor hand-off already does with the one file it has to write
-([incognito.md](incognito.md#INCOG-8)), and the reasoning there carries over unchanged: on a shared
-temporary directory an existing name may be something another account left pointing at a file of
-theirs, and refusing to reuse one is what keeps a write from going through it. On Unix the directory
-is created with mode `0700`, which is the other half of that, and is what keeps another account away
-from what lands inside, because a file arriving there comes in at a umask whether this program
-opened it for a redirection or a program wrote it itself.
+A session has a directory of its own in the system temporary directory, created as the session
+opens. Its name carries this program's prefix and enough besides to tell two sessions apart. It is
+created rather than opened, so a name something else holds is refused rather than adopted, and on
+Unix it is created with mode `0700`. `/status` reports it as the session's own. A one-shot run has
+one for as long as it runs. A session that cannot be given one runs without one and says so.
 
-Which directory that is, on every platform, is a question the standard library already answers: it
-reads `TMPDIR` on Unix and falls back to `/tmp`, and on Windows it asks the operating system, which
-resolves `TMP`, then `TEMP`, then the profile directory. An undefined `TMPDIR` therefore needs no
-handling of this program's own and no platform call written here. What does not carry across is the
-mode, which is Unix's: the Windows temporary path is ordinarily the account's own and takes its
-permissions from that, and the refusal to reuse a name is what covers the rest.
+**Why.** Both of the other places to put an intermediate file cost more than this one. In the
+project it is a file a build, a test run, a `git add -A` and a reviewer each have to deal with, and
+one somebody has to remember to delete; it is also a file several walks would each have to be taught
+to skip, none of them reading a project's ignore file, on the ground that a tree that can hide its
+files from a search can hide them from review ([tools/search.md](tools/search.md)). Reached by
+`/add-dir /tmp` it costs the trust that line grants in the same action, over everything every other
+process on the machine has left in a world-writable directory. Out here neither is true.
 
-Not a fixed name, and not a fixed name with the session's identifier inside it. On macOS the system
-temporary directory is the account's own, but on Linux it is ordinarily the world-writable `/tmp`,
-where any name this program would compose is one another account can create, or point somewhere
-else, before this program gets there.
+Which directory the platform keeps temporary files in is a question the standard library already
+answers: `TMPDIR` on Unix, falling back to `/tmp`, and on Windows the operating system's own answer,
+which resolves `TMP`, then `TEMP`, then the profile directory. An undefined `TMPDIR` therefore needs
+nothing written here.
 
-Not under the working directory, which is how this section first read. A directory in the project is
-one that several walks have to be taught to skip, each keeping its own list and none of them reading
-a project's ignore file, on the ground that a tree that can hide its files from a search can hide
-them from review ([tools/search.md](tools/search.md)): a search and a glob expansion, a listing, and
-the picker `@` reads from ([naming-files.md](naming-files.md)). It is reported by a repository until
-an ignore file is written to hide it, its name has to be one no project uses for its own sources,
-and even empty it says a session ran in this project at this time, which is most of what an
-incognito session declines to write ([incognito.md](incognito.md)). Out here none of that holds, and
-none of it has to be built.
+Created rather than opened, and `0700`, because that directory is shared. On macOS it is the
+account's own, but on Linux it is ordinarily the world-writable `/tmp`, where a name this program
+composes is one another account can create first, or leave pointing at a file of theirs. Refusing a
+name already taken is what keeps a write from going through one of those, and the mode is what keeps
+another account away from what lands inside, because a file arriving there comes in at a umask
+whether this program opened it for a redirection or a program wrote it itself. It is what the editor
+hand-off already does with the one file it has to write ([incognito.md](incognito.md#INCOG-8)). The
+mode is Unix's alone: the Windows temporary path is ordinarily the account's own and takes its
+permissions from that, and the refusal to reuse a name covers the rest.
 
-**Its reach is granted, its trust is not.** The directory is outside the working directory, so
-nothing reaches it unless something says so, and what says so here is this program rather than a
-person. The grounds are that the directory was created here, empty, owned by this account and
-readable by nobody else, so there is no content in it anybody could be asked to vouch for. Those are
-grounds about reach and they do not extend to trust: TRUST-1 is that nothing is trusted until it is
-granted, and a directory this program created is not a person's answer. Emptiness is also true only
-for an instant, and what keeps it true afterwards is the ownership and the mode rather than anything
-the map records.
+Enough in the name to tell two apart rather than a fixed name, because two sessions sharing one
+directory could each read and overwrite what the other wrote, and because a fixed name is one
+another account can take first. Not the session's identifier either, which would name a session in
+a directory anybody on the machine can list.
 
-So no label is granted with the reach, and the directory carries no rule of its own. A path under it
-is answered the way a path in the workspace is: by what was said at startup (TRUST-7), which trusts
-nothing when it was declined, and then per file by reconciliation, which marks the exact path a
-write went to (TRUST-4, TRUST-5). A line whose output is untrusted therefore distrusts the scratch
-file it redirected into, under the name the line spelled
-([tools/command-line.md](tools/command-line.md)), which is the case worth having right in a
-directory of intermediate files.
+Saying so rather than refusing to open the session, because a session with nowhere to put an
+intermediate file can still do everything else.
+
+`verified-by: bravebot_agent::scratch::a_session_is_given_a_directory_of_its_own`
+`verified-by: bravebot_agent::scratch::a_name_something_else_holds_is_refused`
+`verified-by: bravebot_agent::scratch::nobody_else_may_read_what_a_session_writes_there`
+`verified-by: bravebot_tui::status::the_sessions_scratch_directory_is_reported_for_what_it_is`
+`verified-by: bravebot_tui::status::a_session_with_no_scratch_directory_reports_none`
+
+<a id="TRUST-15"></a>
+### TRUST-15: nothing in the session's directory outlives the session
+
+The directory goes as the session ends, with everything written in it, whether the session ended by
+being left or by an error on the way out. A session that carries on from another is given its own: a
+resume, a fork, and the session `/clear` begins each open a new directory, and the one belonging to
+the session they followed is removed rather than handed on.
+
+**Why.** A resume can come days later, and bytes surviving that gap are a cache nothing evicts.
+There is nothing to reconstruct anyway, since the name carries what tells one directory from its
+neighbours rather than the session's identifier. What a cleared context wrote is not something the
+session after it should find lying there either.
+
+A `/cd` needs nothing done to the directory, which is the one lifetime rule this location removes
+rather than restates: the directory is not under the working directory, so a move does not leave it
+behind, and there is no ordering to get right between removing it and still being able to reach it
+(TRUST-13).
+
+`verified-by: bravebot_agent::scratch::nothing_written_in_it_outlives_the_session`
+`verified-by: bravebot_agent::scratch::no_two_sessions_are_given_the_same_directory`
+
+<a id="TRUST-16"></a>
+### TRUST-16: the session's directory is reachable, and its reach grants no trust
+
+A path under the session's own directory resolves, so a file there is read, written, listed and
+searched by its absolute path. What that reach covers is that directory: the temporary directory it
+sits in is not reachable, a path leaving it is refused as one leaving the project is (TRUST-10), and
+it is not one of the directories the user opened by name.
+
+Neither `/add-dir` nor `/cd` takes it, and a directory inside it is refused the same way. Adding it
+would write a rule over a directory whose whole point is carrying none, and it is reachable without
+one already. Moving into it would make the working directory a directory this session removes when it
+ends, leaving every read after that against a directory that is no longer there. The temporary
+directory it sits in is not refused, since that is a directory a person may open and their answer
+about it is theirs to give.
+
+Nothing is trusted for being there. The directory carries no rule of its own, and a path under it
+that no rule covers is answered by what was said about the workspace (TRUST-7), which trusts nothing
+where it was declined. Per file the answer is reconciliation's, marking the exact path a write went
+to (TRUST-4, TRUST-5), and a rule recorded inside the directory answers for the file it names and
+weakens what is read along with it.
+
+**Why.** The directory is outside the working directory, so nothing reaches it unless something says
+so, and what says so here is this program rather than a person. The grounds are that the directory
+was created here, empty, owned by this account and readable by nobody else, so there is no content in
+it anybody could be asked to vouch for. Those are grounds about reach and they do not extend to
+trust: TRUST-1 is that nothing is trusted until it is granted, and a directory this program created
+is not a person's answer. Emptiness is also true only for an instant, and what keeps it true
+afterwards is the ownership and the mode rather than anything the map records.
+
+The workspace's answer rather than no answer, because a path nobody has said anything about prompts
+on every write and is quarantined on every read (TRUST-4). In a directory whose whole purpose is
+being written to and read back that is a prompt for every intermediate file and a quarantine on
+reading one back, which is a session asked about its own workings instead of about the work. What was
+said about the workspace is what this session already decided about the files a turn deals with, so
+taking it here asks what the workspace asks and no more.
+
+The rules recorded inside the directory still weaken the answer, because a line whose output is
+untrusted distrusts the file it redirected into, under the name the line spelled
+([tools/command-line.md](tools/command-line.md)). Without that a turn could read its own untrusted
+output back as trusted through the directory around it, which is the case worth having right in a
+place intermediate files are written.
 
 This is deliberately not what `/add-dir` does. TRUST-9 grants reach and trust together and says
 either half alone is no use, one leaving a rule about files nothing can open and the other a
-directory that prompts on every edit. Neither is what happens here, because the reach comes from
-this program while the label comes from the workspace's own answer, so the directory prompts exactly
-when the workspace prompts and no more. What `/add-dir` would add on top of that is trust the
-startup answer withheld, over a directory nobody looked at.
+directory that prompts on every edit. Neither is what happens here, because the reach comes from this
+program while the label comes from the workspace's own answer, so the directory prompts exactly when
+the workspace prompts and no more. What `/add-dir` would add on top of that is trust the startup
+answer withheld, over a directory nobody looked at.
 
 A standing quarantine is refused for what it costs at the other end. A line a person vouched for
 prints trusted output, and a redirection on such a line leaves the map as it was, so a standing
 quarantine would make a plan pay a prompt to read back the file it just asked for. A default every
 session works around is not a default.
 
-**It is a place to write, not a place writes stop being asked about.** A path under it appears in a
-plan's write set, is shown in the prompt, and takes every write gate exactly as a path in the
-project does ([tools/command-line.md](tools/command-line.md)). What it buys is a fixed place that
-needs no name invented for it, that a repository does not report, that no walk has to skip, and that
-goes when the session does. It buys no prompt anybody would otherwise see.
+It is a place to write and not a place writes stop being asked about. A path under it appears in a
+plan's write set, is shown in the prompt, and takes every write gate a path in the project takes
+([tools/command-line.md](tools/command-line.md)). What it buys is a fixed place that needs no name
+invented for it, that a repository does not report, that no walk has to skip, and that goes when the
+session does. It buys no prompt anybody would otherwise see.
 
-**Given as the session opens, not asked for by a tool.** The directory is created as the session
-opens and its path is put in the environment this process holds, which is the environment each stage
-of a `run` is spawned with ([tools/command-line.md](tools/command-line.md)), so a line can name it
-without anything having been called first.
+One directory inside the temporary directory is reached and not the directory that one sits in, so
+`/tmp` is no more writable than it was and the reason `/add-dir /tmp` is the wrong answer is
+untouched. A directory reachable without a rule is also why `/status` has a line of its own for it
+(TRUST-14): the rules in force (TRUST-12) cannot report a directory that has none, and reach nothing
+says out loud is reach somebody discovers by accident.
+
+`verified-by: bravebot_agent::workspace::a_file_in_the_sessions_own_directory_is_reachable_by_its_absolute_path`
+`verified-by: bravebot_agent::workspace::the_temporary_directory_around_it_stays_unreachable`
+`verified-by: bravebot_agent::workspace::a_symlink_out_of_the_sessions_own_directory_is_refused`
+`verified-by: bravebot_agent::workspace::the_sessions_own_directory_is_not_one_the_user_added`
+`verified-by: bravebot_agent::workspace::the_sessions_own_directory_cannot_be_added_by_name`
+`verified-by: bravebot_agent::workspace::the_working_directory_cannot_be_moved_into_the_sessions_own_directory`
+`verified-by: bravebot_agent::workspace::a_second_spelling_of_a_file_in_the_sessions_own_directory_reaches_the_same_rule`
+`verified-by: bravebot_core::policy::a_write_in_the_sessions_own_directory_asks_what_a_write_in_the_project_asks`
+`verified-by: bravebot_core::policy::a_declined_workspace_leaves_the_sessions_own_directory_untrusted`
+`verified-by: bravebot_core::policy::an_untrusted_file_in_the_sessions_own_directory_stays_untrusted`
+`verified-by: bravebot_core::policy::a_name_climbing_out_of_the_sessions_own_directory_is_not_answered_for_it`
+`verified-by: bravebot_core::policy::a_line_reading_the_sessions_own_directory_still_sees_the_rules_inside_it`
+
+<a id="TRUST-17"></a>
+### TRUST-17: a program a `run` starts is told where the session's directory is
+
+Every stage of a line is spawned with `BRAVEBOT_SCRATCH_DIR` holding the path of the directory this
+session was given (TRUST-14), in the background as in the foreground. An assignment of that name on
+the line wins, as the same assignment in front of a program wins in a shell
+([tools/command-line.md](tools/command-line.md)). A session that has no directory of its own sets
+nothing, so a program finds the name absent rather than pointing at a directory that is not there.
+
+**Given as the session opens, not asked for by a tool.** The directory is there before the first
+line runs and its path is in the environment each stage is spawned with, so a program that wants
+somewhere to write finds it without anything having been called first. The planner is told the
+same way and at the same point, as one of the facts the system prompt states about this machine
+([instructions.md](instructions.md)), since a variable nothing knows to read is a variable nothing
+reads.
 
 A tool that makes one on demand is the alternative, and is refused. It would cost a description in
 every request whether or not a turn needs a scratch file at all, and the first line that redirects
 would be written before the tool had been called, so a turn pays a refusal and a round trip to learn
-what an environment variable would have told it for nothing. On-demand creation was worth weighing
-only while the directory was in the project, where one belonging to a session that never writes a
-file is litter somebody has to look at; out here an unused empty directory costs what the sweep
-below costs and nothing more.
+what an environment variable would have told it for nothing.
 
-**Nothing in it outlives the session.** The session removes its directory as it closes. A resumed
-session is given a new one rather than the one it had, because the name carries what told it apart
-from its neighbours rather than the session's own identifier, so there is nothing to reconstruct,
-and a resume can come days later where bytes surviving that gap are a cache nothing evicts. A fork
-is a new session and is given its own. `/clear` begins a session as well as closing one, so it
-removes the directory of the session it closed and opens another.
+The line itself expands nothing. A `$` in a line is refused, and quoted it is ordinary text
+([tools/command-line.md](tools/command-line.md)), so what reads the variable is the program the line
+named rather than anything between the two. That is why the name is worth having: an argument a
+person endorsed is the text they were shown, and a program that needs the path reads it where paths
+of that kind are kept.
 
-A `/cd` needs nothing done to the directory, which is the one lifetime rule this location removes
-rather than restates: the directory is not under the working directory, so a move does not leave it
-behind and there is no ordering to get right between removing it and still being able to reach it
-(TRUST-13). What a path under it is labelled after a move follows from whatever the map says then,
-exactly as for any path the startup answer covers.
+Set on each stage as it is spawned rather than written into the environment this process holds. This
+process reads its own environment from several threads, so rewriting that in place has no moment at
+which nothing is reading it, and reaching the programs a line starts is the whole of what the
+variable is for. A line the person typed themselves has nothing added to it, keeping their own
+environment as it keeps everything else about their terminal ([RUN-12](tools/run.md#RUN-12)).
 
-**The system temporary directory itself stays unreachable.** One directory inside it is reached, not
-the directory that one sits in, so `/tmp` is no more writable than it was and the reason
-`/add-dir /tmp` is the wrong answer is untouched. `$TMPDIR` for a program a `run` starts also stays
-what it was, since the map governs the operations this program performs and the redirection targets
-a line spells rather than what a program opens for itself. A program's own temporary file is named
-in no plan and read back by nothing, so pointing that variable at the session's directory would put
-files nobody decided anything about inside a directory the map answers for, which is the known cost
-about a file another process drops in, arrived at on purpose. Whether a confined program reaches a
+`$TMPDIR` for a program a `run` starts stays what it was, since the map governs the operations this
+program performs and the redirection targets a line spells rather than what a program opens for
+itself. A program's own temporary file is named in no plan and read back by nothing, so pointing that
+variable at the session's directory would put files nobody decided anything about inside a directory
+the map answers for, which is the known cost about a file another process drops in, arrived at on
+purpose. Whether a confined program reaches a
 temporary directory at all is a question for the base profile [sandboxing.md](sandboxing.md)
 describes.
+
+`verified-by: bravebot_agent::exec::a_stage_is_told_where_the_sessions_own_directory_is`
+`verified-by: bravebot_agent::exec::a_background_stage_is_told_where_the_sessions_own_directory_is`
+`verified-by: bravebot_agent::exec::a_steps_own_assignment_wins_over_the_directory_it_was_given`
+`verified-by: bravebot_agent::exec::a_session_with_no_directory_of_its_own_names_none`
+`verified-by: bravebot_agent::exec::a_stage_keeps_the_temporary_directory_this_process_has`
+`verified-by: bravebot_agent::turn::a_program_a_turn_runs_is_told_where_the_sessions_directory_is`
+
+## How a path is named to the map
+
+<a id="TRUST-18"></a>
+### TRUST-18: a path is asked about under the name of the open directory it lands in
+
+**A key is `/`-spelled, and a name that is not one is read under the working directory.** A drive
+letter is not a root here and a backslash is not a separator: a key arrives spelled from `/`, and a
+backslash is a legal filename byte where paths are, so a file called `C:\notes` is a file in the
+project and its name has to reach the project's rules. Resolving a platform's path into a key
+therefore belongs to the workspace and not to the map, and every door that opens a directory by
+name, `/cd` as much as `/add-dir`, refuses a resolved name it cannot spell that way rather than
+handing over one that would be read as a path inside the project.
+
+Every rule is written about a directory somebody opened, under the name that directory was opened
+as: the working directory itself, which is what the startup answer covers (TRUST-7), and the path
+it resolved to for one opened by name (TRUST-9). A path is therefore reduced to the open directory
+it lands in, taking that directory's recorded name with the rest of the path as it was spelled.
+This is the rule that two spellings of a path are one rule (TRUST-2), extended to the spellings
+only a filesystem can tell apart: a directory named through a link is the same directory, and
+`/tmp` being a link to `/private/tmp` is what a person types rather than a corner. A path landing
+in no open directory is asked about as written, and so is one that reaches an open directory by a
+link straight into the middle of it rather than through that directory's own name: neither has a
+spelling under a recorded name, and nothing covers either.
+
+A `..` component keeps the name it was given. Confinement refuses such a path rather than resolving
+it (TRUST-10), so it is refused before anything reads it, and reducing it here would be guessing at
+which file it named.
+
+Where the path lands decides which directory's name it takes and the spelling decides the rest, and
+each half answers a different question. A name spelled inside the project that lands out of it
+takes the name of the directory it lands in and not the project's, because the project has no rules
+about a file it does not hold and confinement refuses that name's relative spelling outright.
+Taking only the ancestor that reaches an open directory, rather than the whole destination, is what
+keeps the reduction from being a laundering step of its own: resolving the rest would return the
+rule for a *different* name, so a file in an untrusted subtree would be readable as trusted through
+a link inside that subtree. A file with two names of its own therefore still has two rules, which
+is a cost of keying on the name and is written down below.
+
+The reduction is the workspace's, so it holds for what the workspace does: the reads, writes,
+listings, vouches and quarantines that go through it. A proven `run` line has no reduction to make,
+because it need not settle which name is the file's: it asks this map under every name the operand
+has and labels its output from the weakest answer
+([tools/command-line.md](tools/command-line.md#CMDLINE-8)). That is stronger than the reduction
+wherever the two differ, and it is the form that road can hold, since nothing there has a filesystem
+to settle a name with. One thing stays outside both: the prompt before a write asks under the
+spelling it was given, since it also matches the rules a person wrote in advance and those are
+matched on the path as written, so it asks where a reduced name would not have.
+
+**Why.** Without the reduction a directory reached by a second spelling of its own name is covered
+by nothing, so a file the user vouched for is quarantined under half its names; on macOS that is
+the ordinary case rather than a corner, since `/tmp` and `$TMPDIR` are both links. And the refusal
+is the fail-closed half of the first paragraph: a rule keyed under a name with no leading slash
+would be read as a path inside the project, where the answer given about the project at startup
+covers it.
+
+`verified-by: bravebot_core::trust::a_name_that_is_a_root_on_another_platform_is_read_under_the_working_directory`
+`verified-by: bravebot_agent::workspace::a_directory_the_trust_map_cannot_key_is_refused`
+`verified-by: bravebot_agent::workspace::a_project_file_named_absolutely_is_read_under_its_relative_rule`
+`verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
+`verified-by: bravebot_agent::workspace::a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule`
+`verified-by: bravebot_agent::workspace::a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rule`
+`verified-by: bravebot_agent::workspace::a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule`
+`verified-by: bravebot_agent::workspace::a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule`
+`verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
+
+## What a rewind puts back
+
+<a id="TRUST-19"></a>
+### TRUST-19: what a turn writes in the session's own directory is not rewound
+
+A write through a file tool into the session's own directory keeps nothing to put back. Undoing the
+turn neither restores such a file nor removes one the turn created, does not name it among the paths
+it could not put back, and leaves the bytes it would have kept to the files the turn wrote in the
+project.
+
+**Why.** What one turn keeps so that it can be undone is bounded, and the bound is shared by every
+file that turn wrote ([sessions.md](sessions.md)). An intermediate file is the size of thing that
+bound is set to stay clear of, so keeping one spends what a source file's own copy needed and leaves
+that file unable to go back: the file somebody wants undone loses to the file nobody does.
+
+There is nothing there anybody has open either. The directory holds what a turn wrote for its own
+use, it is empty when the session begins, and it goes when the session ends, so a file in it is
+nobody's work in progress. What the undone turn wrote there stays until the session ends, and a
+later turn in the same session can read it.
+
+Removing what the turn created there, which costs none of the budget, is the alternative and is
+refused for what it makes the report say. What a turn overwrote there cannot go back, since those
+bytes are the ones this declines to keep, so a path in the directory would have to be named on the
+line reporting the rewind, and that line would carry intermediate files for as long as the list of
+them ran. A stale intermediate file in a directory whose whole purpose is intermediate files is the
+smaller cost of the two.
+
+This is what being outside the project buys rather than a carve-out inside it. The rule is that what
+an undo keeps is what is in the project, and a directory the user opened by name is in the project
+for this purpose: those are files somebody has open, which is the whole reason the bytes are kept.
+
+`verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo`
+`verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project`
+
+## What the session's directory is still missing
+
+An incognito session has one as well, and [incognito.md](incognito.md) names it among the things
+that still reach the filesystem in that mode: the name says nothing about which project or which
+session, and nothing in it outlives the session, so what an empty one records is that this program
+ran at this time rather than that a session ran in this project at this time.
 
 **What has to exist first.**
 
@@ -551,13 +704,7 @@ describes.
   what a program may reach ([sandboxing.md](sandboxing.md)), and the base names no temporary
   directory today, so a redirection into the session's directory would be refused by the profile
   after the map had allowed it. The base has to name that one directory, and name it per session,
-  since which directory it is cannot be known when the base is written. This is the price of being
-  outside the workspace and the one thing the in-project version had for free.
-- The map has no rule that grants reach and says nothing about trust. Every rule it holds is a
-  label, and TRUST-9 is the only thing that makes an absolute path reachable at all. What this needs
-  is the reach half alone, with the label left to TRUST-7 and to reconciliation, and `/status` has
-  to show such a rule for what it is (TRUST-12) rather than list the directory as trusted or as
-  quarantined when it is neither.
+  since which directory it is cannot be known when the base is written.
 - A leftover cannot be told from a live one without a claim. Removal as a session closes covers a
   session that closes, but a killed process leaves its directory, and the names are unrelated to
   each other precisely so that concurrent sessions cannot collide, so a later session cannot tell a
@@ -568,22 +715,6 @@ describes.
   account's own at the mode it should have. `flock` is reached through `rustix`, which is already a
   dependency; the Windows equivalent is `LockFileEx` and nothing here offers it today, so the sweep
   begins as Unix's and Windows leans on its own cleaner until it does.
-- A write into it through the file tools is one the turn can rewind, and the bytes kept to do that
-  come out of a single bounded per-turn budget shared with every other file the turn wrote
-  ([sessions.md](sessions.md)). An intermediate file is the size of thing that budget is set to stay
-  clear of, so a large one written there spends what a source file's own backup needed and leaves
-  that file unable to go back. Being outside the workspace makes the answer the ordinary one rather
-  than a carve-out: what a rewind keeps is what is in the project.
-- An incognito session may have one, and [incognito.md](incognito.md) has to add it to the short
-  list of things that still reach the filesystem in that mode. The name says nothing about which
-  project or which session and the directory is not in the project, so what an empty one records is
-  that this program ran at this time, rather than that a session ran in this project at this time,
-  which is the record that mode refuses to leave. That puts it beside the editor hand-off the same
-  list already carries, so the list grows by an entry rather than the mode growing an exception.
-- The security scan flags a name composed under the system temporary directory, and the editor
-  hand-off carries an annotation and a justification for exactly that. This directory needs the same
-  ones, and the justification is the same: created and not opened, a taken name refused rather than
-  reused, and mode `0700` where a mode means anything.
 
 ## Known costs
 
@@ -622,6 +753,12 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   second paragraph covers less of the traffic than it does elsewhere. No rule about that would
   help, since the same writes to the same effect are available one directory up: it is the standing
   statement about the place, met more often.
+- **An undone turn's intermediate files stay until the session ends.** Nothing written in the
+  session's own directory goes back (TRUST-19), so a turn that wrote one there and was undone has
+  left a file a later turn in the same session can read. The directory is removed when the session
+  is, and what is in it is the workings of a turn rather than anybody's work in progress, which is
+  what makes this smaller than the two things keeping it would cost: the budget the file in the
+  project needs, and a rewind naming every intermediate file it could not put back.
 - **Confinement is decided before an operation runs, not while it runs.** Where a path lands is
   worked out by resolving it, and the operation happens after that, so a component that is a
   directory when it is resolved and a symlink when the file is opened carries the bytes with it.
@@ -636,11 +773,12 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   record on the destination instead is what closes it, and that is a change to every rule the map
   holds rather than to confinement.
 - **A platform that spells its paths from a drive letter cannot open a directory by name.** Every
-  rule is keyed under a `/`-spelled name (TRUST-3), so `/add-dir` and `/cd` both refuse a resolved
+  rule is keyed under a `/`-spelled name (TRUST-18), so `/add-dir` and `/cd` both refuse a resolved
   path that is not one, which on Windows is every path there is, until whether that platform is
-  supported has an answer ([issue #88](https://github.com/brave-experiments/bravebot/issues/88)).
-  Refusing is the closed direction of the two: admitting such a directory puts its rule in the
-  relative namespace, where the answer given about the project at startup covers every file in it.
+  supported has an answer ([issue #88](https://github.com/brave/bravebot/issues/88)).
+  Refusing is the closed direction of the two: admitting such a directory would key its rule under
+  a name read as a path inside the project, where the answer given about the project at startup
+  covers every file in it.
 
   A file inside the project on that platform has the same problem and no refusal to fall back on,
   since a name the workspace hands back below the root carries that platform's separator, and a name
@@ -650,7 +788,5 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   they reach a permission rule the same way, which is matched segment by segment as well, so one
   opaque segment matches nothing a rule a person wrote says about the path they wrote it for
   ([permissions.md](permissions.md) records that half). So the laundering this closes outside the
-  project stays reachable inside it there, and what settles both halves is one canonical key
-  spelling, which is the choice reserved between
-  [issue #24](https://github.com/brave-experiments/bravebot/issues/24) and
-  [issue #25](https://github.com/brave-experiments/bravebot/issues/25).
+  project stays reachable inside it there, and what settles it is one canonical key spelling on that
+  platform's separator, which is [issue #25](https://github.com/brave/bravebot/issues/25).

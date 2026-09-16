@@ -101,6 +101,26 @@ road.
 `verified-by: bravebot_cli::main::doctor_says_whether_the_kernel_enforces_network_denial`
 `verified-by: bravebot_cli::main::confinement_that_could_not_be_established_fails_the_run`
 
+<a id="SANDBOX-6"></a>
+### SANDBOX-6: every path a policy names is granted, or the policy is refused
+
+A policy is granted as written. A backend that cannot install a grant for one of the paths refuses
+the policy and names that path, rather than confining the process to the rest of them. Where a
+backend can grant a path that does not exist yet, the profile carries that grant as named; where it
+cannot, the refusal arrives before the process starts, and again where a path goes away between
+that refusal and the exec.
+
+**Why.** A policy is the list a caller decided a program may reach, so a process running under
+fewer of those paths than the policy names is the silent degradation [SANDBOX-1](#SANDBOX-1)
+forbids, reached one grant at a time: the process runs, the record says the policy was applied,
+and the program is refused a path somebody granted it. Which paths a backend can name is a
+platform difference a caller can work with, and a grant that vanished without being reported is
+not.
+
+`verified-by: bravebot_sandbox::linux::a_path_that_cannot_be_opened_is_refused_rather_than_dropped`
+`verified-by: bravebot_sandbox::linux::a_ruleset_is_not_built_with_a_path_missing_from_it`
+`verified-by: bravebot_sandbox::macos::a_path_that_is_not_there_yet_is_granted_as_named`
+
 ## Programs a person asked for
 
 A program `run` ([tools/run.md](tools/run.md)) starts is unconfined: it gets the access the user's
@@ -120,14 +140,98 @@ the mode that answers every permission question are each held to what their own 
 Nothing a program prints reaches the profile, and no value the model supplied chooses one beyond the
 plan a person could read.
 
-**The base is reviewed as code.** The loader, the system directories and a toolchain are shown by no
-prompt, so they are a fixed part of the profile rather than a grant. That base holds no credential
-directory, which is the whole of what this buys: `~/.ssh/id_rsa` and `~/.aws/credentials` are out of
-reach of a program whose plan never named them. It does hold the caches and version manager
-directories a build resolves through, and not the token files beside them: `~/.cargo/registry` and
-`~/.npm/_cacache` are in it, `~/.cargo/credentials.toml` and `~/.npmrc` are not. The configuration
-of the editor `git commit` opens is in it too. Leaving a cache out breaks every build and protects
-nothing, so a cache is part of the base rather than an exception somebody is shown.
+**The base is reviewed as code.** The loader, the system directories and the temporary directory are
+shown by no prompt, so they are a fixed part of the profile rather than a grant. A profile denies
+everything and then names what may be reached, so "everything except this key" is not a profile
+anybody can write, and something has to carry what every program needs before any plan is read. That
+list is code: it is the same for every plan, nothing the model supplied and nothing an argv carries
+adds to it, and it changes only in a diff somebody reviews. What it buys is that it holds no
+credential directory, so `~/.ssh/id_rsa` and `~/.aws/credentials` are out of reach of a program
+whose plan never named them.
+
+| The base holds | To |
+|---|---|
+| the loader, the system libraries, the system binary directories, the locale data, terminfo, the CA bundle and the certificate directory beside it, `/etc/hosts`, `/etc/resolv.conf`, `/etc/nsswitch.conf`, `/etc/passwd`, `/dev/null`, `/dev/zero`, `/dev/random` and `/dev/urandom` | read, and write for `/dev/null` |
+| the system temporary directory this process resolved as the session opened | read and write |
+| the git configuration any stage may read for an identity: `~/.gitconfig` and `~/.config/git/config` | read |
+
+Three rows is the whole of what stays invisible, and each one is here because every program needs it
+and none of it sits beside a token. The prelude is what a dynamic executable needs to start at all.
+The git configuration is in the base rather than in one program's list because a stage that never
+mentions `git` still shells out to it for an identity, a `cargo` fetching a git dependency among
+them, and it can name a credential store without holding one. The remote scope below naming
+`~/.gitconfig` as well costs nothing. What keeps the base to three rows is that a row shown on every
+run is a row that teaches a person to approve without reading, and a row shown on no run is one
+nobody audits: neither is free, so the split is by whether every program needs it.
+
+The temporary directory is the one this process resolved as the session opened, and not one a
+stage's own environment assignment names, so a line carrying a `TMPDIR=` assignment changes where a
+program writes without changing what the profile allows. A program that cannot open a temporary file
+fails outright, and that directory is one every process on the machine already reaches, so the base
+names it. What it costs is that this session's own scratch directory sits inside it
+([trust-map.md](trust-map.md)): an intermediate file a turn left there is readable by a program whose
+plan never named it, and the mode that directory is created with does not separate two processes
+running as the same account.
+
+**A toolchain and its caches are the list a program brings.** The paths a build resolves through
+belong to that build rather than to every program that runs, so they are keyed on the resolved
+binary a stage of the plan names and are shown in the prompt with the rest of the plan. An `npm ci`
+is held to the npm rows and a `cargo build` in the same session to the cargo rows, so a postinstall
+script cannot leave something in `~/.cargo/registry` for a later `cargo build` to read. The key is
+the binary the plan already resolved and a person already read, never a name the model supplied and
+never a value a configuration file holds.
+
+| The list for | Read | Read and write |
+|---|---|---|
+| `cargo` | `~/.rustup`, `~/.cargo/bin`, `~/.asdf` | `~/.cargo/registry`, `~/.cargo/git`, `~/.cargo/.package-cache` |
+| `node`, `npm`, `npx` | `~/.nvm`, `~/.asdf` | `~/.npm/_cacache` |
+| `python`, `pip` | `~/.pyenv`, `~/.asdf` | `~/.cache/pip` |
+| `go` | `~/.asdf` | `~/.cache/go-build`, `~/go/pkg/mod` |
+| `mvn` | `~/.asdf` | `~/.m2/repository` |
+| `gradle` | `~/.asdf` | `~/.gradle/caches`, `~/.gradle/wrapper`, `~/.gradle/native` |
+| `git` | the configuration directory of each editor this row names, which is what the editor `git commit` opens reads | that editor's own state directory |
+
+A cache is writable because a build that cannot write one fetches everything again or fails
+outright, and the price is a write no plan accounted for: a program can leave something in its own
+ecosystem's cache for a later build in that ecosystem to read. Holding that to one ecosystem is what
+keying on the binary buys, since the write a `cargo build` is trusted with is one an `npm ci` never
+receives. An install is read-only for the opposite reason. A build that would install a toolchain
+fails, and a line somebody then runs unconfined costs less than letting a confined stage replace the
+`cargo` or the `node` a later stage in the same pipeline resolves to.
+
+**A list names a cache, never the directory holding it.** A package manager keeps its token beside
+its cache, so naming the parent would grant the token with it: `~/.cargo/credentials.toml` sits in
+`~/.cargo`, `~/.m2/settings.xml` holds a server password, and `~/.gradle/gradle.properties` holds a
+signing key. Each row above names the subdirectory a build reads, and a token file is out of every
+list by never being named. Where a tool keeps state at the top of its home directory rather than in
+a subdirectory, that file is named on its own, which is why the cargo lock `~/.cargo/.package-cache`
+is in a row beside the registry and the token file next to it is not. The same rule keeps
+`~/.config` out, since `~/.config/gh` is a credential store the remote scope below grants, so the
+XDG git configuration and an editor's configuration are named one directory at a time rather than
+through the directory they sit in. Which editors the `git` row knows is in that row and is not read
+from `core.editor`, since no configuration file's contents decide what a list holds. `$HOME` itself
+is in no row, so a file in it that no row names, `~/.npmrc` and `~/.pypirc` among them, is
+unreachable. What this costs is an editor no row names and an editor installed outside the system
+binary directories: the first opens without its configuration, the second cannot start at all, and
+naming the directory is a person's to do in either case.
+
+**A command no list knows is asked about, and the answer lasts the session.** A wrapper is the
+common case rather than the edge one: `make check` here, a `just` recipe or an `npm run` target
+elsewhere, and the binary such a stage resolves is `make` or `just` and not the build it goes on to
+drive. That stage gets the base and its plan and nothing else, so a build inside it that needs a
+cache fails. The run that failed stays failed; what follows it is a question naming the lists above,
+and a person attaches the ones that command turns out to need. Those lists are the whole of what the
+question can offer, so a build made to fail in a chosen way puts no path of its own in front of
+anybody, which is what keeps this on the right side of nothing widening in answer to a refusal
+below.
+
+The answer lasts the session, a `--resume` carries it and `/status` lists it, on the terms
+`/add-dir` already sets ([trust-map.md](trust-map.md)). Keeping it past a `/clear` is a person
+writing it in `permissions` ([permissions.md](permissions.md)), since an attachment outliving the
+answer that allowed it is the durable reach a session-scoped answer exists to avoid leaving behind.
+What this costs is a wrapper answered once in every session that runs one, and a person who attaches
+every list to a single command has one shared list back, though only for that command and only by an
+answer somebody gave.
 
 **A credential is a scope the plan carries.** A push is how most sessions end, so a profile that
 refuses one is a profile somebody turns off, and a scope a person has to go and find first is that
@@ -222,15 +326,16 @@ output trusted.
   the socket instead. On Linux the right that governs connecting to a pathname socket arrives many
   ABI versions after the one this backend targets, so a connect there is neither granted nor
   deniable, and a profile meaning to bound one needs that ABI and a kernel carrying it.
-- The two backends disagree about a path that does not exist yet. On Linux a path a policy names and
-  cannot open is dropped rather than refused, so a scope naming `~/.ssh/known_hosts` on a fresh
-  account grants nothing and says nothing, and the push meets the refusal the scope existed to
-  prevent. On macOS the same name goes into the profile and the file can then be created. Granting
-  less than a policy asked for without saying so is the same degradation [SANDBOX-1](#SANDBOX-1)
-  forbids of an unavailable backend.
-- The base has to be written down. A profile as generated here denies everything and then names what
-  a program may reach, on both backends, so "everything except this key" is not expressible and the
-  base has to carry what an ordinary build reads.
+- A profile has to name paths that are already there, on the backend that cannot name any other
+  kind. A path that does not exist yet goes into a macOS profile and the file can then be created,
+  while on Linux a grant is a right on an open descriptor, so such a path cannot be named in one at
+  all and the policy is refused ([SANDBOX-6](#SANDBOX-6)). A scope naming `~/.ssh/known_hosts` on a
+  fresh account is therefore a `run` that does not start rather than a push that fails for no stated
+  reason, and what the compiler owes the profile is to create the file, name the directory holding
+  it, or leave the scope out. The program lists name more such paths than the base or any scope
+  does, since a machine carries the toolchain one list names and none of the rest, so leaving an
+  absent row out is what the compiler owes a list as well: a machine with no `~/.pyenv` is not a
+  machine where every `run` is refused.
 - The macOS backend clears the environment of a process it wraps. A stage receives the environment
   this process holds, less the credentials this agent authenticates with, so a `run` profile needs a
   backend that leaves the rest of that environment alone. The ssh half of the remote scope depends

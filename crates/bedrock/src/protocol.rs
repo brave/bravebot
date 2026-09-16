@@ -446,6 +446,20 @@ impl ConverseRequest {
         }
         self
     }
+
+    /// The same request without the breakpoint on the end of its conversation, the prompt's kept.
+    ///
+    /// For a request whose conversation is given up once it answers: the breakpoint that rolls to
+    /// the end is worth a cache write because the next request sends everything in front of it
+    /// again, and where there is no next request it is a premium paid for a prefix nothing reads
+    /// back. The prompt is a different prefix, the same bytes every time such a request is made.
+    pub fn without_the_conversation_breakpoint(mut self) -> Self {
+        if let Some(last) = self.messages.last_mut() {
+            last.content
+                .retain(|block| !matches!(block, Block::CachePoint(_)));
+        }
+        self
+    }
 }
 
 /// Build a Bedrock request from the conversation the agent holds.
@@ -1179,6 +1193,44 @@ mod tests {
             request.messages[0].content.last(),
             Some(&Block::CachePoint(CachePoint::new())),
             "a round ending in a tool result was not marked"
+        );
+    }
+
+    /// The rolling breakpoint is worth a cache write because the next request reads that prefix
+    /// back. A request that gives its conversation up once it answers has no next request, so what
+    /// the write buys is nothing, and it is charged above the tokens it covers. The system prompt is
+    /// the same bytes every time such a request is made and keeps its breakpoint.
+    #[test]
+    fn a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone() {
+        let request = request_from(
+            &[
+                Message::system("summarise what you are shown"),
+                Message::user("first"),
+                Message::assistant("an answer"),
+                Message::user("summarise everything above"),
+            ],
+            None,
+        )
+        .without_the_conversation_breakpoint();
+
+        let system = request.system.as_deref().expect("a system block");
+        assert_eq!(
+            system.last(),
+            Some(&SystemBlock::CachePoint(CachePoint::new())),
+            "the prefix every such request shares lost its breakpoint too"
+        );
+        let body = body_of(&request);
+        assert_eq!(
+            body["messages"][2]["content"]
+                .as_array()
+                .expect("the last message's blocks")
+                .len(),
+            1,
+            "the conversation kept a breakpoint nothing can read back: {body}"
+        );
+        assert_eq!(
+            body["messages"][2]["content"][0]["text"],
+            "summarise everything above"
         );
     }
 

@@ -913,7 +913,10 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
     };
 
     let mut spans = vec![
-        Span::styled(format!("  {name}"), Style::default().fg(Color::Cyan)),
+        Span::styled(
+            format!("  {name}"),
+            Style::default().fg(theme::brand_primary()),
+        ),
         Span::styled(format!("  ·  {standing}"), Style::default().fg(colour)),
     ];
 
@@ -1098,7 +1101,7 @@ fn session_row(highlighted: bool, width: usize) -> Line<'static> {
         Span::styled(about, detail),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1157,7 +1160,7 @@ fn aside_row(aside: &crate::state::Aside, highlighted: bool, width: usize) -> Li
         Span::styled(format!("{standing:<STANDING_COLUMN$}"), standing_style),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1210,7 +1213,7 @@ fn delegate_row(delegate: &Delegate, highlighted: bool, width: usize) -> Line<'s
         Span::styled(calls, detail),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1272,7 +1275,7 @@ fn output_row(output: &Output, highlighted: bool, width: usize) -> Line<'static>
         Span::styled(count, detail),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1379,7 +1382,10 @@ fn scroller_exit(bindings: &Keybindings) -> (String, &'static str) {
 fn draw_scroller_help(frame: &mut Frame, area: Rect, session: &Session) {
     let row = |(key, what): (&str, &str)| {
         Line::from(vec![
-            Span::styled(format!(" {key:<18}"), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!(" {key:<18}"),
+                Style::default().fg(theme::brand_primary()),
+            ),
             Span::styled(what.to_string(), dim()),
         ])
     };
@@ -1442,7 +1448,10 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
     if let Some(typing) = &scroller.typing {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(format!("  /{typing}"), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("  /{typing}"),
+                    Style::default().fg(theme::brand_primary()),
+                ),
                 Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
                 Span::styled(format!("  ·  {}", t!(scroller_searching)), dim()),
             ])),
@@ -1467,7 +1476,7 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
             Paragraph::new(Line::from(vec![
                 Span::styled(
                     format!("  /{}", scroller.needle),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme::brand_primary()),
                 ),
                 Span::styled(format!("  ·  {standing}"), dim()),
                 Span::styled(format!("  ·  {}", t!(scroller_search_keys)), dim()),
@@ -1490,7 +1499,7 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
     let running = session.indicator().map(|indicator| {
         Span::styled(
             format!("  ·  {}…", indicator.verb),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme::running()),
         )
     });
 
@@ -1500,7 +1509,7 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
     let mut spans = vec![
         Span::styled(
             format!("  {}", t!(scroller_footer)),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme::brand_primary()),
         ),
         Span::styled(format!("  ·  {}", t!(scroller_footer_keys)), dim()),
     ];
@@ -2466,7 +2475,7 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
             Span::styled(
                 " QUEUED ",
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(theme::on_primary())
                     .bg(theme::brand_primary())
                     .add_modifier(Modifier::BOLD),
             ),
@@ -3946,35 +3955,46 @@ mod tests {
         ///
         /// A ratio rather than a wall clock, because what matters is that the pass is of the same
         /// order as the one beside it and not that either takes a particular number of milliseconds.
+        ///
+        /// The shortest of several passes, and the two interleaved. A pass that lost the processor to
+        /// something else on the machine only ever reads long, so one sample of each compares the
+        /// contention of one moment against that of another, and a loaded machine fails this on the
+        /// draw it happened to interrupt. Three passes because the load measured here stalled about
+        /// one sample in fifteen, and each pass costs laying the transcript out twice.
         #[test]
         fn measuring_where_the_rows_are_stays_in_proportion_to_drawing_them() {
             let at_rest = a_long_session();
-            let started = std::time::Instant::now();
-            let (lines, plain) = lay_out(&at_rest, 90, 24);
-            // The wrap a frame at rest already pays for, and the one this is in proportion to.
-            // Laying the lines out is the cheaper half of drawing them, and measuring against it
-            // alone compares the new pass with something no frame has ever consisted of.
-            let rows = Paragraph::new(lines)
-                .wrap(Wrap { trim: false })
-                .line_count(90);
-            let baseline = started.elapsed();
-            assert!(rows > 2000, "the transcript is not long: {rows}");
-
             let mut scrolling = a_long_session();
             scrolling.open_scroller();
-            let started = std::time::Instant::now();
-            let (_, laid) = lay_out(&scrolling, 90, 24);
-            let took = started.elapsed();
 
+            let mut drawing = std::time::Duration::MAX;
+            let mut measuring = std::time::Duration::MAX;
+            let mut rows = 0;
+            let mut measured = 0;
+
+            for _ in 0..3 {
+                let started = std::time::Instant::now();
+                let (lines, plain) = lay_out(&at_rest, 90, 24);
+                // The wrap a frame at rest already pays for, and the one this is in proportion to.
+                // Laying the lines out is the cheaper half of drawing them, and measuring against it
+                // alone compares the new pass with something no frame has ever consisted of.
+                rows = Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .line_count(90);
+                drawing = drawing.min(started.elapsed());
+                assert_eq!(plain.rows, 0, "the rows were counted with nobody asking");
+
+                let started = std::time::Instant::now();
+                let (_, laid) = lay_out(&scrolling, 90, 24);
+                measuring = measuring.min(started.elapsed());
+                measured = laid.rows;
+            }
+
+            assert!(rows > 2000, "the transcript is not long: {rows}");
+            assert!(measured > 2000, "the transcript is not long: {measured}");
             assert!(
-                laid.rows > 2000,
-                "the transcript is not long: {}",
-                laid.rows
-            );
-            assert_eq!(plain.rows, 0, "the rows were counted with nobody asking");
-            assert!(
-                took < baseline * 4,
-                "measuring took {took:?} against {baseline:?} to draw, which is out of proportion"
+                measuring < drawing * 4,
+                "measuring took {measuring:?} against {drawing:?} to draw, which is out of proportion"
             );
         }
 
@@ -6079,10 +6099,13 @@ mod tests {
         session.submit();
         session.complete(
             "reply",
-            vec![Event::Observed {
-                capability: Capability::FileRead,
-                label: Label::untrusted_private(),
-            }],
+            vec![crate::audit::as_line(
+                &Event::Observed {
+                    capability: Capability::FileRead,
+                    label: Label::untrusted_private(),
+                },
+                None,
+            )],
             0,
         );
 
@@ -6162,10 +6185,13 @@ mod tests {
 
         session.complete(
             "reply",
-            vec![Event::Observed {
-                capability: Capability::FileRead,
-                label: Label::untrusted_private(),
-            }],
+            vec![crate::audit::as_line(
+                &Event::Observed {
+                    capability: Capability::FileRead,
+                    label: Label::untrusted_private(),
+                },
+                None,
+            )],
             0,
         );
         assert!(
@@ -6181,10 +6207,13 @@ mod tests {
         session.submit();
         session.complete(
             "reply",
-            vec![Event::Observed {
-                capability: Capability::FileRead,
-                label: Label::untrusted_private(),
-            }],
+            vec![crate::audit::as_line(
+                &Event::Observed {
+                    capability: Capability::FileRead,
+                    label: Label::untrusted_private(),
+                },
+                None,
+            )],
             0,
         );
         session
@@ -6199,11 +6228,14 @@ mod tests {
         session.submit();
         session.complete(
             "refused",
-            vec![Event::GateBlocked {
-                gate: "action",
-                detail: String::new(),
-                reason: "injection blocked".into(),
-            }],
+            vec![crate::audit::as_line(
+                &Event::GateBlocked {
+                    gate: "action",
+                    detail: String::new(),
+                    reason: "injection blocked".into(),
+                },
+                None,
+            )],
             0,
         );
 
@@ -6234,6 +6266,35 @@ mod tests {
         assert!(
             !inks.contains(&theme::running()),
             "the note is still yellow"
+        );
+    }
+
+    /// The word that names the mode carries meaning, so it is a shade this interface mixes rather
+    /// than one of the sixteen slots a terminal repaints. Cyan is not one of the three slots whose
+    /// meaning is the terminal's own, so a scheme that remapped it decided how this row read, and
+    /// a person who chose a theme was not drawn in it at all.
+    #[test]
+    fn the_scroller_names_the_mode_in_a_shade_and_not_a_slot() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+
+        let mut session = Session::new("none");
+        session.note_layout(crate::state::Laid {
+            width: 120,
+            height: 24,
+            rows: 24,
+            ..crate::state::Laid::default()
+        });
+        session.open_scroller();
+
+        let inks = inks_on_row_containing(&session, "scroller");
+        assert!(
+            inks.contains(&theme::brand_primary()),
+            "the mode is not named in the interface's own ink: {inks:?}"
+        );
+        assert!(
+            !inks.contains(&Color::Cyan),
+            "a slot the terminal repaints is still carrying it: {inks:?}"
         );
     }
 
@@ -6294,15 +6355,34 @@ mod tests {
     }
 
     /// A narrow terminal is a normal condition, not a crash.
+    ///
+    /// And not a reason to drop the box either: the transcript can be squeezed to nothing, since
+    /// what it holds has scrolled past anyway, but a session drawn without the line somebody is
+    /// typing into is a session they cannot use.
     #[test]
     fn a_tiny_terminal_renders() {
-        let session = Session::new("none");
+        let mut session = Session::new("none");
+        for c in "hello".chars() {
+            session.type_char(c);
+        }
         let mut terminal = Terminal::new(TestBackend::new(10, 5)).expect("terminal");
         terminal
             .draw(|frame| {
                 draw(frame, &session);
             })
             .expect("draw must not panic on a small area");
+
+        let drawn: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            drawn.contains("> hello"),
+            "the box the person is typing into was drawn out of view: {drawn}"
+        );
     }
 
     /// The end of a reply that wraps must be on the screen when it arrives.

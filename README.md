@@ -21,13 +21,13 @@ npm install -g @brave/bravebot
 Or on macOS and Linux, without npm:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/brave-experiments/bravebot/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | sh
 ```
 
 That puts the binary in `/usr/local/bin`, and takes `INSTALL_DIR` for somewhere else:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/brave-experiments/bravebot/main/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
+curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
 Either way, run `bravebot` in a repository afterwards. Both installers verify the release

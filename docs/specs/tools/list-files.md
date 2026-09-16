@@ -38,12 +38,24 @@ use. What came of that in practice was a planner guessing globs to see which cam
 <a id="LIST-3"></a>
 ### LIST-3: the glob is literal and the matcher does not backtrack
 
-The matcher is hand written. `*` and `?` do not cross `/`, `**` does, and brace groups are
-unsupported. Version-control and build directories are skipped.
+The matcher is hand written. `*` and `?` do not cross `/`, `**` does, and a brace group is
+expanded into the plain patterns it stands for before the walk rather than matched during it.
+An expansion past the cap on how many patterns it may produce in all falls back to matching the
+pattern literally, which finds nothing and is reported as finding nothing. Version-control and
+build directories are skipped.
 
-**Why.** A backtracking pattern arriving through a turn is a denial-of-service vector.
+**Why.** A backtracking pattern arriving through a turn is a denial-of-service vector. Expanding a
+group before the walk is what keeps that bound: each alternative is an ordinary pattern applied
+once per path, so a group costs a multiple of the work and never a power of it.
 
-`verified-by: none`
+`verified-by: bravebot_agent::glob::a_path_pattern_anchors_at_the_root`
+`verified-by: bravebot_agent::glob::a_question_mark_matches_one_character`
+`verified-by: bravebot_agent::glob::a_double_star_crosses_directories`
+`verified-by: bravebot_agent::glob::a_brace_group_matches_each_alternative`
+`verified-by: bravebot_agent::glob::an_oversized_expansion_falls_back_to_the_literal`
+`verified-by: bravebot_agent::glob::a_pathological_pattern_does_not_blow_up`
+`verified-by: bravebot_agent::workspace::the_original_noise_directories_are_still_skipped`
+`verified-by: bravebot_agent::workspace::noise_directories_from_other_ecosystems_are_skipped`
 
 <a id="LIST-4"></a>
 ### LIST-4: a truncated listing says it was truncated

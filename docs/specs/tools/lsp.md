@@ -7,6 +7,8 @@ governs:
   - crates/lsp/src/protocol.rs
   - crates/lsp/src/server.rs
   - crates/agent/src/lsp.rs
+  - crates/agent/src/turn.rs
+  - crates/tui/src/app.rs
 guards:
   - symbol: Operation::parse
   - symbol: locations_in
@@ -198,6 +200,7 @@ can read the disk is not a server that can put prose in the planner's context.
 `verified-by: bravebot_lsp::server::starting_a_server_is_put_to_a_person`
 `verified-by: bravebot_lsp::server::a_refused_server_does_not_start`
 `verified-by: bravebot_lsp::server::a_server_is_not_asked_about_twice_in_a_session`
+`verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next`
 
 <a id="LSP-6"></a>
 ### LSP-6: no server means no answer, and says which
@@ -258,6 +261,8 @@ nobody asks about spends a person's CPU on nothing.
 `verified-by: bravebot_lsp::server::no_server_starts_until_a_request_needs_one`
 `verified-by: bravebot_lsp::server::a_server_that_ignores_shutdown_is_killed`
 `verified-by: bravebot_lsp::server::dropping_the_set_stops_every_server`
+`verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next`
+`verified-by: bravebot_agent::lsp::a_turn_that_is_handed_no_set_starts_a_server_of_its_own`
 
 <a id="LSP-9"></a>
 ### LSP-9: the capability is separate, and a delegate does not inherit it

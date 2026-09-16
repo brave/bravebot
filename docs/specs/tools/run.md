@@ -4,10 +4,12 @@ title: run
 status: normative
 governs:
   - crates/agent/src/exec.rs
+  - crates/agent/src/remembered.rs
   - crates/agent/src/scrub.rs
   - crates/core/src/command.rs
   - crates/core/src/programs.rs
   - crates/core/src/policy.rs
+  - crates/core/src/remembered.rs
   - crates/tui/src/confirm.rs
 guards:
   - symbol: Policy::read_output
@@ -109,21 +111,31 @@ the trust map says about the path, so the second route is always private and alw
 `verified-by: bravebot_core::policy::one_unvouched_step_makes_the_whole_lines_output_untrusted`
 
 <a id="RUN-5"></a>
-### RUN-5: every run asks, unless every stage was vouched for or proven
+### RUN-5: every run asks, unless every stage was vouched for, remembered, ruled on, or proven
 
 There is no *declared* read-only category. `foo --bar` might write to disk and nothing here can
-tell, and a stage declaring itself harmless only helps if the declaration is honest. Two things may
-answer the question, and nothing else: a person having answered it before, in this session, for this
-exact command, and the audited table in [command-line.md](command-line.md) establishing that these
-exact arguments write nothing and read only paths the user vouched for. Never a property of the
-argv, never a declaration by a stage, never anything derived from what a program printed.
+tell, and a stage declaring itself harmless only helps if the declaration is honest. Four things
+may answer the question, and nothing else: a person having answered it before, in this session, for
+this exact command; that person having asked at a prompt for their answer to one exact command line
+to last past the session, which [RUN-19](#RUN-19) specifies; a rule the person
+wrote down in advance, which
+[permissions.md](../permissions.md) governs and which stops the asking without raising any label;
+and the audited table in [command-line.md](command-line.md) establishing that these exact arguments
+write nothing and read only paths the user vouched for. Never a property of the argv this system
+worked out for itself, never a declaration by a stage, never anything derived from what a program
+printed.
 
 **Why.** An unprompted write is worse than an unwanted prompt, so nothing that could be wrong about
-a write may answer the question. An entry in the table is a claim checked by hand against one
-program's full option list, which is why it may, and it is narrow for the same reason: anything it
-does not fully recognise asks.
+a write may answer the question. The middle two are the same authority the first road has, exercised
+about a line the person read and recorded where they can read it back, and both grant strictly less
+than a vouch: they stop the question and leave every label where it was. An entry in the table is a
+claim checked by hand against one program's full option list, which is why it may, and it is narrow
+for the same reason: anything it does not fully recognise asks.
 
 `verified-by: bravebot_core::policy::a_command_nobody_vouched_for_is_put_to_a_person`
+`verified-by: bravebot_core::policy::a_line_remembered_past_the_session_is_not_asked_about`
+`verified-by: bravebot_core::policy::a_rule_the_user_wrote_in_advance_answers_the_run_prompt`
+`verified-by: bravebot_core::policy::an_allow_rule_stops_the_prompt_and_does_not_trust_what_the_command_prints`
 `verified-by: bravebot_core::policy::a_vouched_command_is_not_asked_about_again`
 `verified-by: bravebot_core::policy::one_unvouched_step_puts_the_whole_line_to_a_person`
 `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_does_not_ask`
@@ -161,6 +173,10 @@ not rest on a drawing.
   y run it    a always    n don't    ctrl-c stop the turn
 ```
 
+This is the row a run prompt would draw on its own. [RUN-19](#RUN-19) specifies a longer lifetime,
+the key that grants it and the label `a` carries beside it, and its row replaces this one wherever a
+run prompt is drawn.
+
 `a` grants, in these terms:
 
 1. the command runs again unasked, side effects and all;
@@ -192,23 +208,54 @@ messages from a repository the person never answered a question about. Widening 
 the directory would grant the shortcut there, and it is not done: it would put a tree into an entry
 the session record and `/status` (RUN-9) describe as a program and its arguments.
 
+An entry says nothing about the **environment** either, because nothing in it records a `NAME=value`
+assignment written in front of a program. So it grants neither of RUN-7's two things for a line
+carrying one: `LD_PRELOAD=./evil.so git log` is asked about however often `git log` was vouched for,
+and what it prints is `(U,priv)`. An assignment decides what a program loads and reads before its own
+arguments are looked at, so the line is a different proposition from the one the person read, and
+what it printed was written by whatever that assignment brought in. `a` is not offered for such a
+line at all, and the refusal is made twice, once where the prompt is drawn and again where an answer
+is acted on: an entry made there would be a bare entry, covering the same program under no
+assignment, so the list would end up holding something nobody was shown. Widening the key to include
+the environment is not done for the reason the directory is not: it would put a set of assignments
+into an entry the session record and `/status` (RUN-9) describe as a program and its arguments. The
+question is put before a rule in a settings file is consulted, as
+[permissions.md](../permissions.md) requires: a rule is matched against the program and its arguments
+run together, a rendering an assignment is not in, so no rule anybody could write tells the two lines
+apart.
+
+**A known cost.** `NO_COLOR=1 cargo test` and `RUST_LOG=debug ./demo` are ordinary work, and they are
+asked about every time, in this session and in the next. The answer is the spelling that puts the
+assignment where a person reads it and an entry can hold it: `env NO_COLOR=1 cargo test` is a program
+called `env` with three arguments, so a vouch for it covers that line and no other, and the person
+approving it saw the assignment in the argv they approved. What this clause refuses is a line whose
+meaning is not in its argv, not the setting of a variable.
+
 `verified-by: bravebot_core::policy::vouching_for_one_command_does_not_cover_another_of_the_same_program`
 `verified-by: bravebot_core::policy::vouching_does_not_follow_a_name_onto_a_different_binary`
 `verified-by: bravebot_core::policy::a_vouched_line_is_asked_about_when_it_runs_outside_the_root`
 `verified-by: bravebot_core::policy::output_of_a_vouched_line_run_outside_the_root_is_untrusted`
 `verified-by: bravebot_core::policy::a_vouched_line_is_asked_about_when_no_root_is_known`
 `verified-by: bravebot_agent::turn::a_vouched_line_is_asked_about_again_when_a_directory_is_named`
+`verified-by: bravebot_core::policy::a_vouched_line_carrying_an_environment_assignment_is_asked_about`
+`verified-by: bravebot_core::policy::output_of_a_vouched_line_carrying_an_environment_assignment_is_untrusted`
+`verified-by: bravebot_tui::confirm::a_run_carrying_an_environment_assignment_offers_no_standing_permission`
+`verified-by: bravebot_tui::confirm::a_run_that_is_private_and_carries_an_assignment_gives_both_reasons`
+`verified-by: bravebot_agent::turn::a_line_carrying_an_environment_assignment_is_not_remembered_however_it_is_answered`
 
 <a id="RUN-9"></a>
 ### RUN-9: the vouched list belongs to the session
 
 Empty at the start of every session, written into the session record, restored by `--resume`,
-never inherited by a fresh session in the same directory. `/status` lists what was granted.
+never inherited by a fresh session in the same directory. `/status` lists what was granted. A line
+somebody asked to be remembered past the session is a separate record holding less, which
+[RUN-19](#RUN-19) governs, and it puts no entry in this list.
 
-**Why.** The same reason the trust map belongs to a session. It is the one permission whose whole effect is that
-prompts stop, so it has to be readable back.
+**Why.** The same reason the trust map belongs to a session. Its effect is invisible until a prompt
+does not appear, so it has to be readable back.
 
 `verified-by: bravebot_core::policy::a_fresh_policy_vouches_for_no_command`
+`verified-by: bravebot_core::policy::a_line_remembered_past_the_session_vouches_for_nothing`
 
 <a id="RUN-10"></a>
 ### RUN-10: the vouched-for list is not an allowlist and must never become one
@@ -224,7 +271,10 @@ output, not a belief about the binary. The audited table in [command-line.md](co
 not one: a program absent from it is neither refused nor confined, only asked about, and what the
 table establishes is what an output may be labelled rather than what may run.
 
-`verified-by: none`
+`verified-by: bravebot_core::policy::a_command_nobody_vouched_for_is_put_to_a_person`
+`verified-by: bravebot_core::policy::a_fresh_policy_vouches_for_no_command`
+`verified-by: bravebot_agent::turn::an_approved_run_executes_and_the_user_saw_what_it_was`
+`verified-by: bravebot_agent::exec::the_users_own_environment_still_reaches_a_program`
 
 <a id="RUN-11"></a>
 ### RUN-11: a run has a wall-clock limit, and reaching it ends the run rather than failing it
@@ -261,9 +311,10 @@ RUN-4's to decide.
 ### RUN-12: a program is not handed this agent's own credentials
 
 The environment a stage receives is the one this process holds, less the credentials this agent
-authenticates to its backend with. Every stage, not only the first. Removed rather than emptied, so a
-program that distinguishes an unset variable from a blank one sees what a machine that never held the
-credential sees.
+authenticates to its backend with and with the session's own directory named in it
+([TRUST-17](../trust-map.md#TRUST-17)). Every stage, not only the first. Removed rather than
+emptied, so a program that distinguishes an unset variable from a blank one sees what a machine that
+never held the credential sees.
 
 **Why.** A person approving a run reads the argv, the resolved binary and the directory. The
 environment is not among those, so a credential travelling alongside them is granted without having
@@ -330,7 +381,9 @@ Where the output could not be shown, the planner is also told how to see this re
 stop being asked: `read_output` puts this one to the user, and a person vouching for every stage of
 the exact command makes what it prints visible from then on. It is also pointed at `read_file` for
 a file. Only where a command produced the result: a quarantined read carries no advice about
-`read_output` or about vouching for a command nobody ran.
+`read_output` or about vouching for a command nobody ran. The advice about vouching is left out where
+a record already stops the asking for that exact line ([RUN-19](#RUN-19)), since no prompt will
+return there for a person to answer, and `read_output` is then the whole of what is said.
 
 **Why.** [RUN-4](#RUN-4) is about who answered for the command, not about programs being
 unreadable, and a planner that reads it the second way stops running them. One did: told once that
@@ -345,6 +398,7 @@ is not inferring it: the planner still cannot vouch for anything, and a person s
 
 `verified-by: bravebot_agent::turn::a_quarantined_run_says_what_would_make_it_visible`
 `verified-by: bravebot_agent::turn::a_quarantined_read_says_nothing_about_vouching_for_a_command`
+`verified-by: bravebot_agent::turn::a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching`
 
 <a id="RUN-15"></a>
 ### RUN-15: a pipeline may be left running, and the turn that started it ends it
@@ -558,6 +612,348 @@ worse answer than the single read this pair of clauses set out to correct, becau
 without even the file. Hence the first look happens in the turn that was asked.
 
 `verified-by: bravebot_agent::tools::the_run_description_routes_a_watch_request_to_one_of_the_two_techniques`
+
+<a id="RUN-19"></a>
+### RUN-19: a prompt may record its answer past the session, and it stops only the asking
+
+The run prompt offers a third answer, which outlives the session:
+
+```
+  y run it    a always this session    r remember it    n don't    ctrl-c stop the turn
+```
+
+`r` records this exact command line where the things that outlive a session are kept, under
+`~/.bravebot`, beside the record of the session itself and keyed by the same directory
+([state-directory.md](../state-directory.md), [sessions.md](../sessions.md)). Every session begun in
+that directory honours what it holds, and the session that wrote it honours it from that moment. It
+is consulted where a run prompt would otherwise be drawn rather than read once at the start, so a
+line recorded a minute ago in another session is covered by this one, and a session with nobody to
+put a prompt to consults nothing. A session that moves its working directory is answered by the
+record for where it moved to and no longer by the one for where it was, because what `make check`
+does depends on the tree it runs in and the person answered about one tree. The prompt shows what
+would be recorded and where, because that is the whole of the grant and a person cannot endorse a
+record they were not shown.
+
+The row relabels `a` so that both lifetimes can be read off the screen, and it replaces
+[RUN-7](#RUN-7)'s row wherever a run prompt is drawn, including the prompts that offer no `r`. What
+`a` grants is unchanged. A bare `always` left on those prompts would be the one word this
+relabelling exists to stop meaning two things, read by a person who has met the longer lifetime
+elsewhere.
+
+**What is recorded is the line, not text a pattern could be read out of.** The stage as it was
+approved: the program's name, the binary that name resolved to, the argument list as it was given
+with each argument its own field, every environment assignment the line carried with each name and
+each value its own field, and where its output was sent. A later line is covered when every one of
+those is the same and the name still resolves to the same binary, and in no other case. The name is
+recorded as well as the binary because a name is what the person read, and a second name for the same
+binary is a line they have not seen; [RUN-8](#RUN-8) is what keeps a name from carrying the coverage
+on its own. Nothing in the record has a spelling that means "any text", so no key at this prompt can
+reach a second line, which is [RUN-20](#RUN-20). A pipeline records every stage and is covered only
+where every stage is, the same requirement [RUN-8](#RUN-8) makes of a vouch.
+
+**The fields nobody would think to key on are the ones this turns on.** Sending the errors somewhere
+else makes a different line, for the reason [RUN-6](#RUN-6) gives about a redirection being in
+neither the program nor the arguments: a record made while two streams were merged would otherwise
+cover the same program with them apart. Setting a variable makes a different line for a sharper
+reason. An assignment decides what a program loads and reads before its own arguments are looked at,
+which is why the hand-audited table refuses to prove a line carrying one
+([command-line.md](command-line.md)), so a record that left it out would cover the line the person
+read with anything at all put in front of it. This is still a narrower key than a vouch has. A vouch
+is keyed on the resolved path and the exact arguments and nothing else ([RUN-8](#RUN-8)), so a
+vouched entry covers the same program with its two streams merged; the session it was given in is
+what bounds that, and a record that outlives the session has no such bound.
+
+**The assignment is in the key and still cannot be recorded, and that is not a contradiction.** A
+line carrying one is asked about before this record is reached ([RUN-8](#RUN-8)), so an entry holding
+one would stop no later prompt, and `r` is not offered for such a line: a key that records something
+answering nothing is a key that promises what the next session will not keep. The field stays in the
+key so that the file cannot be made to say otherwise. It is read from the home directory, and an
+entry arriving with an assignment left out of it, from a hand edit or from a version that keyed on
+less, would cover the line a person answered about with anything at all put in front of it. Keying on
+it makes that entry cover nothing rather than cover too much.
+
+**Why a record rather than a rule in a settings file.** A rule is matched against a rendering of the
+line: one string, the program's name and its arguments run together, in a language where a character
+means "any text". Two different argument lists render to one string, and an argument containing that
+character would grant the family this clause exists to refuse. A field per argument has neither
+problem, and it can hold the binary the name resolved to, which a rule has no way to say.
+
+**It grants the first of [RUN-7](#RUN-7)'s two things and never the second.** A covered line runs
+unasked, side effects and all, and what it prints carries the label [RUN-4](#RUN-4) gives it, which is
+untrusted and private. A person who wants what a command prints to be readable presses `a`, which is
+a vouch and is RUN-7's.
+
+**Why the key does not also vouch for the line in the session it was pressed in.** It could: the
+person is present, so the assertion [RUN-7](#RUN-7)'s second half rests on is theirs to make, and the
+entry would die with the session as every other one does. It is not done because one key would then
+grant two things of different lifetimes, which is the reading the relabelled row exists to prevent,
+and because it would lift the cost below for one session while leaving it in every later one. `a` is
+the key that decides a label and this one is the key that decides a lifetime.
+
+**The two records are separate, and a label is decided from the session's own.** What this one holds
+answers whether to ask and nothing else, while the vouched list answers both questions. One list
+serving both would make a covered line's output trusted on the strength of a keypress from a session
+that has ended, and that is an assertion only a person who is present can make.
+
+**Why the second could not last even though the person read this exact line.** RUN-7's second half is
+an assertion about the thing that ran, made by somebody looking at it. A record read next month is
+read on behalf of a person who is not looking, and the file at the recorded path may no longer be the
+file they answered about. Recording the path narrows what may have changed to one binary replaced in
+place, which is enough to keep the asking honest and not enough to carry an assertion about output.
+
+**Which of the three things this could have weakened gives way: none of them.** The vouched list keeps
+its key, its lifetime and its emptiness at the start of a session ([RUN-8](#RUN-8),
+[RUN-9](#RUN-9)), because this record is not an entry in it and nothing here widens one. The trust map
+is neither read nor written, so nothing about which paths are reachable moves. A durable grant is
+usually refused on the ground that trust assumed from silence is not trust granted, and there is no
+silence here: the person was asked, and the key they pressed is the one that says how long its answer
+lasts. What lasts is the asking, which carries no trust, and that is why nothing had to give way to
+let it. The clause that does change is elsewhere: how many standing grants there are, and which of
+them a fresh session in the same directory reads, is [prompting.md](../prompting.md)'s, and this
+record is a third one.
+
+**It is read only where a prompt could be drawn, which is less than somebody reading one.** A
+one-shot run and a session whose channel has closed read no record at all. What a record answers is a
+prompt, and where no prompt can be put it would be saying instead which effects may happen with
+nobody to put them to, which is what [cli.md](../cli.md) refuses an allow rule for and what the flag
+that lifts that refusal is named and warned about for. A line in a file in the home directory must
+not do that quietly, so a one-shot run puts a covered line where it puts every other one.
+
+The boundary is the prompt and not the person, and the difference is where this is at its most
+exposed. A tick of a loop, a round of a goal and a delegate's own step each draw their prompts to a
+live session, so each reads the record and each runs a covered line without stopping, and a loop left
+open overnight is a session where a prompt could have been drawn and nobody was there to read it
+([loop.md](../loop.md) says what that costs). Somebody who presses `r` and then leaves a loop running
+has granted more than somebody who presses it and stays. The line could not be drawn at the person
+instead, because that would mean asking what a screen nobody is in front of would have said.
+
+**A rule the person wrote in advance still decides.** A deny rule refuses a covered line outright and
+an ask rule puts it back to them, because this record answers only where nothing they wrote already
+does and a keypress must not overturn a standing instruction to be asked. So `r` is not offered where
+such a rule matches the line, and one written afterwards takes the line back.
+
+**Where `r` is not offered.** At a prompt for a run that releases private data, for the reason `a` is
+not offered there ([RUN-6](#RUN-6)). Where the line names a file to write, and where it would run
+anywhere but the workspace root, which takes in a line naming a directory
+([CMDLINE-12](command-line.md#CMDLINE-12)) and a session with no root known: those are asked about
+whatever is recorded, so the key would stop no prompt. Where the line writes an assignment in front of
+a program, which is asked about whatever is recorded for the same reason and which `a` is not offered
+for either ([RUN-8](#RUN-8)). `a` stays on a prompt for a line that writes
+because it still decides the label of what that line prints, which is the half this key does not
+grant. In a session that adds
+nothing to `~/.bravebot`, which keeps a closed list of
+what still reaches the filesystem and this is not on it ([incognito.md](../incognito.md)). In a
+session answering every permission question without asking anybody, which draws no run prompt for a
+key to reach: were one drawn, a record saying somebody chose to remember a line they were never shown
+would be a standing permission nobody granted, which is the reason that mode adds nothing to the
+vouched list either. Enter reaches no standing key, and declining or Ctrl-C records nothing, which is
+what [prompting.md](../prompting.md) requires of every standing grant. Each of these refusals is made
+twice, once where the prompt is drawn and again where a keypress is acted on, for the reason RUN-6
+gives.
+
+**A delegate's prompt may record a line, and nothing has to be handed back.** A delegate's prompts
+reach the same person the session's own do ([permission-modes.md](../permission-modes.md)), and what
+that person answers inside a delegate is already a decision about their own machine rather than the
+delegate's ([delegation.md](../delegation.md)). The vouched list has to travel back out of a delegate
+because it lives in the run, and this record does not, because it is a file every session begun in
+that directory reads at the moment it would draw a prompt: a line recorded inside a delegate holds for
+the turn that spawned it and for the next session, with no copy seeded and no difference collected.
+The cost is that a delegate cannot be handed a narrower view of the record than the turn above it has,
+and that a turn running ten of them has ten writers of one file, which is what an entry added rather
+than a record rewritten is for. It is also the one thing two delegates share:
+[DELEGATE-15](../delegation.md#DELEGATE-15) keeps each of them from seeing the other's conversation,
+quarantine and vouched list, and this record is none of those, so a line one of them recorded stops
+the asking in the next.
+
+**No second question about the write.** Writing the record is a write, and every other write is put to
+a person. This one is not, because the person pressed the key with the line and the place on the
+screen, and asking again would collect a second answer for one decision. It is not a write any of
+those gates governs either: it lands where what outlives a session lands, with the mode everything
+there is written with ([state-directory.md](../state-directory.md)). What goes into it is the argument
+list they read, trusted and public before it reaches any gate, so no byte a program printed reaches
+the file. An entry is added rather than the record rewritten, so two sessions open in one directory
+cannot lose each other's answers.
+
+**It is read back with what put it there.** `/status` lists what is covered and says of each line
+whether this session's own answer covered it or an earlier session's did, and where the list is
+shortened it says how many of each it left out. The two lifetimes are the point: a person deciding
+whether to press `r` again, or whether to delete something, cannot tell from a flat list which
+answers they are still carrying from last week. The reading also says where the record is, because
+deleting a line from it is the way back.
+
+**The cost that matters most: a covered line is only as good as the tree it runs in.** `make check`
+runs what the makefile in that tree has come to say, and `npm test` what its `package.json` has, so a
+covered line does whatever the file it takes its work from now says. A vouch has the same property
+and the session bounds it, where this record is bounded only by somebody deleting the line, in a
+session that may be ticking a loop nobody is reading. The write
+that changed such a file was itself put to a person, except in the mode that accepts edits without
+asking, where it was not. Which programs take what they run from a file in the tree is what the
+hand-audited table ([command-line.md](command-line.md)) knows and what this key does not consult, so
+pressing `r` is a decision about the tree as much as about the command.
+
+**Other known costs.** A binary replaced in place at the recorded path is covered without anybody
+being asked again, which is a longer exposure than a session's and is what the answer lasting costs. A
+covered line is never put to that person again, so it can no longer be vouched for and its output
+stays quarantined: `read_output` still puts one result to them, which is [RUN-14](#RUN-14)'s advice,
+and the way back is to delete the line. The record is keyed by a directory, so a person working in
+two clones of one repository answers in each, and a session begun in a subdirectory is a different
+directory from the one above it. That key is a directory's name with every character outside a small
+set mapped to `-`, which is lossy, so two directories whose names reduce to the same one are answered
+by one record; [sessions.md](../sessions.md) records the same cost of the session store, where it
+takes a person resuming another directory's session to reach it, and here it takes only a session
+begun in either. And a line whose arguments differ every time is not helped at all, which
+[RUN-20](#RUN-20) is the answer to.
+
+`verified-by: bravebot_core::remembered::the_line_that_was_recorded_is_covered`
+`verified-by: bravebot_core::remembered::no_entry_reaches_a_second_argument_list`
+`verified-by: bravebot_core::remembered::a_second_name_for_the_same_binary_is_not_the_line_that_was_read`
+`verified-by: bravebot_core::remembered::an_answer_does_not_follow_a_name_onto_a_different_binary`
+`verified-by: bravebot_core::remembered::an_environment_assignment_makes_a_different_line`
+`verified-by: bravebot_core::remembered::sending_the_streams_somewhere_else_makes_a_different_line`
+`verified-by: bravebot_core::remembered::a_pipeline_is_covered_only_where_every_stage_is`
+`verified-by: bravebot_core::remembered::how_the_steps_are_joined_is_part_of_the_line`
+`verified-by: bravebot_core::remembered::an_empty_record_covers_nothing`
+`verified-by: bravebot_core::remembered::an_entry_says_which_session_answered_it`
+`verified-by: bravebot_core::policy::a_line_remembered_past_the_session_is_not_asked_about`
+`verified-by: bravebot_core::policy::output_of_a_line_remembered_past_the_session_is_still_untrusted_and_private`
+`verified-by: bravebot_core::policy::a_line_remembered_past_the_session_vouches_for_nothing`
+`verified-by: bravebot_core::policy::a_remembered_line_fed_private_input_is_asked_about_anyway`
+`verified-by: bravebot_core::policy::a_remembered_line_that_writes_is_asked_about_anyway`
+`verified-by: bravebot_core::policy::a_remembered_line_run_outside_the_root_is_asked_about_anyway`
+`verified-by: bravebot_core::policy::a_remembered_line_carrying_an_environment_assignment_is_asked_about_anyway`
+`verified-by: bravebot_core::policy::an_ask_rule_takes_back_a_line_remembered_past_the_session`
+`verified-by: bravebot_core::policy::the_key_is_offered_for_a_line_nothing_refuses_it_for`
+`verified-by: bravebot_core::policy::a_record_handed_over_again_replaces_what_it_held`
+`verified-by: bravebot_agent::remembered::a_line_written_by_one_session_is_read_back_by_another`
+`verified-by: bravebot_agent::remembered::every_field_of_a_line_survives_being_written_and_read`
+`verified-by: bravebot_agent::remembered::a_second_answer_is_added_rather_than_replacing_the_first`
+`verified-by: bravebot_agent::remembered::a_line_answered_in_one_directory_does_not_answer_in_another`
+`verified-by: bravebot_agent::remembered::a_directory_sharing_a_key_with_another_is_not_answered_by_its_lines`
+`verified-by: bravebot_agent::remembered::a_record_that_cannot_be_read_covers_nothing`
+`verified-by: bravebot_agent::remembered::a_line_nothing_can_read_leaves_the_rest_of_the_record_answering`
+`verified-by: bravebot_agent::turn::a_line_remembered_past_the_session_runs_without_asking`
+`verified-by: bravebot_agent::turn::a_line_remembered_past_the_session_covers_no_other_line`
+`verified-by: bravebot_agent::turn::a_turn_with_nobody_to_ask_reads_no_record`
+`verified-by: bravebot_agent::turn::answering_with_a_key_the_prompt_did_not_offer_records_nothing`
+`verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
+`verified-by: bravebot_agent::incognito::no_remembered_line_is_written_down`
+`verified-by: bravebot_agent::incognito::a_line_an_earlier_session_recorded_is_still_honoured`
+`verified-by: bravebot_tui::confirm::the_run_keys_separate_this_session_from_every_session`
+`verified-by: bravebot_tui::confirm::a_prompt_that_offers_no_record_binds_no_key_to_one`
+`verified-by: bravebot_tui::confirm::enter_does_not_record_a_run_past_the_session`
+`verified-by: bravebot_tui::confirm::refusing_a_run_records_nothing_past_the_session`
+`verified-by: bravebot_tui::confirm::a_prompt_offering_to_remember_says_where_the_record_goes`
+`verified-by: bravebot_tui::confirm::the_row_says_which_lifetime_the_always_key_grants`
+`verified-by: bravebot_tui::confirm::a_prompt_with_no_record_to_offer_draws_no_key_for_one`
+`verified-by: bravebot_tui::status::the_report_names_the_lines_remembered_past_a_session_and_who_answered_them`
+`verified-by: bravebot_tui::status::a_shortened_list_of_remembered_lines_says_how_many_came_from_an_earlier_session`
+`verified-by: bravebot_tui::status::a_directory_with_nothing_remembered_does_not_mention_the_record`
+`verified-by: bravebot_tui::status::a_session_carrying_a_remembered_line_is_not_told_every_run_is_asked_about`
+`verified-by: bravebot_agent::remembered::an_entry_this_build_does_not_fully_understand_covers_nothing`
+
+<a id="RUN-20"></a>
+### RUN-20: no answer at a prompt grants a family, because nothing here tells a value from a program
+
+Neither `a` nor `r` covers more than one argument list, and no key derives a wider grant from the
+lines a person has already answered.
+
+**Why.** Bounding a family means knowing which argument positions carry a value and which name
+something to run, and nothing available at a prompt can tell those apart. A wrapper puts what runs
+into an argument: `npm run <script>`, `env NAME=1 <program>`, `ssh <host> <command>`, `sh -c <script>`,
+`timeout 5 <program>`. A global option puts a sub-command into one: `git --no-pager <sub-command>`,
+`cargo --quiet <sub-command>`. So no positional account holds. Freeing the last argument turns two
+readings of a repository into a standing answer for `git --no-pager push`, and freeing any position but
+the first turns two `npm run` lines into every script a `package.json` names, which is a file in the
+tree rather than anything the person read. Two lines somebody has read do not say which position was
+the value. A program-by-program account of which positions are values is a table checked by hand
+against that program's full option list, which is the other road entirely
+([command-line.md](command-line.md)) and is a proof rather than something a keypress mints.
+
+**Why not a pattern the person edits at the prompt.** A box with `git commit -m *` already in it moves
+the deciding back to this system, since whatever is filled in is what nearly every reader accepts, and
+the thing filling it in is the thing that cannot tell a value from a program. An empty box is the
+file's own work moved somewhere worse: a person composing a pattern there cannot see the rules they
+already carry or the deny list theirs would sit under, and they are composing it in the middle of
+answering a question about something else.
+
+**Why the homework is the point here.** [RUN-18](#RUN-18) rejects an answer that hands somebody a line
+to type where this system could do the thing itself, and that reasoning does not reach this case. What
+is handed over is not a chore but an authority: deciding which argument carries a value is a judgment
+about a program, and nothing here can make it. Where the line repeats, nothing is handed over at all
+and [RUN-19](#RUN-19)'s key is the whole of the answer. The lines that vary are the only ones left,
+and they are the person's because only the person can decide them.
+
+**What the prompt says instead.** Where the line being asked about is one whose arguments will differ
+next time, the prompt says that a pattern is written in a settings file rather than answered at a
+prompt, names the file, and says what a pattern costs: it covers lines nobody has read, it stops the
+asking, and it makes nothing readable. A file they edited is also one they can read back and delete.
+Saying nothing
+would be the worse answer, for the reason [RUN-14](#RUN-14) says what would lift a quarantine rather
+than leaving it to be found: somebody answering the same shape of prompt all day learns nothing from
+the prompt about the durable form. No pattern is put on the screen, for the reason a box with one in
+it is refused above: naming the file is the fact they cannot get from anywhere else, and composing
+the rule is the judgment only they can make.
+
+**How a prompt knows which line that is.** The person has already read a run prompt for the same
+binary, in this session, under a different argument list. Two argument lists for one program is the
+variation itself rather than a reading of the argv, and nothing in it says which position moved, so
+this establishes what the clause needs without making the judgment the clause refuses. It is read
+off the run prompts this session has drawn, which is a list that grants nothing: membership stops no
+prompt, raises no label, vouches for nothing and reaches no file. It is written nowhere, not even
+into the session record that carries the vouched list across a `--resume` ([RUN-9](#RUN-9)), because
+what it holds is questions somebody read rather than anything they are carrying. So the first prompt
+of a session says nothing about patterns, and so does the first prompt of a resumed one. Neither does
+any prompt on a machine that names no home directory, since there is no file to name and advice that
+cannot say which file is a chore handed over without the one fact it needs.
+
+The whole line is compared at once, and the argument lists the line itself holds are not what it
+differs from. `grep TODO src | grep -v test` names one binary under two argument lists, so a
+step-by-step reading would have that line, asked about a second time, varying from itself.
+
+**Only where a rule would decide the line.** The advice says that editing a file ends the asking, so
+it is given only where that is true. A line releasing private input, naming a file to write, running
+anywhere but the workspace root, or writing an assignment in front of a program is put to a person
+before any rule is read ([RUN-6](#RUN-6), [RUN-8](#RUN-8)), so no pattern reaches one and saying
+otherwise would have somebody change the wrong thing about the line. These are the same four
+refusals [RUN-19](#RUN-19)'s key is withheld for, and for the same reason: each is made before the
+thing being offered is consulted. Where a rule already matches the line, nothing is said either,
+since the person has found the file and what their rule says is what happens.
+
+**Why not on every prompt.** [RUN-19](#RUN-19)'s key is the whole of the answer for a line that
+repeats, so the advice there would send somebody to edit a file where a keypress would do. It is
+drawn beside that key rather than instead of it, because a line can repeat and vary in one session
+and both answers are then true of it.
+
+**A known cost.** A line whose arguments change every time is asked about every time, in this session
+and in the next. A commit message and a new branch name are the two that do this in ordinary work.
+The answer for them is a pattern the person writes or a prompt each time, and this clause chooses the
+prompt.
+
+**A second known cost.** Two different jobs for one program read as one job whose arguments moved.
+`git log` followed by `git push` draws the advice, because telling those apart means deciding which
+argument names something to run, which is what this clause refuses to decide for a grant and cannot
+decide here either. What it costs is a sentence of advice where a person did not need one, against
+the alternative of withholding it from the case it exists for.
+
+`verified-by: bravebot_core::programs::a_second_argument_list_for_one_binary_is_a_line_whose_arguments_vary`
+`verified-by: bravebot_core::programs::a_line_asked_about_twice_is_not_a_line_whose_arguments_vary`
+`verified-by: bravebot_core::programs::a_line_nothing_has_been_asked_about_has_no_arguments_that_have_varied`
+`verified-by: bravebot_core::programs::a_second_binary_is_not_the_first_ones_arguments_varying`
+`verified-by: bravebot_core::programs::asking_about_a_line_vouches_for_nothing`
+`verified-by: bravebot_core::policy::a_binary_asked_about_under_two_argument_lists_is_one_whose_arguments_have_varied`
+`verified-by: bravebot_core::policy::a_line_asked_about_again_unchanged_has_not_varied`
+`verified-by: bravebot_core::policy::a_line_asked_about_is_not_thereby_vouched_for_or_remembered`
+`verified-by: bravebot_core::policy::a_line_the_rules_are_never_read_for_is_one_no_pattern_would_answer`
+`verified-by: bravebot_core::programs::a_line_naming_one_binary_twice_does_not_vary_from_itself`
+`verified-by: bravebot_agent::turn::a_line_no_rule_is_ever_read_for_is_advised_no_pattern`
+`verified-by: bravebot_core::policy::vouching_for_one_command_does_not_cover_another_of_the_same_program`
+`verified-by: bravebot_core::remembered::no_entry_reaches_a_second_argument_list`
+`verified-by: bravebot_agent::turn::a_binary_asked_about_under_two_argument_lists_is_advised_to_a_settings_file`
+`verified-by: bravebot_agent::turn::a_line_asked_about_again_unchanged_is_advised_no_pattern`
+`verified-by: bravebot_tui::confirm::a_prompt_for_a_line_whose_arguments_vary_names_the_settings_file`
+`verified-by: bravebot_tui::confirm::a_prompt_for_a_line_whose_arguments_vary_says_what_a_pattern_costs`
+`verified-by: bravebot_tui::confirm::advising_a_pattern_offers_no_key_that_grants_one`
+`verified-by: bravebot_tui::confirm::a_prompt_for_a_line_nothing_has_varied_says_nothing_about_a_pattern`
 
 ## Open questions
 

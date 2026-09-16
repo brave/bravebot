@@ -7,6 +7,7 @@
 //! Events carry labels and decisions, never slot contents.
 
 use crate::capability::Capability;
+use crate::delegate::DelegateId;
 use crate::label::Label;
 use crate::slot::SlotId;
 use std::fmt;
@@ -96,6 +97,21 @@ pub enum Event {
 /// JSONL file, or both.
 pub trait Sink {
     fn emit(&mut self, event: Event);
+
+    /// Whose gates the events after this one are, where they are a delegate's.
+    ///
+    /// A turn and the delegates it spawned record into one trail, so a record that did not say
+    /// which run took it would leave the turn's decisions and its delegates' interleaved with
+    /// nothing telling them apart, and two delegates of the same kind reading identically.
+    ///
+    /// Said beside the event rather than carried on it, because an event is what a gate decided
+    /// and the run that took it is a fact about the run. The driver says it, for the reason it
+    /// says whose a report is: it already holds the answer, and reading the record back to work
+    /// the answer out would be taking it from prose a model had a hand in.
+    ///
+    /// Ignored by a sink that keeps no attribution, and by every run that spawns nothing: a trail
+    /// told nothing is a turn's own.
+    fn recording_for(&mut self, _delegate: Option<DelegateId>) {}
 }
 
 /// Discards everything. For tests that do not assert on the trail.
@@ -110,6 +126,14 @@ impl Sink for NullSink {
 #[derive(Debug, Default)]
 pub struct RecordingSink {
     events: Vec<Event>,
+    /// Which run took the decision at the same index, where it was a delegate's.
+    ///
+    /// Kept beside the events rather than in them because [`RecordingSink::events`] is what
+    /// nearly every reader of this wants, and a record type there would put an attribution in
+    /// front of every assertion about a trail that has only one run in it.
+    from: Vec<Option<DelegateId>>,
+    /// Whose events are arriving, until something says otherwise.
+    recording: Option<DelegateId>,
 }
 
 impl RecordingSink {
@@ -119,6 +143,12 @@ impl RecordingSink {
 
     pub fn events(&self) -> &[Event] {
         &self.events
+    }
+
+    /// Every event, with the run whose gate took it where that was a delegate rather than the
+    /// turn.
+    pub fn recorded(&self) -> impl Iterator<Item = (Option<DelegateId>, &Event)> {
+        self.from.iter().copied().zip(self.events.iter())
     }
 
     /// Every refusal, in order.
@@ -141,6 +171,11 @@ impl RecordingSink {
 impl Sink for RecordingSink {
     fn emit(&mut self, event: Event) {
         self.events.push(event);
+        self.from.push(self.recording);
+    }
+
+    fn recording_for(&mut self, delegate: Option<DelegateId>) {
+        self.recording = delegate;
     }
 }
 
@@ -164,6 +199,32 @@ mod tests {
             sink.events()[0],
             Event::GatePassed { gate: "first", .. }
         ));
+    }
+
+    /// One trail holds a turn's decisions and its delegates', so a record that did not say which
+    /// run took it would leave them interleaved and unattributable. The turn's own are left
+    /// unnamed, which is what "the turn, or one delegate of it" means when nothing has spawned.
+    #[test]
+    fn a_record_says_which_run_took_the_decision() {
+        let mut sink = RecordingSink::new();
+        let gate = |gate: &'static str| Event::GatePassed {
+            gate,
+            detail: String::new(),
+        };
+
+        sink.emit(gate("the turn's"));
+        sink.recording_for(Some(DelegateId::nth(1)));
+        sink.emit(gate("the first delegate's"));
+        sink.recording_for(Some(DelegateId::nth(2)));
+        sink.emit(gate("the second delegate's"));
+        sink.recording_for(None);
+        sink.emit(gate("the turn's again"));
+
+        let took: Vec<Option<u32>> = sink
+            .recorded()
+            .map(|(from, _)| from.map(DelegateId::position))
+            .collect();
+        assert_eq!(took, vec![None, Some(1), Some(2), None]);
     }
 
     #[test]

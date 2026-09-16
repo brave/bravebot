@@ -81,6 +81,7 @@ cli-workspace-problem = workspace error: { $problem }
 cli-interface-problem = interface error: { $problem }
 cli-directory-unknown = cannot tell which directory this is
 cli-no-such-session = no session { $id } in this directory
+cli-manifest-run = { $id } is a manifest run, so there is nothing to continue; this is what it did
 cli-nothing-to-continue = no session to continue in this directory
 cli-fork-needs-a-name = --fork requires a session id
 cli-piped-input-unreadable = warning: could not read piped input: { $problem }
@@ -148,11 +149,22 @@ doctor-settings-overridden = { $name } from { $path }
 doctor-leo = leo
 doctor-subscription =
     { $environment } subscription imported, { $unspent } of { $total } credentials unspent
-doctor-state-directory = state directory { $path }
+# Which variable answered as well as where the directory is: more than one can name a profile
+# directory, and the one that won is what somebody has to change to put the directory elsewhere.
+doctor-state-directory = state directory { $path }, from { $variable }
+# What this program asks for as each file is created is a mode no other account can read. Where the
+# platform is not told that, the files carry whatever the profile directory grants them instead. A
+# prompt history holds every path, branch name and pasted fragment somebody has typed, so which of
+# the two they have is theirs to know rather than a detail of the build.
+doctor-state-directory-unprotected = not restricted
+doctor-state-directory-permissions =
+    prompt history, session records and saved choices carry your profile directory's permissions
 # What outlives a session is kept in this directory, so a machine without one keeps none of it, and
-# nothing else in the report says so. The absence is partial: a checkout's own files are read as
-# usual, and saying which half is lost is what stops this reading as "your AGENTS.md is ignored".
-doctor-state-directory-absent = no state directory: HOME names nothing
+# nothing else in the report says so. Every variable that was looked at is named, since which ones
+# they are is a fact about the platform rather than something the reader should have to know. The
+# absence is partial: a checkout's own files are read as usual, and saying which half is lost is
+# what stops this reading as "your AGENTS.md is ignored".
+doctor-state-directory-absent = no state directory: { $variables } names nothing
 doctor-state-directory-not-kept = not kept
 doctor-state-directory-forgotten =
     sessions and --resume, prompt history, the model and theme you choose
@@ -160,7 +172,9 @@ doctor-state-directory-not-read = not read
 doctor-state-directory-your-own =
     settings, skills and standing instructions of your own; a checkout's own still apply
 doctor-state-directory-remedy = to keep them
-doctor-state-directory-set-home = set HOME to a directory of your own
+# The remedy names the same variables the line above does. Naming one of them would send somebody on
+# a platform that answers with the other to set the variable that was not going to be consulted.
+doctor-state-directory-set-profile = set { $variables } to a directory of your own
 doctor-confinement = confinement { $level }
 # How much confinement was actually achieved. The sandbox reports which of the three it got and
 # the interface is what names it, because bravebot-sandbox holds no words for a person.
@@ -195,6 +209,12 @@ leo-browser-untouched =
 # rather than by an error, so the only symptom is a worse answer.
 subscription-unusable =
     the imported subscription could not be used ({ $problem }), so this turn runs on the free tier
+
+# Said when a background job exits. The line drawn when it started said only that something had
+# been started, and nothing else in the transcript ever says it is over, so a build that failed
+# while the turn was doing something else would leave nothing on the screen about it. What it
+# printed goes to the view a person can open; this is the sentence saying the thing has ended.
+background-job-finished = `{ $command }` finished in the background: { $outcome }
 
 
 ## Vouching for a directory, asked once when a session starts somewhere new
@@ -369,8 +389,23 @@ run-always-output-trusted = what it prints is trusted, and the model reads it
 run-always-exact-arguments = these arguments only: git log would not cover git push
 run-private-not-remembered =
     private input is asked about every time, so this one cannot be remembered
+run-assignment-not-remembered =
+    an assignment in front of a program is asked about every time, so this one cannot be remembered
+run-remember-explained = r: stop asking about this exact line, in this directory, from now on
+run-remember-where = it is written down here, and deleting the line is the way back:
+run-remember-only-asking = it stops the asking only: what it prints stays quarantined
+run-remember-every-session = every session started in this directory reads it, not just this one
+# Said where the person has already answered a prompt for this binary under other arguments, which
+# is the only thing a prompt can establish about a line that will be asked about however it is
+# answered. No pattern is suggested: which argument carried the message is the person's to decide.
+run-pattern-varies =
+    these arguments differ from the ones you were asked about before, so no key here ends the asking
+run-pattern-where = a pattern for the family is written in a settings file, not answered here:
+run-pattern-covers-unread = a pattern covers lines nobody has read, which is more than any key here grants
+run-pattern-only-asking = a pattern stops the asking and nothing else: what the line prints stays quarantined
 run-yes = run it
-run-always = always
+run-always = always this session
+run-remember = remember it
 run-no = don't
 
 
@@ -488,6 +523,8 @@ status-directory-trusted = trusted
 status-directory-untrusted = not trusted, so every write is shown to you
 status-also-open = Also open
 status-added-directory = added with /add-dir
+status-scratch = Scratch
+status-scratch-note = this session's own to write in, removed when it ends
 status-model = Model
 status-model-chosen = chosen with /model
 status-model-default = the configured default
@@ -545,9 +582,19 @@ status-trusted = trusted
 status-untrusted = untrusted
 status-programs = Programs
 status-every-run-is-asked = every run is put to you
+status-nothing-vouched-this-session = nothing vouched for this session; the lines below run unasked
 status-trusted-commands = Trusted commands
 status-trusted-commands-note = run unasked, and their output is trusted
 status-and-more = … and { $count } more
+status-remembered = Remembered lines
+status-remembered-note = run unasked in this directory, and their output stays quarantined
+status-remembered-this-session = remembered in this session
+status-remembered-earlier = remembered in an earlier session
+status-remembered-where = delete a line from { $path } to be asked again
+status-remembered-and-more = { $count ->
+    [one] … and 1 more, { $earlier } of them from an earlier session
+   *[other] … and { $count } more, { $earlier } of them from an earlier session
+    }
 
 # Which deployment is being talked to. Left as they are where a language borrows the English
 # abbreviation, which is common for these four.
@@ -700,8 +747,10 @@ command-btw = Ask something beside the work, without putting it in the conversat
 command-clear = Start a new session here, keeping this one resumable
 command-loop = Send a prompt again and again, on your interval or at a pace each turn sets
 command-goal = Keep working until a condition you set is judged met
+command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-export = Export the session transcript to a markdown file
-command-undo = Rewind the last turn and restore files
+command-undo = Rewind one turn and put back the files it wrote
+command-rewind = List the turns a rewind could go back to, or go back that many
 command-exit = Leave
 
 
@@ -712,10 +761,24 @@ session-renamed = renamed to { $title }
 session-rename-needs-a-name = /rename needs a name, as in /rename the parser bug
 session-rename-needs-something = /rename needs a name with something in it
 session-cleared = cleared: a new session, with the previous one still resumable
-session-last-turn-undone = rewound the session by one turn
-session-last-turn-undone-partly =
-    rewound the session by one turn, but these files still hold what it wrote: { $paths }
+session-rewound = rewound the session to before turn { $turn }
+session-rewound-partly =
+    rewound the session to before turn { $turn }, but these files still hold what was
+    written: { $paths }
 session-nothing-to-undo = nothing left to undo in this session
+session-rewind-points = a rewind goes back to one of these, putting back every row down to it:
+# One point a rewind could reach: how many turns back it is, which turn it would land before,
+# what that turn was asked, and every path it would put back.
+session-rewind-point =
+    { $turns } back: before turn { $turn }, { $asked }, puts back { $paths }
+session-rewind-point-wrote-nothing =
+    { $turns } back: before turn { $turn }, { $asked }, no files to put back
+session-rewind-needs-a-number = /rewind takes how many turns to go back, as in /rewind 2
+session-rewind-goes-no-further =
+    { $kept ->
+        [one] this session can go back one turn, no further
+       *[other] this session can go back { $kept } turns, no further
+    }
 session-exported = exported transcript to { $path }
 session-export-failed = could not export transcript: { $problem }
 session-add-dir-needs-a-path = /add-dir needs a directory, as in /add-dir ~/notes
@@ -735,6 +798,9 @@ session-permissions-skipped =
     --dangerously-skip-permissions: nothing will be asked before a write, a command, or reading a
     file nobody vouched for. shift-tab to change
 session-directory-not-added = could not add { $directory }: { $problem }
+# Said when the session has nowhere of its own to write. Not a failure to start, but a person whose
+# turn is told there is nowhere to put an intermediate file has nothing else to read it off.
+session-scratch-unavailable = no scratch directory this session: { $problem }
 session-using-model = using { $model }
 # The picker row that said which service answers is gone by the time this is read, and the same
 # name reached through two services is two bills and two credentials.
@@ -881,6 +947,16 @@ btw-uninterruptible = the question cannot be interrupted; it takes one request
 btw-ended-unexpectedly = the question ended unexpectedly
 btw-answered = asked beside the work, and answered there; { $chord } opens it again
 btw-failed = the question could not be answered: { $problem }
+
+# What the session says about a manifest run started from it. The plan, each step and the reply are
+# shown as they happen, so what is left to say is that a run is starting, where it was written down,
+# and what went wrong where something did. That a run is not a turn of the conversation is what the
+# mode is for rather than news about this run, so it is not said here.
+manifest-needs-a-task = /manifest takes the task to plan, as in /manifest summarise the docs
+manifest-began = planning the whole task first; the session waits here until the run ends
+manifest-ended-unexpectedly = the run ended unexpectedly
+manifest-failed = the run stopped: { $problem }
+manifest-recorded = recorded as { $id }; read it again with bravebot --resume { $id }
 
 
 ## The opening screen

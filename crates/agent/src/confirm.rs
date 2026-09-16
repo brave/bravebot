@@ -114,6 +114,27 @@ pub struct RunRequest {
     /// The plan and not the line. Two lines that compile alike are one thing to agree to, and a
     /// person reading the text rather than the plan would be answering for something else.
     pub plan: bravebot_core::command::Plan,
+    /// Where an answer that outlives the session would be written, where one may be.
+    ///
+    /// `Some` exactly where the prompt may offer to remember this line: a session that can keep
+    /// such a record at all, and a plan the policy will still consult one for. `None` everywhere
+    /// else, and the key is not drawn.
+    ///
+    /// The path rather than a flag, because the prompt has to show where the record goes. A person
+    /// cannot endorse a record they were not shown, and deleting a line from that file is the way
+    /// back from having pressed the key.
+    pub record: Option<std::path::PathBuf>,
+    /// Where a pattern would be written, where this line's arguments will differ next time.
+    ///
+    /// `Some` exactly where the prompt says so: the same binary has already been put to this
+    /// person in this session under a different argument list, and there is a settings file to
+    /// name. `None` everywhere else, and nothing about patterns is drawn at all.
+    ///
+    /// The path rather than a flag, for the reason [`RunRequest::record`] carries one: the advice
+    /// is to edit a file, and advice that does not say which file is a chore handed over twice.
+    /// The two are independent. A line can repeat and vary in one session, so a prompt may offer
+    /// the key and give the advice together, and the key still covers only the line on screen.
+    pub pattern: Option<std::path::PathBuf>,
 }
 
 impl RunRequest {
@@ -132,6 +153,8 @@ impl RunRequest {
             })
             .collect();
         Self {
+            record: None,
+            pattern: None,
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),
@@ -158,6 +181,37 @@ impl RunRequest {
         self.plan.releases_private()
     }
 
+    /// Whether the line writes an environment assignment in front of one of its programs.
+    ///
+    /// The second reason the prompt cannot offer to stop asking: an entry records a program and its
+    /// exact arguments, and an assignment is in neither, so [`RunRequest::would_vouch_for`] cannot
+    /// represent one. An entry made here would be a bare entry covering the same program under no
+    /// assignment at all, and the screen would be claiming a grant nothing recorded.
+    ///
+    /// Asked apart from [`RunRequest::can_be_remembered`] because that one decides whether to offer
+    /// anything and this one decides what to say about not offering it.
+    pub fn carries_an_assignment(&self) -> bool {
+        self.plan.carries_an_assignment()
+    }
+
+    /// Whether an entry could record this line at all, which is what `a` would make.
+    ///
+    /// One question rather than a list of reasons repeated at each place that asks, so a reason
+    /// added later cannot reach the drawing and miss the layer that acts on the answer.
+    pub fn can_be_remembered(&self) -> bool {
+        self.plan.can_be_remembered()
+    }
+
+    /// Whether the prompt may offer to record this answer past the session.
+    pub fn may_record(&self) -> bool {
+        self.record.is_some()
+    }
+
+    /// Whether the prompt says a pattern in a settings file is what answers this line.
+    pub fn advises_a_pattern(&self) -> bool {
+        self.pattern.is_some()
+    }
+
     /// A short description for a prompt line.
     pub fn summary(&self) -> String {
         format!(
@@ -174,7 +228,9 @@ impl RunRequest {
     /// stopped asking, and its output would still be untrusted.
     ///
     /// Each entry is a program **and its exact arguments**. Vouching for `git log` says nothing
-    /// about `git push`.
+    /// about `git push`, and an entry can hold nothing else: an assignment written in front of a
+    /// step is not in it, which is why [`RunRequest::carries_an_assignment`] is asked separately
+    /// rather than answered from this list.
     pub fn would_vouch_for(&self) -> Vec<bravebot_core::programs::Command> {
         let mut named: Vec<bravebot_core::programs::Command> = Vec::new();
         for step in self.plan.steps() {
@@ -326,6 +382,12 @@ pub struct RunDecision {
     pub decision: Decision,
     /// Whether the person asked for these programs to stop being asked about this session.
     pub remember: bool,
+    /// Whether the person asked for this exact line to stop being asked about past the session.
+    ///
+    /// A separate field from `remember` because the two keys grant different things with different
+    /// lifetimes, and one field could not carry both: this one stops the asking and leaves every
+    /// label where it was, while `remember` also says what the command prints may be read.
+    pub record: bool,
 }
 
 impl RunDecision {
@@ -334,6 +396,7 @@ impl RunDecision {
         Self {
             decision: Decision::Approve,
             remember: false,
+            record: false,
         }
     }
 
@@ -342,6 +405,20 @@ impl RunDecision {
         Self {
             decision: Decision::Approve,
             remember: true,
+            record: false,
+        }
+    }
+
+    /// Run it, and record this exact line so every session in this directory runs it unasked.
+    ///
+    /// Vouches for nothing: what the line prints keeps the label it would have had. The two
+    /// lifetimes are separate keys because one is a decision about a label and the other is a
+    /// decision about how long an answer lasts.
+    pub fn approve_and_record() -> Self {
+        Self {
+            decision: Decision::Approve,
+            remember: false,
+            record: true,
         }
     }
 
@@ -350,6 +427,7 @@ impl RunDecision {
         Self {
             decision: Decision::Reject,
             remember: false,
+            record: false,
         }
     }
 

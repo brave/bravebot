@@ -9,6 +9,7 @@ governs:
   - crates/tui/src/status.rs
   - crates/tui/src/state.rs
   - crates/config/src/bedrock.rs
+  - crates/config/src/env_var.rs
   - crates/config/src/lib.rs
   - crates/aichat/src/lib.rs
   - crates/aichat/src/models.rs
@@ -622,12 +623,13 @@ leaves everything else in force.
 
 | What | How layers combine |
 |---|---|
-| `env`, `provider`, `attribution` | per name, one level down; the value under a name is replaced whole |
+| `env`, `provider`, `attribution`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, every list under `permissions` | every layer's entries are kept |
 | `model`, anything else | the closest layer that set it wins |
 
 The project layers are read from the directory the process started in and no ancestor of it. Each
-layer fails independently: one that is missing, oversized, or unparseable leaves the others in force.
+layer fails independently: one that is missing, larger than 64 KB, or unparseable leaves the others
+in force.
 
 **Why.** An account is not the only scope a value belongs to. A credential profile is a property of
 the person, the gateway a particular checkout talks to is a property of that checkout, and something
@@ -639,7 +641,9 @@ which is why a gateway entry is replaced whole and a project file naming one mus
 
 The two names under `attribution` combine per name for the same reason `env` does: they are
 unrelated destinations that happen to share a block, and a file answering for one must not answer
-for the other by omission.
+for the other by omission. The chords under `keybindings` and the two caps under `search` are the
+same case: a file moving one action's key is no statement about the other six, and a checkout
+widening a search's walk for its own size is none about how long a read may take.
 
 The lists are the exception because an entry in one only ever narrows what is possible: a name under
 `scrubEnv` takes a variable away from a subprocess, and a rule under `permissions` refuses something
@@ -652,6 +656,10 @@ session would depend on which directory somebody happened to change into, and th
 above the thing being worked on. Refusing the whole stack over one bad layer is the other thing it
 declines: a mistake in a checkout must not decide that somebody's own profile no longer applies.
 
+The bound is there because these files are a handful of short strings and a session must start
+without waiting on one. A file that grew by accident, or that is not a settings file at all, is
+skipped rather than parsed, and 64 KB is far above anything a person writes by hand.
+
 The order and the merge rules are Claude Code's, down to the name `settings.local.json`, so that
 knowing where to put a value for one tool is knowing it for the other.
 
@@ -663,6 +671,7 @@ knowing where to put a value for one tool is knowing it for the other.
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_directories_a_file_makes_reachable`
 `verified-by: bravebot_config::settings::the_closest_layer_that_named_a_model_wins`
 `verified-by: bravebot_config::settings::a_layer_answering_for_one_attribution_name_leaves_the_other`
+`verified-by: bravebot_config::settings::a_layer_capping_one_side_of_a_search_leaves_the_other`
 `verified-by: bravebot_config::settings::a_layer_naming_no_model_leaves_the_one_below_it`
 `verified-by: bravebot_config::settings::a_project_layer_replaces_one_gateway_and_leaves_the_others`
 `verified-by: bravebot_config::settings::a_project_gateway_naming_no_host_replaces_one_that_did`
@@ -724,10 +733,11 @@ deliberately is not something the picker offers, that entry not being on this pr
 <a id="BACKEND-27"></a>
 ### BACKEND-27: a Bedrock request marks the prefix it will send again
 
-Two cache breakpoints go on every request to Bedrock: one at the end of the system prompt, which
-covers the tool schemas in front of it, and one on the last block of the conversation, which moves
-to the end as the conversation grows. Neither changes what is sent, only what the service has to
-read again.
+Two cache breakpoints go on a request to Bedrock: one at the end of the system prompt, which covers
+the tool schemas in front of it, and one on the last block of the conversation, which moves to the
+end as the conversation grows. The second comes off where the caller says no later request sends that
+conversation again, leaving such a request the system prompt's breakpoint alone. Neither changes what
+is sent, only what the service has to read again.
 
 **Why.** A turn re-sends its whole history every round. One session reached 104,633 tokens over
 twenty-seven rounds and paid for every token of every round at full price, in latency as much as in
@@ -738,7 +748,12 @@ front of the last one are identical to a round ago.
 **Rolling rather than fixed.** Each request writes the round before it into the cache and reads
 back everything older, which is what makes the second breakpoint worth a cache write. A conversation
 ending in an image or a tool call is left with the breakpoint on the system prompt alone, and costs
-a cache write and nothing else.
+a cache write and nothing else. A request whose conversation no later request sends is left the same
+way: the write on the end of that exchange is charged above the tokens it covers and buys a cache
+nothing reads back, while the prompt in front of it is the same bytes every time such a request is
+made. Which requests those are is the caller's to say, and
+[compaction.md](compaction.md), [goal.md](goal.md), [watching.md](watching.md) and
+[tools/spawn-processor.md](tools/spawn-processor.md) are where they say it.
 
 **The reported prompt is what was sent, not what was read.** This API states `inputTokens` net of
 the cache and reports the cached tokens beside it, so the three are added back together on the way
@@ -771,6 +786,7 @@ for one that does not.
 `verified-by: bravebot_bedrock::protocol::the_system_prompt_carries_a_breakpoint`
 `verified-by: bravebot_bedrock::protocol::the_last_block_of_the_conversation_carries_a_breakpoint`
 `verified-by: bravebot_bedrock::protocol::a_conversation_ending_in_a_tool_result_is_marked_too`
+`verified-by: bravebot_bedrock::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
 `verified-by: bravebot_bedrock::protocol::a_reply_without_a_breakpoint_still_parses`
 `verified-by: bravebot_bedrock::protocol::cached_tokens_are_counted_as_the_prompt_they_were`
 `verified-by: bravebot_bedrock::protocol::a_request_without_breakpoints_keeps_everything_that_was_asked_for`
@@ -924,10 +940,12 @@ says which turn it speaks for, the counts beside it being the session's.
 ### BACKEND-32: an aichat request marks the prefix it will send again
 
 A request in the OpenAI-compatible wire format marks two prefixes: the system prompt, which the tool
-schemas travel in front of, and the last thing the user said. The mark is a `cache_control` of
-`{"type": "ephemeral"}` on the content block the prefix ends at, which is the field the Anthropic API
-defines for this and the field a gateway fronting such a model reads. A marked message carries its
-words as a block rather than as a bare string, that being the only shape the field exists in.
+schemas travel in front of, and the last thing the user said. The second is left off where the caller
+says the conversation is given up once it has been answered, marking the prompt alone. The mark is a
+`cache_control` of `{"type": "ephemeral"}` on the content block the prefix ends at, which is the field
+the Anthropic API defines for this and the field a gateway fronting such a model reads. A marked
+message carries its words as a block rather than as a bare string, that being the only shape the
+field exists in.
 
 **Why.** The arithmetic is BACKEND-27's, and so is the measurement behind it: a turn re-sends its
 whole history every round, the system prompt and the schemas are identical on every round of every
@@ -944,6 +962,15 @@ through the last user turn is written by the first round and read back by every 
 since what a round appends is a call and its result on the end, so what goes unread is only what
 those rounds appended. A turn whose last block is a picture keeps the breakpoint on the system prompt
 alone, because what a service makes of a mark on an image block is not a thing to guess at.
+
+**A conversation nothing sends again is not worth marking.** The mark on the last thing the user said
+is worth a cache write because the request after it sends everything in front of it again. A request
+that gives its conversation up once it has been answered has no request after it, and the write is
+charged above the tokens it covers for a prefix nothing can read back. The prompt keeps its mark,
+being the same bytes every time such a request is made, so what is given up is a write and no read.
+[compaction.md](compaction.md), [goal.md](goal.md), [watching.md](watching.md) and
+[tools/spawn-processor.md](tools/spawn-processor.md) are where a request says its conversation is
+not sent again.
 
 **Marked on the way out and nowhere else.** The mark is put on a copy as the body is built, so the
 request a turn assembled does not carry one and neither does anything a session records. A
@@ -977,6 +1004,7 @@ sent.
 
 `verified-by: bravebot_aichat::protocol::the_system_prompt_and_the_last_thing_the_user_said_are_marked`
 `verified-by: bravebot_aichat::protocol::a_result_the_assistant_asked_for_is_not_marked`
+`verified-by: bravebot_aichat::protocol::a_request_giving_up_its_conversation_marks_the_prompt_alone`
 `verified-by: bravebot_aichat::protocol::a_turn_ending_in_a_picture_is_left_unmarked`
 `verified-by: bravebot_aichat::protocol::the_words_after_a_picture_carry_the_mark`
 `verified-by: bravebot_aichat::protocol::a_marked_body_changes_nothing_but_the_messages`
@@ -989,6 +1017,131 @@ sent.
 `verified-by: bravebot_aichat::client::a_refusal_the_retry_did_not_fix_is_not_remembered`
 `verified-by: bravebot_aichat::client::a_request_the_server_refused_is_not_sent_again_unchanged`
 `verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
+
+<a id="BACKEND-33"></a>
+### BACKEND-33: an `env` block names these twelve variables
+
+The `env` block of a settings file sets variables under their own names, and these are the names
+something reads:
+
+| Name | What it decides |
+|---|---|
+| `SERVICES_KEY_AICHAT` | the key a request to Brave's endpoint is signed with |
+| `BRAVE_SERVICES_KEY_ID` | which key that signature is checked against |
+| `BRAVE_AI_CHAT_ENDPOINT` | the host Brave's endpoint is reached at |
+| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host an imported subscription is spent against |
+| `BRAVE_AI_CHAT_DEFAULT_MODEL` | which model answers before anybody has chosen one |
+| `BRAVEBOT_CONTEXT_BUDGET` | how many prompt tokens a conversation may reach before it is shortened |
+| `BRAVEBOT_USE_BEDROCK` | `1` to reach models through somebody's own AWS account |
+| `AWS_REGION` | which region that account is reached in |
+| `AWS_PROFILE` | which profile in the AWS configuration names the credentials to sign with |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | the model the tier word `opus` names |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | the model the tier word `sonnet` names |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | the model the tier word `haiku` names |
+
+A gateway is not configured from this block: it is a `provider` entry, whose shape BACKEND-13
+states and whose credential BACKEND-16 names. The top-level `model` key is not one of these either, being a
+choice rather than a variable, and BACKEND-11 is what ranks it.
+
+**Why.** A configuration surface that is described but never named is one nobody can use without
+reading the source. Anything written *about* this system (the site somebody installs it from, a
+message telling a person what to set) is written from what is stated here, so a backend whose
+variables are named nowhere is a backend that reaches people undocumented however completely its
+behaviour is specified. Naming them is also what makes the set reviewable: a thirteenth variable is
+a change to this table, which a person reads, rather than a constant added to a file nobody is
+asked to look at.
+
+The AWS names keep the spelling another tool already gave them, and the switch and the budget carry
+this program's own prefix, for the reason BACKEND-24 gives about the file as a whole: a block
+copied from elsewhere should work unedited, while a name that decides what *this* program does
+belongs to this program and must not collide with whatever else a shared shell profile wanted.
+
+`verified-by: bravebot_config::lib::every_name_a_settings_block_may_set_reaches_the_configuration`
+`verified-by: bravebot_config::settings::an_env_block_is_read`
+
+<a id="BACKEND-34"></a>
+### BACKEND-34: a settings value is a string, and anything else is not a value
+
+Every value in a settings block is a JSON string. A name spelled with a number, a boolean, a null, a
+list or an object holds nothing, and holds nothing in the layers underneath it either: the closest
+layer that spelled the name is the layer that answered for it. Every other name in that file is
+unaffected.
+
+A block spelled as anything but a block is answered for the same way, one level up. A layer whose
+`env` is a number, a string, a list or a null sets no variable, and no variable is read from the
+layers under it either. The file still parses, so this is not the failed-layer case BACKEND-24
+describes, and the other blocks in it are read as they would have been.
+
+**Why.** What a variable takes is a string, and JSON has a distinct spelling for each of the other
+kinds. Coercing one invents a spelling the writer did not choose, `1` and `true` being far from
+obviously `"1"` and `"true"` to whoever reads the value back later, and the values here are hosts
+and credentials, where a guess about spelling is a guess about where a request goes. Dropping the name
+rather than the file keeps the damage to the thing that was mistyped, since the rest of the file
+still describes a working backend.
+
+A weaker layer is not fallen through to because the name was answered, by the file closest to the
+work. Falling through would make a typo in a checkout resolve quietly to a value from a file the
+person was not looking at, which is the one outcome worse than the name being unset. That is the
+reason the same thing happens to a whole block, and it is also where the rule costs the most: a
+single mistyped `env` takes a person's own variables away with the checkout's.
+
+`verified-by: bravebot_config::settings::a_value_that_is_not_a_string_is_left_out`
+`verified-by: bravebot_config::settings::a_value_that_is_not_a_string_leaves_the_name_unset_in_every_layer`
+`verified-by: bravebot_config::settings::a_block_that_is_not_a_block_leaves_no_names_under_it`
+`verified-by: bravebot_config::settings::a_model_that_is_blank_or_not_a_string_names_nothing`
+
+<a id="BACKEND-35"></a>
+### BACKEND-35: an exported variable, then the build, then the file
+
+For every name but the top-level `model` key, a value exported into the process environment outranks
+one this binary was built with, which outranks the `env` block. A variable exported blank does not
+displace a value the build carries; where the build carries none, the blank is what the
+configuration holds, so a missing credential is reported as empty rather than as absent.
+
+**Why.** An exported variable is the most specific thing a person said, and a file that overrode it
+would make `AWS_PROFILE=other bravebot` do nothing. The build sits above the file so that a released
+binary reaches the host it was given and signs with the credentials it was given, whatever the
+`.bravebot` directory of the checkout somebody happens to be working in says. That layer is the
+easiest thing on the machine to write to, which is the same reason BACKEND-1 gives for a file
+granting no capability at all.
+
+On a binary built with nothing, which is a source build, the file is what answers for all of it:
+the endpoint, the key id and the signing key included, and a project layer can name any of them.
+That is the case the file exists for, and what it costs is under Known costs.
+
+BACKEND-11 is the one exception and says why: a `model` key ranked here would lose to the baked-in
+default on every binary anybody was given.
+
+`verified-by: bravebot_config::lib::the_environment_outranks_the_settings_file`
+`verified-by: bravebot_config::lib::a_baked_in_value_outranks_the_settings_file`
+`verified-by: bravebot_config::lib::the_settings_file_applies_when_the_environment_is_silent`
+`verified-by: bravebot_config::lib::a_blank_variable_does_not_shadow_a_built_in_value`
+`verified-by: bravebot_config::lib::a_blank_variable_survives_when_nothing_was_built_in`
+
+<a id="BACKEND-36"></a>
+### BACKEND-36: a name nothing reads is kept and decides nothing
+
+Every name an `env` block sets is read into the settings and reported by `doctor` among the names
+that file set, whether or not anything consults it. A name outside BACKEND-33's table decides
+nothing: it configures nothing, it is not an error, and, like every name in the block, it is not
+exported. The switch that hands this agent's own credentials back to a program it starts is read
+from the process environment alone, so a file spelling that name changes nothing about what a
+subprocess is given.
+
+**Why.** This is the person's own configuration surface and a file people copy between tools, so it
+holds names written for something else and names written for a later version of this one. Refusing
+one would make a settings file from a newer release stop an older binary from starting, and
+discarding one silently would make a typo and a forward-looking entry look identical to whoever is
+debugging it, which is why `doctor` reports the names rather than only the ones that landed.
+
+Keeping a name is not the same as acting on one, and the distance between the two is the whole of
+what makes the file safe to read. A block that could switch off credential scrubbing would be a
+block that hands this agent's secrets to every command it runs, decided by whatever last edited a
+file in a checkout.
+
+`verified-by: bravebot_config::lib::a_name_nothing_consults_changes_nothing`
+`verified-by: bravebot_config::settings::a_name_this_crate_does_not_know_is_still_read`
+`verified-by: bravebot_config::settings::the_names_are_reportable_and_the_values_are_not`
 
 ## Known costs
 
@@ -1030,19 +1183,38 @@ sent.
   the parameter without saying which words it accepts. A model may reject or silently round a level
   it does not know, and no listing distinguishes that from honouring it.
 
+- **A blank exported variable reaches the file for the model and for nothing else.** BACKEND-11's
+  resolution treats a blank as absence the whole way down, so a `model` key still answers. BACKEND-35's
+  stops at the build: on a binary built with nothing, exporting a name blank leaves the configuration
+  holding the blank and the value in the file unread. The two orders are the same argument, that a
+  placeholder in a shell profile is not an instruction to discard anything, applied to one more source
+  in one of them than in the other, and which behaviour a person meets depends on which name they
+  blanked.
+
 - **A credential is resolved by running the AWS CLI.** Reaching Bedrock needs short-lived keys that
   expire during a session, and the tool that holds them is the one the person already signs in
   with. That is a process this code did not write, reading a configuration this code does not
   govern.
 
-- **Compaction throws away everything the cache held.** A summary replaces the messages in front of
-  the last few, which is a rewrite of the very prefix both breakpoints sit in, so the round after a
-  compaction reads nothing back and pays a cache write to establish the new prefix. That is the
-  right way round, the point of compacting being that the old prefix is no longer worth sending at
-  all, but it means the sessions that benefit most from caching are the ones that periodically lose
-  it, and a session compacting often enough could write more than it ever reads. Nothing here
-  measures that: BACKEND-31's figures are per turn, and the turn that compacted is charged for the
-  write in the same figure as the rounds that profited from it.
+- **A planning round marks a conversation the round after it cannot read.** Planning a manifest is
+  two requests over one growing conversation, so the second does send the first's messages again, and
+  it sends them behind a different set of instructions. A cached prefix is matched from the start of
+  a request, so a prompt that changed leaves nothing after it matchable, and the mark on the end of
+  the first round's conversation is a write nothing reads. The second round is the last one, so its
+  own mark buys nothing either. Saying so is the caller's to do, as it is everywhere else, and
+  [manifest.md](manifest.md) is where it would be said. What it costs is two writes over a short
+  conversation, a planner carrying the prompt a person typed and one reply rather than a session.
+
+- **Compaction throws away the cache of the conversation.** A summary replaces the messages in front
+  of the last few, which is a rewrite of the prefix the rolling breakpoint sits in, so the round
+  after a compaction reads none of the conversation back and pays a cache write to establish the
+  shortened one. The prompt's breakpoint covers a prefix a compaction does not touch and survives it,
+  which [compaction.md](compaction.md) is where to read. Giving the rest up is the right way round,
+  the point of compacting being that the old conversation is no longer worth sending at all, but it
+  means the sessions that benefit most from caching are the ones that periodically lose part of it,
+  and a session compacting often enough could write more than it ever reads. Nothing here measures
+  that: BACKEND-31's figures are per turn, and the turn that compacted is charged for the write in
+  the same figure as the rounds that profited from it.
 
 - **An ephemeral cache entry expires on a few minutes of inactivity, and nothing here tracks it.** A
   person who thinks between turns misses more often than the token arithmetic suggests, and a miss

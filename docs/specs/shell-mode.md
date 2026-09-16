@@ -80,7 +80,8 @@ never a line reconstructed from a transcript.
 **Why.** The justification cannot be checked from the bytes, so it lives at the call site. Today
 that is the TUI's shell mode and nothing else.
 
-`verified-by: none`
+`verified-by: bravebot_tui::app::a_pasted_line_does_not_arm_shell_mode`
+`verified-by: bravebot_tui::state::a_command_comes_back_as_words_and_not_as_a_command`
 
 <a id="SHELL-5"></a>
 ### SHELL-5: the planner gets no shell tool, ever
@@ -88,10 +89,19 @@ that is the TUI's shell mode and nothing else.
 Not behind a capability, not behind an approval prompt, not via MCP. If it could ask for one,
 everything above is void.
 
-`verified-by: none`
+`verified-by: bravebot_agent::tools::the_tool_set_is_reads_plus_gated_writes`
+`verified-by: bravebot_agent::tools::no_shell_is_offered`
+`verified-by: bravebot_agent::turn::a_shell_the_planner_names_is_not_dispatched`
 
 ## Known costs
 
+- **A paste into an armed command line is bytes the person did not type reaching the shell.** The
+  text lands in the line verbatim, and a line put away comes back into an armed mode as the command
+  being written, which is what [terminal-input.md](terminal-input.md) settles for the key that puts
+  a line away and brings it back. What Enter asserts is the line in the box, which the person armed
+  the mode for and is looking at, and that is the same assertion they make for a command typed one
+  character at a time. What the mode may never do is arm itself, since then nobody chose to run
+  anything at all.
 - **`! cat notes-from-a-stranger.md` puts somebody else's words into the planner's context as
   though they were the user's.** Nothing inspects the bytes to catch that, exactly as nothing
   inspects a directory that was vouched for. It is the same assertion a person makes by vouching for a

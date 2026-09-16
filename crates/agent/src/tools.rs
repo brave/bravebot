@@ -610,8 +610,11 @@ pub fn available(scheduling: Scheduling) -> Vec<Tool> {
                                         server, a watcher, a log follower. Use it when you need \
                                         the program still up while you do something else, such \
                                         as starting a server and then fetching a page from it. \
-                                        Call job_output with the name to see what it has \
-                                        printed. Must be one pipeline with no redirection, and \
+                                        While this turn is still going you are told when it \
+                                        ends, with how it ended and what it printed, so nothing \
+                                        has to poll for that. Call job_output with the name to \
+                                        see what it has printed before then. \
+                                        Must be one pipeline with no redirection, and \
                                         it is killed when this turn ends. Defaults to false, \
                                         which waits and hands back the output."
                     }
@@ -926,6 +929,12 @@ pub struct Output {
     /// Recorded on the slot by the turn loop, since only a slot minted from a command may be
     /// offered to the user for reading.
     pub printed_by: Option<crate::report::Command>,
+    /// Whether the line ran unasked because a record already covers it.
+    ///
+    /// Read where a quarantined result says what would lift the quarantine: the advice about
+    /// vouching is advice about a prompt, and no prompt will return here for this line until
+    /// somebody deletes the entry.
+    pub covered_by_record: bool,
     /// The media type, where what this produced is a picture.
     ///
     /// Recorded on the slot by the turn loop, and what makes a picture reach a processor as a part
@@ -1015,6 +1024,13 @@ pub struct Tools<'a> {
     ///
     /// Initialized to the workspace root and updated when `run` specifies a `directory`.
     pub run_directory: &'a mut std::path::PathBuf,
+    /// The session whose run prompts may have their answers remembered past it.
+    ///
+    /// `None` for a turn with nobody to put a prompt to, which reads no record and writes none:
+    /// what a record answers is a prompt, and where no prompt can be drawn it would be saying
+    /// instead which effects may happen with nobody to see them. The identifier is what the reading
+    /// back uses to tell this session's own answers from an earlier session's.
+    pub remembering: Option<&'a str>,
 }
 
 /// The background pipelines a turn has started.
@@ -1054,6 +1070,38 @@ struct Job {
     /// rather than one offset into the composed text, because output arriving on one stream moves
     /// where the other sits in that composition.
     seen: crate::exec::Seen,
+    /// Whether somebody has already been given the account of how this one ended.
+    ///
+    /// Set by whichever route got there first, so the finish is news exactly once: the turn's own
+    /// look between rounds, or a `job_output` call whose answer already said it had ended. Without
+    /// it a planner that waited for a build would be told a second time, with the output gone,
+    /// since the bytes go to whoever was handed them.
+    reported: bool,
+}
+
+/// A background job's finish, as the turn is told about it (CMDLINE-14).
+///
+/// The name and the outcome are the driver's own: a name this module minted, and a verdict read off
+/// exit codes and a clock. Nothing here was read out of a byte the pipeline printed. What it
+/// *printed* is content, and it carries the label the kernel fixed before anything started.
+pub struct Ended {
+    /// The name the planner was given for it.
+    pub name: String,
+    /// The line as the person approved it.
+    pub line: String,
+    /// How it ended.
+    pub outcome: crate::report::Outcome,
+    /// What it printed that nobody has been handed yet, cut to the cap where it may be read.
+    ///
+    /// `None` where it printed nothing since anybody last looked, which is the job whose exit code
+    /// is the whole of its account: a reference to an empty slot spends a name the planner is
+    /// reading the numbering of and says nothing. A count of bytes and never a look at one.
+    pub printed: Option<Labelled<String>>,
+    /// The whole of it, where the cap cut the sample down.
+    ///
+    /// Beside the sample for the reason a run's is: the cap bounds what a conversation holds and
+    /// not what the program printed, so the middle has to exist somewhere a later call can reach.
+    pub whole: Option<Labelled<String>>,
 }
 
 impl Jobs {
@@ -1086,9 +1134,74 @@ impl Jobs {
                 line,
                 label,
                 seen: crate::exec::Seen::default(),
+                reported: false,
             },
         );
         name
+    }
+
+    /// Every job that has ended and whose finish nobody has been told about yet (CMDLINE-14).
+    ///
+    /// Polled rather than waited on, so a turn asking between rounds is never held by a program
+    /// behaving as intended: a job still running answers immediately. The exit is what makes this
+    /// news, so the planner is told about a build that finished whether or not it thought to ask,
+    /// and a job whose account has already been given is passed over rather than reported twice.
+    ///
+    /// The output is taken as it is handed over, which is what stops it being handed over again:
+    /// `seen` moves, so a `job_output` call after this reports what arrived after this and not the
+    /// whole log a second time.
+    pub fn ended(&mut self) -> Vec<Ended> {
+        let mut finished = Vec::new();
+        for (name, job) in self.running.iter_mut() {
+            if job.reported || !job.running.ended() {
+                continue;
+            }
+            job.reported = true;
+            let printed = job.running.since(&mut job.seen);
+            // Capped only where the planner may read it, exactly as a run's output is: what it may
+            // not read is quarantined whole, and there is nothing of it in the conversation to
+            // bound.
+            let sample = if job.label.is_trusted() {
+                bounded(&printed)
+            } else {
+                None
+            };
+            let (printed, whole) = match sample {
+                Some(sample) => (sample, Some(Labelled::new(printed, job.label))),
+                None => (printed, None),
+            };
+            finished.push(Ended {
+                name: name.clone(),
+                line: job.line.clone(),
+                outcome: how_it_ended(job.running.codes()),
+                printed: (!printed.is_empty()).then(|| Labelled::new(printed, job.label)),
+                whole,
+            });
+        }
+        finished
+    }
+}
+
+/// How a job that has ended finished, read off the exit code of each of its steps.
+///
+/// Structure and nothing else: no byte of what the pipeline printed reaches this. Failed rather
+/// than succeeded where a step did not exit zero, because a planner that waited for a build and was
+/// told it exited 0 reports a red build as green, and where the output is quarantined that sentence
+/// is the only account of it the planner ever gets.
+fn how_it_ended(codes: &[Option<i32>]) -> crate::report::Outcome {
+    let failed: Vec<String> = codes
+        .iter()
+        .enumerate()
+        .filter(|(_, code)| **code != Some(0))
+        .map(|(at, code)| match code {
+            Some(code) => format!("step {} exited {code}", at + 1),
+            None => format!("step {} was killed", at + 1),
+        })
+        .collect();
+    if failed.is_empty() {
+        crate::report::Outcome::Succeeded
+    } else {
+        crate::report::Outcome::Failed(failed.join(", "))
     }
 }
 
@@ -1156,6 +1269,12 @@ struct Produced {
     /// Recorded on the slot by the turn loop, because only a slot minted from a command may be
     /// offered to the user for reading.
     printed_by: Option<crate::report::Command>,
+    /// Whether the line ran unasked because a record already covers it.
+    ///
+    /// What it changes is the advice on a quarantined result: telling a planner that a person
+    /// vouching for every stage would make the output visible is advice about a prompt, and no
+    /// prompt will be drawn for this line again until somebody deletes the entry.
+    covered_by_record: bool,
     /// When the planner asked for the next tick of a self-paced loop.
     wakeup: Option<crate::turn::Wakeup>,
     /// The media type, where what this produced is a picture.
@@ -1163,11 +1282,6 @@ struct Produced {
     /// Recorded on the slot by the turn loop, and what makes a picture reach a processor as a part
     /// rather than as a body. The driver's own, from a table of extensions.
     picture: Option<String>,
-    /// The name of a pipeline this call left running, where it started one.
-    ///
-    /// Reported so a person watching sees that something was started rather than run, which is a
-    /// different thing to have agreed to.
-    background: Option<String>,
     /// The delegates the kernel has approved and nobody has started yet.
     ///
     /// Started by the turn rather than here, because a delegate outlives the call that asked for
@@ -1199,9 +1313,9 @@ impl Produced {
             usage: Usage::default(),
             inference: std::time::Duration::ZERO,
             printed_by: None,
+            covered_by_record: false,
             picture: None,
             wakeup: None,
-            background: None,
             delegate: Vec::new(),
         }
     }
@@ -1235,13 +1349,17 @@ impl Produced {
     ///
     /// The name is the driver's own, so the planner is told it as text rather than being handed a
     /// reference: there is nothing quarantined about it, and nothing has been printed yet.
+    ///
+    /// It says the finish arrives by itself, because it does (CMDLINE-14), and a planner that does
+    /// not know that spends a round per look asking whether a build has finished.
     fn started_in_the_background(mut self, job: String) -> Self {
         self.text = Labelled::trusted(format!(
-            "started in the background as {job}. Nothing has been read from it yet: call \
-             job_output with \"{job}\" to see what it has printed, and again later for what is \
-             new. It is killed when this turn ends."
+            "started in the background as {job}. Nothing has been read from it yet. If it ends \
+             while this turn is still going you are told so, with how it ended and what it \
+             printed, without having to ask; call job_output with \"{job}\" before then to see \
+             what it has printed so far, and again later for what is new. It is killed when this \
+             turn ends."
         ));
-        self.background = Some(job);
         self
     }
 
@@ -1594,6 +1712,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 usage: produced.usage,
                 inference: produced.inference,
                 printed_by: produced.printed_by,
+                covered_by_record: produced.covered_by_record,
                 picture: produced.picture,
                 wakeup: produced.wakeup,
                 delegate: produced.delegate,
@@ -1673,6 +1792,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         usage: produced.usage,
         inference: produced.inference,
         printed_by: produced.printed_by,
+        covered_by_record: produced.covered_by_record,
         picture: produced.picture,
         wakeup: produced.wakeup,
         delegate: produced.delegate,
@@ -1704,8 +1824,8 @@ fn problem(text: impl Into<String>) -> Produced {
         usage: Usage::default(),
         inference: std::time::Duration::ZERO,
         printed_by: None,
+        covered_by_record: false,
         picture: None,
-        background: None,
         delegate: Vec::new(),
     }
 }
@@ -3007,6 +3127,26 @@ fn read_output<S: Sink, C: Confirmer>(
     }
 }
 
+/// The record of lines somebody asked to be remembered past this session, for this workspace.
+///
+/// `None` where this session has none, which is two cases with one answer: a turn with nobody to
+/// put a prompt to, and a machine that names no state directory. Both mean the record says nothing
+/// and every run asks, which is what a session did before the key existed.
+///
+/// A session that adds nothing to `~/.bravebot` is not one of them: it still honours what an
+/// earlier session recorded, for the reason it still reads the model and the theme, and what it
+/// does not do is add to it ([`crate::remembered::may_be_added_to`]).
+///
+/// Keyed by the workspace root rather than by whatever directory this call would run in. A line is
+/// only ever recorded where it runs at the root, so the root is the tree the person answered about.
+fn remembered_record(tools: &Tools<'_>) -> Option<crate::remembered::Store> {
+    tools.remembering?;
+    Some(crate::remembered::Store::new(
+        tools.home?,
+        tools.workspace.root(),
+    ))
+}
+
 /// Run a program, after a person approves the exact arguments.
 ///
 /// The order is the whole of the safety argument, and it is the same order a write goes through:
@@ -3113,8 +3253,54 @@ fn run<S: Sink, C: Confirmer>(
         ));
     }
 
-    if policy.plan_needs_approval(&plan) {
-        let request = crate::confirm::RunRequest { plan: plan.clone() };
+    // The record of lines somebody asked to be remembered past the session, where this session has
+    // somewhere to keep one and somebody to have pressed the key. Read here rather than once at the
+    // start of the session: the file belongs to every session begun in this directory, so a line
+    // recorded a minute ago in another one is covered by this run, and one deleted a minute ago is
+    // not. A session with nobody to put a prompt to reads nothing at all.
+    let record = remembered_record(tools);
+    let recalled = record.as_ref().map(|store| store.read());
+    if let Some(lines) = &recalled {
+        policy.recall(lines.clone());
+    }
+
+    let asking = policy.plan_needs_approval(&plan);
+    // Whether the record is what stopped the question. Read where the result is quarantined: the
+    // advice about vouching is advice about a prompt, and no prompt will return here for this line
+    // until somebody deletes the entry.
+    let covered_by_record = !asking && recalled.as_ref().is_some_and(|lines| lines.covers(&plan));
+
+    if asking {
+        // Whether this person has already read a prompt for this binary under other arguments,
+        // asked before the line on screen joins that list. An identical line is not a different
+        // argument list, so the order is a matter of reading rather than of correctness.
+        let varied = policy.arguments_have_varied(&plan);
+        policy.asked_about(&plan);
+        let request = crate::confirm::RunRequest {
+            plan: plan.clone(),
+            // Offered only where it would stop a later prompt, which the policy decides: not for a
+            // line releasing private data, not for one naming a file to write, not for one running
+            // outside the workspace root, and not where a rule the person wrote in advance already
+            // says to ask. The path is what the prompt shows, since a person cannot endorse a
+            // record they were not shown.
+            record: record
+                .as_ref()
+                .filter(|_| policy.may_remember(&plan))
+                .filter(|_| crate::remembered::may_be_added_to())
+                .map(|store| store.path().to_path_buf()),
+            // Said only where a key at this prompt will not finish the asking, only where a rule
+            // in that file would decide the line at all, and only where there is a file to name:
+            // a line that writes, releases private data, runs outside the root or carries an
+            // assignment is asked about before any rule is read, so a pattern for one would stop
+            // no prompt, and advice on a machine that names no home directory would send somebody
+            // to a path nothing reads. A session in the mode that adds nothing to `~/.bravebot`
+            // still gets the advice, because writing that file is the person's own act rather
+            // than this session's.
+            pattern: tools
+                .home
+                .filter(|_| varied && policy.a_rule_could_answer(&plan))
+                .map(bravebot_config::user_settings_file),
+        };
         let answer = confirmer.confirm_run(&request);
         if !answer.approved() {
             return problem(
@@ -3126,15 +3312,32 @@ fn run<S: Sink, C: Confirmer>(
         // Recorded before the run, so a repeat of the same command later in this turn is not
         // asked about again. The policy carries it out of the turn and the session records it.
         //
-        // Not for a line that feeds a file to a program. The prompt does not offer `a` for those,
-        // and this is the same refusal at the layer that would act on it: what an entry records
-        // is a program and its exact argv, and a `<` redirection is in neither, so an entry made
-        // while one file was redirected in would cover the same program fed any other file. A
-        // front end answering `always` anyway must not be able to widen the list that way.
-        if answer.remember && !plan.releases_private() {
+        // Not for a line an entry could not record: one that feeds a file to a program, and one that
+        // writes an assignment in front of a program. The prompt offers `a` for neither, and this is
+        // the same refusal at the layer that would act on it, asked of the same predicate so the two
+        // cannot drift. What an entry records is a program and its exact argv, and a `<` redirection
+        // and an assignment are in neither, so an entry made here would cover the same program fed
+        // any other file, or run under no assignment at all. A front end answering `always` anyway
+        // must not be able to widen the list that way.
+        if answer.remember && plan.can_be_remembered() {
             for command in request.would_vouch_for() {
                 policy.remember_command(command);
             }
+        }
+        // The second of the two refusals RUN-19 makes, at the layer that acts on the answer. The
+        // policy is asked again rather than the drawing being read back: a front end answering
+        // with a key the prompt never offered must not be able to put a line into a record that
+        // outlives the session, and a guard that consulted what was drawn would be resting on the
+        // very thing it is there to check. `may_be_added_to` is asked a second time too, inside
+        // the store, for the mode that adds nothing to the state directory.
+        if answer.record
+            && policy.may_remember(&plan)
+            && let (Some(store), Some(session)) = (record.as_ref(), tools.remembering)
+        {
+            store.remember(
+                &bravebot_core::remembered::RememberedLine::of(&plan),
+                session,
+            );
         }
     }
 
@@ -3191,7 +3394,7 @@ fn run<S: Sink, C: Confirmer>(
             }
         };
 
-        return match crate::exec::start_steps(steps, &plan.directory) {
+        return match crate::exec::start_steps(steps, &plan.directory, tools.workspace.scratch()) {
             Ok(running) => {
                 // The directory is carried over only once pre-flight checks and launch succeed.
                 *tools.run_directory = plan.directory.clone();
@@ -3216,10 +3419,16 @@ fn run<S: Sink, C: Confirmer>(
     // What the run reports opening, never the plan's write set. The set names every branch, so a
     // destination a line decided against is in it, and a rule about a file nothing wrote would
     // quarantine a file the planner can read today. Spelled the way a read of the file is
-    // spelled, because relative and absolute rules are separate namespaces in the map and a rule
-    // in the wrong one decides nothing.
+    // spelled, because a name is reduced to the open directory it lands in before the map sees it
+    // and a rule written under an unreduced name decides nothing.
     let mut opened: Vec<std::path::PathBuf> = Vec::new();
-    let ran = crate::exec::run_plan(&plan, tools.cancel, limit, &mut opened);
+    let ran = crate::exec::run_plan(
+        &plan,
+        tools.cancel,
+        limit,
+        &mut opened,
+        tools.workspace.scratch(),
+    );
     let written: Vec<String> = opened
         .iter()
         .map(|path| tools.workspace.relative_display(path))
@@ -3292,6 +3501,7 @@ fn run<S: Sink, C: Confirmer>(
                 line: displayed.clone(),
                 outcome,
             });
+            produced.covered_by_record = covered_by_record;
             produced
         }
         // A run that produced nothing still says what happened. The plan is safe to repeat back:
@@ -3324,6 +3534,15 @@ fn fetch_url<S: Sink, C: Confirmer>(
             "error: '{url}' names no host to fetch from; give an absolute http or https URL"
         ));
     };
+
+    // Before the person is asked. A rule refusing something is a statement that it does not
+    // happen, and there is nothing to show or approve once it has been made.
+    if let Err(denial) = policy.before_fetch_rules(&url) {
+        return problem(format!(
+            "refused: {denial}. Do not retry this URL and do not look for another route to that \
+             host: say in your reply what you needed from it."
+        ));
+    }
 
     if policy.fetch_needs_approval(&url) {
         let request = crate::confirm::FetchRequest {
@@ -3456,25 +3675,7 @@ fn job_output<S: Sink>(
     // what the pipeline printed. Worked out before the kill below, so a job that had already ended
     // is reported as what it did rather than as what the kill would have done to it.
     let outcome = if ended {
-        let failed: Vec<String> = job
-            .running
-            .codes()
-            .iter()
-            .enumerate()
-            .filter(|(_, code)| **code != Some(0))
-            .map(|(at, code)| match code {
-                Some(code) => format!("step {} exited {code}", at + 1),
-                None => format!("step {} was killed", at + 1),
-            })
-            .collect();
-        // Failed rather than Succeeded where a step did not exit zero. A planner that waited for a
-        // build to finish and was told it exited 0 reports a red build as green, and where the
-        // output is quarantined that sentence is the only account of it the planner ever gets.
-        if failed.is_empty() {
-            crate::report::Outcome::Succeeded
-        } else {
-            crate::report::Outcome::Failed(failed.join(", "))
-        }
+        how_it_ended(job.running.codes())
     } else if kill {
         crate::report::Outcome::Stopped(ran_for)
     } else {
@@ -3482,6 +3683,13 @@ fn job_output<S: Sink>(
         // was stopped stops asking about a program that is still printing.
         crate::report::Outcome::Running { ran_for, waited }
     };
+
+    // This answer is the account of the finish, so the turn's own look between rounds does not give
+    // it a second time (CMDLINE-14). A killed job is finished too: the planner asked for the end of
+    // it and was told what it had done, and news of it exiting afterwards is news of nothing.
+    if ended || kill {
+        job.reported = true;
+    }
 
     if kill {
         job.running.kill();
@@ -3749,25 +3957,27 @@ fn spawn_agent<S: Sink, R: Reporter>(
     let mut kind_name = "";
 
     for task in &tasks {
-        // The trail's name for it is the driver's own word, not the task: a task is a paragraph,
-        // and it would be in every line of the trail that mentions this run.
+        // Numbered by the driver, in the order this turn spawned them, and numbered before the
+        // gate rather than after it so that the record of the gate names the delegate it
+        // approved. Everything recorded or reported about this delegate carries the number, which
+        // is the only thing saying whose a line is: the alternative is reading the line, which is
+        // prose a model wrote. A fan-out is exactly where two of them read alike, and a refusal
+        // is numbered for the same reason a permission is.
+        //
+        // The trail's name for it is that number, not the task: a task is a paragraph, and it
+        // would be in every line of the trail that mentions this run.
         //
         // Gated once per delegate rather than once per call. A fan-out is several runs, and a
         // gate that saw one of them would be approving the others on the strength of a sibling.
-        let spec = match policy.before_delegate("delegate", &kind, task) {
+        *tools.spawned += 1;
+        let id = crate::report::DelegateId::nth(*tools.spawned);
+        let spec = match policy.before_delegate(id, &kind, task) {
             Ok(spec) => spec,
             Err(denial) => return problem(format!("refused: {denial}")),
         };
 
-        // Numbered by the driver, in the order this turn spawned them. Everything reported about
-        // this delegate carries the number, which is the only thing saying whose a line is: the
-        // alternative is reading the line, which is prose a model wrote.
-        //
-        // The task goes with it, released for a screen the way the target of any other call is. A
-        // person watching several delegates has nothing else to tell them apart by, and a fan-out
-        // is exactly where several of them read alike.
-        *tools.spawned += 1;
-        let id = crate::report::DelegateId::nth(*tools.spawned);
+        // The task is released for a screen the way the target of any other call is. A person
+        // watching several delegates has nothing else to tell them apart by.
         let asked = {
             let proof = policy.authorise_display_release("what a delegate was asked to do");
             task.clone().declassify(&proof)
@@ -3784,7 +3994,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
         // Everything the kernel settled, taken off the policy here on the turn's own thread. From
         // this point the delegate needs nothing further from the run that spawned it, which is
         // what lets the two run at the same time.
-        let seeded = crate::delegate::seed(policy, spec);
+        let seeded = crate::delegate::seed(policy, spec, tools.remembering);
         produced = produced.delegating(id, seeded);
     }
 
@@ -4754,12 +4964,50 @@ mod tests {
     /// The test that used to stand here banned every tool whose name contained "run". It predated
     /// the argv design by a day and would have blocked it, which is the failure mode worth
     /// remembering: a test pinning the old reason for a rule outlives the reason.
+    ///
+    /// Every audience there is, because no capability buys this one: a checker and a worker hold
+    /// the grant `run` is gated on, and what that gets them is `run`.
+    ///
+    /// A name is the weaker half of the check, since a shell can be called anything. The stronger
+    /// half is that a delegate is offered a subset of the turn's own list rather than a list of its
+    /// own, so `the_tool_set_is_reads_plus_gated_writes` counts for a delegate too, and one offered
+    /// a tool that list does not hold is the way that stops being true.
     #[test]
     fn no_shell_is_offered() {
-        for tool in available(Scheduling::ArrangingALook) {
-            let name = tool.function.name;
-            assert!(!name.contains("shell"), "{name} takes a shell string");
-            assert!(!name.contains("exec"), "{name} takes a shell string");
+        fn shell_free(audience: &str, offered: &[Tool]) {
+            for tool in offered {
+                let name = &tool.function.name;
+                assert!(
+                    !name.contains("shell"),
+                    "{audience} was offered {name}, which takes a shell string"
+                );
+                assert!(
+                    !name.contains("exec"),
+                    "{audience} was offered {name}, which takes a shell string"
+                );
+            }
+        }
+
+        let turn = available(Scheduling::ArrangingALook);
+        shell_free("a turn", &turn);
+        shell_free("a turn pacing a loop", &available(Scheduling::PacingALoop));
+        shell_free(
+            "a turn on their interval",
+            &available(Scheduling::TheirInterval),
+        );
+
+        let held: Vec<&str> = turn.iter().map(|t| t.function.name.as_str()).collect();
+        for name in bravebot_core::delegate::Kind::NAMES {
+            let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
+            let offered = for_delegate(&kind.capabilities());
+            shell_free(name, &offered);
+            for tool in &offered {
+                assert!(
+                    held.contains(&tool.function.name.as_str()),
+                    "a {name} was offered {}, which the turn's own list does not hold",
+                    tool.function.name
+                );
+            }
         }
     }
 
@@ -5310,6 +5558,26 @@ mod tests {
         }
     }
 
+    /// Nothing is touched, so there is no field for a person to approve: the list is the whole of
+    /// the call. A destination here, even an optional one, would be a routing argument on the one
+    /// tool whose answer to "what would a person be approving?" is "nothing".
+    #[test]
+    fn the_task_list_tool_offers_no_argument_that_names_a_destination() {
+        let tool = available(Scheduling::ArrangingALook)
+            .into_iter()
+            .find(|t| t.function.name == "todo_write")
+            .expect("todo_write is offered");
+        let properties = tool.function.parameters["properties"]
+            .as_object()
+            .expect("the arguments are an object");
+
+        assert_eq!(
+            properties.keys().collect::<Vec<_>>(),
+            vec!["todos"],
+            "todo_write advertises an argument beside the list itself"
+        );
+    }
+
     /// The model has to be told the list is replaced wholesale, or it will send only what changed
     /// and the finished tasks will vanish from the display.
     #[test]
@@ -5579,7 +5847,7 @@ mod tests {
         /// Run the tool against a fresh policy in a workspace the user vouched for.
         fn call<C: Confirmer>(confirmer: &mut C, arguments: Value) -> Labelled<String> {
             let mut sink = RecordingSink::new();
-            let mut trust = TrustStore::new();
+            let mut trust = TrustStore::new("/work");
             trust.trust(".");
             let mut policy = Policy::begin(
                 routing(),
@@ -6307,6 +6575,58 @@ mod tests {
             assert!(!rows[0].struck());
         }
 
+        /// Every other tool answers "what would a person be approving?" with a path, a program or
+        /// a URL, and this one has no answer because it reaches nothing. Held to it two ways: the
+        /// call is given no capability at all and still works, and the trail it leaves records no
+        /// field checked before an effect and no capability producing data. Writing the list to a
+        /// file, or routing it anywhere a person would have to agree to, would fail the first and
+        /// show up in the second.
+        #[test]
+        fn a_task_list_decides_no_destination_and_needs_no_capability() {
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::none(),
+                &mut sink,
+            )
+            .expect("policy");
+            let mut reporter = RecordingReporter::default();
+            let produced = todo_write(
+                &mut policy,
+                &mut reporter,
+                &SlotStore::new(),
+                &list(&[
+                    ("Read the file", "completed"),
+                    ("Make the change", "pending"),
+                ]),
+            );
+
+            assert!(!produced.failed, "a list with no capability was refused");
+            assert!(
+                produced.origin.is_empty(),
+                "a task list named a destination: {}",
+                produced.origin
+            );
+            assert_eq!(
+                reporter.updates.last().expect("the display was told").len(),
+                2,
+                "the list did not reach the screen"
+            );
+
+            for event in sink.events() {
+                match event {
+                    bravebot_core::event::Event::ActionField { tool, field, .. } => {
+                        panic!("a task list decided '{field}' for '{tool}'")
+                    }
+                    bravebot_core::event::Event::Observed { capability, .. } => {
+                        panic!("a task list observed something through {capability}")
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         /// A list with no items is a list the model cleared, and the display must follow rather
         /// than keeping the previous one on screen.
         #[test]
@@ -6423,7 +6743,7 @@ mod tests {
         /// the same kind: an absolute rule would be dead here and the tests would be passing
         /// for a reason nobody wrote down.
         fn policy_vouching(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
-            let mut store = TrustStore::new();
+            let mut store = TrustStore::new("/work");
             store.trust(".");
             Policy::begin(
                 routing(),

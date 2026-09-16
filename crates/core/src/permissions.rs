@@ -930,7 +930,8 @@ mod tests {
     }
 
     /// A relative rule and an absolute one are about different paths, and neither reaches into
-    /// the other's namespace. The trust map keeps the same separation for the same reason.
+    /// the other's namespace. A pattern is matched against the path as a gate holds it, and a rule
+    /// written one way says nothing about a path spelled the other.
     #[test]
     fn a_relative_rule_says_nothing_about_an_absolute_path() {
         let permissions = rules(&["Read(secrets/**)"], &[], &[]);

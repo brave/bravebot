@@ -141,12 +141,23 @@ The run prompt separates running once from running always, Enter does not approv
 releasing private data offers no standing permission at all. Declining, and Ctrl-C, vouch
 for nothing.
 
+A third answer, whose grant outlives the session, is [tools/run.md](tools/run.md)'s. Everything
+above holds of it: it has a key of its own, Enter does not reach it, a run
+releasing private data does not offer it, and declining or Ctrl-C records nothing. Its row is where the
+two standing lifetimes are told apart, since a key saying only `always` is the one that could be read
+as either.
+
 The plan prompt offers no standing form at all, and Enter does not approve a plan either. A plan is
 written afresh for each run, so remembering an answer to one would be approving steps nobody has
 seen.
 
 `verified-by: bravebot_tui::confirm::the_run_keys_separate_running_once_from_running_always`
+`verified-by: bravebot_tui::confirm::the_run_keys_separate_this_session_from_every_session`
+`verified-by: bravebot_tui::confirm::the_row_says_which_lifetime_the_always_key_grants`
 `verified-by: bravebot_tui::confirm::enter_does_not_approve_a_run`
+`verified-by: bravebot_tui::confirm::enter_does_not_record_a_run_past_the_session`
+`verified-by: bravebot_tui::confirm::refusing_a_run_records_nothing_past_the_session`
+`verified-by: bravebot_tui::confirm::a_prompt_that_offers_no_record_binds_no_key_to_one`
 `verified-by: bravebot_tui::confirm::enter_does_not_approve_a_plan`
 `verified-by: bravebot_tui::confirm::a_run_that_releases_private_data_offers_no_standing_permission`
 `verified-by: bravebot_tui::confirm::pressing_always_at_a_private_input_prompt_grants_nothing`
@@ -165,6 +176,7 @@ session opens with ends the session and opens nothing, and only Ctrl-C leaves.
 
 `verified-by: bravebot_tui::confirm::saying_no_does_not_stop_the_turn`
 `verified-by: bravebot_tui::confirm::ctrl_c_refuses_the_write_and_stops_the_turn`
+`verified-by: bravebot_tui::confirm::only_the_interrupt_stops_the_turn_at_a_run_prompt`
 `verified-by: bravebot_tui::trust_prompt::ctrl_c_leaves_rather_than_answering_the_question`
 `verified-by: bravebot_tui::trust_prompt::only_ctrl_c_leaves`
 `verified-by: bravebot_tui::trust_prompt::leaving_starts_no_session`
@@ -173,10 +185,14 @@ session opens with ends the session and opens nothing, and only Ctrl-C leaves.
 <a id="PROMPT-8"></a>
 ### PROMPT-8: a resume restores standing permissions, and nothing else
 
-Two of these grants are standing: the trust map, and the list of commands a person said to stop
-asking about. Both are written into the session record and come back with `--resume`, because the
-person resuming is the person who gave them. A fresh session in the same directory restores
-neither and asks again.
+Three of these grants are standing. Two, the trust map
+and the list of commands a person said to stop asking about, are written into the session record and
+come back with `--resume`, because the person resuming is the person who gave them; a fresh session
+in the same directory restores neither and asks again. The third is not restored by a resume at all:
+the record of command lines somebody asked to be remembered past the session, which
+[tools/run.md](tools/run.md) governs, is read by every session begun in that directory, resumed or
+fresh. It reaches a fresh session because the key that made it said how long its answer lasts, and
+because what it carries is the asking rather than any trust.
 
 Nothing else survives. A single-use endorsement is created by one approval, is bound to one value,
 and is never written down, so a resumed turn cannot replay a write or a run that an earlier turn
@@ -189,6 +205,7 @@ approving something nobody looked at.
 
 `verified-by: bravebot_core::policy::a_turn_inherits_what_the_session_vouched_for`
 `verified-by: bravebot_core::policy::an_endorsement_cannot_be_replayed`
+`verified-by: bravebot_agent::turn::a_line_remembered_past_the_session_runs_without_asking`
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
 
 <a id="PROMPT-9"></a>

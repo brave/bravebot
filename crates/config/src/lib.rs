@@ -21,7 +21,7 @@ mod settings;
 #[cfg(test)]
 mod testutil;
 
-pub use settings::Settings;
+pub use settings::{Settings, user_settings_file};
 
 pub mod bedrock;
 pub mod provider;
@@ -1125,6 +1125,108 @@ mod tests {
         let chosen = resolve(env_var::AWS_REGION, None, |_| None)
             .or_else(|| settings.get(env_var::AWS_REGION).map(str::to_string));
         assert_eq!(chosen.as_deref(), Some("from-the-file"));
+    }
+
+    /// The resolution [`Config::from_env_and_settings`] performs, gateways included, over three
+    /// sources a test names rather than over the process environment and whatever this binary was
+    /// built with.
+    fn resolved(
+        settings: &Settings,
+        exported: impl Fn(&str) -> Option<String>,
+        baked: impl Fn(&str) -> Option<String>,
+    ) -> Result<Config, ConfigError> {
+        Config::from_lookup_with_providers(
+            |key| match key {
+                env_var::DEFAULT_MODEL => resolve_model(exported(key), settings, &baked),
+                _ => resolve(key, exported(key), &baked)
+                    .or_else(|| settings.get(key).map(str::to_string)),
+            },
+            settings.providers().to_vec(),
+        )
+    }
+
+    /// The names a settings file may set are the names something reads, and this is all of them. A
+    /// configuration surface described but never named is one nobody can use without reading this
+    /// crate, which is how a whole backend reached people undocumented.
+    #[test]
+    fn every_name_a_settings_block_may_set_reaches_the_configuration() {
+        let settings = Settings::parse(
+            r#"{"env": {
+                "SERVICES_KEY_AICHAT": "signing-key-from-the-file",
+                "BRAVE_SERVICES_KEY_ID": "key-id-from-the-file",
+                "BRAVE_AI_CHAT_ENDPOINT": "https://endpoint.invalid",
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT": "https://premium.invalid",
+                "BRAVE_AI_CHAT_DEFAULT_MODEL": "model-from-the-file",
+                "BRAVEBOT_CONTEXT_BUDGET": "4096",
+                "BRAVEBOT_USE_BEDROCK": "1",
+                "AWS_REGION": "eu-west-1",
+                "AWS_PROFILE": "profile-from-the-file",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-arn",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-arn"
+            }}"#,
+        );
+        let config = resolved(&settings, |_| None, |_| None).expect("configured");
+
+        assert_eq!(config.signing_key.expose(), "signing-key-from-the-file");
+        assert_eq!(config.key_id, "key-id-from-the-file");
+        assert_eq!(config.endpoint, "https://endpoint.invalid");
+        assert_eq!(
+            config.premium_endpoint.as_deref(),
+            Some("https://premium.invalid")
+        );
+        assert_eq!(config.default_model, "model-from-the-file");
+        assert_eq!(config.context_budget, 4096);
+
+        let bedrock = config.bedrock.expect("an aws block");
+        assert_eq!(bedrock.region, "eu-west-1");
+        assert_eq!(bedrock.profile.as_deref(), Some("profile-from-the-file"));
+        for (tier, named) in [
+            (bedrock::Tier::Opus, "opus-arn"),
+            (bedrock::Tier::Sonnet, "sonnet-arn"),
+            (bedrock::Tier::Haiku, "haiku-arn"),
+        ] {
+            assert_eq!(bedrock.model_for(tier), Some(named));
+        }
+    }
+
+    /// Every name but the top-level `model` key ranks below what the build baked in, so a released
+    /// binary reaches the host it was built for rather than one a file in a checkout named.
+    #[test]
+    fn a_baked_in_value_outranks_the_settings_file() {
+        let settings = Settings::parse(
+            r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://from-the-file.invalid"}}"#,
+        );
+        let config = resolved(
+            &settings,
+            |_| None,
+            |name| match name {
+                env_var::ENDPOINT => Some("https://baked.invalid".into()),
+                other => complete_env(other),
+            },
+        )
+        .expect("configured");
+        assert_eq!(config.endpoint, "https://baked.invalid");
+    }
+
+    /// A name nothing reads is kept so that a file written for another tool, or for a later
+    /// version, does not stop a session. Kept is the whole of it: the switch that hands this
+    /// agent's credentials back to a subprocess is read from the environment alone, and a file
+    /// spelling it changes nothing. Compared whole, so a field added later is covered too.
+    #[test]
+    fn a_name_nothing_consults_changes_nothing() {
+        let named = Settings::parse(
+            r#"{"env": {"BRAVEBOT_SUBPROCESS_ENV_SCRUB": "0", "SOMETHING_ELSE": "a value"}}"#,
+        );
+        assert_eq!(named.get(env_var::SUBPROCESS_ENV_SCRUB), Some("0"));
+
+        let with_the_names = resolved(&named, |_| None, complete_env).expect("configured");
+        let without = resolved(&Settings::default(), |_| None, complete_env).expect("configured");
+        assert_eq!(
+            with_the_names.signing_key.expose(),
+            without.signing_key.expose()
+        );
+        assert_eq!(format!("{with_the_names:?}"), format!("{without:?}"));
     }
 
     /// The point of reading the key: a file naming a model is what decides, without the variable

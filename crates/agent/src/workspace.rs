@@ -61,13 +61,17 @@ pub fn media_for(path: &str) -> Option<&'static str> {
 /// which is what people attach.
 pub const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 
-/// The most one turn may keep in memory so that it can be rewound.
+/// The most that may be kept in memory so that turns can be rewound.
 ///
-/// Every file a turn writes costs what the file held beforehand, held until the turn after it,
-/// whether or not anybody rewinds. The files a turn writes are files somebody is working on, so
-/// the budget is set well past a tree of source and well short of what a checked-in archive or a
-/// build artefact would cost. Past it the path is still remembered, and a rewind says it did not
-/// go back rather than pretending it did.
+/// Every file a turn writes costs what the file held beforehand, held for as long as the turn is
+/// one a rewind can reach, whether or not anybody rewinds. The files a turn writes are files
+/// somebody is working on, so the budget is set well past a tree of source and well short of what
+/// a checked-in archive or a build artefact would cost. Past it the path is still remembered, and
+/// a rewind says it did not go back rather than pretending it did.
+///
+/// A workspace sees one turn, so this is what it holds one turn to. The caller keeping several
+/// turns' backups holds the whole set to the same figure, dropping the turns furthest back:
+/// the budget is what is held at once, not what each turn may add.
 pub const MAX_REWIND_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -156,11 +160,26 @@ pub struct Workspace {
     /// relative paths mean, what the session record is keyed on, and where `AGENTS.md` is looked
     /// for. Making it one root among many would make all three ambiguous.
     added: Vec<PathBuf>,
-    /// How many files a search may walk. [`MAX_SEARCH_FILES`] unless a caller lowered it.
+    /// The session's own directory outside the project, where it has one.
     ///
-    /// A field rather than a constant so a test can reach the cap without writing a hundred
-    /// thousand files, and so a host on a slow filesystem can say so.
+    /// Reachable by its absolute path, exactly as an added directory is, and kept apart from
+    /// `added` because the user did not name it: `/status` says what it is rather than listing it
+    /// among the directories they opened, and `/cd` leaves it alone rather than closing it for
+    /// overlapping the directory being moved to.
+    scratch: Option<PathBuf>,
+    /// How many files a search may walk. [`MAX_SEARCH_FILES`] unless the settings named another.
+    ///
+    /// A field rather than a constant because the right number is a property of the tree: a
+    /// monorepo holds more files than the default walks, and a test reaches the cap without
+    /// writing a hundred thousand files.
     search_files: usize,
+    /// How long a search may spend opening files. [`MAX_SEARCH_TIME`] unless the settings named
+    /// another.
+    ///
+    /// A field for the same reason as `search_files`, and a separate one because the two bound
+    /// different things: a tree large enough to need a wider walk is not always slow enough to
+    /// need a longer read.
+    search_time: Duration,
     /// What the files this turn has written held before it wrote to them.
     ///
     /// Behind a lock and a handle because a workspace is cloned into the turn that uses it, and a
@@ -218,18 +237,18 @@ fn overlaps(one: &Path, other: &Path) -> bool {
 /// Refuse a directory whose resolved name the trust map cannot key a rule under.
 ///
 /// A directory is opened by handing the map the name it resolved to, and the map reads a name
-/// without a leading slash as a path under the primary root (TRUST-3), where the root's own empty
-/// prefix covers it. So a rule about a directory named any other way would land in the relative
-/// namespace and the answer given about the project at startup would decide files in a directory
-/// nobody vouched for. Refusing is the fail-closed half of that clause, and it is here rather than
-/// in the map because canonicalising a name is filesystem work.
+/// without a leading slash as a path under the working directory (TRUST-18), where the rule
+/// covering the project covers it. So a rule about a directory named any other way would be keyed
+/// inside the project, and the answer given about the project at startup would decide files in a
+/// directory nobody vouched for. Refusing is the fail-closed half of that clause, and it is here
+/// rather than in the map because canonicalising a name is filesystem work.
 ///
 /// Every door that opens a directory by name has to refuse it, `/cd` as much as `/add-dir`: the
-/// rules of a working directory left behind are re-keyed against the one replacing it, so a
-/// destination the map cannot key re-spells them into the wrong namespace instead.
+/// working directory a map reads its relative names under is replaced by the destination, so one
+/// the map cannot key would read every one of them under a name inside the project instead.
 ///
 /// The name is rendered the way a caller renders it to build the key, so the two cannot disagree
-/// about which namespace the directory is in.
+/// about whether the directory has one.
 fn refuse_unkeyable(canonical: &Path, named: &str) -> Result<(), WorkspaceError> {
     match is_absolute_key(&canonical.to_string_lossy()) {
         true => Ok(()),
@@ -309,23 +328,60 @@ impl Workspace {
         Ok(Self {
             root: canonical,
             added: Vec::new(),
+            scratch: None,
             search_files: MAX_SEARCH_FILES,
+            search_time: MAX_SEARCH_TIME,
             backups: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
-    /// Lower how many files a search may walk.
+    /// Put a search under the caps somebody configured, keeping the built-in one for each cap
+    /// they did not name.
     ///
-    /// Only ever lowered in practice: the default is chosen to be past what any tree a person
-    /// works in holds, and raising it trades a bounded search for an unbounded one.
+    /// `None` rather than the default number, so that the defaults live here alone: a caller
+    /// passing [`MAX_SEARCH_FILES`] on to say "unchanged" would be a second copy of it to keep
+    /// in step with this one.
+    ///
+    /// Either cap may be raised as well as lowered. What the default is past depends on the tree
+    /// rather than on anything this can measure, and a search is still bounded afterwards: both
+    /// caps hold, and the match cap holds whatever they are.
     #[must_use]
-    pub fn with_search_limit(mut self, files: usize) -> Self {
-        self.search_files = files;
+    pub fn with_search_caps(mut self, files: Option<usize>, time: Option<Duration>) -> Self {
+        self.search_files = files.unwrap_or(self.search_files);
+        self.search_time = time.unwrap_or(self.search_time);
         self
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Reach the session's own directory outside the project, or stop reaching one.
+    ///
+    /// `None` is a session that could not be given one, and then nothing outside the project and
+    /// the directories the user opened is reachable. Set as the session opens rather than asked for
+    /// by a tool, so a turn cannot widen its own reach by calling this: the caller is the code that
+    /// made the directory.
+    pub fn open_scratch(&mut self, directory: Option<PathBuf>) {
+        self.scratch = directory;
+    }
+
+    /// The session's own directory outside the project, where it has one.
+    pub fn scratch(&self) -> Option<&Path> {
+        self.scratch.as_deref()
+    }
+
+    /// Whether a resolved path lands in a directory reached by its absolute name.
+    ///
+    /// The directories the user opened and the session's own. They are reached the same way and
+    /// differ in who asked for them, so every test of where a path lands has to cover both or the
+    /// session would be handed a directory it cannot write to.
+    fn is_opened(&self, resolved: &Path) -> bool {
+        self.added.iter().any(|dir| resolved.starts_with(dir))
+            || self
+                .scratch
+                .as_deref()
+                .is_some_and(|dir| resolved.starts_with(dir))
     }
 
     /// Whether an absolute path is one this workspace may touch.
@@ -341,9 +397,7 @@ impl Workspace {
             path: path.display().to_string(),
         };
         let resolved = destination(path).ok_or_else(escapes)?;
-        if resolved.starts_with(&self.root)
-            || self.added.iter().any(|dir| resolved.starts_with(dir))
-        {
+        if resolved.starts_with(&self.root) || self.is_opened(&resolved) {
             return Ok(());
         }
         Err(escapes())
@@ -362,6 +416,10 @@ impl Workspace {
     ///
     /// So is one whose resolved name the trust map cannot key a rule under, which is what a platform
     /// that spells its paths from a drive letter or a share hands back: `refuse_unkeyable` says why.
+    ///
+    /// And so is the session's own directory, for the reason a directory inside the root is: it is
+    /// reachable already, and adding it would put a rule the user wrote over a directory whose whole
+    /// point is carrying none.
     pub fn resolve_directory(&self, directory: &str) -> Result<PathBuf, WorkspaceError> {
         let candidate = Path::new(directory);
         if !candidate.is_absolute() {
@@ -390,9 +448,26 @@ impl Workspace {
             });
         }
 
+        if self.reaches_scratch(&canonical) {
+            return Err(WorkspaceError::Invalid {
+                path: directory.to_string(),
+                reason: "is the session's own directory, which is reachable already",
+            });
+        }
+
         refuse_unkeyable(&canonical, directory)?;
 
         Ok(canonical)
+    }
+
+    /// Whether `canonical` is the session's own directory or a directory inside it.
+    ///
+    /// Not a directory that holds it: the temporary directory it sits in is one a person may open by
+    /// name, and the answer they give about that is theirs to give.
+    fn reaches_scratch(&self, canonical: &Path) -> bool {
+        self.scratch
+            .as_deref()
+            .is_some_and(|directory| canonical.starts_with(directory))
     }
 
     /// Also allow paths inside `directory`, which must exist.
@@ -422,12 +497,15 @@ impl Workspace {
     /// somebody will discover by being refused a file they could read a minute ago.
     ///
     /// **Nothing may overlap the new root.** The directory left behind is closed, and so is any
-    /// added directory inside the new root or containing it. That is not tidiness: a file inside
-    /// two open directories has two spellings, one relative and one absolute, and the two are
-    /// separate namespaces in the trust map. A tree reachable by both spellings could be read
-    /// under whichever rule was more permissive, which is the one thing keeping the namespaces
-    /// apart exists to prevent. An added directory that overlaps nothing is left open, since the
+    /// added directory inside the new root or containing it. That is not tidiness: a directory the
+    /// root reaches is reachable already, and leaving it open would record a second open directory
+    /// for a path under the root to be named under, with nothing to choose between them
+    /// ([`Workspace::trust_key`]). An added directory that overlaps nothing is left open, since the
     /// user opened it by name and moving elsewhere does not withdraw that.
+    ///
+    /// **The session's own directory is not a working directory.** It is removed when the session
+    /// ends, so a root inside it is a root that goes while the session is still using it, and every
+    /// read, write and run afterwards fails against a directory that is no longer there.
     pub fn change_root(&mut self, directory: &str) -> Result<Moved, WorkspaceError> {
         let candidate = Path::new(directory);
         if !candidate.is_absolute() {
@@ -453,6 +531,13 @@ impl Workspace {
             return Err(WorkspaceError::Invalid {
                 path: directory.to_string(),
                 reason: "is already the working directory",
+            });
+        }
+
+        if self.reaches_scratch(&canonical) {
+            return Err(WorkspaceError::Invalid {
+                path: directory.to_string(),
+                reason: "is the session's own directory, which the session removes when it ends",
             });
         }
 
@@ -562,7 +647,8 @@ impl Workspace {
         Ok(resolved)
     }
 
-    /// Resolve an absolute path, which is legal only inside a directory the user added.
+    /// Resolve an absolute path, which is legal only inside a directory reached by its absolute
+    /// name: one the user added, or the session's own.
     ///
     /// The containment test is against where the path lands, so a symlink inside an added
     /// directory pointing elsewhere is refused exactly as one in the primary root is, whether or
@@ -581,7 +667,7 @@ impl Workspace {
             path: named.to_string(),
         };
         let resolved = destination(candidate).ok_or_else(escapes)?;
-        if !self.added.iter().any(|dir| resolved.starts_with(dir)) {
+        if !self.is_opened(&resolved) {
             return Err(escapes());
         }
         Ok(resolved)
@@ -1100,7 +1186,16 @@ impl Workspace {
     /// The first write of a turn is the one worth keeping: a path written twice was already
     /// changed by the first, so the second write's contents are this turn's doing and rewinding
     /// to them would leave the turn half undone.
+    ///
+    /// Nothing is kept for the session's own directory. What a turn writes there is what it wrote
+    /// for its own use, in a directory that is empty when the session begins and gone when it
+    /// ends, so there is nothing anybody would ask to have back. Keeping it would spend
+    /// [`MAX_REWIND_BYTES`] on a file nobody wants rewound, and what that budget runs out on is
+    /// the next file in the project the turn writes.
     fn record_backup(&self, resolved: &Path) {
+        if self.reaches_scratch(resolved) {
+            return;
+        }
         let Ok(mut backups) = self.backups.lock() else {
             return;
         };
@@ -1196,18 +1291,26 @@ pub(crate) const MAX_ENTRIES: usize = 2_000;
 ///
 /// Walking is cheap: a path is a stat and a string. Reading is not, which is what
 /// [`MAX_SEARCH_TIME`] is for.
+///
+/// Past what a tree a person works in usually holds, which is not the same as past every tree:
+/// a monorepo or a checkout of generated sources reaches this, and
+/// [`Workspace::with_search_caps`] is how one says so.
 pub const MAX_SEARCH_FILES: usize = 100_000;
 
 const MAX_MATCHES: usize = 200;
 const MAX_MATCH_LINE: usize = 500;
 
-/// How long a search may spend opening files.
+/// How long a search may spend opening files, where nothing configured otherwise.
 ///
 /// The match cap already stops a *productive* search early. This is for the other one: a
 /// pattern that matches nothing is read to the end of the tree, so on a large repository the
 /// worst case is every file. A wall-clock budget bounds that without bounding the useful
 /// case, and stopping is reported the same way the entry cap is, since the answer is partial
 /// either way, and what the reader must not do is take it for complete.
+///
+/// Ten seconds is a guess about a filesystem rather than a fact about one, which is why
+/// [`Workspace::with_search_caps`] exists: a network mount reads an order of magnitude slower
+/// than a local disk, and nothing here can tell which it is on.
 const MAX_SEARCH_TIME: Duration = Duration::from_secs(10);
 
 /// Caps on a single paged read.
@@ -1787,7 +1890,7 @@ impl Workspace {
             }
             // Checked per file rather than per line: the clock is here to bound a walk over a
             // large tree, and a single file cannot be large enough to matter beside that.
-            if started.elapsed() >= MAX_SEARCH_TIME {
+            if started.elapsed() >= self.search_time {
                 timed_out = true;
                 break;
             }
@@ -1981,8 +2084,8 @@ impl Workspace {
     /// Relative to the primary root for a file in the project, and absolute for one in an added
     /// directory. That is the same spelling each would have to be given to reach the file again, so
     /// a listing can be read and acted on without knowing which tree an entry came from, and it is
-    /// the spelling the trust map keys a rule about that file under: the two namespaces it keeps
-    /// apart are exactly these.
+    /// the spelling the trust map is asked about that file under: relative names it reads under the
+    /// primary root, which is how it arrives at the same key either way.
     pub(crate) fn relative_display(&self, path: &Path) -> String {
         match path.strip_prefix(&self.root) {
             Ok(relative) => relative.to_string_lossy().to_string(),
@@ -1993,13 +2096,14 @@ impl Workspace {
     /// The name the trust map holds a rule about `named` under.
     ///
     /// Every rule is recorded about a directory a person opened, under the name that directory was
-    /// opened as: the empty prefix for the primary root, which is what the startup answer covers
-    /// (TRUST-7), and the canonical path for one added by name (TRUST-9). An absolute name is
+    /// opened as: the relative name for the primary root, which the map reads under that root and
+    /// which is what the startup answer covers (TRUST-7), and the canonical path for one added by
+    /// name (TRUST-9). An absolute name is
     /// therefore spelled under the open directory it lands in, taking that directory's recorded
     /// name with the rest of the name as it was written. Without that a directory reached by
     /// a second spelling of its own name is covered by nothing, so a file the user vouched for is
-    /// quarantined under half its names (TRUST-3); on macOS that is the ordinary case rather than a
-    /// corner, since `/tmp` and `$TMPDIR` are both links.
+    /// quarantined under half its names (TRUST-18); on macOS that is the ordinary case rather than
+    /// a corner, since `/tmp` and `$TMPDIR` are both links.
     ///
     /// Where the path lands decides *which* name is substituted, and the spelling decides the rest.
     /// Both halves are load bearing. A name spelled inside the root that lands outside it is named
@@ -2033,11 +2137,10 @@ impl Workspace {
     ///
     /// That is a name landing in no open directory, one reaching an open directory other than
     /// through an ancestor of its own, and the root named as itself. The first two are the same
-    /// answer confinement gives: nothing is trusted that no rule covers. The last is the root's
-    /// alone: its relative name is the empty prefix, which is the rule covering the whole project,
-    /// and that rule is the startup question's to write (TRUST-7) rather than something one path's
-    /// spelling can reach. An added directory named as itself has a recorded name to be asked
-    /// about, so it gets one.
+    /// answer confinement gives: nothing is trusted that no rule covers. The last has nothing to
+    /// re-spell to, since the root's own relative name is the empty one, so the name stands as
+    /// written and the map reads it as the rule covering the whole project either way. An added
+    /// directory named as itself has a recorded name to be asked about, so it gets one.
     fn recorded_name(&self, candidate: &Path) -> Option<String> {
         let opened = self.landed_in(&destination(candidate)?)?;
         let below = written_below(candidate, opened)?;
@@ -2050,19 +2153,25 @@ impl Workspace {
         Some(opened.join(below).to_string_lossy().to_string())
     }
 
-    /// The open directory a resolved path lands in: the primary root, or the deepest directory
-    /// added by name that holds it.
+    /// The open directory a resolved path lands in: the primary root, the deepest directory added by
+    /// name that holds it, or the session's own.
     ///
     /// The root before any added directory, rather than whichever of them is deepest. An added
-    /// directory may hold the project, and an absolute rule reaching inside the project is an
-    /// answer given about a directory rather than about the work, so the project's own rules decide
-    /// its files (TRUST-3).
+    /// directory may hold the project, and naming a project file under that directory instead would
+    /// leave the name it was reached by deciding which rule answers. Under the project's own name
+    /// the project's own rules are the most specific ones that cover it, which is what decides its
+    /// files either way (TRUST-2).
+    ///
+    /// The session's own directory among them, on the same terms as one the user added: it is
+    /// reached by its absolute name, so a name that reaches it by another spelling has to come back
+    /// to the same rule as the canonical one, or one file there would hold two.
     fn landed_in(&self, resolved: &Path) -> Option<&Path> {
         if resolved.starts_with(&self.root) {
             return Some(&self.root);
         }
         self.added
             .iter()
+            .chain(self.scratch.as_ref())
             .filter(|dir| resolved.starts_with(dir))
             .max_by_key(|dir| dir.components().count())
             .map(PathBuf::as_path)
@@ -2101,8 +2210,8 @@ mod tests {
     use super::*;
 
     /// A door that opens a directory by name hands the trust map the name it resolved to, so a name
-    /// the map cannot key a rule under is one no door may open: the rule would land in the relative
-    /// namespace, where the answer given about the project at startup covers it (TRUST-3). Said
+    /// the map cannot key a rule under is one no door may open: the rule would be keyed inside the
+    /// project, where the answer given about the project at startup covers it (TRUST-18). Said
     /// about the resolved name directly, because canonicalising on a platform that spells its paths
     /// from `/` always hands back a name that is a key, so neither door can reach its own refusal
     /// where the tests run.
@@ -2111,7 +2220,7 @@ mod tests {
         assert!(refuse_unkeyable(Path::new("/other"), "/other").is_ok());
 
         let refused = refuse_unkeyable(Path::new("C:\\other"), "C:\\other")
-            .expect_err("a directory keyed in the relative namespace was opened");
+            .expect_err("a directory whose rule could not be keyed was opened");
         assert_eq!(
             refused.to_string(),
             "'C:\\other' is not usable: is not spelled from '/', so no trust rule can be keyed under it"

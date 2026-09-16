@@ -51,6 +51,21 @@ impl Declassification {
     }
 }
 
+/// Permission to build a [`crate::processor::ProcessorSpec`].
+///
+/// Lives here for the reason [`Declassification`] does. A spec's fields are private to the module
+/// that declares them, so no gate could set them there, and a constructor another module of this
+/// crate could reach is a second place a spec can be built: one skipping the slot checks, the
+/// `about` check and the taint the label is computed by, which are what makes a spec worth
+/// freezing. `mint` is `pub(in crate::policy)`, so the gates here are that one place.
+pub(crate) struct SpecAuthority(());
+
+impl SpecAuthority {
+    pub(in crate::policy) fn mint() -> Self {
+        Self(())
+    }
+}
+
 /// Permission to take the bytes out of a transport envelope, for as long as the decoder needs.
 ///
 /// Confined to `Vec<u8>`, which is the shape of an envelope off a socket. A tool argument, a
@@ -218,14 +233,35 @@ pub struct Policy<'sink, S: Sink> {
     denials: usize,
     /// Which paths the user vouched for.
     trust: TrustStore,
-    /// The directory [`Policy::trust`] spells its relative rules against.
+    /// The working directory this turn runs in.
     ///
-    /// A rule in the map means a path under this directory, so anything asked about a path has to
-    /// know which directory the path was written relative to. `None` where the caller has not said,
-    /// and then nothing that needs it holds.
+    /// The same directory [`Policy::trust`] was made against: the map reads its own relative names
+    /// under the directory it was given, and a caller installing one made against somewhere else
+    /// would have the gates comparing names to a map about another project's files. `None` where
+    /// the caller has not said, and then nothing that needs it holds.
     root: Option<std::path::PathBuf>,
+    /// The session's own directory outside the project, where it has one.
+    ///
+    /// Reachable with no rule written about it, so a path under it that no rule covers answers as
+    /// the workspace does. [`Policy::integrity_in_force`] is where that happens, and it is the only
+    /// thing this field is for.
+    scratch: Option<std::path::PathBuf>,
     /// Which programs the user has stopped being asked about, by resolved path.
     programs: crate::programs::TrustedPrograms,
+    /// Which command lines this session has already put to the user at a run prompt.
+    ///
+    /// Decides nothing about whether a line runs. It is read only to say, at a prompt, that the
+    /// program in front of the person is one they have already answered about under different
+    /// arguments, which is a line no key at a prompt will finish asking about.
+    asked: crate::programs::AskedAbout,
+    /// The command lines somebody asked to be remembered past the session, for this directory.
+    ///
+    /// Refreshed by the driver wherever a run prompt would be drawn rather than held from the start
+    /// of the session, because the record is a file every session in this directory writes to and a
+    /// line recorded a minute ago in another one is covered by this turn. Empty is the state of a
+    /// session that has nowhere to keep such a record and of one with nobody to put a prompt to,
+    /// and it means every run asks.
+    remembered: crate::remembered::Remembered,
     /// Rules the user wrote in advance about what to ask them about.
     ///
     /// Consulted at the gates that ask, and nowhere else. Empty is the state a session with no
@@ -263,7 +299,7 @@ pub struct Policy<'sink, S: Sink> {
 /// what a person answered while it ran. Kept as one type rather than two arguments because the
 /// pair is always passed together and a caller that got the order wrong would silently swap a
 /// trust map for a command list.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Vouched {
     /// Which paths the person vouched for.
     pub trust: TrustStore,
@@ -322,9 +358,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             grants: Vec::new(),
             sink,
             denials: 0,
-            trust: TrustStore::new(),
+            // Empty, so nothing is trusted until a caller installs the person's own map with
+            // `with_trust`. The filesystem root is the working directory a map with no project
+            // behind it has to read a relative name under, and an empty map answers `None` about
+            // every path whatever it is read under.
+            trust: TrustStore::new("/"),
             root: None,
+            scratch: None,
             programs: crate::programs::TrustedPrograms::new(),
+            asked: crate::programs::AskedAbout::new(),
+            remembered: crate::remembered::Remembered::new(),
             permissions: crate::permissions::Permissions::new(),
             vouch_asked: std::collections::BTreeSet::new(),
             fetching: None,
@@ -409,11 +452,36 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(())
     }
 
+    /// Refuse a fetch a `deny` rule covers, before anybody is asked about it.
+    ///
+    /// A rule that refuses is a statement that the fetch does not happen, so there is nothing
+    /// left to show or approve once it has been written: a prompt here would put a question to
+    /// somebody that their own settings file has already closed, and an answer of yes would be
+    /// overruled a moment later at the egress gate. What that teaches a person is to wave prompts
+    /// through, which is the opposite of what every gate here is for.
+    ///
+    /// [`Policy::before_plan_rules`] does this for a command line, in the same position and for
+    /// the same reason. The egress check stays where it is: it covers every redirect hop, and a
+    /// hop is a host nobody was ever shown.
+    ///
+    /// A URL naming no host passes. There is nothing to rule on, and a URL that cannot be parsed
+    /// is refused for being one before it reaches a gate.
+    pub fn before_fetch_rules(&mut self, url: &str) -> Gated<()> {
+        let Some(host) = crate::url::host_of(url) else {
+            return Ok(());
+        };
+        let decision = self.permissions.for_host(&host);
+        self.refuse_if_denied("fetch", decision, &host)
+    }
+
     /// Whether a person has to approve fetching `url`.
     ///
     /// Asked of the host, since that is what a person can answer for: a rule naming one is a
     /// statement about who is being talked to, and the path is where a URL carries the particular
     /// thing being asked for.
+    ///
+    /// A `deny` rule never reaches this. [`Policy::before_fetch_rules`] has refused by then, so
+    /// the only rule that decides anything here is one that answers the prompt.
     pub fn fetch_needs_approval(&mut self, url: &str) -> bool {
         let Some(host) = crate::url::host_of(url) else {
             // Nothing to ask about yet. The fetch fails on the URL itself further down, and
@@ -510,13 +578,74 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         &self.trust
     }
 
-    /// Say which directory the trust map's relative rules are written against.
+    /// Say which directory this turn runs in.
     ///
-    /// The workspace root. Without it, a gate that has to work out which rule covers a path it was
-    /// handed relative to somewhere else cannot, and refuses rather than guessing.
+    /// The workspace root, which is also the directory the map handed to [`Policy::with_trust`]
+    /// was made against. Without it, a gate that has to compare a directory it was handed against
+    /// the one the turn is in cannot, and refuses rather than guessing.
     pub fn with_root(mut self, root: &std::path::Path) -> Self {
         self.root = Some(root.to_path_buf());
         self
+    }
+
+    /// Say where the session's own directory outside the project is, where it has one.
+    ///
+    /// Whether a path there can be reached at all is the workspace's question. What this decides is
+    /// the label on a file in it, which is the answer given about the workspace rather than a rule
+    /// of the directory's own: see [`Policy::integrity_in_force`].
+    pub fn with_scratch(mut self, directory: Option<&std::path::Path>) -> Self {
+        self.scratch = directory.map(std::path::Path::to_path_buf);
+        self
+    }
+
+    /// What the map says about `path`, with the session's own directory answered by the workspace.
+    ///
+    /// Every gate asks this rather than the store, because a directory made reachable without a
+    /// rule would otherwise answer as a path nobody has said anything about: every write there
+    /// prompting and every read quarantined, in a directory whose whole purpose is being written to
+    /// and read back. The answer given about the workspace is what it takes instead, so the
+    /// directory prompts when the workspace prompts and no more, and a session that vouched for
+    /// nothing is asked about a file there exactly as it is asked about one in the project.
+    ///
+    /// Only where nothing covers the path. A rule reconciliation wrote about a file there answers
+    /// for that file, which is what keeps untrusted output from being read back as trusted.
+    fn integrity_in_force(&self, path: &str) -> Option<Integrity> {
+        match self.trust.integrity_of(path) {
+            Some(integrity) => Some(integrity),
+            None if self.is_scratch(path) => self.trust.integrity_of(""),
+            None => None,
+        }
+    }
+
+    /// [`Policy::integrity_in_force`] for a whole subtree, which is what a command line's read set
+    /// is asked about.
+    fn integrity_beneath_in_force(&self, path: &str) -> Option<Integrity> {
+        match (self.is_scratch(path), self.trust.integrity_of("")) {
+            // Only where the workspace has an answer to lend. A session that vouched for nothing has
+            // none, and then the rules written inside the directory are the whole of what is known
+            // about it, exactly as for a path this does not cover.
+            (true, Some(workspace)) => Some(self.trust.integrity_beneath_or(path, workspace)),
+            _ => self.trust.integrity_beneath(path),
+        }
+    }
+
+    /// Whether `path` lands in the session's own directory outside the project.
+    ///
+    /// A key holding `..` is not, whatever it is spelled under. A trust key keeps such a component
+    /// as it was written, and matching by component would take a name that climbs out of the
+    /// directory for one inside it, which is the workspace's answer being lent to a path the session
+    /// was never given.
+    fn is_scratch(&self, path: &str) -> bool {
+        let path = std::path::Path::new(path);
+        if path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return false;
+        }
+        self.scratch
+            .as_deref()
+            .is_some_and(|directory| path.starts_with(directory))
     }
 
     /// Begin with the programs an earlier turn of this session was told to stop asking about.
@@ -528,6 +657,36 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The programs vouched for, including any this turn recorded.
     pub fn programs(&self) -> &crate::programs::TrustedPrograms {
         &self.programs
+    }
+
+    /// Seed the session's list of run prompts already put to this person.
+    ///
+    /// A turn is where a prompt is drawn and a session is where somebody answers the same shape of
+    /// prompt all day, so the list is the caller's and this turn adds to it. It grants nothing, so
+    /// seeding it cannot widen what a turn may do: the most a wrong list can cost is a sentence of
+    /// advice drawn or not drawn.
+    pub fn with_asked(mut self, asked: crate::programs::AskedAbout) -> Self {
+        self.asked = asked;
+        self
+    }
+
+    /// The run prompts put to this person, for the caller to carry into the next turn.
+    pub fn asked(&self) -> &crate::programs::AskedAbout {
+        &self.asked
+    }
+
+    /// Hand over the record of lines somebody asked to be remembered past the session.
+    ///
+    /// Called with what the record holds now, immediately before the question of whether to ask
+    /// about a line, and not once at the start of a session: the file is shared by every session
+    /// begun in the directory, and reading it once would leave this turn answering from a copy that
+    /// was already out of date. A driver that cannot put a prompt to anybody hands over nothing, so
+    /// what a covered line grants is never exercised where nobody could have been asked.
+    ///
+    /// Replaces rather than adds, for the same reason: the file is the state, and an entry somebody
+    /// deleted has to stop covering the line it named.
+    pub fn recall(&mut self, remembered: crate::remembered::Remembered) {
+        self.remembered = remembered;
     }
 
     /// Install the rules a person wrote in advance about what to ask them about.
@@ -709,7 +868,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         // "Never mentioned" and "explicitly untrusted" both mean untrusted. Trust is granted,
         // never inferred from silence.
-        let integrity = match self.trust.integrity_of(path) {
+        let integrity = match self.integrity_in_force(path) {
             Some(Integrity::Trusted) => Integrity::Trusted,
             _ => Integrity::Untrusted,
         };
@@ -748,7 +907,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let mut visited = 0usize;
         for path in paths {
             visited += 1;
-            let this = match self.trust.integrity_of(path) {
+            let this = match self.integrity_in_force(path) {
                 Some(Integrity::Trusted) => Integrity::Trusted,
                 _ => Integrity::Untrusted,
             };
@@ -1391,7 +1550,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::present`] will ask afterwards, early enough to avoid reading a file nobody will
     /// be shown.
     pub fn read_is_quarantined(&self, path: &str) -> bool {
-        !matches!(self.trust.integrity_of(path), Some(Integrity::Trusted))
+        !matches!(self.integrity_in_force(path), Some(Integrity::Trusted))
     }
 
     /// Record that a slot will hold a file, without reading it.
@@ -1423,7 +1582,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             principle: Principle::Capability,
             message: "'file_read' produces no observation to label".to_string(),
         })?;
-        let integrity = match self.trust.integrity_of(&path) {
+        let integrity = match self.integrity_in_force(&path) {
             Some(Integrity::Trusted) => Integrity::Trusted,
             _ => Integrity::Untrusted,
         };
@@ -1514,7 +1673,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         let mut references = Vec::with_capacity(paths.len());
         for (slot, path) in ids.iter().cloned().zip(paths) {
-            let integrity = match self.trust.integrity_of(&path) {
+            let integrity = match self.integrity_in_force(&path) {
                 Some(Integrity::Trusted) => Integrity::Trusted,
                 _ => Integrity::Untrusted,
             };
@@ -1993,8 +2152,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             _ => None,
         });
 
-        let spec =
-            crate::processor::ProcessorSpec::new(id, reads.to_vec(), instruction, out_label, about);
+        let spec = crate::processor::ProcessorSpec::new(
+            id,
+            reads.to_vec(),
+            instruction,
+            out_label,
+            about,
+            &SpecAuthority::mint(),
+        );
 
         self.allow(
             "processor",
@@ -2030,7 +2195,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// trail says what was dropped.
     pub fn before_delegate(
         &mut self,
-        id: &str,
+        id: crate::delegate::DelegateId,
         kind: &Labelled<String>,
         task: &Labelled<String>,
     ) -> Gated<crate::delegate::DelegateSpec> {
@@ -2154,9 +2319,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// and a vouched program is a command they approved, so both were `(T,pub)` before either run
     /// existed. Nothing a delegate read, produced or was told is in either record.
     pub fn adopt_from_delegate(&mut self, since: &Vouched, ended: &Vouched) {
-        let before: BTreeMap<&str, Integrity> = since.trust.rules().collect();
+        // Under the keys rather than the names: a name is relative to whichever working
+        // directory the map holding it was made with, and the two maps here need not have been.
+        let before: BTreeMap<&str, Integrity> = since.trust.keyed().collect();
         let mut paths = 0;
-        for (path, integrity) in ended.trust.rules() {
+        for (path, integrity) in ended.trust.keyed() {
             if before.get(path) == Some(&integrity) {
                 continue;
             }
@@ -2740,7 +2907,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             crate::permissions::Decision::Unmatched => {}
         }
 
-        let (needed, reason) = match self.trust.integrity_of(path) {
+        let (needed, reason) = match self.integrity_in_force(path) {
             // Nobody has said anything about this path, so the first write is the moment to ask.
             None => (true, "a path nobody has vouched for either way"),
             // The one irreversible case: a trusted path is about to stop being trusted.
@@ -2779,7 +2946,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Always the exact path, never its parent: one untrusted file must not distrust its
     /// siblings. Most-specific-wins then resolves the two rules correctly.
     pub fn reconcile_after_write(&mut self, path: &str, written: Label) {
-        let effective = self.trust.integrity_of(path);
+        let effective = self.integrity_in_force(path);
         let actual = written.integrity;
 
         if effective == Some(actual) {
@@ -2903,6 +3070,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// step anywhere is a transformation nobody answered for, and its output is what the next step
     /// reads, so one such step makes the whole line's output untrusted however familiar the steps
     /// either side of it are.
+    ///
+    /// An entry holds a resolved program and its arguments and nothing else, so this answers about
+    /// argv alone: [`crate::command::Plan::carries_an_assignment`] is the separate question, and
+    /// every gate that consults this one has to ask that one too.
     fn every_step_vouched(&self, plan: &crate::command::Plan) -> bool {
         plan.steps().iter().all(|step| {
             self.programs
@@ -3007,7 +3178,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 true => Integrity::Untrusted,
                 false => keys_for_the_map(&plan.directory, path)
                     .iter()
-                    .filter_map(|key| self.trust.integrity_beneath(key))
+                    .filter_map(|key| self.integrity_beneath_in_force(key))
                     .reduce(Integrity::meet)
                     .unwrap_or(Integrity::Untrusted),
             };
@@ -3020,20 +3191,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Whether a person has to be asked before this plan runs.
     ///
     /// The questions in order: private input first and unconditionally, then a write, then the tree
-    /// the line runs in, then a rule the user wrote in advance, then the proof road, then the
-    /// vouched list.
+    /// the line runs in, then an environment assignment, then a rule the user wrote in advance, then
+    /// the proof road, then the vouched list, then the record of lines somebody asked to be
+    /// remembered past the session.
     ///
-    /// True unless the audited table accounts for **every** step or this session's user has vouched
-    /// for every one of them. There is no read-only category and there is no way to declare one:
+    /// True unless the audited table accounts for **every** step, a rule the user wrote in advance
+    /// covers the line, this session's user has vouched for every step of it, or the record holds
+    /// this exact line. There is no
+    /// read-only category and there is no way to declare one:
     /// `foo --bar` might write to disk and nothing here can tell, and a step calling itself harmless
     /// would only help if the declaration were honest. So a program nobody has vouched for is always
     /// asked about, however innocuous it looks.
     ///
-    /// Two things may answer the question and nothing else: a person having answered it before, in
-    /// this session, for this program with these exact arguments, and the audited table in
-    /// [`crate::pure`] establishing that these exact arguments write nothing and read only paths the
-    /// user vouched for. The table matches argv, but it is not a property of the argv in the sense
-    /// this rules out: an entry is a claim checked by hand against one program's full option list,
+    /// Four things may answer the question and nothing else: a person having answered it before, in
+    /// this session, for this program with these exact arguments; that person having asked, at a
+    /// prompt, for their answer to one exact line to last past the session, which
+    /// [`crate::remembered`] holds; a rule the person wrote in advance,
+    /// which stops the asking without raising any label; and the audited table in [`crate::pure`]
+    /// establishing that these exact arguments write nothing and read only paths the user vouched
+    /// for. The middle two grant strictly less than a vouch: they stop the question and leave every
+    /// label where it was. The table matches argv, but it is not a property of the argv in the sense this rules
+    /// out: an entry is a claim checked by hand against one program's full option list,
     /// which is why it may answer at all. Never something a step declares about itself, and never
     /// anything derived from what a program printed, which is `(U,priv)` and could say anything.
     ///
@@ -3079,6 +3257,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return true;
         }
 
+        // A plan carrying an environment assignment has a load and a search path of its own as well
+        // as a program, and a vouched entry records neither: `LD_PRELOAD=./evil.so git log` matches
+        // an entry made for `git log`. An assignment decides what the program loads and reads before
+        // its own arguments are looked at, so it is asked about every time, for the same reason a
+        // write and a tree are.
+        if plan.carries_an_assignment() {
+            self.allow(
+                "approval",
+                "the line writes an assignment in front of a program, which decides what it loads \
+                 before its arguments are read and which no standing answer covers, asking"
+                    .to_string(),
+            );
+            return true;
+        }
+
         match self.permissions.for_pipeline(&self.plan_lines(plan)) {
             crate::permissions::Decision::Ruled(ruling) => {
                 let needed = ruling != crate::permissions::Ruling::Allow;
@@ -3115,6 +3308,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return false;
         }
 
+        // Last of the four, and the only one whose answer was given in another session. It is
+        // reached only past the questions above it, which is what keeps an entry honest about what
+        // it covers: a recorded line met here with private input fed to it, with a file to write, in
+        // another tree, or with an assignment in front of a program is asked about like any other,
+        // because those were refused before this was consulted.
+        if self.remembered.covers(plan) {
+            self.allow(
+                "approval",
+                "the user asked at a prompt for this exact line to be remembered past the \
+                 session, no prompt"
+                    .to_string(),
+            );
+            return false;
+        }
+
         self.allow(
             "approval",
             "nothing can establish that a program changes nothing, and not every step was \
@@ -3122,6 +3330,83 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 .to_string(),
         );
         true
+    }
+
+    /// Whether a prompt for this plan may offer to record its answer past the session.
+    ///
+    /// The same refusals the record itself is read past, asked before the prompt is drawn so
+    /// that a key is never offered where it would stop no prompt. A line releasing private data is
+    /// asked about every time, as is one naming a file to write, one running anywhere but the
+    /// workspace root, and one writing an assignment in front of a program, and a rule the person
+    /// wrote in advance decides ahead of any keypress: an `ask` rule is a standing instruction to be
+    /// asked, and a key must not overturn it.
+    ///
+    /// The assignment is the one refusal an entry's key could have accounted for, since it holds
+    /// every assignment in a field of its own, and it is refused anyway: RUN-8 asks about such a
+    /// line before this record is reached, so the key would record an entry that stopped no later
+    /// prompt. Keeping the assignment in the key and out of what may be written is deliberate, so
+    /// that an entry arriving from anywhere else cannot cover a line with something put in front of
+    /// it.
+    ///
+    /// Read-only, and it writes no audit entry: it is a question about what to draw rather than a
+    /// gate anything passes, and the gate is [`Policy::plan_needs_approval`] above.
+    ///
+    /// The refusal is made twice, here and again where the answer is acted on, for the reason
+    /// RUN-6 gives about the key that vouches: an invariant about what a record may hold does not
+    /// rest on a drawing.
+    pub fn may_remember(&self, plan: &crate::command::Plan) -> bool {
+        self.a_rule_could_answer(plan)
+    }
+
+    /// Whether a rule the person writes in the settings file would decide this line.
+    ///
+    /// The same question [`Policy::may_remember`] asks, because the answer is the same one: the
+    /// four refusals above are each made in [`Policy::plan_needs_approval`] before the rules are
+    /// read, and the record is consulted after them, so whatever stops a rule from deciding a line
+    /// stops a record from deciding it too. Two names rather than one because the two call sites
+    /// are asking different things: one is whether a key may be offered, and this is whether the
+    /// prompt may say that editing a file ends the asking. Saying so of a line the rules never
+    /// reach would send somebody to write a pattern that stops no prompt.
+    ///
+    /// False as well where a rule already matches the line, which is not a refusal but an answer:
+    /// the person has found the file, and what their rule says is what happens.
+    pub fn a_rule_could_answer(&self, plan: &crate::command::Plan) -> bool {
+        !plan.releases_private()
+            && plan.writes.is_empty()
+            && self.runs_at_the_root(plan)
+            && !plan.carries_an_assignment()
+            && matches!(
+                self.permissions.for_pipeline(&self.plan_lines(plan)),
+                crate::permissions::Decision::Unmatched
+            )
+    }
+
+    /// Record that this plan was put to a person at a run prompt.
+    ///
+    /// Called where the prompt is drawn rather than from [`Policy::plan_needs_approval`], because
+    /// what this list holds is questions somebody read. It grants nothing, so nothing rests on it
+    /// being complete: a line missed here costs a sentence of advice at a later prompt and can
+    /// cost nothing else.
+    pub fn asked_about(&mut self, plan: &crate::command::Plan) {
+        for step in plan.steps() {
+            self.asked.record(step.command());
+        }
+    }
+
+    /// Whether some step of this plan names a binary already asked about under other arguments.
+    ///
+    /// What a prompt says instead of offering a key that would cover a family: this is the only
+    /// thing available at a prompt that establishes a line will be asked about again however it is
+    /// answered, and it establishes it by having asked twice rather than by reading the argv.
+    ///
+    /// Order against [`Policy::asked_about`] does not matter, and neither does a line naming one
+    /// binary twice: the whole line is compared at once and its own steps are not what it differs
+    /// from, so nothing here can make a line vary from itself.
+    ///
+    /// Read-only, and it writes no audit entry: it decides what a prompt says, not what runs.
+    pub fn arguments_have_varied(&self, plan: &crate::command::Plan) -> bool {
+        let line: Vec<_> = plan.steps().iter().map(|step| step.command()).collect();
+        self.asked.arguments_have_varied(&line)
     }
 
     /// Record that a person approved this exact plan.
@@ -3145,7 +3430,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// a program is neither.
     ///
     /// The output label is `(U,priv)` unless every step is a command this session's user vouched
-    /// for **and the line runs where they vouched for it**, in which case it is `(T,priv)`.
+    /// for, **the line runs where they vouched for it**, and **no step carries an environment
+    /// assignment**, in which case it is `(T,priv)`.
     /// `(U,priv)` is the only label that holds without knowing what ran, and nothing a caller or
     /// the model can say changes it. Two things reach a better label, by different roads, and
     /// neither is a declaration.
@@ -3197,7 +3483,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "every step is an audited call whose output is a function of paths the user \
                  vouched for",
             )
-        } else if self.every_step_vouched(plan) && self.runs_at_the_root(plan) {
+        } else if self.every_step_vouched(plan)
+            && self.runs_at_the_root(plan)
+            && !plan.carries_an_assignment()
+        {
             (
                 Label::trusted_private(),
                 "every step is a command the user vouched for, output and all",
@@ -3205,7 +3494,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         } else {
             (
                 opaque,
-                "a program may print anything, and not every step was vouched for where it runs",
+                "a program may print anything, and not every step of this line was vouched for as \
+                 written, where it runs",
             )
         };
         self.allow("provenance", format!("run: output labelled {label}, {why}"));
@@ -3657,19 +3947,24 @@ fn names_a_path(program: &str) -> bool {
 
 /// Every name the trust map may hold a rule about an operand under.
 ///
-/// A relative name and an absolute one are separate namespaces (TRUST-3), so a file inside the
-/// workspace has a name in each: the one the project's own rules are written against, and the one a
-/// rule about a directory the workspace sits in answers about. The line picked one of them, and the
-/// pick is not a decision anybody made about the file, so both are returned and the caller takes the
-/// weakest answer. That is why this can be right without a filesystem to resolve a name with:
-/// choosing wrongly which spelling is authoritative could only cost a question, never grant trust.
+/// A name is reduced to the open directory it lands in before the map sees it, and that reduction
+/// needs a filesystem (TRUST-18), which this road does not have. So a file inside the workspace is
+/// named both ways here: relatively, which is what the project's own rules are written against, and
+/// in full, which is what a rule about a directory the workspace sits in answers about. The line
+/// picked one of them, and the pick is not a decision anybody made about the file, so both are
+/// returned and the caller takes the weakest answer. That is why this can be right without a
+/// filesystem: choosing wrongly which spelling is authoritative could only cost a question, never
+/// grant trust.
 ///
 /// The name as written is always one of them. An absolute name inside the root adds its relative
-/// one, which is what closes the round trip `/add-dir` opens: a directory above the project is
-/// trusted by an answer about that directory ([TRUST-9]), and a project file labelled from that rule
-/// alone would take the label of a directory it happens to be reachable through. An absolute name
-/// that holds the root adds the empty one, the rule covering the project, since a line reading that
-/// directory whole reads every file the project's own rules bear on.
+/// one, and an absolute name that holds the root adds the empty one, which is the rule covering
+/// the project: a line reading that directory whole reads every file the project's own rules bear
+/// on, and nothing need cover the directory itself for those rules to answer.
+///
+/// The first pair is one key wherever the map was made against the directory the line ran in,
+/// since the map reads a relative name under that directory (TRUST-2). It is spelled both ways
+/// here all the same, because this road does no filesystem work and nothing in it can check that
+/// the two directories agree.
 ///
 /// Nothing is resolved, only re-spelled, so a name outside the root keeps just its own and the rule
 /// about the directory holding it decides.
@@ -4456,7 +4751,7 @@ mod tests {
     #[test]
     fn a_path_that_lost_its_trust_fills_the_slot_untrusted() {
         let mut sink = RecordingSink::new();
-        let mut store = crate::trust::TrustStore::new();
+        let mut store = crate::trust::TrustStore::new("/work");
         store.trust("src");
         let mut policy = Policy::begin(
             routing_with("task", "tidy up"),
@@ -4973,8 +5268,12 @@ mod tests {
     }
 
     /// A store that vouches for the whole project, which is what answering yes at startup writes.
-    fn trusting(paths: &[&str], distrusting: &[&str]) -> TrustStore {
-        let mut trust = TrustStore::new();
+    ///
+    /// `root` is the working directory the relative names are read under, which is the one the
+    /// policy under test is given: a map made against a different directory would write its rules
+    /// about somebody else's files.
+    fn trusting(root: &str, paths: &[&str], distrusting: &[&str]) -> TrustStore {
+        let mut trust = TrustStore::new(root);
         for path in paths {
             trust.trust(path);
         }
@@ -5004,7 +5303,7 @@ mod tests {
         distrusting: &[&str],
     ) -> Policy<'s, RecordingSink> {
         open_policy(sink)
-            .with_trust(trusting(&["."], distrusting))
+            .with_trust(trusting("/work", &["."], distrusting))
             .with_root(std::path::Path::new("/work"))
     }
 
@@ -5124,16 +5423,42 @@ mod tests {
 
     /// An assignment in front of a program decides what that program loads and reads before its own
     /// arguments are looked at, so an audit of an option surface says nothing about the call.
+    ///
+    /// Asked of the label as well as of the prompt, and against a control. The prompt has a second
+    /// reason to ask about this line ([`crate::command::Plan::carries_an_assignment`]) and would
+    /// answer the same with the proof road wide open, so the prompt alone cannot tell whether the
+    /// table refused. What a proof is for is the label, and the control establishes that the road is
+    /// otherwise open here: without it, a proof that had stopped working for every line would pass.
     #[test]
     fn an_environment_assignment_leaves_a_step_unproven() {
         let mut sink = RecordingSink::new();
         let mut policy = in_a_project(&mut sink, &[]);
 
+        let audited = plan_of(vec![step_named("wc", &["-l", "Cargo.toml"])]);
+        policy.endorse_plan(&audited);
+        assert!(
+            policy
+                .before_plan(&audited)
+                .expect("an endorsed plan runs")
+                .is_trusted(),
+            "the proof road is shut for the line this test contrasts with"
+        );
+
         let mut step = step_named("wc", &["-l", "Cargo.toml"]);
         step.environment = vec![("LD_PRELOAD".to_string(), "./evil.so".to_string())];
+        let carrying = plan_of(vec![step]);
         assert!(
-            policy.plan_needs_approval(&plan_of(vec![step])),
+            policy.plan_needs_approval(&carrying),
             "a line carrying an environment assignment ran unasked"
+        );
+
+        policy.endorse_plan(&carrying);
+        assert!(
+            !policy
+                .before_plan(&carrying)
+                .expect("an endorsed plan runs")
+                .is_trusted(),
+            "the audited table proved a call whose program loads what an assignment chose"
         );
     }
 
@@ -5216,6 +5541,7 @@ mod tests {
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink)
             .with_trust(trusting(
+                "/work/project",
                 &[".", "/work"],
                 &["vendor", "/work/project/shared/fetched.json"],
             ))
@@ -5264,7 +5590,7 @@ mod tests {
     fn a_line_reading_a_directory_holding_the_project_answers_for_the_project() {
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink)
-            .with_trust(trusting(&[".", "/work"], &["vendor"]))
+            .with_trust(trusting("/work/project", &[".", "/work"], &["vendor"]))
             .with_root(std::path::Path::new("/work/project"));
 
         let the_root_itself = reading_in("/work/project", "/work/project");
@@ -5295,7 +5621,7 @@ mod tests {
     fn a_climbing_operand_is_untrusted_under_a_root_spelled_with_a_climb() {
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink)
-            .with_trust(trusting(&["."], &[]))
+            .with_trust(trusting("/work/../work/project", &["."], &[]))
             .with_root(std::path::Path::new("/work/../work/project"));
 
         let climbing = reading_in("/work/../work/project", "/work/../work/project/src/main.rs");
@@ -5568,6 +5894,29 @@ mod tests {
         );
     }
 
+    /// A rule is matched against the program and its arguments run together, which is a rendering
+    /// an assignment is not in: `Bash(git log)` covers `LD_PRELOAD=./evil.so git log` and there is
+    /// no rule anybody could have written to say otherwise. So the question comes before the rules,
+    /// and the allowed bare line is asserted first because it is what makes that ordering the thing
+    /// under test rather than a rule that never matched.
+    #[test]
+    fn an_environment_assignment_asks_even_for_a_line_a_rule_allows() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_permissions(permissions(&[], &[], &["Bash(git log)"]));
+
+        assert!(
+            !policy.plan_needs_approval(&a_plan()),
+            "the rule did not cover the line it was written for"
+        );
+
+        assert!(
+            policy.plan_needs_approval(&with_an_assignment()),
+            "a settings-file rule ran a program under an assignment it cannot name, unasked"
+        );
+    }
+
     /// The default label, and the only one that holds without knowing what ran: a program may
     /// print bytes an earlier step read out of a file an attacker wrote.
     #[test]
@@ -5668,6 +6017,56 @@ mod tests {
         assert!(!label.is_public());
     }
 
+    /// An assignment decides what a program loads and reads before its own arguments are looked at,
+    /// so `LD_PRELOAD=./evil.so git log` is a different proposition from the `git log` somebody read
+    /// at a prompt. An entry records no assignment, so there is nothing in it that could answer for
+    /// one.
+    #[test]
+    fn a_vouched_line_carrying_an_environment_assignment_is_asked_about() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched("/usr/bin/git", &["log"]));
+
+        assert!(
+            !policy.plan_needs_approval(&a_plan()),
+            "the vouched entry did not cover the command it was made for"
+        );
+
+        assert!(
+            policy.plan_needs_approval(&with_an_assignment()),
+            "a program ran under an assignment nobody approved, behind a command somebody said \
+             yes to"
+        );
+    }
+
+    /// The other half of the same grant, and the half that still matters once a person has approved
+    /// the line: what a program prints under an assignment nobody vouched for is whatever the
+    /// library that assignment loaded decided to print, so labelling it trusted would hand the
+    /// planner content this design keeps out of its context.
+    #[test]
+    fn output_of_a_vouched_line_carrying_an_environment_assignment_is_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched("/usr/bin/git", &["log"]));
+
+        let tampered = with_an_assignment();
+        policy.endorse_plan(&tampered);
+        let label = policy.before_plan(&tampered).expect("endorsed");
+        assert!(
+            !label.is_trusted(),
+            "output from a program run under an assignment nobody vouched for was labelled trusted"
+        );
+        assert!(!label.is_public());
+    }
+
+    /// The vouched line of [`a_plan`] with an assignment written in front of it, which is the shape
+    /// the compiler produces for `LD_PRELOAD=./evil.so git log`.
+    fn with_an_assignment() -> crate::command::Plan {
+        let mut step = step_named("git", &["log"]);
+        step.environment = vec![("LD_PRELOAD".to_string(), "./evil.so".to_string())];
+        plan_of(vec![step])
+    }
+
     /// Without a root there is nothing to check an answer about a directory against, so the vouched
     /// road is closed rather than open. The gate is strongest where it was told least.
     #[test]
@@ -5684,6 +6083,235 @@ mod tests {
 
     fn vouched(program: &str, args: &[&str]) -> crate::programs::Command {
         crate::programs::Command::new(program, args.iter().map(|a| a.to_string()).collect())
+    }
+
+    /// A record holding exactly one line, as reading the file would produce.
+    fn recalling(plan: &crate::command::Plan) -> crate::remembered::Remembered {
+        let mut record = crate::remembered::Remembered::new();
+        record.record(
+            crate::remembered::RememberedLine::of(plan),
+            "an-earlier-session",
+        );
+        record
+    }
+
+    /// RUN-19: what the key is for. A line somebody asked to be remembered runs without a prompt in
+    /// a session that never asked about it, which is the one thing the vouched list cannot do.
+    #[test]
+    fn a_line_remembered_past_the_session_is_not_asked_about() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        assert!(
+            policy.plan_needs_approval(&a_plan()),
+            "a fresh session had something remembered before it was handed a record"
+        );
+        policy.recall(recalling(&a_plan()));
+        assert!(!policy.plan_needs_approval(&a_plan()));
+    }
+
+    /// RUN-19: it stops only the asking. What a covered line prints carries the label it would have
+    /// carried anyway, which is untrusted and private, because an assertion about output is one
+    /// only somebody looking at it can make.
+    #[test]
+    fn output_of_a_line_remembered_past_the_session_is_still_untrusted_and_private() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&a_plan()));
+        let label = label_of(&mut policy, &a_plan());
+        assert_eq!(label.integrity, Integrity::Untrusted);
+        assert_eq!(
+            label.confidentiality,
+            crate::label::Confidentiality::Private
+        );
+    }
+
+    /// RUN-20: the prompt for a line whose arguments differ from one run to the next says so, and
+    /// the only thing that establishes it at a prompt is the person having read two argument lists
+    /// for one binary. A commit message is the case: the second `git commit` is a new line, is
+    /// asked about however the first was answered, and no key on the screen changes that.
+    #[test]
+    fn a_binary_asked_about_under_two_argument_lists_is_one_whose_arguments_have_varied() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        let first = plan_of(vec![step_named("git", &["commit", "-m", "first"])]);
+        let second = plan_of(vec![step_named("git", &["commit", "-m", "second"])]);
+        assert!(
+            !policy.arguments_have_varied(&first),
+            "a first prompt had something to compare itself against"
+        );
+        policy.asked_about(&first);
+        assert!(policy.arguments_have_varied(&second));
+    }
+
+    /// RUN-20: a line that repeats exactly is the one RUN-19's key answers in full, so advice about
+    /// a settings file there would be sending somebody to edit a file where a keypress would do.
+    #[test]
+    fn a_line_asked_about_again_unchanged_has_not_varied() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.asked_about(&a_plan());
+        assert!(!policy.arguments_have_varied(&a_plan()));
+    }
+
+    /// RUN-20: the advice says that editing a settings file ends the asking, so it must not be
+    /// given about a line no rule in that file is ever read for. A line naming a file to write is
+    /// put to a person before the rules are consulted, and so are one fed private data, one running
+    /// outside the root and one carrying an assignment: a pattern for any of them would stop no
+    /// prompt, and somebody who wrote one would be told to change the wrong thing.
+    #[test]
+    fn a_line_the_rules_are_never_read_for_is_one_no_pattern_would_answer() {
+        let mut sink = RecordingSink::new();
+        let policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        assert!(policy.a_rule_could_answer(&a_plan()));
+
+        let mut writing = a_plan();
+        writing.writes = vec![std::path::PathBuf::from("/work/out.txt")];
+        assert!(!policy.a_rule_could_answer(&writing));
+
+        let mut assigning = a_plan();
+        assigning.steps = crate::command::Steps::Pipeline(vec![crate::command::Step {
+            environment: vec![("LD_PRELOAD".to_string(), "./evil.so".to_string())],
+            ..step_named("git", &["log"])
+        }]);
+        assert!(!policy.a_rule_could_answer(&assigning));
+
+        let mut elsewhere = a_plan();
+        elsewhere.directory = std::path::PathBuf::from("/work/vendor");
+        assert!(!policy.a_rule_could_answer(&elsewhere));
+    }
+
+    /// RUN-20: the list of questions a person has read is not a grant. Nothing in it stops a later
+    /// prompt, vouches for a command, or reaches the record that outlives the session, so a session
+    /// cannot grow an allowlist out of what it asked about.
+    #[test]
+    fn a_line_asked_about_is_not_thereby_vouched_for_or_remembered() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.asked_about(&a_plan());
+        assert!(
+            policy.plan_needs_approval(&a_plan()),
+            "asking about a line stopped the next prompt for it"
+        );
+        assert!(policy.programs().is_empty());
+    }
+
+    /// RUN-19: a covered line is not an entry in the vouched list, and puts none there. One list
+    /// serving both would make a covered line's output trusted on the strength of a keypress from a
+    /// session that has ended.
+    #[test]
+    fn a_line_remembered_past_the_session_vouches_for_nothing() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&a_plan()));
+        assert!(!policy.plan_needs_approval(&a_plan()));
+        assert!(
+            policy.programs().is_empty(),
+            "reading the record put an entry in the vouched list"
+        );
+    }
+
+    /// RUN-19: private input asks every time whatever is recorded. The record cannot account for
+    /// what is fed to the first step, because that is not in the line, so the question is refused
+    /// before the record is consulted.
+    #[test]
+    fn a_remembered_line_fed_private_input_is_asked_about_anyway() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&a_plan()));
+        let mut fed = a_plan();
+        fed.stdin = Some(Label::new(
+            Integrity::Untrusted,
+            crate::label::Confidentiality::Private,
+        ));
+        assert!(policy.plan_needs_approval(&fed));
+        assert!(!policy.may_remember(&fed), "the key was offered for it too");
+    }
+
+    /// RUN-19: a line naming a file to write is asked about however often it was answered, since a
+    /// write has a destination as well as a program.
+    #[test]
+    fn a_remembered_line_that_writes_is_asked_about_anyway() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        let mut writing = a_plan();
+        writing.writes = vec![std::path::PathBuf::from("/work/out.txt")];
+        policy.recall(recalling(&writing));
+        assert!(policy.plan_needs_approval(&writing));
+        assert!(
+            !policy.may_remember(&writing),
+            "the key was offered for it too"
+        );
+    }
+
+    /// RUN-19: what `make check` does depends on the tree it runs in, so a line running anywhere
+    /// but the workspace root is asked about whatever is recorded.
+    #[test]
+    fn a_remembered_line_run_outside_the_root_is_asked_about_anyway() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        let mut elsewhere = a_plan();
+        elsewhere.directory = std::path::PathBuf::from("/work/vendor");
+        policy.recall(recalling(&elsewhere));
+        assert!(policy.plan_needs_approval(&elsewhere));
+        assert!(
+            !policy.may_remember(&elsewhere),
+            "the key was offered for it too"
+        );
+    }
+
+    /// RUN-19: a rule the person wrote in advance decides first. An `ask` rule is a standing
+    /// instruction to be asked, and a keypress from an earlier session must not overturn it.
+    #[test]
+    fn an_ask_rule_takes_back_a_line_remembered_past_the_session() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_permissions(permissions(&[], &["Bash(git log)"], &[]));
+        policy.recall(recalling(&a_plan()));
+        assert!(policy.plan_needs_approval(&a_plan()));
+        assert!(
+            !policy.may_remember(&a_plan()),
+            "the key was offered under a rule that asks anyway"
+        );
+    }
+
+    /// RUN-19: an assignment decides what a program loads before its own arguments are read, so
+    /// RUN-8 asks about such a line before the record is reached. The key is not offered for one
+    /// either, since an entry it wrote would stop no later prompt.
+    #[test]
+    fn a_remembered_line_carrying_an_environment_assignment_is_asked_about_anyway() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&with_an_assignment()));
+        assert!(policy.plan_needs_approval(&with_an_assignment()));
+        assert!(
+            !policy.may_remember(&with_an_assignment()),
+            "the key was offered for it too"
+        );
+    }
+
+    /// RUN-19: the key is offered for the ordinary line, which is what the refusals above are
+    /// exceptions to.
+    #[test]
+    fn the_key_is_offered_for_a_line_nothing_refuses_it_for() {
+        let mut sink = RecordingSink::new();
+        let policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        assert!(policy.may_remember(&a_plan()));
+    }
+
+    /// RUN-19: the record is read afresh wherever a prompt would be drawn, so an entry somebody
+    /// deleted stops covering the line it named without the session being restarted.
+    #[test]
+    fn a_record_handed_over_again_replaces_what_it_held() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&a_plan()));
+        assert!(!policy.plan_needs_approval(&a_plan()));
+        policy.recall(crate::remembered::Remembered::new());
+        assert!(
+            policy.plan_needs_approval(&a_plan()),
+            "a line deleted from the record was still covered"
+        );
     }
 
     /// Rules as a settings file would have carried them, with every rule required to parse: a
@@ -5812,6 +6440,30 @@ mod tests {
         assert!(policy.fetch_needs_approval("https://example.com/docs"));
     }
 
+    /// A rule that refuses is a statement that the fetch does not happen, so there is nothing
+    /// left to put to a person: the prompt would ask them to approve a host their own settings
+    /// file has banned, and yes would be overruled at the egress gate a moment later.
+    #[test]
+    fn a_denied_host_is_refused_rather_than_put_to_a_person() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &["WebFetch(domain:evil.test)"],
+            &[],
+            &[],
+        ));
+
+        policy
+            .before_fetch_rules("https://evil.test/x")
+            .expect_err("a host a deny rule covers must be refused");
+
+        // It refuses; it does not approve. A host nobody has ruled on passes this gate and is put
+        // to a person at the next one, which is the whole of what the prompt is for.
+        policy
+            .before_fetch_rules("https://elsewhere.test/x")
+            .expect("nothing denies this host");
+        assert!(policy.fetch_needs_approval("https://elsewhere.test/x"));
+    }
+
     #[test]
     fn a_rule_written_in_advance_answers_the_fetch_prompt() {
         let mut sink = RecordingSink::new();
@@ -5899,6 +6551,43 @@ mod tests {
                 .before_network("https://sub.evil.test/landed")
                 .is_err(),
             "a subdomain of a denied host was reachable by redirect"
+        );
+    }
+
+    /// The deny at this gate holds on its own account, without the gate in front of it having been
+    /// called. That is what makes it the second of two rather than a comment on the first: a gate
+    /// covered only by another gate doing its job can be deleted and no test says so.
+    ///
+    /// The hop here is the approved host itself, which is the one shape the other tests cannot
+    /// reach. A hop to any other host is already refused for being one nobody was shown, so those
+    /// tests pass whether this branch is here or not, and
+    /// [`Policy::before_fetch_rules`] now stops a denied host from being the approved one through
+    /// the tool. What is left to pin is the gate itself, reached the way a caller that forgot the
+    /// earlier one would reach it.
+    #[test]
+    fn a_denied_host_is_refused_at_the_egress_gate_on_its_own_account() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &["WebFetch(domain:evil.test)"],
+            &[],
+            &[],
+        ));
+
+        // Endorsed and admitted, because neither of those reads a rule: `before_fetch` checks the
+        // capability and the endorsement, which is precisely why the rule has to be checked here.
+        let denied = "https://evil.test/x";
+        policy.endorse_fetch(denied);
+        policy
+            .before_fetch(denied)
+            .expect("before_fetch reads no rules");
+
+        let denial = policy
+            .before_network(denied)
+            .expect_err("a denied host reached the network");
+        assert!(
+            denial.message.contains("denies fetching from evil.test"),
+            "refused, but not for the rule: {}",
+            denial.message
         );
     }
 
@@ -6543,7 +7232,7 @@ mod tests {
         sink: &'a mut RecordingSink,
         paths: &[&str],
     ) -> Policy<'a, RecordingSink> {
-        let mut store = TrustStore::new();
+        let mut store = TrustStore::new("/work");
         for p in paths {
             store.trust(p);
         }
@@ -6598,7 +7287,7 @@ mod tests {
     #[test]
     fn trusted_data_into_an_untrusted_path_is_silent_and_trusts_the_path() {
         let mut sink = RecordingSink::new();
-        let mut store = TrustStore::new();
+        let mut store = TrustStore::new("/work");
         store.distrust("vendor");
         let mut policy = Policy::begin(
             routing_with("task", "edit"),
@@ -6625,7 +7314,7 @@ mod tests {
     #[test]
     fn untrusted_data_into_an_untrusted_path_is_silent_and_changes_nothing() {
         let mut sink = RecordingSink::new();
-        let mut store = TrustStore::new();
+        let mut store = TrustStore::new("/work");
         store.distrust("vendor");
         let mut policy = Policy::begin(
             routing_with("task", "edit"),
@@ -6663,6 +7352,139 @@ mod tests {
 
         assert!(policy.write_needs_approval("a.rs", Label::trusted_public(), Destination::Named));
         assert!(policy.write_needs_approval("a.rs", Label::untrusted_public(), Destination::Named));
+    }
+
+    /// The session's own directory is reachable with no rule written about it, so the answer given
+    /// about the workspace is what stands there: a write asks what a write in the project asks and
+    /// no more. Left to the row above, a directory whose whole purpose is being written to would
+    /// prompt on every file it held, in a session where the user has already said what they want to
+    /// be asked about.
+    #[test]
+    fn a_write_in_the_sessions_own_directory_asks_what_a_write_in_the_project_asks() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &["."])
+            .with_root(std::path::Path::new("/work"))
+            .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+
+        let own = "/tmp/bravebot-scratch-1/workings.txt";
+        assert_eq!(
+            policy.write_needs_approval(own, Label::trusted_public(), Destination::Named),
+            policy.write_needs_approval("src/a.rs", Label::trusted_public(), Destination::Named),
+            "a write in the session's own directory was not asked about as a project write is"
+        );
+        assert_eq!(
+            policy.write_needs_approval(own, Label::untrusted_public(), Destination::Named),
+            policy.write_needs_approval("src/a.rs", Label::untrusted_public(), Destination::Named),
+            "an untrusted write in the session's own directory took a different answer"
+        );
+        assert!(
+            !policy.read_is_quarantined(own),
+            "a turn could not read back what it wrote in its own directory"
+        );
+    }
+
+    /// The answer is the workspace's, whichever way the workspace was answered. A user who declined
+    /// to vouch for the project has not vouched for anything the session writes either, so nothing
+    /// here hands a turn trust it was not given.
+    #[test]
+    fn a_declined_workspace_leaves_the_sessions_own_directory_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut store = TrustStore::new("/work");
+        store.distrust(".");
+        let policy = Policy::begin(
+            routing_with("task", "edit"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(store)
+        .with_root(std::path::Path::new("/work"))
+        .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+
+        assert!(
+            policy.read_is_quarantined("/tmp/bravebot-scratch-1/workings.txt"),
+            "a declined session was shown a file out of its own directory"
+        );
+    }
+
+    /// Only where nothing covers the path. A rule reconciliation wrote about a file there answers
+    /// for that file, and for a line reading the tree around it, which is what stops a turn from
+    /// reading its own untrusted output back as trusted.
+    #[test]
+    fn an_untrusted_file_in_the_sessions_own_directory_stays_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &["."])
+            .with_root(std::path::Path::new("/work"))
+            .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+
+        let fetched = "/tmp/bravebot-scratch-1/fetched.json";
+        policy.reconcile_after_write(fetched, Label::untrusted_public());
+
+        assert!(
+            policy.read_is_quarantined(fetched),
+            "the file a turn marked untrusted was shown as though nothing had been said about it"
+        );
+        assert!(
+            !policy.read_is_quarantined("/tmp/bravebot-scratch-1/workings.txt"),
+            "the rule about one file spread to the directory holding it"
+        );
+        assert!(
+            !label_of(&mut policy, &reading_in("/work", "/tmp/bravebot-scratch-1")).is_trusted(),
+            "a line reading the whole directory laundered the untrusted file inside it"
+        );
+        assert!(
+            label_of(
+                &mut policy,
+                &reading_in("/work", "/tmp/bravebot-scratch-1/workings.txt")
+            )
+            .is_trusted(),
+            "a line reading a file nothing was said about answered as unvouched for"
+        );
+    }
+
+    /// A name that climbs out of the directory is not in it. A trust key keeps a `..` as it was
+    /// written, so matching by component alone would lend the workspace's answer to whatever the
+    /// name climbed to.
+    #[test]
+    fn a_name_climbing_out_of_the_sessions_own_directory_is_not_answered_for_it() {
+        let mut sink = RecordingSink::new();
+        let policy = policy_trusting(&mut sink, &["."])
+            .with_root(std::path::Path::new("/work"))
+            .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+
+        assert!(
+            policy.read_is_quarantined("/tmp/bravebot-scratch-1/../../etc/hosts"),
+            "a name that climbed out of the session's directory took the workspace's own answer"
+        );
+    }
+
+    /// The workspace's answer is lent only where there is one. A session that vouched for nothing
+    /// has none, and then the rules inside the directory are the whole of what is known about it.
+    #[test]
+    fn a_line_reading_the_sessions_own_directory_still_sees_the_rules_inside_it() {
+        let mut sink = RecordingSink::new();
+        let mut store = TrustStore::new("/work");
+        store.trust("/tmp/bravebot-scratch-1/workings.txt");
+        let mut policy = Policy::begin(
+            routing_with("task", "edit"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(store)
+        .with_root(std::path::Path::new("/work"))
+        .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+
+        assert!(
+            label_of(
+                &mut policy,
+                &reading_in("/work", "/tmp/bravebot-scratch-1/workings.txt")
+            )
+            .is_trusted(),
+            "a rule inside the directory was skipped because the workspace had no answer to lend"
+        );
     }
 
     /// Reading out of a trusted directory yields trusted data. This is what lets row 1 of
@@ -6829,7 +7651,7 @@ mod tests {
     #[test]
     fn a_named_file_is_trusted_inside_an_untrusted_tree() {
         let mut sink = RecordingSink::new();
-        let mut store = TrustStore::new();
+        let mut store = TrustStore::new("/work");
         store.trust(".");
         store.distrust("vendor");
         let mut policy = Policy::begin(
@@ -7843,6 +8665,38 @@ mod tests {
             assert_eq!(label, Label::untrusted_public());
         }
 
+        /// The trail line for a processor says what went in and what the output will carry, so
+        /// somebody reading it can see the shape of the call, and never the instruction.
+        #[test]
+        fn a_description_names_the_slots_and_the_label_but_no_content() {
+            let (store, public, private) = quarantine();
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing_with("task", "rewrite it"),
+                ReleasePlan::new(),
+                all_capabilities(),
+                &mut sink,
+            )
+            .unwrap();
+
+            let spec = policy
+                .before_processor(
+                    "processor:1",
+                    &[public, private],
+                    &instruction(),
+                    None,
+                    &store,
+                )
+                .expect("a processor over both slots");
+
+            // The whole line rather than what it holds: a description is one sentence, and
+            // checking for the slots and the label leaves anything else it picked up unread.
+            assert_eq!(
+                spec.describe(),
+                "processor:1 reads ref:0, ref:1 and writes (U,priv)"
+            );
+        }
+
         #[test]
         fn a_reference_to_nothing_is_refused() {
             let (store, _, _) = quarantine();
@@ -8039,7 +8893,7 @@ mod tests {
 
     mod delegates {
         use super::*;
-        use crate::delegate::Kind;
+        use crate::delegate::{DelegateId, Kind};
 
         /// What a planner's own words look like by the time a tool hands them over: the tool layer
         /// labels every argument pessimistically, because it cannot know where one came from.
@@ -8064,7 +8918,11 @@ mod tests {
             .resuming(Integrity::Untrusted);
 
             let err = policy
-                .before_delegate("delegate", &argument("reader"), &argument("find the bug"))
+                .before_delegate(
+                    DelegateId::nth(1),
+                    &argument("reader"),
+                    &argument("find the bug"),
+                )
                 .expect_err("a fallen context must not steer a second planner");
             assert_eq!(err.principle, Principle::IntegrityGate);
             assert!(!policy.finish());
@@ -8078,7 +8936,11 @@ mod tests {
             let mut policy = open_policy(&mut sink);
 
             let spec = policy
-                .before_delegate("delegate", &argument("reader"), &argument("find the bug"))
+                .before_delegate(
+                    DelegateId::nth(1),
+                    &argument("reader"),
+                    &argument("find the bug"),
+                )
                 .expect("a clean context may delegate");
             assert_eq!(spec.kind(), Kind::Reader);
             assert_eq!(spec.task(), "find the bug");
@@ -8096,7 +8958,7 @@ mod tests {
                 Label::untrusted_private(),
             );
             let err = policy
-                .before_delegate("delegate", &argument("reader"), &private)
+                .before_delegate(DelegateId::nth(1), &argument("reader"), &private)
                 .expect_err("private content must not become a prompt");
             assert_eq!(err.principle, Principle::Confinement);
             assert!(!policy.finish());
@@ -8112,7 +8974,7 @@ mod tests {
                 let mut policy = open_policy(&mut sink);
 
                 let err = policy
-                    .before_delegate("delegate", &argument(name), &argument("do it"))
+                    .before_delegate(DelegateId::nth(1), &argument(name), &argument("do it"))
                     .expect_err("a name nobody enumerated must reach no capability set");
                 assert_eq!(err.principle, Principle::Capability, "for '{name}'");
                 assert!(!policy.finish());
@@ -8134,7 +8996,7 @@ mod tests {
             .unwrap();
 
             let spec = policy
-                .before_delegate("delegate", &argument("worker"), &argument("fix it"))
+                .before_delegate(DelegateId::nth(1), &argument("worker"), &argument("fix it"))
                 .expect("a narrow run may still delegate");
 
             assert!(spec.capabilities().contains(Capability::FileRead));
@@ -8157,7 +9019,7 @@ mod tests {
                 let mut policy = open_policy(&mut sink);
 
                 let spec = policy
-                    .before_delegate("delegate", &argument(name), &argument("do it"))
+                    .before_delegate(DelegateId::nth(1), &argument(name), &argument("do it"))
                     .expect("an enumerated kind");
                 let kind = Kind::from_name(name).expect("enumerated");
                 assert_eq!(spec.rounds(), kind.rounds(), "{name} was bounded elsewhere");

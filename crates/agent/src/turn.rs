@@ -541,6 +541,26 @@ pub struct Task {
     /// on whatever the developer happened to have installed, and a run would differ from the
     /// same run elsewhere for reasons nothing in the task described.
     pub home: Option<PathBuf>,
+    /// The run prompts this session has already put to the person, by program and arguments.
+    ///
+    /// Empty by default and for a caller that keeps nothing between turns. It grants nothing and
+    /// no gate reads it: what it decides is whether a run prompt says that this line's arguments
+    /// have already differed and so that a pattern in a settings file is what ends the asking.
+    ///
+    /// Carried by the caller for the reason `home` and `remembering` are: a turn is where a prompt
+    /// is drawn, and a session is where somebody answers the same shape of prompt all day.
+    pub asked_about: bravebot_core::programs::AskedAbout,
+    /// The session this turn belongs to, where a run prompt's answer may outlive it.
+    ///
+    /// `None` by default and for every turn with nobody to put a prompt to: a one-shot run, a
+    /// session whose channel has closed. Such a turn reads no record of remembered lines and writes
+    /// none, because what a record answers is a prompt, and where no prompt can be drawn it would
+    /// be saying instead which effects may happen with nobody there to see them.
+    ///
+    /// The session's own identifier rather than a flag, because the reading back has to say which
+    /// answers a person is still carrying from an earlier session and a flat list cannot.
+    /// Supplied per turn for the reason `home` is: which session this is belongs to the caller.
+    pub remembering: Option<String>,
     /// The model to request, when the user has chosen one.
     ///
     /// `None` means the configured default applies. Supplied per turn rather than read here for
@@ -640,6 +660,12 @@ impl Task {
             images: Vec::new(),
             piped: None,
             home: None,
+            // Nothing has been asked about until a caller says so, which is what a caller keeping
+            // nothing between turns is saying.
+            asked_about: bravebot_core::programs::AskedAbout::new(),
+            // Nothing is remembered past the session unless a caller says which session this is,
+            // which is the caller saying there is somebody a prompt could be put to.
+            remembering: None,
             model: None,
             effort: None,
             tick: None,
@@ -705,6 +731,24 @@ impl Task {
     /// the correct behaviour for a caller that has not said where those live.
     pub fn with_home(mut self, home: Option<PathBuf>) -> Self {
         self.home = home;
+        self
+    }
+
+    /// Carry in the run prompts this session has already drawn.
+    ///
+    /// Said by a caller that holds a session together across turns. Without it every turn starts
+    /// with nothing to compare a line against, so no prompt says a line's arguments have varied.
+    pub fn already_asked_about(mut self, asked: bravebot_core::programs::AskedAbout) -> Self {
+        self.asked_about = asked;
+        self
+    }
+
+    /// Name the session whose run prompts may have their answers remembered past it.
+    ///
+    /// Said only by a caller that can put a prompt to somebody. Without it a turn neither reads the
+    /// record of remembered lines nor writes one, and every run asks.
+    pub fn remembering(mut self, session: Option<String>) -> Self {
+        self.remembering = session;
         self
     }
 
@@ -824,6 +868,11 @@ pub struct Outcome {
     /// Travels back rather than being recorded by whoever drew the prompt, so there is one copy
     /// of the answer and nothing to disagree with it.
     pub programs: TrustedPrograms,
+    /// The run prompts put to the person after the turn, including any this one drew.
+    ///
+    /// Travels back for the reason [`Outcome::programs`] does, and grants nothing at all: a caller
+    /// that drops it loses a sentence of advice at a later prompt and nothing else.
+    pub asked_about: bravebot_core::programs::AskedAbout,
     /// Tokens the turn cost in total, summed over every round.
     ///
     /// A turn is several requests when the model calls tools, and each re-sends the whole
@@ -913,7 +962,7 @@ pub fn run<S: Sink + Send, C: Confirmer + Send>(
         task,
         confirmer,
         sink,
-        TrustStore::new(),
+        TrustStore::new(workspace.root()),
     )
 }
 
@@ -922,6 +971,12 @@ pub fn run<S: Sink + Send, C: Confirmer + Send>(
 /// The conversation is borrowed rather than returned because a turn that fails has still had
 /// one: what it asked, what it read, and what it was told are the very things the next turn
 /// needs in order to be told "try that again".
+///
+/// `servers` is borrowed for the same reason, and LSP-8 is why a caller running more than one turn
+/// has to own it: a server is started on the first question that needs one and kept for the
+/// session, so a set that ended with the turn would have the next message ask the same person
+/// about the same language and pay for a second index. `None` says this caller keeps no set
+/// between turns, and the turn then owns one of its own.
 #[allow(clippy::too_many_arguments)]
 pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
     config: &Config,
@@ -934,6 +989,7 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
     sink: &mut S,
     trust: TrustStore,
     programs: TrustedPrograms,
+    servers: Option<&mut crate::lsp::LanguageServers>,
     cancel: &Cancel,
 ) -> Result<Outcome, TurnError> {
     run_inner(
@@ -947,6 +1003,7 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         sink,
         trust,
         programs,
+        servers,
         cancel,
     )
 }
@@ -982,6 +1039,9 @@ pub fn run_cancellable<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         // A fresh conversation vouches for no program: the list belongs to a session, and this
         // begins one.
         TrustedPrograms::new(),
+        // And it begins and ends one, so a set kept past the turn would be kept past the session
+        // it belonged to. The turn owns the servers it starts and stops them on the way out.
+        None,
         cancel,
     )
 }
@@ -1024,6 +1084,10 @@ pub(crate) fn delegated(
         sink,
         trust,
         programs,
+        // Its own, not the parent session's. A delegate runs on a thread beside the turn that
+        // spawned it and beside its siblings, so a shared set would be one several of them held
+        // at once.
+        None,
         cancel,
     )
 }
@@ -1053,6 +1117,8 @@ pub fn run_with_trust<S: Sink + Send, C: Confirmer + Send>(
         sink,
         trust,
         TrustedPrograms::new(),
+        // One turn is the whole session here, so the set the turn owns is the session's.
+        None,
         &Cancel::new(),
     )
 }
@@ -1487,6 +1553,141 @@ fn collect_delegates<S: Sink, R: Reporter>(
     Ok(collected)
 }
 
+/// Tell the turn about every background job that has ended since it last looked (CMDLINE-14).
+///
+/// The exit is what says so, rather than the planner deciding to ask. A job's finish arrives as a
+/// message of its own, the way a delegate's report does and for the same reason: the call that
+/// started it was answered rounds ago, and a result cannot be given twice.
+///
+/// Waiting for none of them. A background job is for the program that is meant to keep going, so a
+/// turn that waited here would wait out a server, which is the whole of what backgrounding exists
+/// to avoid. What is still running when the turn ends is killed with it, as it always was.
+///
+/// Nothing here reads what a job printed. The handle and the status are the driver's own structure,
+/// worked out from a name it minted and the exit codes it collected, and the output goes through
+/// the same gate as any other result: a job nobody vouched for hands the planner a reference.
+fn collect_jobs<S: Sink, R: Reporter>(
+    jobs: &mut tools::Jobs,
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    reporter: &mut R,
+) -> Result<(), TurnError> {
+    for ended in jobs.ended() {
+        let origin = format!("what `{}` printed", ended.line);
+        // Whichever way the label went: it is their directory, and a person who let a program run
+        // in it is entitled to read what it printed and to be told how it ended. "12 lines,
+        // quarantined" says neither.
+        let (lines, total) = match &ended.printed {
+            Some(printed) => released_lines(policy, "job_output", printed, KEPT_LINES, KEPT_WIDTH),
+            None => (Vec::new(), 0),
+        };
+
+        // A job that printed nothing still has news, and it is the case this clause is most needed
+        // for: a build that failed silently is reported by its exit code and by nothing else. The
+        // status then goes out on its own rather than as a reference to an empty slot, which would
+        // spend a name the planner is reading the numbering of and hold nothing.
+        let reserved = ended
+            .printed
+            .as_ref()
+            .map(|_| conversation.next_reference());
+        let presented = match (&ended.printed, &reserved) {
+            (Some(printed), Some(slot)) => Some(
+                policy
+                    .present(
+                        "job_output",
+                        slot.clone(),
+                        &origin,
+                        printed,
+                        conversation.quarantine(),
+                    )
+                    .map_err(|d| TurnError::Precommit(d.to_string()))?,
+            ),
+            _ => None,
+        };
+
+        // The transcript says the job is over, because nothing else in it does: the row drawn when
+        // the job started said only that something had been started. From the outcome, which is
+        // the driver's own words about exit codes, so nothing of what the job printed is in it.
+        reporter.narration(t!(
+            background_job_finished,
+            command = ended.line.clone(),
+            outcome = ended.outcome.summary()
+        ));
+
+        // Nothing withheld unless the gate withheld it. A job that printed nothing has nothing to
+        // keep from the planner, and drawing that row as content out of its reach would say the
+        // opposite of what happened.
+        reporter.printed(crate::report::Printed {
+            command: ended.line.clone(),
+            lines,
+            total,
+            read_by_the_planner: !matches!(presented, Some(Presentation::Quarantined(_))),
+            outcome: ended.outcome.clone(),
+        });
+
+        // In front of what it printed, so a long log does not bury the verdict, and said from the
+        // exit codes either way: a program's own bytes do not say whether it did what it was asked.
+        let told = format!(
+            "{TOOL_BUDGET_SPENT} The background job you started as {} has finished. {}",
+            ended.name,
+            ended.outcome.describe()
+        );
+
+        let body = match &presented {
+            None => format!("{told} It printed nothing since you last looked."),
+            Some(Presentation::Visible(text)) => {
+                // A cap bounds what the conversation holds and not what the program printed, so
+                // the whole of it goes into a slot of its own. Without it the one case where the
+                // cap bites is the one case with no way back to the middle, and a job the turn has
+                // reported cannot be started again to get it.
+                let rest = match (&ended.whole, reserved) {
+                    (Some(whole), Some(slot)) => {
+                        // The slot this result already reserved, which a visible presentation
+                        // leaves unfilled. A second name would leave a hole in the numbering the
+                        // planner is reading, which is what the reserving above is careful about.
+                        let reference = policy
+                            .keep_whole(
+                                "job_output",
+                                slot,
+                                &origin,
+                                whole,
+                                conversation.quarantine(),
+                            )
+                            .map_err(|d| TurnError::Precommit(d.to_string()))?;
+                        // Only a slot a program printed may be offered to the user for reading, so
+                        // the provenance is recorded where the slot is minted, together with the
+                        // line as the person approved it.
+                        policy.came_from_command(
+                            &reference.slot,
+                            &ended.line,
+                            conversation.quarantine(),
+                        );
+                        format!(
+                            "\n\nThe whole of this output, middle included, is a reference:\n{}",
+                            reference.describe()
+                        )
+                    }
+                    _ => String::new(),
+                };
+                format!("{told} What it printed since you last looked:\n\n{text}{rest}")
+            }
+            Some(Presentation::Quarantined(reference)) => {
+                policy.came_from_command(&reference.slot, &ended.line, conversation.quarantine());
+                format!(
+                    "{told} What it printed could not be shown to you: {}\n\nThis is about who \
+                     answered for the command rather than about what it printed. To see it, call \
+                     read_output with the reference: the user is shown it and decides.",
+                    reference.describe()
+                )
+            }
+        };
+
+        conversation.push(Message::user(body));
+        conversation.observed(policy.context_integrity());
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter + ?Sized + Send>(
     config: &Config,
@@ -1499,6 +1700,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     sink: &mut S,
     trust: TrustStore,
     programs: TrustedPrograms,
+    servers: Option<&mut crate::lsp::LanguageServers>,
     cancel: &Cancel,
 ) -> Result<Outcome, TurnError> {
     // First thing in the turn, so the wall figure covers the work that happens before the first
@@ -1555,7 +1757,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         .map_err(|d| TurnError::Precommit(d.to_string()))?
         .with_trust(trust)
         .with_root(workspace.root())
+        .with_scratch(workspace.scratch())
         .with_programs(programs)
+        .with_asked(task.asked_about.clone())
         .with_permissions(task.permissions.clone())
         .resuming(conversation.context());
 
@@ -1578,14 +1782,15 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // LSP-5 asks the person before it does, so a session that never asks about a symbol never
     // prompts about a server.
     //
-    // Built per turn rather than per session, which is short of what LSP-8 asks for: a second turn
-    // starts a fresh server and re-indexes. The set has to outlive the turn to fix that, and the
-    // entry points that would carry it are the caller's, so it is left for the change that gives a
-    // session somewhere to keep one.
-    let mut servers = Some(crate::lsp::LanguageServers::new(
-        workspace.root().to_path_buf(),
-        task.home.clone(),
-    ));
+    // The caller's set where there is one, because the set belongs to the session and a session is
+    // many turns. One built here would be dropped on the way out and its processes shut down with
+    // it, so the next message would ask the same person about the same language and wait for a
+    // second index of the same tree. A caller that hands none over is one whose session is this
+    // turn, so what is built for it is still the session's.
+    let mut owned = servers.is_none().then(|| {
+        crate::lsp::LanguageServers::new(workspace.root().to_path_buf(), task.home.clone())
+    });
+    let mut servers = servers.or(owned.as_mut());
 
     // Built once and put in front of every round of this turn. Nothing here is stored in the
     // conversation, so a session running many turns holds one copy of AGENTS.md rather than one
@@ -1868,6 +2073,11 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                 &mut cached,
                 false,
             )?;
+
+            // And whatever exited while it was running, for the same reason and in the same place:
+            // the finish of a background job is news the turn is told rather than something the
+            // planner has to remember to ask about (CMDLINE-14).
+            collect_jobs(&mut jobs, &mut policy, conversation, &mut reporter)?;
 
             // Before the request rather than after the reply that overflowed. The figure being
             // compared is the last round's, so this is one round late by construction, which is why
@@ -2180,9 +2390,10 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                         cancel,
                         scheduling,
                         home: task.home.as_deref(),
+                        remembering: task.remembering.as_deref(),
                         // A delegate is offered no way to delegate, and dispatch refuses one anyway.
                         delegated: task.delegate.is_some(),
-                        servers: servers.as_mut(),
+                        servers: servers.as_deref_mut(),
                         spawned: &mut spawned,
                         jobs: &mut jobs,
                         permission_mode: task.permission_mode,
@@ -2570,16 +2781,33 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                             // From `printed_by` rather than the tool's name, which is the same
                             // condition the provenance above is recorded under: a result carries a
                             // command when a command produced it.
-                            let vouching = if output.printed_by.is_some() {
-                                "\n\nThis is about the command rather than about what it \
-                                 printed, and it is not the end of the road. To see this one, \
-                                 call read_output with the reference: the user is shown it and \
-                                 decides, and if they agree it comes back as text you can read. \
-                                 To stop being asked, a person vouching for every stage of the \
-                                 exact command makes what it prints visible from then on. To \
-                                 read a file, use read_file."
-                            } else {
-                                ""
+                            //
+                            // The half about vouching is left out where a record already stops the
+                            // asking for this exact line: no prompt will return there for anybody
+                            // to answer, so advice about what to press at one is advice about
+                            // something that will not happen, and `read_output` is then the whole
+                            // of what can be said.
+                            let vouching = match (
+                                output.printed_by.is_some(),
+                                output.covered_by_record,
+                            ) {
+                                (false, _) => "",
+                                (true, true) => {
+                                    "\n\nThis is about the command rather than about what it \
+                                     printed, and it is not the end of the road. To see this one, \
+                                     call read_output with the reference: the user is shown it and \
+                                     decides, and if they agree it comes back as text you can read. \
+                                     To read a file, use read_file."
+                                }
+                                (true, false) => {
+                                    "\n\nThis is about the command rather than about what it \
+                                     printed, and it is not the end of the road. To see this one, \
+                                     call read_output with the reference: the user is shown it and \
+                                     decides, and if they agree it comes back as text you can read. \
+                                     To stop being asked, a person vouching for every stage of the \
+                                     exact command makes what it prints visible from then on. To \
+                                     read a file, use read_file."
+                                }
                             };
                             format!(
                                 "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{capped}{vouching}",
@@ -2707,6 +2935,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // approved run may have added to the programs.
     let trust = policy.trust().clone();
     let programs = policy.programs().clone();
+    let asked_about = policy.asked().clone();
 
     // Said to the person, not to the planner, which has answered and gone. They are the one about
     // to act on a diff, and nothing else in the summary distinguishes a change that was compiled
@@ -2730,6 +2959,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         steps,
         trust,
         programs,
+        asked_about,
         tokens,
         output_tokens,
         context_tokens,

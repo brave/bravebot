@@ -12,7 +12,7 @@ use bravebot_mcp::{McpError, StdioServer};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::{Sandbox, Unavailable};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// Serialises the tests in this binary, which all write a script and then execute it.
@@ -102,18 +102,28 @@ fn routing() -> Routing {
 /// backend refuses a policy requiring network denial because that is not implemented
 /// there yet, and refusing is the correct behaviour, so a test that wants a successful
 /// spawn on both platforms has to ask for the weaker policy the backend can honour.
+///
+/// The list names both platforms' directories and grants the ones this machine has: the
+/// temporary directory is under `/private/var` on macOS and `/tmp` on Linux, and a path
+/// that is not there is a grant a backend may refuse the whole policy over.
 fn sandbox_policy() -> SandboxPolicy {
-    SandboxPolicy::strict()
-        .allow_network_egress()
-        .allow_read("/usr")
-        .allow_read("/bin")
-        .allow_read("/lib")
-        .allow_read("/lib64")
-        // macOS puts the temporary directory under /private/var; Linux uses /tmp.
-        .allow_read("/private/var/folders")
-        .allow_read("/tmp")
-        .allow_read("/var")
-        .allow_subprocesses()
+    [
+        "/usr",
+        "/bin",
+        "/lib",
+        "/lib64",
+        "/private/var/folders",
+        "/tmp",
+        "/var",
+    ]
+    .into_iter()
+    .filter(|path| Path::new(path).exists())
+    .fold(
+        SandboxPolicy::strict()
+            .allow_network_egress()
+            .allow_subprocesses(),
+        SandboxPolicy::allow_read,
+    )
 }
 
 /// Skip where no real backend exists, since these tests need a spawn to succeed.

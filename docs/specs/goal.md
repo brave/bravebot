@@ -326,6 +326,23 @@ condition answers, not about asking.
 
 `verified-by: bravebot_agent::preamble::a_turn_under_a_goal_is_told_the_condition_is_what_to_work_on`
 
+<a id="GOAL-17"></a>
+### GOAL-17: a check asks for no cache of the exchange it judges
+
+The judge's request marks its own instructions for caching and marks nothing on the end of the
+exchange it carries.
+
+**Why.** A cache write is charged above the fresh tokens it covers, and it buys something only where
+a later request sends the same prefix again. The check after this one carries a turn's work on the
+end of the same exchange, in front of the same condition, so the prefix a mark here would store is
+never asked for again. This is where that adds up: a check goes out after every turn of a session
+working towards a condition, and each one carries the whole conversation.
+
+**The instructions keep their mark**, being the same bytes every check, which is what marking a
+prompt is for. What is given up is a write and no read.
+
+`verified-by: bravebot_agent::turn::the_judge_asks_for_no_cache_of_the_exchange_it_judges`
+
 ## Known costs
 
 - **The judge reads the transcript, not the world.** It cannot run a command or open a file, so a

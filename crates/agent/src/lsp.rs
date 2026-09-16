@@ -457,7 +457,7 @@ mod tests {
         let mut sink = RecordingSink::new();
         // A real configuration rather than an empty store, which would trust nothing whatever
         // decided the label and so would hold for a reason that is not this clause.
-        let mut store = bravebot_core::trust::TrustStore::new();
+        let mut store = bravebot_core::trust::TrustStore::new("/work");
         store.trust(".");
         store.distrust("vendor");
         let mut policy = Policy::begin(routing(), ReleasePlan::new(), capabilities(), &mut sink)
@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn hover_text_is_not_labelled_by_the_file_that_was_queried() {
         let mut sink = RecordingSink::new();
-        let mut store = bravebot_core::trust::TrustStore::new();
+        let mut store = bravebot_core::trust::TrustStore::new("/work");
         // The workspace vouched for whole, with one directory taken back out of it.
         store.trust(".");
         store.distrust("pkg");

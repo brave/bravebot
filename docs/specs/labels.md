@@ -16,7 +16,7 @@ guards:
       - crates/agent/src/tools.rs: 22
       - crates/agent/src/turn.rs: 4
       - crates/agent/src/workspace.rs: 2
-      - crates/agent/tests/workspace.rs: 37
+      - crates/agent/tests/workspace.rs: 39
       - crates/aichat/tests/client.rs: 2
       - crates/core/src/policy.rs: 39
       - crates/core/src/value.rs: 1
@@ -35,7 +35,7 @@ guards:
       - crates/agent/src/aside.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 2
-      - crates/agent/src/turn.rs: 8
+      - crates/agent/src/turn.rs: 9
       - crates/core/src/policy.rs: 8
   - symbol: Policy::label_model_output
     sites:
@@ -344,7 +344,7 @@ what catches it.
     decision. The write is approved later, from a diff of the actual bytes, so a person who reads
     the diff sees what happens whatever the remark said. The residue is that a plausible remark
     might persuade somebody to skim, which is
-    [issue #23](https://github.com/brave-experiments/bravebot/issues/23).
+    [issue #23](https://github.com/brave/bravebot/issues/23).
   - **Add or drop a trailing newline.**
 
   What is not on the list is the thing that would matter: choosing *which* file is written. That

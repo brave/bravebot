@@ -16,8 +16,8 @@ governs:
 
 ## Scope
 
-What the user types into: how the box behaves, which keys do what, and where a terminal's own
-limits show through. What is drawn back is [terminal-transcript.md](terminal-transcript.md), and
+What the user types into: how the box behaves, which keys do what, what the session takes from the
+terminal to make any of it work, and where a terminal's own limits show through. What is drawn back is [terminal-transcript.md](terminal-transcript.md), and
 pasting is [pasting.md](pasting.md).
 
 ## Clauses
@@ -75,6 +75,8 @@ sent nothing. What lingered was the row, which is the only place a person can se
 the marker out worked: left drawn, it says a file is going that is not.
 
 `verified-by: bravebot_tui::drop::deleting_the_marker_takes_the_attachment_off`
+`verified-by: bravebot_tui::state::deleting_a_marker_takes_the_picture_back`
+`verified-by: bravebot_tui::state::deleting_the_marker_takes_the_paste_back`
 `verified-by: bravebot_tui::drop::several_files_dropped_together_each_get_a_marker`
 `verified-by: bravebot_tui::drop::sending_a_line_clears_what_was_attached_to_it`
 `verified-by: bravebot_tui::render::an_attached_file_is_named_under_the_box`
@@ -697,6 +699,19 @@ flight, which is aimed at something else entirely and costs the answer being wri
   and it buys a selection that is a pair of offsets rather than a rectangle every operator would have
   to understand separately. A box ten rows tall holding one prompt is also not where somebody edits
   columns of a table.
+- **A panic leaves the terminal taken.** Every path that returns hands it back (INPUT-33), and a
+  panic returns through none of them: the process ends on the alternate screen, in raw mode, with
+  mouse reporting on, and the shell that started it is left needing `reset`. The message that says
+  what went wrong is on the screen thrown away with it, which is the worse half. A process-wide
+  hook is not the answer on its own: a turn runs off the main thread, and a panic there is a turn
+  that failed rather than a session that ended, so a hook that handed the terminal back would do it
+  underneath an interface still drawing on it.
+- **A session owns the whole terminal while it runs.** The transcript is a viewport repainted in
+  place on a screen of its own rather than lines added to the terminal's scrollback (INPUT-33), so
+  what leaves the top of it is reachable through this program's own scroller and through nothing
+  else, and a screen repainted in place is not a document a screen reader can follow. There is no
+  line-oriented mode to fall back to, which is what makes this a cost rather than a preference: the
+  alternative to the viewport is not using the interactive interface at all.
 - **Vi's editing is what this box does with the keys, not what vi does with a file.** There is one
   register rather than named ones, undo is a single step (INPUT-28), counts do not prefix a command,
   and there is no `:` line. Each of those is machinery for a file being edited over an afternoon,
@@ -1391,3 +1406,38 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`
 `verified-by: bravebot_tui::app::vi_mode_search_prompts_uses_configured_history_chord`
 `verified-by: bravebot_tui::app::configured_keybinding_overrides_readline_editing`
+
+<a id="INPUT-33"></a>
+### INPUT-33: a session takes the terminal for its length, and gives every part of it back
+
+Starting a session puts the terminal in raw mode and moves it to a screen of its own, so what was
+in the terminal beforehand is untouched and is back on the screen afterwards. With that screen the
+session asks for mouse reporting, narrowed to the buttons, the wheel and motion while a button is
+held; bracketed paste; focus reporting; and, only where the terminal says it understands the
+request, disambiguated keys.
+
+Every one of those is given back when the session ends, including when it ends by failing rather
+than by being left, and again around each handover of the terminal to another program: the editor
+a prompt is written in and the viewer a transcript is read in both get the terminal as it was
+found, and the same set is taken again on the way back.
+
+**Why.** Each mode is asked for because something here cannot work without it. The wheel scrolls
+the transcript only while the mouse is reported, and all-motion reporting is narrowed away because
+a pointer merely crossing the window is an event and a redraw per pixel of travel, for a gesture
+nothing here reads. Bracketed paste is what stops a pasted prompt sending itself, since without it
+the newline most clipboards carry arrives as Enter. Focus reporting is what makes the clipboard
+worth a look at the one moment a picture appears on it, rather than polled for ever. Disambiguated
+keys are what make Shift-Enter arrive at all, a terminal otherwise sending the same byte however
+Enter was pressed.
+
+Giving them back is owed because none of them is this program's to keep. A mode left on outlives
+the process: mouse reporting turns a later click into unreadable bytes, bracketed paste prints its
+markers into whatever is typed next, and a keyboard enhancement pushed and never popped sits on a
+stack the terminal keeps for every program after this one. The failing exit is the case that
+matters most, since a terminal left in raw mode on a screen that is not its own is worse for the
+person than whatever error put it there.
+
+`verified-by: bravebot_tui::app::a_session_draws_on_a_screen_of_its_own`
+`verified-by: bravebot_tui::app::every_mode_a_session_asks_for_is_given_back`
+`verified-by: bravebot_tui::app::a_pushed_keyboard_mode_is_popped_and_an_unpushed_one_is_not`
+`verified-by: bravebot_tui::app::the_session_reads_a_drag_and_not_every_pointer_movement`

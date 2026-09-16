@@ -54,3 +54,30 @@ pub mod vim;
 pub mod wrap;
 
 pub use state::{Entry, Session, Speaker, Status};
+
+/// Whether an environment variable of this shape asks for what it names: set, and not empty.
+///
+/// The convention `NO_COLOR` established, which `NO_MOTION` follows. The value carries nothing
+/// beyond presence, so `NO_COLOR=0` is somebody who set the variable: a value that switched the
+/// request back off would need every program reading one to agree on which words mean false, and
+/// a person who wants colour back unsets it.
+pub(crate) fn asked_for(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::asked_for;
+    use std::ffi::OsStr;
+
+    /// The whole of the convention, and the half of it that surprises people: any value at all
+    /// counts, including one that reads as a denial.
+    #[test]
+    fn a_presentation_variable_says_nothing_beyond_being_set() {
+        assert!(asked_for(Some(OsStr::new("1"))));
+        assert!(asked_for(Some(OsStr::new("0"))));
+        assert!(asked_for(Some(OsStr::new("false"))));
+        assert!(!asked_for(Some(OsStr::new(""))));
+        assert!(!asked_for(None));
+    }
+}

@@ -8,19 +8,22 @@
 # lines, or read the warnings check-spec prints.
 
 docs/specs/cli.md:CLI-6: a failure exits non-zero
+docs/specs/file-watches.md:FSWATCH-1: a watch outlives the turn that armed it, and observes rather than acts
+docs/specs/file-watches.md:FSWATCH-2: a watch names one path, settled when it is armed
+docs/specs/file-watches.md:FSWATCH-3: what a watch observes is the file's size and modification time, and nothing else
+docs/specs/file-watches.md:FSWATCH-4: a fire's prompt says which watch fired and on what path, and carries nothing from the filesystem
+docs/specs/file-watches.md:FSWATCH-5: a fire waits for an idle session and never interrupts, and changes while a turn runs are one fire
+docs/specs/file-watches.md:FSWATCH-6: a watch, a loop and a goal are never live together, and a watch asked for under one is refused
+docs/specs/file-watches.md:FSWATCH-7: a watch is armed only where the path could have been read, and ends if that stops being true
+docs/specs/file-watches.md:FSWATCH-8: how long a watch lives, how many there may be, and how often one may fire
+docs/specs/file-watches.md:FSWATCH-9: seven things end a watch, and each of them says so
+docs/specs/file-watches.md:FSWATCH-10: a live watch is on the screen, with the turn that armed it
+docs/specs/file-watches.md:FSWATCH-11: a watch is never written down, and the process ending is what reaps it
 docs/specs/incognito.md:INCOG-7: importing a subscription is refused rather than silently skipped
 docs/specs/layering.md:LAYER-2: `bravebot-core` and `bravebot-agent` are both the driver
 docs/specs/naming-files.md:NAME-3: the rule outlives the read
 docs/specs/processors.md:PROC-9: the confinement is the capability set, not an operating system boundary
 docs/specs/routing.md:ROUTE-7: before adding a tool, ask what its routing field is
 docs/specs/sessions.md:SESSION-2: nothing untrusted is ever written down
-docs/specs/shell-mode.md:SHELL-4: only a line a human typed
-docs/specs/shell-mode.md:SHELL-5: the planner gets no shell tool, ever
-docs/specs/tools/command-line.md:CMDLINE-14: a call may run in the background, and its finish wakes the turn
-docs/specs/tools/list-files.md:LIST-3: the glob is literal and the matcher does not backtrack
-docs/specs/tools/load-skill.md:LOAD-2: a name close to a real one is refused, not guessed at
-docs/specs/tools/run.md:RUN-10: the vouched-for list is not an allowlist and must never become one
-docs/specs/tools/search.md:SEARCH-2: a result touching several files is trusted only if every one of them is
-docs/specs/tools/todo-write.md:TODO-1: there is no routing, because nothing is touched
 docs/specs/tools/tool-surface.md:TOOL-2: before adding a tool, ask what its routing field is
 docs/specs/trace.md:TRACE-2: the trail holds no content

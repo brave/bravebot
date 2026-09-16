@@ -188,7 +188,79 @@ pub struct Record {
     /// one that stopped.
     #[serde(default)]
     pub manifest: Option<StoredManifest>,
+    /// The turns a rewind can go back to, oldest first.
+    ///
+    /// Here rather than only in memory because a mistake is often noticed after closing the
+    /// program and opening it again, and a resumed session with nothing to undo is a session
+    /// whose whole history of what it wrote has been thrown away while the transcript describing
+    /// it was kept.
+    ///
+    /// Empty for a record written before this was kept, and for a session that has had no turn
+    /// a rewind may reach.
+    #[serde(default)]
+    pub rewind: Vec<StoredRewind>,
 }
+
+/// One point a rewind can go back to, as it is written down.
+///
+/// Its own type rather than the interface's, for the reason [`StoredAside`] is: a record on disk
+/// outlives the shape of a struct in memory. The conversation is the same [`Snapshot`] the record
+/// keeps for the session itself, since it is the same thing a turn earlier.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredRewind {
+    /// The exchange as it stood before the turn.
+    pub conversation: Snapshot,
+    /// Completed turns before the turn.
+    pub turns: usize,
+    /// Cumulative tokens before the turn.
+    pub tokens: u64,
+    #[serde(default)]
+    pub spend: BTreeMap<usize, u64>,
+    #[serde(default)]
+    pub timing: BTreeMap<usize, bravebot_agent::timing::Timing>,
+    /// What the turn before this one read out of the cache, where there was one.
+    #[serde(default)]
+    pub cached: Option<bravebot_aichat::protocol::Cached>,
+    /// The trust map before the turn, written the way [`Record::trust`] is.
+    ///
+    /// `None` reads as a map with nothing in it rather than as a question, unlike the record's
+    /// own: a point that recorded no rules is one nothing had been vouched for before, and a
+    /// rewind that put back the live map instead would keep a permission the turn granted.
+    #[serde(default)]
+    pub trust: Option<Vec<StoredRule>>,
+    /// The programs vouched for before the turn.
+    #[serde(default)]
+    pub programs: Vec<StoredCommand>,
+    /// The session's name before the turn.
+    pub title: String,
+    /// Whether a record for this session was on disk before the turn.
+    #[serde(default)]
+    pub wrote: bool,
+    /// What the turn was asked, for the line that lists this point.
+    pub prompt: String,
+    /// What the files the turn wrote to held before it wrote to them.
+    #[serde(default)]
+    pub wrote_over: Vec<StoredBackup>,
+}
+
+/// What one path held before a turn wrote to it, as it is written down.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredBackup {
+    /// The file, relative to the project where it is inside it, so a record survives the
+    /// checkout being moved the way [`Record::trust`] does.
+    pub path: String,
+    /// What was there: [`NOTHING`] for a path the turn created, [`BYTES`] for one whose contents
+    /// are here, and anything else for one this session did not keep.
+    pub before: String,
+    /// Those contents, base64, where `before` says they are here.
+    #[serde(default)]
+    pub bytes: Option<String>,
+}
+
+/// The word for a path the turn created, so a rewind removes it again.
+const NOTHING: &str = "nothing";
+/// The word for a path whose contents are in the record.
+const BYTES: &str = "bytes";
 
 /// A question asked beside the work, as it is written down.
 ///
@@ -206,6 +278,148 @@ pub struct StoredAside {
     /// is worth keeping even where what came back is not.
     #[serde(default)]
     pub answer: Option<String>,
+}
+
+impl StoredRewind {
+    /// Write one down, with the paths inside the project kept relative to it.
+    fn of(point: &crate::state::RewindPoint, project: &Path) -> Self {
+        use base64::Engine;
+        use bravebot_agent::workspace::Before;
+
+        let snapshot = &point.snapshot;
+        Self {
+            conversation: snapshot.conversation.clone(),
+            turns: snapshot.turns,
+            tokens: snapshot.tokens,
+            spend: snapshot.spend.clone(),
+            timing: snapshot.timing.clone(),
+            cached: snapshot.cached,
+            trust: Some(stored_rules(&snapshot.trust)),
+            programs: stored_programs(&snapshot.programs),
+            title: snapshot.title.clone(),
+            wrote: snapshot.was_wrote,
+            prompt: point.prompt.clone(),
+            wrote_over: point
+                .backups
+                .iter()
+                .map(|backup| {
+                    let path = backup
+                        .path
+                        .strip_prefix(project)
+                        .unwrap_or(&backup.path)
+                        .display()
+                        .to_string();
+                    let (before, bytes) = match &backup.was {
+                        Before::Nothing => (NOTHING, None),
+                        Before::Bytes(held) => (
+                            BYTES,
+                            Some(base64::engine::general_purpose::STANDARD.encode(held)),
+                        ),
+                        Before::NotKept => ("not-kept", None),
+                    };
+                    StoredBackup {
+                        path,
+                        before: before.to_string(),
+                        bytes,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// Read one back, for a session working in `root`.
+    ///
+    /// Anything this build cannot read means the path will not go back: a word it does not know,
+    /// and base64 it cannot decode, both land there rather than on "the file was never here",
+    /// which is the direction that would have a rewind delete work it merely could not hold.
+    ///
+    /// The place in the transcript is not read from here and is left at nothing. It is an index
+    /// into the list one process drew, and the session reading this draws another; the turn
+    /// number is the fact that survives, and [`crate::state::Session::restore_rewind_points`]
+    /// finds the index again from it.
+    fn into_point(self, root: &Path) -> crate::state::RewindPoint {
+        use base64::Engine;
+        use bravebot_agent::workspace::{Backup, Before};
+
+        let mut trust = TrustStore::new(root);
+        for rule in self.trust.iter().flatten() {
+            if rule.integrity == TRUSTED {
+                trust.trust(&rule.path);
+            }
+        }
+        for rule in self.trust.iter().flatten() {
+            if rule.integrity != TRUSTED {
+                trust.distrust(&rule.path);
+            }
+        }
+
+        crate::state::RewindPoint {
+            snapshot: crate::state::TurnSnapshot {
+                conversation: self.conversation,
+                turns: self.turns,
+                tokens: self.tokens,
+                spend: self.spend,
+                timing: self.timing,
+                cached: self.cached,
+                trust,
+                programs: TrustedPrograms::from_iter(self.programs.iter().map(|c| {
+                    bravebot_core::programs::Command::new(c.program.clone(), c.args.clone())
+                })),
+                transcript_len: 0,
+                title: self.title,
+                was_wrote: self.wrote,
+            },
+            backups: self
+                .wrote_over
+                .into_iter()
+                .map(|held| {
+                    let was = match held.before.as_str() {
+                        NOTHING => Before::Nothing,
+                        BYTES => held
+                            .bytes
+                            .and_then(|encoded| {
+                                base64::engine::general_purpose::STANDARD
+                                    .decode(encoded)
+                                    .ok()
+                            })
+                            .map_or(Before::NotKept, Before::Bytes),
+                        _ => Before::NotKept,
+                    };
+                    Backup {
+                        path: root.join(held.path),
+                        was,
+                    }
+                })
+                .collect(),
+            prompt: self.prompt,
+        }
+    }
+}
+
+/// A trust map as it is written down.
+fn stored_rules(trust: &TrustStore) -> Vec<StoredRule> {
+    trust
+        .rules()
+        .map(|(path, integrity)| StoredRule {
+            path: path.to_string(),
+            integrity: match integrity {
+                Integrity::Trusted => TRUSTED,
+                Integrity::Untrusted => UNTRUSTED,
+            }
+            .to_string(),
+        })
+        .collect()
+}
+
+/// A list of vouched-for commands as it is written down.
+fn stored_programs(programs: &TrustedPrograms) -> Vec<StoredCommand> {
+    programs
+        .iter()
+        .map(|c| StoredCommand {
+            program: c.program.clone(),
+            args: c.args.clone(),
+        })
+        .collect()
 }
 
 impl StoredAside {
@@ -283,6 +497,83 @@ impl StoredManifest {
     }
 }
 
+/// Write a manifest run into the session store, finished or not, and say what it is called.
+///
+/// One function for both callers, because a run started from a session and a run started from the
+/// command line are the same run and have to be written down the same way: a reader opening one
+/// with `--resume` should not be able to tell which of the two started it.
+///
+/// `None` where there is nothing worth writing: a run the person cancelled, or a failure that
+/// produced no attempt to look at. Every other outcome is written, because the run somebody needs
+/// to read is the one that stopped. The id it returns is how a session names the run it started.
+///
+/// Best-effort, like everything else under `~/.bravebot`: a run that cannot be written down still
+/// ran, and failing the command because the record did not save would be the wrong trade. The id
+/// comes back regardless, since there is no reading of the disk here to tell.
+pub fn record_manifest_run(
+    project: &Path,
+    prompt: &str,
+    outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
+) -> Option<String> {
+    let (stored, trust) = match outcome {
+        Ok(finished) => (
+            finished
+                .attempt
+                .as_ref()
+                .map(|attempt| StoredManifest::of(attempt, None)),
+            finished.trust.clone(),
+        ),
+        Err(bravebot_agent::TurnError::Manifest { attempt, detail }) => (
+            Some(StoredManifest::of(attempt, Some(detail.clone()))),
+            TrustStore::new(project),
+        ),
+        // Cancelled, or a failure with nothing to show. Nothing worth a record.
+        Err(_) => (None, TrustStore::new(project)),
+    };
+
+    let stored = stored?;
+
+    let conversation = bravebot_agent::Conversation::new();
+    let snapshot = conversation.snapshot();
+    let todos = BTreeMap::new();
+    let programs = TrustedPrograms::new();
+    let tokens = outcome.as_ref().map(|o| o.tokens).unwrap_or(0);
+    // One turn, so the breakdown and the total say the same thing. Written anyway, because a
+    // reader comparing runs should not have to special-case where the figure came from.
+    let spend = BTreeMap::from([(1, tokens)]);
+    // Where that one turn's time went, on the same footing. A manifest run is the case where this
+    // matters most: a run nobody is watching that spent its afternoon blocked on an approval
+    // nobody was there to give leaves this as the only trace of it.
+    let timing = BTreeMap::from([(1, outcome.as_ref().map(|o| o.timing).unwrap_or_default())]);
+    let mut handle = Handle::begin(project);
+    handle.save(
+        prompt,
+        Standing {
+            // Empty, and it has to be: a manifest run has no conversation, which is the same
+            // fact that makes it unresumable. Filling this with something conversation-shaped
+            // would make the picker offer to continue a run that cannot be continued.
+            conversation: &snapshot,
+            turns: 1,
+            tokens,
+            spend: &spend,
+            timing: &timing,
+            model: outcome.as_ref().ok().map(|o| o.model.as_str()),
+            todos: &todos,
+            // None, and there can be none: an aside is a question a person types beside a
+            // conversation, and a manifest run has neither.
+            asides: &[],
+            trust: &trust,
+            programs: &programs,
+            directories: &[],
+            manifest: Some(&stored),
+            // None, on the same footing as the asides: a manifest run plans its whole sequence
+            // in advance and is not resumed, so there is no session for a rewind to go back in.
+            rewind: &[],
+        },
+    );
+    Some(handle.id().to_string())
+}
+
 /// One trust rule as it is written down.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredRule {
@@ -339,9 +630,15 @@ impl Record {
     /// spelling decide. A record written before every spelling of a path became one rule can hold
     /// both, and the file the session marked untrusted is the one a resume must not read back as
     /// trusted.
-    pub fn trust_map(&self) -> Option<TrustStore> {
+    ///
+    /// `root` is the directory the resumed session works in, and the rules inside the project come
+    /// back under it. The map holds full paths, and a record keeps the ones inside the project
+    /// relative, so re-prefixing here is what lets a record survive the checkout being moved or
+    /// renamed: the rules still mean the same files. A rule outside the project is recorded in
+    /// full and comes back as it was written.
+    pub fn trust_map(&self, root: impl AsRef<std::path::Path>) -> Option<TrustStore> {
         let rules = self.trust.as_ref()?;
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new(root);
         for rule in rules.iter().filter(|rule| rule.integrity == TRUSTED) {
             trust.trust(&rule.path);
         }
@@ -384,6 +681,22 @@ impl Record {
                     problem = error
                 )),
             })
+            .collect()
+    }
+
+    /// The turns a rewind can go back to, oldest first.
+    ///
+    /// `root` is the directory the resumed session works in, and the paths inside the project
+    /// come back under it, as the trust map's rules do: a rewind is about the files this
+    /// checkout has, not the ones the machine that wrote the record had.
+    pub fn rewind_points(
+        &self,
+        root: impl AsRef<std::path::Path>,
+    ) -> Vec<crate::state::RewindPoint> {
+        self.rewind
+            .iter()
+            .cloned()
+            .map(|point| point.into_point(root.as_ref()))
             .collect()
     }
 
@@ -446,6 +759,8 @@ pub struct Standing<'a> {
     /// What a manifest run produced. `None` for a turn session, which is every session the
     /// interactive interface writes.
     pub manifest: Option<&'a StoredManifest>,
+    /// The turns a rewind can go back to, oldest first.
+    pub rewind: &'a [crate::state::RewindPoint],
 }
 
 /// A session worth picking up again, and where to pick it up.
@@ -639,28 +954,8 @@ impl Handle {
                 .iter()
                 .map(|(turn, rows)| (*turn, rows.iter().map(StoredTask::of).collect()))
                 .collect(),
-            trust: Some(
-                standing
-                    .trust
-                    .rules()
-                    .map(|(path, integrity)| StoredRule {
-                        path: path.to_string(),
-                        integrity: match integrity {
-                            Integrity::Trusted => TRUSTED,
-                            Integrity::Untrusted => UNTRUSTED,
-                        }
-                        .to_string(),
-                    })
-                    .collect(),
-            ),
-            programs: standing
-                .programs
-                .iter()
-                .map(|c| StoredCommand {
-                    program: c.program.clone(),
-                    args: c.args.clone(),
-                })
-                .collect(),
+            trust: Some(stored_rules(standing.trust)),
+            programs: stored_programs(standing.programs),
             directories: standing
                 .directories
                 .iter()
@@ -670,6 +965,11 @@ impl Handle {
             conversation: standing.conversation.clone(),
             asides: standing.asides.iter().map(StoredAside::of).collect(),
             manifest: standing.manifest.cloned(),
+            rewind: standing
+                .rewind
+                .iter()
+                .map(|point| StoredRewind::of(point, &self.project))
+                .collect(),
         };
 
         let Ok(body) = serde_json::to_vec_pretty(&record) else {
@@ -704,7 +1004,7 @@ impl Handle {
             let line = serde_json::json!({
                 "at": stamped.at,
                 "turn": turn,
-                "event": crate::audit::as_json(&stamped.event),
+                "event": crate::audit::as_json(&stamped.event, stamped.from),
             });
             body.push_str(&line.to_string());
             body.push('\n');
@@ -780,16 +1080,16 @@ pub fn list(project: &Path) -> Vec<Summary> {
         .filter_map(Result::ok)
         .filter(|entry| entry.path().extension().is_some_and(|e| e == "json"))
         .filter_map(|entry| {
-            let record = read(&entry.path())?;
-            let audit = directory.join(format!("{}.audit.jsonl", record.id));
+            let listed = read_listing(&entry.path())?;
+            let audit = directory.join(format!("{}.audit.jsonl", listed.id));
             let bytes = size_of(&entry.path()) + size_of(&audit);
             Some(Summary {
-                id: record.id,
-                title: record.title,
-                branch: record.branch,
-                updated: record.updated,
+                id: listed.id,
+                title: listed.title,
+                branch: listed.branch,
+                updated: listed.updated,
                 bytes,
-                manifest: record.manifest.is_some(),
+                manifest: listed.manifest.is_some(),
             })
         })
         .collect();
@@ -923,25 +1223,11 @@ fn writable_project_directory(project: &Path) -> Option<PathBuf> {
 
 /// The single path segment standing for a working directory.
 ///
-/// Separators become dashes and anything that is not a plain path character goes the same way,
-/// so the name is one segment on every platform and readable in a directory listing. It is not
-/// reversible, which is why the record holds the real path as well.
+/// One definition for every per-directory record under the state directory, which is
+/// [`bravebot_agent::home::key_for`]. It is not reversible, which is why the session record holds
+/// the real path as well.
 pub fn key_for(project: &Path) -> String {
-    let mangled: String = project
-        .display()
-        .to_string()
-        .chars()
-        .map(|c| match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' => c,
-            _ => '-',
-        })
-        .collect();
-
-    // A path of only separators would otherwise name the sessions directory itself.
-    if mangled.trim_matches('-').is_empty() {
-        return "root".to_string();
-    }
-    mangled
+    bravebot_agent::home::key_for(project)
 }
 
 /// What to say about a session being picked up somewhere other than where it ran.
@@ -1050,6 +1336,31 @@ pub fn size(bytes: u64) -> String {
 }
 
 fn read(path: &Path) -> Option<Record> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+/// The five fields a row of the picker needs, and nothing else.
+///
+/// Its own shape rather than [`Record`], because a record holds the conversation, what compaction
+/// archived out of it, and the turns a rewind can go back to, each of which carries a copy of the
+/// conversation and the bytes that turn wrote over. Every one of those would be parsed and
+/// allocated to draw one line of a list, once per session in the directory, before the interface
+/// has drawn anything at all. As fields nothing here names, they cost the scan over their text.
+#[derive(Deserialize)]
+struct Listed {
+    id: String,
+    title: String,
+    #[serde(default)]
+    branch: Option<String>,
+    updated: u64,
+    /// Whether the record has one, which is what makes it a manifest run. What is in it is not
+    /// read: the row says only that the session cannot be continued.
+    #[serde(default)]
+    manifest: Option<serde::de::IgnoredAny>,
+}
+
+fn read_listing(path: &Path) -> Option<Listed> {
     let contents = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&contents).ok()
 }
@@ -1407,7 +1718,7 @@ mod tests {
             "conversation": {"messages": [], "context": "trusted"},
         });
         let record: Record = serde_json::from_value(older).expect("an older record still loads");
-        assert!(record.trust_map().is_none());
+        assert!(record.trust_map(&record.directory).is_none());
     }
 
     /// Whatever a record says that this build does not recognise, the answer is untrusted. A
@@ -1420,12 +1731,56 @@ mod tests {
                 path: ".".to_string(),
                 integrity: word.to_string(),
             }]);
-            let map = record.trust_map().expect("a map was recorded");
+            let map = record
+                .trust_map(&record.directory)
+                .expect("a map was recorded");
             assert!(
                 !map.is_trusted("src/main.rs"),
                 "{word:?} was read as trusted"
             );
         }
+    }
+
+    /// A record keeps the name a rule was written under, not the key the map holds it by, and the
+    /// two differ for every rule inside the project. So a checkout that was moved or renamed since
+    /// resumes with its rules about the same files: they are read under the directory being
+    /// resumed into. Recording the key instead would fail quietly, every rule naming a path that
+    /// is not there any more and the session behaving as though nobody had vouched for anything.
+    #[test]
+    fn a_record_resumes_its_rules_under_the_directory_it_is_read_in() {
+        let mut record = a_record();
+        record.trust = Some(vec![
+            StoredRule {
+                path: String::new(),
+                integrity: "trusted".to_string(),
+            },
+            StoredRule {
+                path: "src/fetched.json".to_string(),
+                integrity: "untrusted".to_string(),
+            },
+            StoredRule {
+                path: "/Users/me/notes".to_string(),
+                integrity: "trusted".to_string(),
+            },
+        ]);
+
+        let map = record
+            .trust_map("/tmp/moved-since")
+            .expect("a map was recorded");
+        assert!(
+            map.is_trusted("src/main.rs"),
+            "the yes given for the project was lost by the project moving"
+        );
+        assert!(
+            !map.is_trusted("src/fetched.json"),
+            "a no given inside the project was lost by the project moving"
+        );
+        assert!(
+            map.is_trusted("/Users/me/notes/todo.md"),
+            "a rule recorded in full was re-read as a path inside the project"
+        );
+        // And the rules are about the directory resumed into rather than the one recorded.
+        assert_eq!(map.integrity_of("/tmp/x/src/main.rs"), None);
     }
 
     /// The rule the whole map turns on has to survive being written down: a path a write marked
@@ -1444,7 +1799,9 @@ mod tests {
             },
         ]);
 
-        let map = record.trust_map().expect("a map was recorded");
+        let map = record
+            .trust_map(&record.directory)
+            .expect("a map was recorded");
         assert!(map.is_trusted("src/main.rs"));
         assert!(!map.is_trusted("src/fetched.json"));
     }
@@ -1468,7 +1825,9 @@ mod tests {
             },
         ]);
 
-        let map = record.trust_map().expect("a map was recorded");
+        let map = record
+            .trust_map(&record.directory)
+            .expect("a map was recorded");
         assert!(
             !map.is_trusted("src/fetched.json"),
             "a resume upgraded a file the session had marked untrusted"
@@ -1497,7 +1856,7 @@ mod tests {
         let record: Record = serde_json::from_value(with_a_mode).expect("the record loads");
         // Nothing on a record answers the question, so nothing can restore an answer to it. The
         // trust map and the programs are the two grants that do come back, and they are separate.
-        assert!(record.trust_map().is_none());
+        assert!(record.trust_map(&record.directory).is_none());
         assert!(record.trusted_programs().is_empty());
     }
 
@@ -1590,6 +1949,66 @@ mod tests {
         assert_eq!(build_note(None, "0.1.0 (bbbbbbb)"), None);
     }
 
+    /// A point whose contents a rewind cannot produce must not read as a file that was never
+    /// there: the two states differ by whether the rewind deletes the person's work.
+    #[test]
+    fn a_kept_file_this_build_cannot_read_will_not_go_back_rather_than_being_deleted() {
+        use bravebot_agent::workspace::Before;
+
+        let point = a_stored_point(vec![
+            StoredBackup {
+                path: "notes.md".to_string(),
+                before: "some word from a later build".to_string(),
+                bytes: None,
+            },
+            StoredBackup {
+                path: "draft.md".to_string(),
+                before: BYTES.to_string(),
+                bytes: Some("not base64 at all !!".to_string()),
+            },
+            StoredBackup {
+                path: "made.md".to_string(),
+                before: NOTHING.to_string(),
+                bytes: None,
+            },
+        ])
+        .into_point(Path::new("/work"));
+
+        assert_eq!(
+            point.backups[0].was,
+            Before::NotKept,
+            "a word this build does not know was read as a file that was never there"
+        );
+        assert_eq!(
+            point.backups[1].was,
+            Before::NotKept,
+            "contents that would not decode were read as a file that was never there"
+        );
+        assert_eq!(
+            point.backups[2].was,
+            Before::Nothing,
+            "a file the turn created is no longer removed by a rewind"
+        );
+    }
+
+    /// One point as a record holds it, with the paths a test wants to read back.
+    fn a_stored_point(wrote_over: Vec<StoredBackup>) -> StoredRewind {
+        StoredRewind {
+            conversation: bravebot_agent::Conversation::new().snapshot(),
+            turns: 1,
+            tokens: 0,
+            spend: BTreeMap::new(),
+            timing: BTreeMap::new(),
+            cached: None,
+            trust: None,
+            programs: Vec::new(),
+            title: "a session".to_string(),
+            wrote: true,
+            prompt: "write the notes".to_string(),
+            wrote_over,
+        }
+    }
+
     fn a_record() -> Record {
         Record {
             id: "1-2".to_string(),
@@ -1617,6 +2036,7 @@ mod tests {
                 measured: 0,
             },
             manifest: None,
+            rewind: Vec::new(),
         }
     }
 
@@ -1763,6 +2183,146 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// An empty project, and an empty store for it.
+    ///
+    /// The store is under `~/.bravebot` rather than under the project, so removing the project
+    /// leaves the records behind and the next run of the test counts them too. Cleared at both
+    /// ends: at the start so a run that was killed does not fail the next one, and at the end so
+    /// a checkout is not left with test records in the picker.
+    fn an_empty_project(name: &str) -> PathBuf {
+        let root = crate::testutil::scratch_dir(name);
+        forget_the_project(&root);
+        std::fs::create_dir_all(&root).expect("create");
+        root
+    }
+
+    /// Remove a test project and every record written about it.
+    fn forget_the_project(root: &Path) {
+        let _ = std::fs::remove_dir_all(root);
+        if let Some(store) = project_directory(root) {
+            let _ = std::fs::remove_dir_all(store);
+        }
+    }
+
+    /// Write a plain turn session down, so a run recorded beside it has something to be beside.
+    ///
+    /// Its own function because [`Standing`] borrows everything it carries, so the empty maps a
+    /// conversation-less fixture needs have to outlive the call rather than the expression.
+    fn save_a_turn_session(handle: &mut Handle) {
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        handle.save(
+            "what do the specs say",
+            Standing {
+                conversation: &snapshot,
+                turns: 1,
+                tokens: 0,
+                spend: &BTreeMap::new(),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &TrustStore::new("/work"),
+                programs: &TrustedPrograms::default(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+            },
+        );
+    }
+
+    /// A failed run, with everything it produced. The success path cannot be built here, since an
+    /// [`bravebot_agent::Outcome`] carries a released reply that only the agent may set, so the
+    /// failure is what these tests use: it is also the run somebody most needs to read.
+    fn a_failed_run() -> Result<bravebot_agent::Outcome, bravebot_agent::TurnError> {
+        Err(bravebot_agent::TurnError::Manifest {
+            attempt: Box::new(bravebot_agent::manifest::Attempt {
+                shape: Some("read the specs, then write a summary".to_string()),
+                proposed: Some("{\"steps\": []}".to_string()),
+                plan: Some("1. [read] read docs/specs/manifest.md".to_string()),
+                steps: vec!["1. [read] read docs/specs/manifest.md: 4kB".to_string()],
+            }),
+            detail: "step 2 had nothing to write".to_string(),
+        })
+    }
+
+    /// MANIFEST-11. A session that starts a run stays a conversation and the run becomes a record
+    /// of its own, so the presence of a manifest in a record is still what makes it a manifest
+    /// run. Written the other way round, the session's own record would be both at once and the
+    /// picker would have to ask which half of it Enter was about.
+    #[test]
+    fn a_manifest_run_is_recorded_apart_from_the_session() {
+        let root = an_empty_project("bravebot-session-manifest-run");
+
+        let mut session = Handle::begin(&root);
+        save_a_turn_session(&mut session);
+
+        let run = record_manifest_run(&root, "summarise the specs", &a_failed_run())
+            .expect("the run was not written down");
+
+        assert_ne!(run, session.id(), "the run took the session's own record");
+
+        let listed = list(&root);
+        assert_eq!(listed.len(), 2, "one of the two records is missing");
+        let manifests: Vec<&Summary> = listed.iter().filter(|row| row.manifest).collect();
+        assert_eq!(manifests.len(), 1, "exactly one row is a manifest run");
+        assert_eq!(manifests[0].id, run);
+
+        let written = load(&root, &run).expect("the run's record does not load");
+        let stored = written.manifest.expect("the run left no manifest");
+        assert_eq!(
+            stored.failure.as_deref(),
+            Some("step 2 had nothing to write")
+        );
+        assert!(
+            stored.describe().contains("read docs/specs/manifest.md"),
+            "the plan is not in the record: {}",
+            stored.describe()
+        );
+
+        forget_the_project(&root);
+    }
+
+    /// The other half of the same clause, and the reason for splitting the records at all: a
+    /// conversation with a manifest run in it must not become unresumable.
+    #[test]
+    fn a_session_that_started_a_run_can_still_be_resumed() {
+        let root = an_empty_project("bravebot-session-manifest-resumable");
+
+        let mut session = Handle::begin(&root);
+        save_a_turn_session(&mut session);
+        record_manifest_run(&root, "summarise the specs", &a_failed_run()).expect("written");
+
+        let record = load(&root, session.id()).expect("the session does not load");
+        assert!(
+            record.manifest.is_none(),
+            "the session's own record reads as a manifest run"
+        );
+        let row = list(&root)
+            .into_iter()
+            .find(|row| row.id == session.id())
+            .expect("the session is not in the list");
+        assert!(
+            !row.manifest,
+            "the picker would refuse Enter on the session"
+        );
+
+        forget_the_project(&root);
+    }
+
+    /// A run the person stopped has nothing in it to read, so it leaves nothing, exactly as it
+    /// does from the command line. A record for every interrupted run would fill the picker with
+    /// rows whose whole content is that somebody changed their mind.
+    #[test]
+    fn a_cancelled_run_leaves_no_record() {
+        let root = an_empty_project("bravebot-session-manifest-cancelled");
+
+        let cancelled = Err(bravebot_agent::TurnError::Cancelled);
+        assert!(record_manifest_run(&root, "summarise the specs", &cancelled).is_none());
+        assert!(list(&root).is_empty(), "a stopped run was written down");
+
+        forget_the_project(&root);
+    }
+
     #[test]
     fn forking_a_manifest_session_is_refused() {
         let root = crate::testutil::scratch_dir("bravebot-fork-manifest");
@@ -1804,6 +2364,7 @@ mod tests {
         let handle = Handle::begin(&root);
         let stamped = crate::audit::Stamped {
             at: 1,
+            from: None,
             event: bravebot_core::event::Event::GatePassed {
                 gate: "file_read",
                 detail: "secret.txt".to_string(),
@@ -1847,16 +2408,18 @@ mod tests {
                 model: None,
                 todos: &BTreeMap::new(),
                 asides: &[],
-                trust: &TrustStore::new(),
+                trust: &TrustStore::new("/work"),
                 programs: &TrustedPrograms::default(),
                 directories: &[],
                 manifest: None,
+                rewind: &[],
             },
         );
         handle.append_audit(
             1,
             &[crate::audit::Stamped {
                 at: 1,
+                from: None,
                 event: bravebot_core::event::Event::GatePassed {
                     gate: "file_read",
                     detail: "secret.txt".to_string(),

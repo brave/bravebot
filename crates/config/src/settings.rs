@@ -51,6 +51,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The file each layer is named by, inside its own directory.
 const SETTINGS_FILE: &str = "settings.json";
@@ -96,6 +97,7 @@ pub struct Settings {
     editor_mode: Option<String>,
     keybindings: BTreeMap<String, String>,
     attribution: Attribution,
+    search: SearchCaps,
     providers: Vec<crate::provider::Provider>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
@@ -122,6 +124,30 @@ impl Attribution {
     }
 }
 
+/// The `search` block: what bounds a search of the workspace, where a file bounds it.
+///
+/// `None` per cap, meaning the built-in one stands. A number carries no way to say "leave this
+/// alone", and a value reserved to mean it would be a second spelling of absence for whoever has
+/// to remember which number it was.
+///
+/// Two independent caps rather than one budget: one bounds how much of the tree is walked, the
+/// other how long is spent reading what the walk selected. A tree large enough to need one is not
+/// always slow enough to need the other.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchCaps {
+    /// How many files a search may walk, from `maxFiles`.
+    pub files: Option<usize>,
+    /// How long a search may spend opening them, from `maxSeconds`.
+    pub time: Option<Duration>,
+}
+
+impl SearchCaps {
+    /// Whether the block said anything.
+    pub fn is_empty(&self) -> bool {
+        self.files.is_none() && self.time.is_none()
+    }
+}
+
 /// The `permissions` block, as text, exactly as the file spelled it.
 ///
 /// Rule text rather than parsed rules, because reading a rule needs to know where the settings
@@ -144,6 +170,20 @@ impl PermissionLists {
             && self.allow.is_empty()
             && self.additional_directories.is_empty()
     }
+}
+
+/// The user's own settings file inside `directory`, whether or not it exists yet.
+///
+/// The one place a rule about which commands to ask about is written by hand, so a prompt that
+/// advises writing one has to name it. Here rather than in the caller because the name of the file
+/// is this module's, and a second spelling of it would have a prompt sending somebody to a path
+/// nothing reads.
+///
+/// The user's layer and not the project one. A rule in a checkout is a rule whoever wrote the
+/// checkout wrote, and advice to put a standing permission there would be advice to trust a file
+/// that arrives with a clone.
+pub fn user_settings_file(directory: &Path) -> PathBuf {
+    directory.join(SETTINGS_FILE)
 }
 
 impl Settings {
@@ -237,6 +277,7 @@ impl Settings {
             editor_mode: word(root, "editorMode"),
             keybindings: keybindings_block(root),
             attribution: attribution_block(root),
+            search: search_caps(root),
             providers: crate::provider::Provider::all(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -280,6 +321,15 @@ impl Settings {
         &self.attribution
     }
 
+    /// What the settings in force put a search of the workspace under, cap by cap.
+    ///
+    /// A cap nobody named is `None` rather than the built-in number, because the built-in one is
+    /// the workspace's to know: answering with it here would make this crate the second place the
+    /// default is written down, and the two would drift.
+    pub fn search(&self) -> &SearchCaps {
+        &self.search
+    }
+
     /// Whether anything was set at all.
     pub fn is_empty(&self) -> bool {
         self.env.is_empty()
@@ -289,6 +339,7 @@ impl Settings {
             && self.editor_mode.is_none()
             && self.keybindings.is_empty()
             && self.attribution.is_empty()
+            && self.search.is_empty()
             && self.providers.is_empty()
     }
 
@@ -349,6 +400,8 @@ impl Settings {
                     .then_some("attribution.commit"),
             )
             .chain(self.attribution.pr.is_some().then_some("attribution.pr"))
+            .chain(self.search.files.is_some().then_some("search.maxFiles"))
+            .chain(self.search.time.is_some().then_some("search.maxSeconds"))
             .chain(self.env.keys().map(String::as_str))
     }
 }
@@ -425,7 +478,8 @@ fn merge(
                 if key == "env"
                     || key == "provider"
                     || key == "attribution"
-                    || key == "keybindings" =>
+                    || key == "keybindings"
+                    || key == "search" =>
             {
                 under.extend(above);
             }
@@ -550,6 +604,31 @@ fn keybindings_block(
         .collect()
 }
 
+/// The `search` block: how many files a search may walk, and how long it may spend reading them.
+///
+/// Numbers rather than the strings the rest of this file reads, because a cap is a quantity and
+/// there is no spelling of one worth carrying through unrecognised. Whole and positive: anything
+/// else is absence, on the same footing as everything else here, so a half-typed file leaves the
+/// built-in cap in force rather than refusing to start.
+///
+/// Zero is absence too. It is the number somebody writes meaning "no cap", and read literally it
+/// is a search permitted to open no file at all, which answers every pattern with nothing found.
+fn search_caps(root: &serde_json::Map<String, serde_json::Value>) -> SearchCaps {
+    let Some(serde_json::Value::Object(block)) = root.get("search") else {
+        return SearchCaps::default();
+    };
+    let count = |name: &str| {
+        block
+            .get(name)
+            .and_then(serde_json::Value::as_u64)
+            .filter(|cap| *cap > 0)
+    };
+    SearchCaps {
+        files: count("maxFiles").and_then(|files| usize::try_from(files).ok()),
+        time: count("maxSeconds").map(Duration::from_secs),
+    }
+}
+
 /// The `permissions` block: three lists of rule text, and the directories to open.
 ///
 /// Strings only, and a malformed entry is dropped rather than refused, on the same footing as
@@ -585,27 +664,46 @@ fn strings(block: &serde_json::Map<String, serde_json::Value>, name: &str) -> Ve
         .collect()
 }
 
-/// The global state directory, or `None` when there is no home to look in.
+/// The variables the platform states the user's profile directory in, in the order they answer.
+///
+/// Spelled here as well as in the crates above this one, because `docs/specs/layering.md` forbids
+/// this one the dependency on the crate that holds the answer. What has to hold across the copies is
+/// the name of the directory, the variables, and the refusal to invent one.
+///
+/// `HOME` on either platform: it is the one Unix sets, and a Windows shell environment that sets one
+/// has been told where the profile is. `USERPROFILE` is the one stock Windows sets, and is read there
+/// only, since on Unix it is not a name the platform states anything in.
+#[cfg(windows)]
+const PROFILE_VARIABLES: &[&str] = &["HOME", "USERPROFILE"];
+#[cfg(not(windows))]
+const PROFILE_VARIABLES: &[&str] = &["HOME"];
+
+/// The global state directory, or `None` when the platform names no profile directory to look in.
 ///
 /// No fallback to a relative `.bravebot`, which is the project layer and reached deliberately rather
 /// than by a home directory going missing. Resolving the weakest layer to the strongest one's
 /// location would silently read a checkout's file as though a person had put it in their own
 /// directory.
 fn home() -> Option<PathBuf> {
-    home_named(std::env::var_os("HOME"))
+    home_named(PROFILE_VARIABLES.iter().map(std::env::var_os))
 }
 
-/// The same answer, from the value rather than from the variable.
+/// The same answer, from the values rather than from the variables.
 ///
 /// Split from the read so the rule is testable without a process-wide variable. A test that set
 /// `HOME` would have to take a lock against every other test in this binary, restore what was
-/// there, and step outside safe Rust to do it, all to check a rule that is a function of one
-/// string.
-fn home_named(home: Option<std::ffi::OsString>) -> Option<PathBuf> {
-    let home = home?;
-    if home.is_empty() {
-        return None;
-    }
+/// there, and step outside safe Rust to do it, all to check a rule that is a function of a couple
+/// of strings.
+///
+/// The values arrive in the order [`PROFILE_VARIABLES`] names them, and the first that names
+/// something answers. An empty one names nothing: joining onto it would resolve the user's own
+/// settings to `/.bravebot`, and stopping there would lose a profile directory the platform does
+/// name to a variable some shell exported empty.
+fn home_named(named: impl IntoIterator<Item = Option<std::ffi::OsString>>) -> Option<PathBuf> {
+    let home = named
+        .into_iter()
+        .flatten()
+        .find(|value| !value.is_empty())?;
     Some(PathBuf::from(home).join(".bravebot"))
 }
 
@@ -624,7 +722,7 @@ mod tests {
     #[test]
     fn the_state_directory_is_the_home_the_environment_names() {
         assert_eq!(
-            home_named(named("/somebody/else")),
+            home_named([named("/somebody/else")]),
             Some(PathBuf::from("/somebody/else/.bravebot"))
         );
     }
@@ -634,11 +732,41 @@ mod tests {
     /// commands run without being asked about.
     #[test]
     fn an_absent_or_empty_home_yields_no_directory_rather_than_a_guess() {
-        assert_eq!(home_named(None), None);
+        assert_eq!(home_named([None]), None);
         assert_eq!(
-            home_named(named("")),
+            home_named([named("")]),
             None,
             "an empty home was joined onto anyway"
+        );
+    }
+
+    /// STATE-2: stock Windows sets no `HOME`, so the settings a person keeps outside a checkout are
+    /// read from the profile directory the platform does name, or from nowhere at all. The order is
+    /// the same in every resolver, so the layer reading settings and the layer writing history agree
+    /// about which variable won.
+    #[test]
+    fn the_profile_directory_answers_where_no_home_is_named() {
+        // In the order `PROFILE_VARIABLES` names them: no `HOME`, then the profile directory stock
+        // Windows names in `USERPROFILE`.
+        assert_eq!(
+            home_named([None, named("C:\\Users\\someone")]),
+            Some(Path::new("C:\\Users\\someone").join(".bravebot"))
+        );
+        assert_eq!(
+            home_named([named(""), named("C:\\Users\\someone")]),
+            Some(Path::new("C:\\Users\\someone").join(".bravebot")),
+            "a variable exported empty took away a profile directory the platform names"
+        );
+    }
+
+    /// STATE-2: a shell environment that sets `HOME` has been told where the profile is, and every
+    /// other tool run from it reads that. Settings read from somewhere else would be a file the
+    /// person cannot find from the shell they configured.
+    #[test]
+    fn a_named_home_answers_before_the_profile_directory() {
+        assert_eq!(
+            home_named([named("/somebody"), named("C:\\Users\\someone")]),
+            Some(PathBuf::from("/somebody/.bravebot"))
         );
     }
 
@@ -815,6 +943,64 @@ mod tests {
                 Settings::parse(text).scrubbed().count(),
                 0,
                 "{text:?} named something"
+            );
+        }
+    }
+
+    /// A tree where the built-in caps are the wrong numbers is the only thing that can say so, so
+    /// the block has to reach the code that walks it: without it there is no way to search a
+    /// repository larger than the default walks.
+    #[test]
+    fn a_file_may_cap_a_search_of_a_large_tree() {
+        let settings = Settings::parse(r#"{"search": {"maxFiles": 500000, "maxSeconds": 60}}"#);
+        assert_eq!(settings.search().files, Some(500_000));
+        assert_eq!(settings.search().time, Some(Duration::from_secs(60)));
+        assert!(!settings.is_empty());
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            ["search.maxFiles", "search.maxSeconds"]
+        );
+    }
+
+    /// The two caps bound different things, so a file raising the walk says nothing about how long
+    /// a read may take: one named alone leaves the other on its built-in number.
+    #[test]
+    fn one_search_cap_is_read_without_the_other() {
+        let files = Settings::parse(r#"{"search": {"maxFiles": 400000}}"#);
+        assert_eq!(files.search().files, Some(400_000));
+        assert_eq!(files.search().time, None);
+
+        let time = Settings::parse(r#"{"search": {"maxSeconds": 45}}"#);
+        assert_eq!(time.search().files, None);
+        assert_eq!(time.search().time, Some(Duration::from_secs(45)));
+    }
+
+    /// Zero is what somebody writes meaning "no cap", and honoured literally it is a search
+    /// permitted to open no file at all: every pattern would come back absent from a tree that
+    /// holds it. Absence leaves the built-in cap in force instead.
+    #[test]
+    fn a_search_cap_of_zero_leaves_the_built_in_one_in_force() {
+        let settings = Settings::parse(r#"{"search": {"maxFiles": 0, "maxSeconds": 0}}"#);
+        assert!(settings.search().is_empty());
+        assert!(settings.is_empty());
+    }
+
+    /// Every other shape is absence, on the same footing as the rest of this file: a half-typed
+    /// settings file leaves the built-in cap in force rather than stopping a session.
+    #[test]
+    fn a_search_cap_that_is_not_a_whole_count_is_absence() {
+        for text in [
+            r#"{"search": {"maxFiles": "500000"}}"#,
+            r#"{"search": {"maxFiles": 500000.5, "maxSeconds": 1.5}}"#,
+            r#"{"search": {"maxFiles": -1, "maxSeconds": -1}}"#,
+            r#"{"search": {"maxFiles": true, "maxSeconds": null}}"#,
+            r#"{"search": {"maxFiles": [500000]}}"#,
+            r#"{"search": "wide"}"#,
+            r#"{"maxFiles": 500000}"#,
+        ] {
+            assert!(
+                Settings::parse(text).search().is_empty(),
+                "{text:?} capped something"
             );
         }
     }
@@ -1105,6 +1291,39 @@ mod tests {
         assert_eq!(settings.get("AWS_PROFILE"), Some("personal"));
     }
 
+    /// A layer that spelled a name at all is the layer that answered for it, so a value that is not
+    /// a string leaves the name unset rather than the one underneath standing. The rest of that
+    /// layer, and every other name, is unaffected: one mistyped value must not discard a file.
+    #[test]
+    fn a_value_that_is_not_a_string_leaves_the_name_unset_in_every_layer() {
+        let settings = Layers::new("not-a-string")
+            .global(r#"{"env": {"AWS_PROFILE": "personal", "AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": 1, "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn"}}"#)
+            .read();
+        assert_eq!(settings.get("AWS_PROFILE"), None);
+        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
+        assert_eq!(
+            settings.get("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            Some("opus-arn")
+        );
+    }
+
+    /// The same rule one level up: a layer that spelled `env` as anything but a block answered for
+    /// the whole block, so nothing is read from it and nothing is read from the layers below. The
+    /// file parses, so this is not the failed-layer case, and the other keys are untouched.
+    #[test]
+    fn a_block_that_is_not_a_block_leaves_no_names_under_it() {
+        for spelling in ["null", "5", "\"AWS_PROFILE=personal\"", "[]"] {
+            let settings = Layers::new(&format!("not-a-block-{}", spelling.len()))
+                .global(r#"{"env": {"AWS_PROFILE": "personal", "AWS_REGION": "us-west-2"}}"#)
+                .project(&format!(r#"{{"env": {spelling}, "model": "opus"}}"#))
+                .read();
+            assert_eq!(settings.get("AWS_PROFILE"), None, "{spelling}");
+            assert_eq!(settings.get("AWS_REGION"), None, "{spelling}");
+            assert_eq!(settings.model(), Some("opus"), "{spelling}");
+        }
+    }
+
     /// Somebody working in a directory that carries no settings gets exactly what they had before
     /// any of this existed.
     #[test]
@@ -1280,6 +1499,18 @@ mod tests {
             settings.attribution().pr.as_deref(),
             Some("Opened by bravebot")
         );
+    }
+
+    /// The two caps are unrelated bounds that share a block, so a checkout widening the walk for
+    /// its own size must not hand back the reading time a person's own file had cut.
+    #[test]
+    fn a_layer_capping_one_side_of_a_search_leaves_the_other() {
+        let settings = Layers::new("search-per-name")
+            .global(r#"{"search": {"maxFiles": 500000, "maxSeconds": 60}}"#)
+            .project(r#"{"search": {"maxFiles": 900000}}"#)
+            .read();
+        assert_eq!(settings.search().files, Some(900_000));
+        assert_eq!(settings.search().time, Some(Duration::from_secs(60)));
     }
 
     /// A model is one choice rather than a list, so the closest layer that names one wins: a checkout

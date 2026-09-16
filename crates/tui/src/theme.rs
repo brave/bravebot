@@ -5,9 +5,12 @@
 //! stay named so they read against whatever palette the person chose for their terminal. A named
 //! theme chosen with `/theme` paints every role from that table, including the background, so two
 //! roles cannot collapse because the terminal remapped a slot.
+//!
+//! `NO_COLOR` in the environment outranks both: every role takes the terminal's own ink, and this
+//! program adds none of its own.
 
 use bravebot_i18n::t;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier, Style};
 use serde::Deserialize;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -127,6 +130,9 @@ impl Theme {
 static LIGHT: AtomicBool = AtomicBool::new(false);
 static SENSED: AtomicBool = AtomicBool::new(false);
 
+/// Whether the interface adds no colour of its own, from `NO_COLOR` in the environment.
+static PLAIN: AtomicBool = AtomicBool::new(false);
+
 /// Claim the theme for one test, until the returned guard is dropped.
 ///
 /// The theme in force is one per process and every test in a binary shares it, so a test that puts
@@ -147,11 +153,23 @@ fn current() -> &'static Mutex<(String, Palette)> {
 
 /// The palette in force right now.
 pub fn palette() -> Palette {
-    current()
+    let chosen = current()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .1
-        .clone()
+        .clone();
+    drawn_from(chosen, no_color())
+}
+
+/// The palette actually drawn from, given the one chosen and whether any colour is wanted.
+///
+/// The answer about colour is taken as an argument rather than read here so that the rule can be
+/// checked without putting a process-wide switch in force under every other test in this binary.
+fn drawn_from(chosen: Palette, no_color: bool) -> Palette {
+    match no_color {
+        true => plain_palette(),
+        false => chosen,
+    }
 }
 
 /// The name of the theme in force right now.
@@ -177,10 +195,7 @@ pub fn apply_brave() {
 }
 
 fn with_palette<R>(f: impl FnOnce(&Palette) -> R) -> R {
-    let guard = current()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    f(&guard.1)
+    f(&palette())
 }
 
 pub fn background() -> Color {
@@ -234,7 +249,19 @@ pub fn brand_primary() -> Color {
 /// A primary that is a named slot rather than a shade is drawn on in black, since the terminal is
 /// free to paint that slot anything and the brighter half of the sixteen is the usual choice.
 pub fn on_primary() -> Color {
-    match brand_primary() {
+    ink_on(brand_primary())
+}
+
+/// The ink for text over a fill of that colour.
+///
+/// A fill of the terminal's own background is not a fill: the row is the page it sits on, so what
+/// goes over it is the page's own ink. That is the case under `NO_COLOR`, where every role is the
+/// terminal's own, and also under a theme whose primary is given as `none`. Black over either one
+/// is this program painting the row after all, in the one colour it was told not to on a dark
+/// terminal.
+fn ink_on(fill: Color) -> Color {
+    match fill {
+        Color::Reset => Color::Reset,
         Color::Rgb(red, green, blue) if !is_light(red, green, blue) => Color::White,
         _ => Color::Black,
     }
@@ -249,8 +276,51 @@ fn is_light(red: u8, green: u8, blue: u8) -> bool {
     luminance > 128.0
 }
 
+/// How a row the cursor is on is told apart from the rows around it.
+///
+/// A fill of brand primary, and reverse video where no colour is drawn. A cursor is not a
+/// decoration: a list nobody can see their place in cannot be walked at all, so this is the one
+/// distinction `NO_COLOR` does not take away. Reverse video is available because it is not a
+/// colour, and it asks the terminal to swap the two inks the person already chose.
+pub fn picked_out() -> Style {
+    picked_out_in(brand_primary(), no_color())
+}
+
+/// The same, given the fill and whether any colour is wanted, so the rule can be checked without
+/// a process-wide switch in force under every other test in this binary.
+fn picked_out_in(fill: Color, no_color: bool) -> Style {
+    match no_color {
+        true => Style::default().add_modifier(Modifier::REVERSED),
+        false => Style::default().bg(fill),
+    }
+}
+
 pub fn paints_background() -> bool {
     with_palette(|p| p.paints_background)
+}
+
+/// Every role in the terminal's own ink, for a person who asked for no colour.
+///
+/// Reset rather than a black and white pair, because what was asked for is that this program add
+/// no colour, not that it choose two. A terminal already has a foreground and a background its
+/// user configured, and those are what every role takes.
+///
+/// Distinctions this interface draws in colour alone are lost here, and that is the request. The
+/// margin down a block of untrusted content, the bar, the glyphs and the words are all still
+/// drawn, because none of them is a colour.
+fn plain_palette() -> Palette {
+    Palette {
+        background: Color::Reset,
+        text: Color::Reset,
+        muted: Color::Reset,
+        ok: Color::Reset,
+        fail: Color::Reset,
+        running: Color::Reset,
+        accent: Color::Reset,
+        note: Color::Reset,
+        primary: Color::Reset,
+        paints_background: false,
+    }
 }
 
 /// The `brave` palette for a light or dark terminal background.
@@ -281,6 +351,23 @@ fn brand_primary_on(light: bool) -> Color {
     })
 }
 
+/// Read whether the person asked for no colour, once, before anything is drawn.
+///
+/// Held in a static rather than asked of the environment per ink, because every span the
+/// interface draws reads a colour, and a lookup that locks the environment and allocates would be
+/// paid thousands of times a frame.
+pub fn sense_no_color() {
+    PLAIN.store(
+        crate::asked_for(std::env::var_os("NO_COLOR").as_deref()),
+        Ordering::Relaxed,
+    );
+}
+
+/// Whether the interface adds no colour of its own.
+pub fn no_color() -> bool {
+    PLAIN.load(Ordering::Relaxed)
+}
+
 /// Read whether the terminal is light, once, before anything is drawn in brand primary.
 ///
 /// Later handovers of the tty (an editor, then back) must not query again: a round trip on every
@@ -288,6 +375,11 @@ fn brand_primary_on(light: bool) -> Color {
 ///
 /// After sensing, rebuilds the `brave` palette if that is what is in force, so primary matches.
 pub fn sense(out: &mut impl Write) {
+    // Nothing is drawn in a shade picked for the background when nothing is drawn in a shade at
+    // all, and the question costs a round trip that swallows whatever was typed into it.
+    if no_color() {
+        return;
+    }
     if SENSED.swap(true, Ordering::Relaxed) {
         return;
     }
@@ -871,6 +963,12 @@ fn light_from_colorfgbg(value: &str) -> Option<bool> {
 
 /// Rec. 709 luma. Integer so a threshold is a comparison and not a float that two call sites
 /// could round differently.
+///
+/// This, `parse_osc11`, `channels_slash` and `channel` read the reply to the OSC 11 query, which
+/// only the Unix arm of `light_background` sends, so on Windows the tests that pin the parsing are
+/// all that reach them. Compiled for those rather than allowed as dead code, so a Windows binary
+/// carries no parser nothing calls.
+#[cfg(any(unix, test))]
 fn light_from_rgb((r, g, b): Rgb) -> bool {
     2126u32 * u32::from(r) + 7152 * u32::from(g) + 722 * u32::from(b) > 1_270_000
 }
@@ -915,10 +1013,14 @@ fn query_osc11(out: &mut impl Write) -> Option<bool> {
     None
 }
 
+/// Unix alone, unlike the parsing around it: this is the framing of a reply nothing on Windows
+/// asks for, so not even a test reaches it there.
+#[cfg(unix)]
 fn osc_complete(buf: &[u8]) -> bool {
     buf.contains(&0x07) || buf.windows(2).any(|w| w == [0x1b, b'\\'])
 }
 
+#[cfg(any(unix, test))]
 fn parse_osc11(buf: &[u8]) -> Option<Rgb> {
     let text = std::str::from_utf8(buf).ok()?;
     let rest = text.split("11;").nth(1)?;
@@ -944,6 +1046,7 @@ fn channel6(hex: &str) -> Option<Rgb> {
     ))
 }
 
+#[cfg(any(unix, test))]
 fn channels_slash(spec: &str) -> Option<Rgb> {
     let mut parts = spec.split('/');
     let r = channel(parts.next()?)?;
@@ -952,6 +1055,7 @@ fn channels_slash(spec: &str) -> Option<Rgb> {
     Some((r, g, b))
 }
 
+#[cfg(any(unix, test))]
 fn channel(hex: &str) -> Option<u8> {
     let v = u32::from_str_radix(hex, 16).ok()?;
     match hex.len() {
@@ -966,6 +1070,76 @@ fn channel(hex: &str) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A person who asked for no colour gets the ink their terminal is set to, for every role.
+    /// Two roles collapsing into one is the request rather than a fault: what told them apart was
+    /// a colour, and a colour is what was declined.
+    #[test]
+    fn no_colour_draws_every_role_in_the_terminals_own_ink() {
+        let drawn = drawn_from(brave_palette(false), true);
+
+        for ink in [
+            drawn.background,
+            drawn.text,
+            drawn.muted,
+            drawn.ok,
+            drawn.fail,
+            drawn.running,
+            drawn.accent,
+            drawn.note,
+            drawn.primary,
+        ] {
+            assert_eq!(ink, Color::Reset, "an ink was chosen: {drawn:?}");
+        }
+        assert!(!drawn.paints_background, "the frame is filled: {drawn:?}");
+    }
+
+    /// The request outranks a theme somebody picked, including one whose whole point is painting
+    /// the background. The choice is still recorded, so unsetting the variable brings it back:
+    /// what is declined is the drawing, not the preference.
+    #[test]
+    fn a_chosen_theme_paints_nothing_where_no_colour_is_asked_for() {
+        let painted = find("tokyonight").expect("a builtin theme");
+        assert!(
+            painted.palette.paints_background,
+            "the theme under test no longer paints a background"
+        );
+
+        let drawn = drawn_from(painted.palette, true);
+        assert_eq!(drawn.background, Color::Reset);
+        assert_eq!(drawn.text, Color::Reset);
+        assert!(!drawn.paints_background);
+    }
+
+    /// A cursor has to stay visible: a list nobody can see their place in cannot be walked, so
+    /// reverse video stands in for the fill rather than the row losing its marking with the rest of
+    /// the colour.
+    #[test]
+    fn a_row_the_cursor_is_on_is_marked_where_no_colour_is_drawn() {
+        let plain = picked_out_in(Color::Reset, true);
+        assert!(plain.add_modifier.contains(Modifier::REVERSED));
+        assert_eq!(
+            plain.bg, None,
+            "a colour was filled in after all: {plain:?}"
+        );
+
+        let painted = picked_out_in(rgb(BRAND_PRIMARY_DARK), false);
+        assert_eq!(painted.bg, Some(rgb(BRAND_PRIMARY_DARK)));
+        assert!(!painted.add_modifier.contains(Modifier::REVERSED));
+    }
+
+    /// A row filled with brand primary needs text picked for the fill, and a fill of the
+    /// terminal's own background is not a fill: the row is the page it sits on, so black over it
+    /// would be this program painting it after all.
+    #[test]
+    fn text_over_a_fill_that_is_not_painted_takes_no_ink() {
+        assert_eq!(
+            ink_on(Color::Reset),
+            Color::Reset,
+            "a fill nothing painted was drawn on in a colour"
+        );
+        assert_eq!(ink_on(rgb(BRAND_PRIMARY_LIGHT)), Color::White);
+    }
 
     /// The shade here is mixed rather than named, which is the whole reason the module exists.
     /// One of the sixteen names is a slot the terminal repaints: yellow is the most likely

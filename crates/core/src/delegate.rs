@@ -138,6 +138,41 @@ impl std::fmt::Display for Kind {
     }
 }
 
+/// Which delegate a record is about.
+///
+/// Minted by the driver, one per delegate, counting from one in the order they were spawned. It
+/// is the driver's own number and nothing a model wrote: several delegates run at once, and an
+/// interface or a trail working out whose line it was holding would be taking that decision from
+/// prose.
+///
+/// Small and copyable because everything carrying one is on a hot path, and ordered because the
+/// order they were spawned in is the order anything showing them uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DelegateId(u32);
+
+impl DelegateId {
+    /// The `n`th delegate of a turn, counting from one.
+    pub fn nth(n: u32) -> Self {
+        Self(n)
+    }
+
+    /// Its position, counting from one.
+    pub fn position(self) -> u32 {
+        self.0
+    }
+}
+
+/// How a planner names one when it asks about it again, and how a record names the run it
+/// belongs to.
+///
+/// Short because it is typed back into a tool call, and prefixed because a bare number in an
+/// argument reads as a count of something.
+impl std::fmt::Display for DelegateId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "d{}", self.0)
+    }
+}
+
 /// What the driver fixed about one delegate before it ran.
 ///
 /// Only [`crate::policy::Policy::before_delegate`] constructs one, and nothing here can widen it
@@ -145,7 +180,7 @@ impl std::fmt::Display for Kind {
 /// kind, a task, and a tool list derived from the capabilities recorded here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DelegateSpec {
-    id: String,
+    id: DelegateId,
     kind: Kind,
     task: String,
     capabilities: CapabilitySet,
@@ -154,14 +189,14 @@ pub struct DelegateSpec {
 
 impl DelegateSpec {
     pub(crate) fn new(
-        id: impl Into<String>,
+        id: DelegateId,
         kind: Kind,
         task: impl Into<String>,
         capabilities: CapabilitySet,
         rounds: usize,
     ) -> Self {
         Self {
-            id: id.into(),
+            id,
             kind,
             task: task.into(),
             capabilities,
@@ -169,9 +204,9 @@ impl DelegateSpec {
         }
     }
 
-    /// The delegate's name in the audit trail. Driver-chosen, never derived from content.
-    pub fn id(&self) -> &str {
-        &self.id
+    /// The delegate's name in the audit trail. Driver-minted, never derived from content.
+    pub fn id(&self) -> DelegateId {
+        self.id
     }
 
     pub fn kind(&self) -> Kind {
@@ -298,7 +333,7 @@ mod tests {
     #[test]
     fn a_description_names_what_it_holds_but_never_the_task() {
         let spec = DelegateSpec::new(
-            "delegate:1",
+            DelegateId::nth(1),
             Kind::Checker,
             "find out whether the tests pass",
             Kind::Checker.capabilities(),
@@ -306,6 +341,10 @@ mod tests {
         );
 
         let described = spec.describe();
+        assert!(
+            described.starts_with("d1 "),
+            "the description does not say which delegate it is about: {described}"
+        );
         assert!(described.contains("checker"));
         assert!(described.contains("file_read"));
         assert!(described.contains("shell_exec"));

@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/core/src/incognito.rs
   - crates/agent/src/home.rs
+  - crates/agent/src/remembered.rs
   - crates/tui/src/store.rs
   - crates/tui/src/sessions.rs
   - crates/cli/src/main.rs
@@ -81,7 +82,10 @@ hold gate names and paths, which is a record of a session having happened and wh
 ### INCOG-5: reading is unchanged
 
 An incognito session reads the settings, the recorded model and theme, the standing instructions,
-the skills and the imported credentials, exactly as an ordinary one does. Only writing is refused.
+the skills and the imported credentials, exactly as an ordinary one does. Only writing is refused. The
+record of command lines somebody asked to be remembered past a session, which
+[tools/run.md](tools/run.md) governs, is read here on the same terms: a line
+already in it stops the asking as it does anywhere, and the key that would add one is not offered.
 
 **Why.** A session that could not read its own configuration would not be private, it would be
 broken, and one that could not read a credential could not reach a backend at all. This is the same
@@ -94,6 +98,8 @@ reaches for the wrong one is visible in review.
 
 `verified-by: bravebot_tui::incognito::no_prompt_is_written_down`
 `verified-by: bravebot_tui::incognito::a_choice_applies_to_the_session_and_is_not_recorded`
+`verified-by: bravebot_agent::incognito::no_remembered_line_is_written_down`
+`verified-by: bravebot_agent::incognito::a_line_an_earlier_session_recorded_is_still_honoured`
 
 <a id="INCOG-6"></a>
 ### INCOG-6: asking is one way, and composes with every other way of starting
@@ -130,7 +136,7 @@ mode points.
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so
 
-Three things still reach the filesystem in an incognito session, each because not doing it would
+Four things still reach the filesystem in an incognito session, each because not doing it would
 mean not doing the work:
 
 - **The workspace.** `write_file` and `edit_file` go on editing the project. Those edits are the
@@ -143,6 +149,11 @@ mean not doing the work:
   file, because there is no way to hand an editor a buffer instead of a path. It goes to the
   system temporary directory rather than `~/.bravebot`, is created `0600` and refuses to reuse an
   existing name, and is unlinked on every path out of the function including the failing ones.
+- **The session's own scratch directory.** Somewhere to put a file that is not part of the project
+  is something a turn needs, and this mode does not take it away. It sits in the system temporary
+  directory beside the editor's hand-off file, on the same terms, and goes with the session. Its
+  name says which program made it and nothing about which project or which session, so an empty one
+  records that this program ran at this time. [trust-map.md](trust-map.md) governs it.
 
 **Why.** A stated limit is worth more than an unstated one. Someone who knows the third of these
 can decide not to open an editor; someone who assumed the mode covered it has been misled by their

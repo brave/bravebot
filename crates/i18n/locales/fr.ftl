@@ -87,6 +87,7 @@ cli-workspace-problem = erreur d'espace de travail : { $problem }
 cli-interface-problem = erreur d'interface : { $problem }
 cli-directory-unknown = impossible de savoir de quel répertoire il s'agit
 cli-no-such-session = aucune session { $id } dans ce répertoire
+cli-manifest-run = { $id } est une exécution planifiée : il n'y a rien à poursuivre, voici ce qu'elle a fait
 cli-nothing-to-continue = aucune session à reprendre dans ce répertoire
 cli-fork-needs-a-name = --fork nécessite un identifiant de session
 cli-piped-input-unreadable = avertissement : impossible de lire l'entrée redirigée : { $problem }
@@ -152,6 +153,21 @@ doctor-settings-overridden = { $name } depuis { $path }
 doctor-leo = leo
 doctor-subscription =
     abonnement { $environment } importé, { $unspent } identifiants sur { $total } non dépensés
+doctor-state-directory = répertoire d'état { $path }, depuis { $variable }
+doctor-state-directory-unprotected = non restreint
+doctor-state-directory-permissions =
+    l'historique des invites, les enregistrements de session et les choix retenus portent les
+    permissions de votre répertoire de profil
+doctor-state-directory-absent = aucun répertoire d'état : { $variables } ne nomme rien
+doctor-state-directory-not-kept = non conservés
+doctor-state-directory-forgotten =
+    les sessions et --resume, l'historique des invites, le modèle et le thème que vous choisissez
+doctor-state-directory-not-read = non lus
+doctor-state-directory-your-own =
+    vos propres réglages, compétences et instructions permanentes ; ceux d'une copie de travail
+    s'appliquent quand même
+doctor-state-directory-remedy = pour les garder
+doctor-state-directory-set-profile = réglez { $variables } sur un répertoire à vous
 doctor-confinement = confinement { $level }
 confinement-kernel = imposé par le noyau
 confinement-partial = partiel
@@ -186,6 +202,8 @@ subscription-unusable =
     l'abonnement importé n'a pas pu être utilisé ({ $problem }) ; ce tour utilise donc
     l'offre gratuite
 
+background-job-finished = `{ $command }` s'est terminé en arrière-plan : { $outcome }
+
 
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
 
@@ -201,6 +219,21 @@ trust-directory-regardless =
 trust-directory-yes = lui faire confiance
 trust-directory-no = me demander à chaque écriture
 quit = quitter
+
+
+## Ouvrir les répertoires qu'un fichier de réglages nomme, demandés une fois chacun au démarrage
+
+named-directory-title = ouvrir ce répertoire ?
+named-directory-question = Ouvrir
+named-directory-explained =
+    Un fichier de réglages a demandé que ce répertoire soit ouvert à côté de celui où vous
+    travaillez. L'ouvrir permet d'y lire et d'y modifier des fichiers, et de les lire comme
+    fiables.
+named-directory-regardless =
+    Un fichier ne peut pas ouvrir un répertoire de lui-même. Répondez non et cette session tourne
+    sans lui ; /add-dir en ouvre un à tout moment.
+named-directory-yes = l'ouvrir
+named-directory-no = le laisser fermé
 
 
 ## Choisir un thème, un modèle, ou une session à reprendre
@@ -333,8 +366,26 @@ run-always-output-trusted = ce qu'elle affiche est fiable, et le modèle le lit
 run-always-exact-arguments = ces arguments seulement : git log ne couvrirait pas git push
 run-private-not-remembered =
     une entrée privée est soumise à chaque fois, celle-ci ne peut donc pas être retenue
+run-assignment-not-remembered =
+    une affectation placée devant un programme est soumise à chaque fois, celle-ci ne peut donc pas être retenue
+run-remember-explained =
+    r : ne plus rien demander pour cette ligne exacte, dans ce répertoire, à partir de maintenant
+run-remember-where = elle est écrite ici, et supprimer la ligne est le chemin du retour :
+run-remember-only-asking =
+    cela arrête seulement la question : ce qu'elle affiche reste en quarantaine
+run-remember-every-session =
+    toute session ouverte dans ce répertoire la lit, pas seulement celle-ci
+run-pattern-varies =
+    ces arguments diffèrent de ceux qui vous ont déjà été soumis : aucune touche ici n'arrête la question
+run-pattern-where =
+    un motif pour la famille s'écrit dans un fichier de configuration, il ne se répond pas ici :
+run-pattern-covers-unread =
+    un motif couvre des lignes que personne n'a lues, ce qui est plus que ce qu'accorde toute touche ici
+run-pattern-only-asking =
+    un motif arrête la question et rien d'autre : ce que la ligne affiche reste en quarantaine
 run-yes = l'exécuter
-run-always = toujours
+run-always = toujours pour cette session
+run-remember = s'en souvenir
 run-no = ne pas l'exécuter
 
 
@@ -365,6 +416,24 @@ fetch-explained =
     ce qu'il contient.
 fetch-yes = le récupérer
 fetch-no = ne pas le récupérer
+
+
+## Démarrer un serveur de langage
+
+server-title = démarrer un serveur de langage ?
+server-verb = Démarrer
+server-workspace = pour indexer { $workspace }
+server-build-tooling =
+    ceci lance les outils de compilation de son écosystème : le code de vos dépendances s'exécute
+    donc avec vos propres accès, comme le fait cargo test. il reste actif pendant cette session.
+server-reads-only =
+    il lit le projet et reste actif pendant cette session. rien n'est écrit dans votre projet.
+server-explained =
+    ce qu'il rapporte garde le même statut quelle que soit votre réponse : un emplacement dans un
+    fichier est montré, et le texte à cet emplacement est en quarantaine tant que vous n'avez pas
+    approuvé le fichier.
+server-yes = le démarrer
+server-no = ne pas le démarrer
 
 
 ## Approuver un plan avant son exécution
@@ -433,6 +502,8 @@ status-directory-trusted = fiable
 status-directory-untrusted = non fiable, chaque écriture vous est donc montrée
 status-also-open = Aussi ouvert
 status-added-directory = ajouté avec /add-dir
+status-scratch = Temporaire
+status-scratch-note = propre à cette session, qui peut y écrire, supprimé à sa fin
 status-model = Modèle
 status-model-chosen = choisi avec /model
 status-model-default = la valeur par défaut configurée
@@ -456,6 +527,9 @@ status-loop-self-paced = cadencée par chaque tour
 status-loop-next = prochaine dans { $next }
 status-loop-running = en cours
 status-loop-unpaced = en attente que le tour dise quand
+status-goal = Objectif
+# « fois » est invariable, donc une seule forme là où l'anglais en a deux.
+status-goal-rounds = renvoyé { $rounds } fois, il en reste { $left }
 status-permissions = Permissions
 status-permissions-cycle = shift-tab pour changer
 status-this-session = Cette session
@@ -473,9 +547,21 @@ status-trusted = fiable
 status-untrusted = non fiable
 status-programs = Programmes
 status-every-run-is-asked = chaque exécution vous est soumise
+status-nothing-vouched-this-session =
+    rien n'a été approuvé pour cette session ; les lignes ci-dessous s'exécutent sans rien demander
 status-trusted-commands = Commandes fiables
 status-trusted-commands-note = exécutées sans rien demander, et leur sortie est fiable
 status-and-more = … et { $count } de plus
+status-remembered = Lignes mémorisées
+status-remembered-note =
+    exécutées sans rien demander dans ce répertoire, et leur sortie reste en quarantaine
+status-remembered-this-session = mémorisée dans cette session
+status-remembered-earlier = mémorisée dans une session antérieure
+status-remembered-where = supprimez une ligne de { $path } pour qu'elle soit redemandée
+status-remembered-and-more = { $count ->
+    [one] … et 1 de plus, dont { $earlier } d'une session antérieure
+   *[other] … et { $count } de plus, dont { $earlier } d'une session antérieure
+    }
 
 # Le français emprunte les trois premières abréviations telles quelles.
 environment-local = local
@@ -596,8 +682,11 @@ command-compact = Résumer la conversation jusqu'ici, en gardant la partie réce
 command-btw = Demander quelque chose à côté du travail, sans le mettre dans la conversation
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
 command-loop = Renvoyer une consigne encore et encore, à votre intervalle ou au rythme de chaque tour
+command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
+command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-export = Exporter la transcription de la session vers un fichier markdown
-command-undo = Annuler le dernier tour et restaurer les fichiers
+command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
+command-rewind = Lister les tours qu'un rembobinage peut atteindre, ou reculer d'autant
 command-exit = Partir
 
 
@@ -608,10 +697,22 @@ session-renamed = renommée en { $title }
 session-rename-needs-a-name = /rename demande un nom, comme /rename le bug de l'analyseur
 session-rename-needs-something = /rename demande un nom qui contienne quelque chose
 session-cleared = effacée : une nouvelle session, la précédente restant reprenable
-session-last-turn-undone = session rembobinée d'un tour
-session-last-turn-undone-partly =
-    session rembobinée d'un tour, mais ces fichiers gardent ce qu'il a écrit : { $paths }
+session-rewound = session rembobinée avant le tour { $turn }
+session-rewound-partly =
+    session rembobinée avant le tour { $turn }, mais ces fichiers gardent ce qui a été
+    écrit : { $paths }
 session-nothing-to-undo = rien à annuler dans cette session
+session-rewind-points = un rembobinage revient à l'un de ceux-ci, restaurant chaque ligne jusqu'à lui :
+session-rewind-point =
+    { $turns } en arrière : avant le tour { $turn }, { $asked }, restaure { $paths }
+session-rewind-point-wrote-nothing =
+    { $turns } en arrière : avant le tour { $turn }, { $asked }, aucun fichier à restaurer
+session-rewind-needs-a-number = /rewind demande un nombre de tours, comme /rewind 2
+session-rewind-goes-no-further =
+    { $kept ->
+        [one] cette session peut reculer d'un tour, pas plus
+       *[other] cette session peut reculer de { $kept } tours, pas plus
+    }
 session-exported = transcription exportée vers { $path }
 session-export-failed = impossible d'exporter la transcription : { $problem }
 session-add-dir-needs-a-path = /add-dir demande un répertoire, comme /add-dir ~/notes
@@ -627,6 +728,7 @@ session-permissions-skipped =
     --dangerously-skip-permissions : rien ne sera demandé avant une écriture, une commande, ou la
     lecture d'un fichier que personne n'a approuvé. shift-tab pour changer
 session-directory-not-added = impossible d'ajouter { $directory } : { $problem }
+session-scratch-unavailable = aucun répertoire temporaire pour cette session : { $problem }
 session-using-model = utilise { $model }
 session-using-model-from = utilise { $model } via { $service }
 session-signing-in =
@@ -651,6 +753,7 @@ session-vouched-for = { $path } approuvé pour cette session
 update-available =
     bravebot { $version } est disponible (celle-ci est { $running }) ; pour la mettre à jour :
     { $command }
+session-started-server = serveur de langage { $language } actif pour cette session ({ $program })
 session-answered-already = déjà répondu : { $question }
 session-something-was-refused =
     un contrôle de la politique a refusé quelque chose pendant ce tour
@@ -681,12 +784,51 @@ loop-stopped = la boucle est arrêtée
 loop-aged-out = la boucle a tourné une semaine et s'est arrêtée d'elle-même
 loop-unpaced = ce tour n'a pas dit quand recommencer, la boucle est donc arrêtée
 loop-busy = /loop commence par un tour à lui, il attend donc la fin de celui-ci
+loop-replaces-goal =
+    l'objectif qui était fixé a été retiré : une session ne travaille qu'à une chose à la fois
 loop-armed-by-the-turn =
     nouveau regard dans { $after }, en répétant ce que vous avez demandé ; ctrl-c l'arrête, et
     partir aussi
 loop-not-armed-under-a-goal =
     un regard plus tard a été demandé sans être lancé : cette session travaille vers un objectif,
     et elle fait une chose à la fois
+
+
+## Travailler jusqu'à ce qu'une condition soit remplie
+
+goal-set =
+    objectif : { $condition }. Rien ne démarre tant que vous n'avez pas envoyé quelque chose ;
+    ensuite chaque tour est jugé par rapport à lui. Ctrl-c le retire, et partir aussi
+goal-replaced = l'objectif qui était fixé a été remplacé
+goal-cleared = l'objectif est retiré
+goal-none =
+    aucun objectif n'est fixé. /goal <condition> en fixe un, comme /goal cargo test se termine
+    avec le code 0, et /goal clear le retire
+goal-active = objectif : { $condition }
+goal-last-check = la dernière vérification a dit : { $reason }
+goal-never-checked = rien n'a encore été jugé par rapport à lui
+goal-not-met = l'objectif n'est pas encore atteint : { $reason }
+goal-not-met-unsaid =
+    l'objectif n'est pas encore atteint, et la vérification n'a pas dit ce qui manque
+goal-met = l'objectif est atteint : { $reason }
+goal-met-unsaid = l'objectif est atteint
+goal-impossible = l'objectif ne peut pas être atteint, il est donc retiré : { $reason }
+goal-unreadable =
+    la vérification n'a pas répondu par un verdict : il n'y a donc rien sur quoi agir et
+    l'objectif est retiré
+goal-quarantined =
+    cette conversation a rencontré du contenu non fiable ; un verdict à son sujet n'est donc pas
+    quelque chose sur quoi ce programme a le droit d'agir, et l'objectif est retiré
+goal-spent =
+    l'objectif a renvoyé le travail { $rounds } fois sans être atteint, et s'est arrêté plutôt que
+    de continuer
+goal-failed = l'objectif n'a pas pu être vérifié ({ $problem }), il est donc retiré
+goal-uninterruptible =
+    la vérification déjà en cours tient en une requête et ne peut pas être arrêtée en chemin, mais
+    rien de plus ne sera envoyé
+goal-ended-unexpectedly = la vérification de l'objectif s'est terminée de façon inattendue
+goal-replaces-loop =
+    la boucle qui tournait a été arrêtée : une session ne travaille qu'à une chose à la fois
 
 
 ## Coller, déposer et joindre
@@ -725,6 +867,16 @@ btw-ended-unexpectedly = la question s'est terminée de façon inattendue
 btw-answered = demandé à côté du travail, et répondu là ; { $chord } l'ouvre à nouveau
 btw-failed = la question n'a pas pu recevoir de réponse : { $problem }
 
+# Ce que la session dit d'une exécution planifiée lancée depuis elle. Le plan, chaque étape et la
+# réponse s'affichent au fur et à mesure ; il ne reste donc à dire qu'une exécution commence, où
+# elle a été enregistrée, et ce qui a échoué là où quelque chose a échoué. Qu'une exécution ne soit
+# pas un tour de la conversation tient au mode et non à cette exécution : cela n'est pas dit ici.
+manifest-needs-a-task = /manifest prend la tâche à planifier, comme /manifest résume la documentation
+manifest-began = la tâche entière est planifiée d'abord ; la session attend ici jusqu'à la fin de l'exécution
+manifest-ended-unexpectedly = l'exécution s'est terminée de façon inattendue
+manifest-failed = l'exécution s'est arrêtée : { $problem }
+manifest-recorded = enregistré sous { $id } ; à relire avec bravebot --resume { $id }
+
 
 ## L'écran d'accueil
 
@@ -737,6 +889,7 @@ opening-invitation = Posez une question sur cet espace de travail.
 verb-read-file = Lire
 verb-list-files = Lister
 verb-search = Chercher
+verb-lsp = Consulter
 verb-write-file = Écrire
 verb-edit-file = Modifier
 verb-todo-write = Planifier

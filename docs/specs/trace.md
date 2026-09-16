@@ -62,12 +62,15 @@ system deduced would omit exactly the decisions somebody might later want to acc
 
 A session's trail is appended a turn at a time, so a line-oriented file can be read with whatever
 is to hand. The labels are spelled out rather than abbreviated, because a file read months later
-has no legend beside it. Each event keeps the time it happened.
+has no legend beside it. Each event keeps the time it happened, and an event a delegate's gate
+took keeps the number of that run ([DELEGATE-13](delegation.md#DELEGATE-13)). The turn's own
+records carry no such field.
 
 **Why.** The compact form suits a terminal, where the reader has the legend in front of them. A
 file has a different reader.
 
 `verified-by: bravebot_tui::sessions::the_audit_keeps_the_time_each_event_happened`
+`verified-by: bravebot_tui::audit::the_written_record_names_the_delegate_that_took_the_decision`
 
 A **gate** is a check that has to pass before anything consequential happens: content reaching the
 model, a file being written, a program being run, a request leaving the process. Each one decides a
@@ -127,6 +130,9 @@ one gate that ran: what it checked, the label it saw, and what it allowed. It is
 find out why something was refused.
 
 `verified-by: bravebot_tui::app::ctrl_t_toggles_the_trail`
+`verified-by: bravebot_tui::render::the_trail_is_hidden_by_default`
+`verified-by: bravebot_tui::render::a_blocked_gate_is_shown_in_the_trail`
+`verified-by: bravebot_cli::main::the_trail_renders_a_line_for_every_event`
 
 <a id="TRACE-6"></a>
 ### TRACE-6: each planning call is recorded, like any other gate

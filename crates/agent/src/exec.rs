@@ -229,13 +229,18 @@ impl std::error::Error for ExecError {}
 /// `cancel` is checked while waiting, so a user who changes their mind does not have to wait out a
 /// slow program. Unlike cancellation between rounds, this one kills: a child already running is an
 /// effect in progress, and the request to stop is precisely a request to end it.
+///
+/// `scratch` is the directory this session was given, which every stage is told the path of. A
+/// caller that has none passes nothing, and then no stage is told of one: a name set to a
+/// directory that does not exist would be worse than an absent name, which a line can test for.
 pub fn run(
     pipeline: &Pipeline,
     resolved: &[std::path::PathBuf],
     directory: &std::path::Path,
     cancel: &Cancel,
+    scratch: Option<&std::path::Path>,
 ) -> Result<Ran, ExecError> {
-    run_within(pipeline, resolved, directory, cancel, LIMIT)
+    run_within(pipeline, resolved, directory, cancel, LIMIT, scratch)
 }
 
 /// [`run`], with the limit named rather than taken from [`LIMIT`].
@@ -250,6 +255,7 @@ pub fn run_within(
     directory: &std::path::Path,
     cancel: &Cancel,
     limit: Duration,
+    scratch: Option<&std::path::Path>,
 ) -> Result<Ran, ExecError> {
     if pipeline.is_empty() {
         return Err(ExecError::Io("no stages to run".to_string()));
@@ -272,7 +278,7 @@ pub fn run_within(
         })
         .collect();
     // A pipeline carries no redirections, so there is nothing for it to report having opened.
-    Running::new(directory, cancel, limit).finish(&Steps::Pipeline(steps), &mut Vec::new())
+    Running::new(directory, cancel, limit, scratch).finish(&Steps::Pipeline(steps), &mut Vec::new())
 }
 
 /// Run a compiled command line and collect what it printed.
@@ -284,13 +290,15 @@ pub fn run_within(
 /// opened, and is filled in whatever becomes of the line. The caller decides what the trust map
 /// records about a file bytes landed in, and the plan's write set cannot answer that: it names
 /// every branch, and a branch that is not taken opens nothing.
+/// `scratch` is the session's own directory, told to every part of the line as in [`run`].
 pub fn run_plan(
     plan: &Plan,
     cancel: &Cancel,
     limit: Duration,
     opened: &mut Vec<std::path::PathBuf>,
+    scratch: Option<&std::path::Path>,
 ) -> Result<Ran, ExecError> {
-    Running::new(&plan.directory, cancel, limit).finish(&plan.steps, opened)
+    Running::new(&plan.directory, cancel, limit, scratch).finish(&plan.steps, opened)
 }
 
 /// Where one of a step's streams goes.
@@ -320,10 +328,17 @@ struct Running<'a> {
     stopped: Option<Duration>,
     /// The destinations opened for writing so far, in the order the steps opened them.
     wrote: Vec<std::path::PathBuf>,
+    /// The directory this session was given, where it has one.
+    scratch: Option<&'a std::path::Path>,
 }
 
 impl<'a> Running<'a> {
-    fn new(directory: &'a std::path::Path, cancel: &'a Cancel, limit: Duration) -> Self {
+    fn new(
+        directory: &'a std::path::Path,
+        cancel: &'a Cancel,
+        limit: Duration,
+        scratch: Option<&'a std::path::Path>,
+    ) -> Self {
         Self {
             directory,
             cancel,
@@ -334,6 +349,7 @@ impl<'a> Running<'a> {
             codes: Vec::new(),
             stopped: None,
             wrote: Vec::new(),
+            scratch,
         }
     }
 
@@ -404,6 +420,18 @@ impl<'a> Running<'a> {
             // The vector, never a string. Nothing here builds a command line, so nothing has to
             // unbuild one.
             command.args(&step.args).current_dir(self.directory);
+            // Where to put an intermediate file, so a line can name one without having been told
+            // the path first. Before the step's own assignments, so a line that sets the name
+            // itself wins, which is what the same assignment in front of a program does in a
+            // shell.
+            if let Some(directory) = self.scratch {
+                command.env(bravebot_config::env_var::SCRATCH_DIR, directory);
+            } else {
+                // Removed rather than left as it arrived. Whatever an outer environment set the
+                // name to is another session's directory or none, and a program that tests the
+                // name would find one that has already been removed.
+                command.env_remove(bravebot_config::env_var::SCRATCH_DIR);
+            }
             // Written in front of this step's own program, so it reaches this step and no other.
             for (name, value) in &step.environment {
                 command.env(name, value);
@@ -935,6 +963,7 @@ pub fn start(
     pipeline: &Pipeline,
     resolved: &[std::path::PathBuf],
     directory: &std::path::Path,
+    scratch: Option<&std::path::Path>,
 ) -> Result<Background, ExecError> {
     if pipeline.is_empty() {
         return Err(ExecError::Io("no stages to run".to_string()));
@@ -956,15 +985,20 @@ pub fn start(
             routes: Vec::new(),
         })
         .collect();
-    start_steps(&steps, directory)
+    start_steps(&steps, directory, scratch)
 }
 
 /// [`start`], for the steps of a compiled plan.
 ///
 /// A plan's redirections and joins are not honoured here: a background job is one pipeline, which
 /// is what [`crate::tools`] refuses anything else for. Every step's own environment is applied, as
-/// it is in the foreground.
-pub fn start_steps(steps: &[Step], directory: &std::path::Path) -> Result<Background, ExecError> {
+/// it is in the foreground, and so is the session's own directory: a program left running is one
+/// with more reason to want somewhere to write, not less.
+pub fn start_steps(
+    steps: &[Step],
+    directory: &std::path::Path,
+    scratch: Option<&std::path::Path>,
+) -> Result<Background, ExecError> {
     if steps.is_empty() {
         return Err(ExecError::Io("no stages to run".to_string()));
     }
@@ -978,6 +1012,13 @@ pub fn start_steps(steps: &[Step], directory: &std::path::Path) -> Result<Backgr
     for (index, step) in steps.iter().enumerate() {
         let mut command = Command::new(&step.resolved);
         command.args(&step.args).current_dir(directory);
+        // In front of the step's own assignments, as in the foreground.
+        if let Some(directory) = scratch {
+            command.env(bravebot_config::env_var::SCRATCH_DIR, directory);
+        } else {
+            // Removed rather than left, as in the foreground.
+            command.env_remove(bravebot_config::env_var::SCRATCH_DIR);
+        }
         for (name, value) in &step.environment {
             command.env(name, value);
         }

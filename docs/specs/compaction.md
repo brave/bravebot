@@ -193,6 +193,8 @@ than necessary, which is a mistake this project made before measuring the endpoi
 `verified-by: bravebot_tui::app::nothing_chosen_has_no_advertised_window`
 `verified-by: bravebot_tui::app::a_model_the_listing_no_longer_offers_has_no_window`
 `verified-by: bravebot_tui::app::a_model_that_advertises_nothing_has_no_window`
+`verified-by: bravebot_tui::app::a_run_with_no_session_adopts_the_window_of_the_model_in_force`
+`verified-by: bravebot_tui::app::a_run_whose_model_no_roster_describes_keeps_the_default`
 
 <a id="COMPACT-10"></a>
 ### COMPACT-10: every compaction is recorded, with what it gave up and where it happened
@@ -214,3 +216,57 @@ only the round says how far into the work.
 
 `verified-by: bravebot_agent::turn::the_trail_says_what_a_compaction_gave_up_and_what_it_cost`
 `verified-by: bravebot_agent::turn::the_trail_says_which_round_a_compaction_landed_on`
+
+<a id="COMPACT-11"></a>
+### COMPACT-11: the summariser asks for no cache of the exchange it gives up
+
+The summariser's request marks its own instructions for caching and marks nothing on the end of the
+exchange it carries. Both wire formats a backend speaks are told the same thing, so which service
+answers does not change what is asked for.
+
+**Why.** A cache write is charged above the fresh tokens it covers, and it buys something only where
+a later request sends the same prefix again. Nothing sends this prefix again: the request opens with
+instructions no other request uses, ends with an instruction of its own, and the exchange between
+them is about to be replaced. It is also among the longest prefixes a session sends, being the
+conversation down to the cut, so marking the end of it pays the premium where it costs most and buys
+a cache nothing can read.
+
+**The instructions keep their mark, for the ordinary reason.** They are the same bytes every time a
+summary is asked for, which is what marking a prompt is for. Nothing here rests on a service storing
+them: these instructions are a few hundred tokens, short enough that a service with a minimum
+cacheable prefix stores nothing at all, so the mark buys a read where one is offered and costs a
+write at most where it is not.
+
+**Marking the end is the default a request opts out of.** The arithmetic is the other way round for
+the rounds of a turn, each of which sends the round before it again, and that is the case the default
+is written for. This is a request that says otherwise.
+
+`verified-by: bravebot_agent::turn::the_summariser_asks_for_no_cache_of_the_exchange_it_gives_up`
+`verified-by: bravebot_aichat::protocol::a_request_giving_up_its_conversation_marks_the_prompt_alone`
+`verified-by: bravebot_bedrock::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
+
+<a id="COMPACT-12"></a>
+### COMPACT-12: what a compaction costs the cache is the conversation
+
+A compaction rewrites the conversation and rewrites nothing of the system prompt or the tool schemas,
+so the round that follows one inside the same turn sends that prefix byte for byte and reads it back.
+Nothing of the conversation is read back, and that round pays a write to establish the shortened one.
+When a compaction happens is COMPACT-8's: the figure it compares is what the last request measured,
+and what a cache holds is no part of it.
+
+**Inside the turn, and nothing claimed past it.** A turn assembles its prompt and its tool schemas
+once and every round of it sends the same ones, which is what makes the round after a compaction
+comparable with the round before. A prompt assembled for a later turn can differ for reasons a
+compaction has no part in, among them the date, a tick's number under a loop, and an instruction file
+re-read from disk; and a turn that has spent its tool budget sends no schemas at all from then on.
+
+**Why it is stated rather than worked out.** A request marks two prefixes and a compaction rewrites
+one of them, so taking the pair as a unit gives the wrong answer twice: it reads as though a
+compaction cost the prompt's cache as well, which makes compacting look more expensive than it is,
+and it leaves a reader expecting the conversation's cache to survive a rewrite of the conversation.
+
+**Why the write is paid rather than avoided.** The alternative is holding a compaction back to keep a
+prefix warm, which trades a request the server will refuse for one cache read. A conversation that
+cannot be shortened stays long, and that is the outcome this document is here to prevent.
+
+`verified-by: bravebot_agent::turn::a_compaction_leaves_the_prompt_a_breakpoint_covers_alone`

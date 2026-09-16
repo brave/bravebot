@@ -335,7 +335,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let config = match Config::from_env() {
+    let mut config = match Config::from_env() {
         Ok(c) => c,
         Err(err) => {
             eprintln!("{}", t!(cli_configuration_problem, problem = err));
@@ -343,7 +343,9 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         }
     };
 
-    let mut workspace = match current_workspace() {
+    let settings = bravebot_config::Settings::load();
+
+    let mut workspace = match current_workspace(&settings) {
         Ok(w) => w,
         Err(err) => {
             eprintln!("{}", t!(cli_workspace_problem, problem = err));
@@ -359,12 +361,16 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // A run is a session for this: it is given somewhere of its own to write what is not part of
+    // the project, and the directory goes when the run does. Held in a binding for exactly that
+    // reason, since dropping it is what removes it.
+    let _scratch = scratch_for_this_run(&mut workspace);
+
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
     // The rules the settings file carried. Anything unreadable is named on stderr, beside the rest
     // of what this run has to say about itself.
-    let settings = bravebot_config::Settings::load();
     let (permissions, rejected) = rules_for_a_one_shot_run(
         &settings,
         bravebot_agent::home::directory().as_deref(),
@@ -447,6 +453,14 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         .unwrap_or(&config.default_model)
         .to_string();
 
+    // The window the endpoint advertises for that model, which is what compaction measures a
+    // conversation against. A run opens no picker and holds no session, so this is the only place
+    // it can be looked up, and the model is in force here however it got there: named on the
+    // command line, read back off disk, or pinned in the settings file. Without it a run compacts
+    // against a default that a narrow window never reaches, so compaction never fires, while a wide
+    // one reaches it with three quarters of the conversation still to spare.
+    bravebot_tui::app::adopt_budget_for_model(&mut config, &model);
+
     // The sign-in's own lines go to stderr as they arrive, beside every other progress line, which
     // keeps stdout the reply and nothing else. A URL and a code are no use after the fact, so they
     // are printed while the command that wrote them is still waiting.
@@ -469,7 +483,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             &mut confirmer,
             &mut reporter,
             &mut sink,
-            TrustStore::new(),
+            TrustStore::new(workspace.root()),
             &Cancel::new(),
         ),
         Mode::Manifest => bravebot_agent::manifest::run(
@@ -480,7 +494,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             &mut confirmer,
             &mut reporter,
             &mut sink,
-            TrustStore::new(),
+            TrustStore::new(workspace.root()),
             &Cancel::new(),
         ),
     };
@@ -489,7 +503,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     // picker says so, but "cannot be continued" is a different thing from "leaves no trace":
     // the run somebody needs to read is the one that stopped, and until now it left nothing.
     if mode == Mode::Manifest {
-        record_manifest_run(&workspace, &task.prompt, &outcome);
+        bravebot_tui::sessions::record_manifest_run(workspace.root(), &task.prompt, &outcome);
     }
 
     match outcome {
@@ -897,20 +911,28 @@ fn print_trace(output: &mut impl Write, sink: &RecordingSink) {
     }
 
     trace!("audit trail");
-    for event in sink.events() {
+    for (delegate, event) in sink.recorded() {
+        // Which run took the decision, in front of what it decided. A turn and the delegates it
+        // spawned record into this one trail, and two delegates of the same kind decide alike.
+        let run = match delegate {
+            Some(delegate) => format!("{delegate} "),
+            None => String::new(),
+        };
         match event {
-            Event::GatePassed { gate, detail } => trace!("  ok      {gate}: {detail}"),
-            Event::GateBlocked { gate, reason, .. } => trace!("  BLOCK   {gate}: {reason}"),
+            Event::GatePassed { gate, detail } => trace!("  ok      {run}{gate}: {detail}"),
+            Event::GateBlocked { gate, reason, .. } => trace!("  BLOCK   {run}{gate}: {reason}"),
             Event::Observed { capability, label } => {
-                trace!("  observe {capability} produced {label}")
+                trace!("  observe {run}{capability} produced {label}")
             }
-            Event::SlotWritten { slot, label } => trace!("  slot    {slot} at {label}"),
+            Event::SlotWritten { slot, label } => trace!("  slot    {run}{slot} at {label}"),
             Event::SlotDeferred {
                 slot,
                 label,
                 origin,
-            } => trace!("  defer   {slot} holds {origin}, unread, at {label}"),
-            Event::Declassified { slot, from, to, .. } => trace!("  release {slot} {from} -> {to}"),
+            } => trace!("  defer   {run}{slot} holds {origin}, unread, at {label}"),
+            Event::Declassified { slot, from, to, .. } => {
+                trace!("  release {run}{slot} {from} -> {to}")
+            }
             Event::ActionField {
                 tool,
                 field,
@@ -923,99 +945,32 @@ fn print_trace(output: &mut impl Write, sink: &RecordingSink) {
                     Role::Routing => "routing",
                     Role::Content => "content",
                 };
-                trace!("  {mark} {tool}.{field} [{role}] {label}");
+                trace!("  {mark} {run}{tool}.{field} [{role}] {label}");
             }
         }
     }
 }
 
-/// Write a manifest run into the session store, finished or not.
-///
-/// Best-effort, like everything else under `~/.bravebot`: a run that cannot be written down still
-/// ran, and failing the command because the record did not save would be the wrong trade.
-fn record_manifest_run(
-    workspace: &bravebot_agent::Workspace,
-    prompt: &str,
-    outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
-) {
-    use bravebot_core::programs::TrustedPrograms;
-    use bravebot_tui::sessions::{Handle, Standing, StoredManifest};
-
-    let (stored, trust) = match outcome {
-        Ok(finished) => (
-            finished
-                .attempt
-                .as_ref()
-                .map(|attempt| StoredManifest::of(attempt, None)),
-            finished.trust.clone(),
-        ),
-        Err(bravebot_agent::TurnError::Manifest { attempt, detail }) => (
-            Some(StoredManifest::of(attempt, Some(detail.clone()))),
-            TrustStore::new(),
-        ),
-        // Cancelled, or a failure with nothing to show. Nothing worth a record.
-        Err(_) => (None, TrustStore::new()),
-    };
-
-    let Some(stored) = stored else {
-        return;
-    };
-
-    let conversation = bravebot_agent::Conversation::new();
-    let snapshot = conversation.snapshot();
-    let todos = std::collections::BTreeMap::new();
-    let programs = TrustedPrograms::new();
-    let tokens = outcome.as_ref().map(|o| o.tokens).unwrap_or(0);
-    // One turn, so the breakdown and the total say the same thing. Written anyway, because a
-    // reader comparing runs should not have to special-case where the figure came from.
-    let spend = std::collections::BTreeMap::from([(1, tokens)]);
-    // Where that one turn's time went, on the same footing. A manifest run is the case where this
-    // matters most: it is the mode nobody is watching, so a run that spent its afternoon blocked on
-    // an approval nobody was there to give leaves this as the only trace of it.
-    let timing = std::collections::BTreeMap::from([(
-        1,
-        outcome.as_ref().map(|o| o.timing).unwrap_or_default(),
-    )]);
-    let mut handle = Handle::begin(workspace.root());
-    handle.save(
-        prompt,
-        Standing {
-            // Empty, and it has to be: a manifest run has no conversation, which is the same
-            // fact that makes it unresumable. Filling this with something conversation-shaped
-            // would make the picker offer to continue a run that cannot be continued.
-            conversation: &snapshot,
-            turns: 1,
-            tokens,
-            spend: &spend,
-            timing: &timing,
-            model: outcome.as_ref().ok().map(|o| o.model.as_str()),
-            todos: &todos,
-            // None, and there can be none: an aside is a question a person types beside a
-            // conversation, and a manifest run has neither.
-            asides: &[],
-            trust: &trust,
-            programs: &programs,
-            directories: &[],
-            manifest: Some(&stored),
-        },
-    );
-}
 fn resume_named(id: &str, skip_permissions: bool) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
         eprintln!("{}", t!(cli_directory_unknown));
         return ExitCode::FAILURE;
     };
     match bravebot_tui::sessions::load(&directory, id) {
+        // Printing what a run produced is what naming one here is for (SESSION-10), and a session
+        // that started a run says to name it. So this answers on stdout and succeeds: the id was
+        // real, the record was read, and the person got the thing they asked for. Reporting it as a
+        // failure would make the line the session printed read as advice that does not work.
         Some(record) if record.manifest.is_some() => {
-            eprintln!("{}", bravebot_tui::resume::manifest_note());
+            println!("{}", t!(cli_manifest_run, id = id));
             if let Some(stored) = &record.manifest {
                 let report = stored.describe();
                 if !report.is_empty() {
-                    eprintln!();
-                    eprint!("{report}");
+                    println!();
+                    print!("{report}");
                 }
             }
-            ExitCode::FAILURE
+            ExitCode::SUCCESS
         }
         Some(record) => interactive(
             bravebot_tui::app::Start::Resuming(Box::new(record)),
@@ -1092,7 +1047,7 @@ fn interactive(start: bravebot_tui::app::Start, skip_permissions: bool) -> ExitC
         }
     };
 
-    let workspace = match current_workspace() {
+    let workspace = match current_workspace(&bravebot_config::Settings::load()) {
         Ok(w) => w,
         Err(err) => {
             eprintln!("{}", t!(cli_workspace_problem, problem = err));
@@ -1166,12 +1121,42 @@ fn named(level: bravebot_sandbox::policy::ConfinementLevel) -> String {
     .to_string()
 }
 
+/// The directory this run writes what is not part of the project into, made and reachable.
+///
+/// Nothing on a machine that cannot give it one, which is not a reason to refuse to run: a full or
+/// read-only temporary directory leaves a turn with nowhere to put an intermediate file and nothing
+/// else. On stderr, beside every other line this run has to say about itself, because a turn told
+/// there is nowhere to write leaves nothing else to read it off.
+fn scratch_for_this_run(workspace: &mut Workspace) -> Option<bravebot_agent::SessionScratch> {
+    let scratch = match bravebot_agent::SessionScratch::create() {
+        Ok(scratch) => Some(scratch),
+        Err(problem) => {
+            eprintln!(
+                "{}",
+                t!(
+                    cli_notice,
+                    notice = t!(session_scratch_unavailable, problem = problem.to_string())
+                )
+            );
+            None
+        }
+    };
+    workspace.open_scratch(scratch.as_ref().map(|held| held.path().to_path_buf()));
+    scratch
+}
+
 /// The workspace is the current directory: file arguments resolve relative to it, and
 /// confinement keeps reads inside it.
-fn current_workspace() -> Result<Workspace, String> {
+///
+/// The search caps come in from the settings here rather than being read inside the workspace,
+/// because a workspace is built by every test in the tree and one that read the settings would
+/// answer differently on a machine whose owner had configured them.
+fn current_workspace(settings: &bravebot_config::Settings) -> Result<Workspace, String> {
+    let caps = settings.search();
     std::env::current_dir()
         .map_err(|e| e.to_string())
         .and_then(|dir| Workspace::new(dir).map_err(|e| e.to_string()))
+        .map(|workspace| workspace.with_search_caps(caps.files, caps.time))
 }
 
 /// Import a Leo Premium subscription from a local Brave install.
@@ -1326,7 +1311,8 @@ fn doctor() -> ExitCode {
 
     // Resolved once for the two sections that need it, since two answers to where the state
     // directory is would be two answers to which rules a run reads.
-    let home = bravebot_agent::home::directory();
+    let resolved = bravebot_agent::home::resolved();
+    let home = resolved.as_ref().map(|(_, path)| path.as_path());
 
     match Config::from_env_and_settings(&settings) {
         Ok(config) => {
@@ -1370,7 +1356,7 @@ fn doctor() -> ExitCode {
             // build could not act on, because those are the ones that look like protection and
             // are not.
             let (permissions, rejected) =
-                bravebot_agent::permissions::from_settings(&settings, home.as_deref());
+                bravebot_agent::permissions::from_settings(&settings, home);
             fact(
                 t!(doctor_permissions),
                 match permissions.is_empty() {
@@ -1421,7 +1407,13 @@ fn doctor() -> ExitCode {
     // Outside the block above, which a configuration error stops before it prints anything: where
     // the state is kept is a fact about the machine either way, and a machine with nowhere to keep
     // it is one of the reasons the configuration above it can be wrong.
-    for line in state_directory(home.as_deref()) {
+    for line in state_directory(
+        resolved
+            .as_ref()
+            .map(|(variable, path)| (*variable, path.as_path())),
+        bravebot_agent::home::PROFILE_VARIABLES,
+        RESTRICTED,
+    ) {
         println!("{line}");
     }
 
@@ -1570,6 +1562,14 @@ fn report_subscription() {
     }
 }
 
+/// Whether a file created under the state directory is reachable only by the account that owns it.
+///
+/// [`bravebot_agent::home::create_directory`] and [`bravebot_agent::home::write_file`] ask for that
+/// mode as they create, and on a platform with no mode to ask for they cannot: the files carry
+/// whatever the profile directory grants them instead. Read here and passed in, so a test on either
+/// platform holds what the section says in both cases.
+const RESTRICTED: bool = cfg!(unix);
+
 /// The state directory section of `doctor`: where it is, or that there is none and what that costs.
 ///
 /// Built rather than printed, so what the section says is a value a test can hold.
@@ -1584,10 +1584,25 @@ fn report_subscription() {
 /// its skills and its `AGENTS.md` are read with no home at all, so a report that said only
 /// "settings are not kept" would have somebody looking for why the file in front of them is being
 /// ignored when it is in force.
-fn state_directory(found: Option<&Path>) -> Vec<String> {
-    let Some(path) = found else {
+///
+/// A directory that is there is reported with the variable that named it, since more than one can
+/// and the one that answered is what somebody has to change to put the directory elsewhere. It is
+/// also where `restricted` is spent: a person keeping a shared or synced profile is owed the
+/// difference between files this program narrowed and files carrying whatever they inherited, and
+/// the state directory is the only section that could tell them.
+///
+/// `variables` is passed in for the same reason `restricted` is: the list is the one thing here that
+/// differs by platform, and a host that states a profile directory in one variable could otherwise
+/// not hold what the report says on a host that states it in two.
+fn state_directory(
+    found: Option<(&str, &Path)>,
+    variables: &[&str],
+    restricted: bool,
+) -> Vec<String> {
+    let Some((variable, path)) = found else {
+        let variables = variables.join(" or ");
         return vec![
-            t!(doctor_state_directory_absent).to_string(),
+            t!(doctor_state_directory_absent, variables = &variables).to_string(),
             aligned(
                 t!(doctor_state_directory_not_kept),
                 t!(doctor_state_directory_forgotten),
@@ -1600,12 +1615,27 @@ fn state_directory(found: Option<&Path>) -> Vec<String> {
             ),
             aligned(
                 t!(doctor_state_directory_remedy),
-                t!(doctor_state_directory_set_home),
+                t!(doctor_state_directory_set_profile, variables = &variables),
                 DETAIL,
             ),
         ];
     };
-    vec![t!(doctor_state_directory, path = path.display().to_string()).to_string()]
+    let mut lines = vec![
+        t!(
+            doctor_state_directory,
+            path = path.display().to_string(),
+            variable = variable
+        )
+        .to_string(),
+    ];
+    if !restricted {
+        lines.push(aligned(
+            t!(doctor_state_directory_unprotected),
+            t!(doctor_state_directory_permissions),
+            DETAIL,
+        ));
+    }
+    lines
 }
 
 /// What `doctor` says about confinement: the lines, and whether there was any.
@@ -1822,18 +1852,31 @@ mod tests {
         );
     }
 
-    /// Which directory this is depends on the `HOME` of whoever started the process, so a person
-    /// under `sudo`, or running the same binary from a service manager, has a different one from
-    /// the session they are looking for. Naming it is what settles which of them is in force.
+    /// Which directory this is depends on the environment of whoever started the process, so a
+    /// person under `sudo`, or running the same binary from a service manager, has a different one
+    /// from the session they are looking for. Naming it is what settles which of them is in force.
+    ///
+    /// The variable it came from is named with it, because more than one can name a profile
+    /// directory and only the one that answered is worth changing: told the path alone, somebody
+    /// moving the directory on Windows sets `USERPROFILE` and watches a `HOME` they forgot they had
+    /// go on winning.
     #[test]
     fn doctor_names_the_state_directory_it_resolved() {
-        let lines = state_directory(Some(Path::new("/home/someone/.bravebot")));
+        let lines = state_directory(
+            Some(("HOME", Path::new("/home/someone/.bravebot"))),
+            &["HOME"],
+            true,
+        );
 
         assert!(
             lines
                 .iter()
                 .any(|line| line.contains("/home/someone/.bravebot")),
             "the state directory in use is not in the section that reports it: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("HOME")),
+            "the section does not say which variable named the directory: {lines:?}"
         );
         assert!(
             !lines
@@ -1843,24 +1886,44 @@ mod tests {
         );
     }
 
+    /// The mode `home` asks for as it creates is what keeps a prompt history out of another
+    /// account's reach, and on a platform that is given no mode the same files are written carrying
+    /// whatever the profile directory grants. Somebody typing a token into a prompt on a shared or
+    /// synced profile is entitled to know which of the two they have, and no other line in the
+    /// report distinguishes them: the section reads identically either way.
+    #[test]
+    fn doctor_says_when_the_files_are_left_unrestricted() {
+        let path = Path::new("C:\\Users\\someone\\.bravebot");
+        let named = ["HOME", "USERPROFILE"];
+        let unrestricted = state_directory(Some(("USERPROFILE", path)), &named, false).join("\n");
+
+        assert!(
+            unrestricted.contains(&t!(doctor_state_directory_permissions).to_string()),
+            "a platform that narrows nothing said nothing about it: {unrestricted}"
+        );
+        assert!(
+            !state_directory(Some(("USERPROFILE", path)), &named, true)
+                .join("\n")
+                .contains(&t!(doctor_state_directory_permissions).to_string()),
+            "a platform that narrows every file reported them as unrestricted"
+        );
+    }
+
     /// The loss this reports is silent: the session records behind `--resume`, the prompt history
     /// and the recorded model are neither read nor written, every subsystem treats that as absence
     /// by design, and somebody whose `/model` choice does not survive the session has nothing else
-    /// in the report to explain it. On Windows, where `HOME` is not the variable the platform sets,
-    /// that is every user.
+    /// in the report to explain it. A stripped environment, a service manager and a container all
+    /// reach it.
     ///
     /// What is still read has to be said in the same breath, because the absence is partial: a
     /// checkout's own settings, skills and `AGENTS.md` load with no home at all, and a report that
     /// left that out would send somebody looking for why a file that is in force is ignored.
     #[test]
     fn a_missing_state_directory_is_reported_with_what_it_costs() {
-        let lines = state_directory(None);
+        let variables = bravebot_agent::home::PROFILE_VARIABLES;
+        let lines = state_directory(None, variables, RESTRICTED);
         let section = lines.join("\n");
 
-        assert!(
-            section.contains("HOME"),
-            "the section does not say why there is no state directory: {section}"
-        );
         for lost in ["sessions", "--resume", "prompt history", "model"] {
             assert!(
                 section.contains(lost),
@@ -1873,9 +1936,39 @@ mod tests {
         );
         assert_ne!(
             lines,
-            state_directory(Some(Path::new("/home/someone/.bravebot"))),
+            state_directory(
+                Some(("HOME", Path::new("/home/someone/.bravebot"))),
+                variables,
+                RESTRICTED
+            ),
             "a machine with no state directory reads the same as one with a state directory"
         );
+    }
+
+    /// Which variables a platform states a profile directory in is not something the reader knows,
+    /// so the report names every one that was looked at: told only that `HOME` names nothing,
+    /// somebody on a platform that answers with another variable is being sent to set the one that
+    /// was never going to be consulted. The remedy carries the same list as the line above it, since
+    /// the remedy is the half somebody acts on.
+    ///
+    /// Held against two variables rather than this host's own, which states one. Against a list of
+    /// one, an assertion that the report names `HOME` is satisfied by the remedy's own wording
+    /// whatever the report does with the list, which is a test that passes having pinned nothing.
+    #[test]
+    fn a_missing_state_directory_names_every_variable_it_looked_at() {
+        let lines = state_directory(None, &["HOME", "USERPROFILE"], RESTRICTED);
+        let absent = lines.first().expect("the absence is reported");
+        let remedy = lines
+            .iter()
+            .find(|line| line.contains(&t!(doctor_state_directory_remedy).to_string()))
+            .expect("the report says how to keep them");
+
+        for line in [absent, remedy] {
+            assert!(
+                line.contains("HOME or USERPROFILE"),
+                "a line of the report names fewer than the two variables looked at: {line}"
+            );
+        }
     }
 
     /// The gateway a settings file configured, for the `doctor` tests below.
@@ -1954,6 +2047,24 @@ mod tests {
         assert!(
             piped_input(at_the_cap.as_slice(), false).is_ok(),
             "the cap itself is allowed"
+        );
+    }
+
+    /// A pipe is not something a person can shorten: what they have is a program writing bytes at
+    /// a command, and a refusal that only says the bytes were too many leaves them with nothing to
+    /// try. The way to hand over something this large is a different gesture, so the refusal names
+    /// it.
+    #[test]
+    fn a_refused_pipe_says_what_to_do_instead() {
+        let oversized = vec![b'x'; PIPE_CAP + 1];
+
+        let refusal = piped_input(oversized.as_slice(), false)
+            .expect_err("an oversized pipe must be refused, not truncated");
+
+        assert!(
+            refusal.contains("Write it to a file and name that instead"),
+            "the refusal said the input was too large and nothing about what to do about it: \
+             {refusal}"
         );
     }
 
