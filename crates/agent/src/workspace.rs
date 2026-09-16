@@ -156,6 +156,13 @@ pub struct Workspace {
     /// relative paths mean, what the session record is keyed on, and where `AGENTS.md` is looked
     /// for. Making it one root among many would make all three ambiguous.
     added: Vec<PathBuf>,
+    /// The session's own directory outside the project, where it has one.
+    ///
+    /// Reachable by its absolute path, exactly as an added directory is, and kept apart from
+    /// `added` because the user did not name it: `/status` says what it is rather than listing it
+    /// among the directories they opened, and `/cd` leaves it alone rather than closing it for
+    /// overlapping the directory being moved to.
+    scratch: Option<PathBuf>,
     /// How many files a search may walk. [`MAX_SEARCH_FILES`] unless a caller lowered it.
     ///
     /// A field rather than a constant so a test can reach the cap without writing a hundred
@@ -309,6 +316,7 @@ impl Workspace {
         Ok(Self {
             root: canonical,
             added: Vec::new(),
+            scratch: None,
             search_files: MAX_SEARCH_FILES,
             backups: Arc::new(Mutex::new(Vec::new())),
         })
@@ -328,6 +336,34 @@ impl Workspace {
         &self.root
     }
 
+    /// Reach the session's own directory outside the project, or stop reaching one.
+    ///
+    /// `None` is a session that could not be given one, and then nothing outside the project and
+    /// the directories the user opened is reachable. Set as the session opens rather than asked for
+    /// by a tool, so a turn cannot widen its own reach by calling this: the caller is the code that
+    /// made the directory.
+    pub fn open_scratch(&mut self, directory: Option<PathBuf>) {
+        self.scratch = directory;
+    }
+
+    /// The session's own directory outside the project, where it has one.
+    pub fn scratch(&self) -> Option<&Path> {
+        self.scratch.as_deref()
+    }
+
+    /// Whether a resolved path lands in a directory reached by its absolute name.
+    ///
+    /// The directories the user opened and the session's own. They are reached the same way and
+    /// differ in who asked for them, so every test of where a path lands has to cover both or the
+    /// session would be handed a directory it cannot write to.
+    fn is_opened(&self, resolved: &Path) -> bool {
+        self.added.iter().any(|dir| resolved.starts_with(dir))
+            || self
+                .scratch
+                .as_deref()
+                .is_some_and(|dir| resolved.starts_with(dir))
+    }
+
     /// Whether an absolute path is one this workspace may touch.
     ///
     /// For a destination something else opens, which is what a redirection in a command line is:
@@ -341,9 +377,7 @@ impl Workspace {
             path: path.display().to_string(),
         };
         let resolved = destination(path).ok_or_else(escapes)?;
-        if resolved.starts_with(&self.root)
-            || self.added.iter().any(|dir| resolved.starts_with(dir))
-        {
+        if resolved.starts_with(&self.root) || self.is_opened(&resolved) {
             return Ok(());
         }
         Err(escapes())
@@ -362,6 +396,10 @@ impl Workspace {
     ///
     /// So is one whose resolved name the trust map cannot key a rule under, which is what a platform
     /// that spells its paths from a drive letter or a share hands back: `refuse_unkeyable` says why.
+    ///
+    /// And so is the session's own directory, for the reason a directory inside the root is: it is
+    /// reachable already, and adding it would put a rule the user wrote over a directory whose whole
+    /// point is carrying none.
     pub fn resolve_directory(&self, directory: &str) -> Result<PathBuf, WorkspaceError> {
         let candidate = Path::new(directory);
         if !candidate.is_absolute() {
@@ -390,9 +428,26 @@ impl Workspace {
             });
         }
 
+        if self.reaches_scratch(&canonical) {
+            return Err(WorkspaceError::Invalid {
+                path: directory.to_string(),
+                reason: "is the session's own directory, which is reachable already",
+            });
+        }
+
         refuse_unkeyable(&canonical, directory)?;
 
         Ok(canonical)
+    }
+
+    /// Whether `canonical` is the session's own directory or a directory inside it.
+    ///
+    /// Not a directory that holds it: the temporary directory it sits in is one a person may open by
+    /// name, and the answer they give about that is theirs to give.
+    fn reaches_scratch(&self, canonical: &Path) -> bool {
+        self.scratch
+            .as_deref()
+            .is_some_and(|directory| canonical.starts_with(directory))
     }
 
     /// Also allow paths inside `directory`, which must exist.
@@ -428,6 +483,10 @@ impl Workspace {
     /// under whichever rule was more permissive, which is the one thing keeping the namespaces
     /// apart exists to prevent. An added directory that overlaps nothing is left open, since the
     /// user opened it by name and moving elsewhere does not withdraw that.
+    ///
+    /// **The session's own directory is not a working directory.** It is removed when the session
+    /// ends, so a root inside it is a root that goes while the session is still using it, and every
+    /// read, write and run afterwards fails against a directory that is no longer there.
     pub fn change_root(&mut self, directory: &str) -> Result<Moved, WorkspaceError> {
         let candidate = Path::new(directory);
         if !candidate.is_absolute() {
@@ -453,6 +512,13 @@ impl Workspace {
             return Err(WorkspaceError::Invalid {
                 path: directory.to_string(),
                 reason: "is already the working directory",
+            });
+        }
+
+        if self.reaches_scratch(&canonical) {
+            return Err(WorkspaceError::Invalid {
+                path: directory.to_string(),
+                reason: "is the session's own directory, which the session removes when it ends",
             });
         }
 
@@ -562,7 +628,8 @@ impl Workspace {
         Ok(resolved)
     }
 
-    /// Resolve an absolute path, which is legal only inside a directory the user added.
+    /// Resolve an absolute path, which is legal only inside a directory reached by its absolute
+    /// name: one the user added, or the session's own.
     ///
     /// The containment test is against where the path lands, so a symlink inside an added
     /// directory pointing elsewhere is refused exactly as one in the primary root is, whether or
@@ -581,7 +648,7 @@ impl Workspace {
             path: named.to_string(),
         };
         let resolved = destination(candidate).ok_or_else(escapes)?;
-        if !self.added.iter().any(|dir| resolved.starts_with(dir)) {
+        if !self.is_opened(&resolved) {
             return Err(escapes());
         }
         Ok(resolved)
@@ -2050,19 +2117,24 @@ impl Workspace {
         Some(opened.join(below).to_string_lossy().to_string())
     }
 
-    /// The open directory a resolved path lands in: the primary root, or the deepest directory
-    /// added by name that holds it.
+    /// The open directory a resolved path lands in: the primary root, the deepest directory added by
+    /// name that holds it, or the session's own.
     ///
     /// The root before any added directory, rather than whichever of them is deepest. An added
     /// directory may hold the project, and an absolute rule reaching inside the project is an
     /// answer given about a directory rather than about the work, so the project's own rules decide
     /// its files (TRUST-3).
+    ///
+    /// The session's own directory among them, on the same terms as one the user added: it is
+    /// reached by its absolute name, so a name that reaches it by another spelling has to come back
+    /// to the same rule as the canonical one, or one file there would hold two.
     fn landed_in(&self, resolved: &Path) -> Option<&Path> {
         if resolved.starts_with(&self.root) {
             return Some(&self.root);
         }
         self.added
             .iter()
+            .chain(self.scratch.as_ref())
             .filter(|dir| resolved.starts_with(dir))
             .max_by_key(|dir| dir.components().count())
             .map(PathBuf::as_path)

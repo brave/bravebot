@@ -501,6 +501,8 @@ status-directory-trusted = trusted
 status-directory-untrusted = not trusted, so every write is shown to you
 status-also-open = Also open
 status-added-directory = added with /add-dir
+status-scratch = Scratch
+status-scratch-note = this session's own to write in, removed when it ends
 status-model = Model
 status-model-chosen = chosen with /model
 status-model-default = the configured default
@@ -748,6 +750,9 @@ session-permissions-skipped =
     --dangerously-skip-permissions: nothing will be asked before a write, a command, or reading a
     file nobody vouched for. shift-tab to change
 session-directory-not-added = could not add { $directory }: { $problem }
+# Said when the session has nowhere of its own to write. Not a failure to start, but a person whose
+# turn is told there is nowhere to put an intermediate file has nothing else to read it off.
+session-scratch-unavailable = no scratch directory this session: { $problem }
 session-using-model = using { $model }
 # The picker row that said which service answers is gone by the time this is read, and the same
 # name reached through two services is two bills and two credentials.

@@ -173,8 +173,11 @@ exactly that.
 ### INSTR-9: where the planner is working is stated, and is not read through the trust gate
 
 The system prompt says the working directory, whether the tree is a git repository, the platform,
-the OS version, the shell and today's date. These are facts about the machine, and the prompt says
-so: they are not instructions and nothing is asked of the planner on their account.
+the OS version, the shell, today's date, and the directory this session has to itself
+([trust-map.md](trust-map.md)) where it has one, with what that directory is for and the name a
+program started from a command line reads its path from. A session that has none has nothing said
+about one. These are facts about the machine, and the prompt says so: they are not instructions and
+nothing is asked of the planner on their account.
 
 They do not pass `read_trusted_content`, and that is the difference between them and every other
 source here. There is no file behind any of them. The root is where the user pointed the session,
@@ -192,10 +195,18 @@ shown it. A planner that does not know its own working directory reaches for `pw
 whole exchange for a value the driver has had since startup. The date is stated for a different
 reason: a model's sense of it comes from its training and is wrong by however long ago that was.
 
+The session's own directory is stated for a third reason: no `run` could discover it. Nothing names
+it but this process, so a planner never told of it has nowhere it knows of to put a file that is not
+part of the project and writes one into the project instead, which is the file a build, a commit and
+a reviewer each have to deal with. Saying nothing where there is no such directory is the same
+argument the other way: a path to a directory that is not there costs a turn the run that finds out.
+
 `verified-by: bravebot_agent::preamble::the_working_directory_is_stated_so_nothing_has_to_run_pwd`
 `verified-by: bravebot_agent::preamble::the_environment_is_stated_even_with_no_instructions_to_read`
 `verified-by: bravebot_agent::preamble::whether_the_tree_is_a_git_repository_is_said_either_way`
 `verified-by: bravebot_agent::preamble::moving_the_working_directory_restates_it`
+`verified-by: bravebot_agent::preamble::the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it`
+`verified-by: bravebot_agent::preamble::a_session_with_no_directory_of_its_own_is_told_of_none`
 
 ## Known costs
 

@@ -141,7 +141,7 @@ fn run_resolved(
     resolved: &[PathBuf],
     at: &std::path::Path,
 ) -> Result<exec::Ran, ExecError> {
-    past_text_file_busy(|| exec::run(pipeline, resolved, at, &Cancel::new()))
+    past_text_file_busy(|| exec::run(pipeline, resolved, at, &Cancel::new(), None))
 }
 
 /// [`exec::run_within`], waiting out a busy program.
@@ -151,7 +151,7 @@ fn run_within(
     at: &std::path::Path,
     limit: std::time::Duration,
 ) -> Result<exec::Ran, ExecError> {
-    past_text_file_busy(|| exec::run_within(pipeline, resolved, at, &Cancel::new(), limit))
+    past_text_file_busy(|| exec::run_within(pipeline, resolved, at, &Cancel::new(), limit, None))
 }
 
 /// [`exec::start`], waiting out a busy program.
@@ -160,7 +160,7 @@ fn start(
     resolved: &[PathBuf],
     at: &std::path::Path,
 ) -> Result<exec::Background, ExecError> {
-    past_text_file_busy(|| exec::start(pipeline, resolved, at))
+    past_text_file_busy(|| exec::start(pipeline, resolved, at, None))
 }
 
 #[test]
@@ -527,7 +527,8 @@ fn cancelling_stops_a_running_pipeline() {
     let pipeline = Pipeline::new(vec![Stage::new("sleep", vec!["30".into()])]);
     let resolved = resolve_all(&pipeline, &scratch.path).expect("sleep is installed");
     let started = std::time::Instant::now();
-    let error = exec::run(&pipeline, &resolved, &scratch.path, &cancel).expect_err("cancelled");
+    let error =
+        exec::run(&pipeline, &resolved, &scratch.path, &cancel, None).expect_err("cancelled");
     assert!(matches!(error, ExecError::Cancelled));
     assert!(
         started.elapsed() < std::time::Duration::from_secs(5),
@@ -575,7 +576,7 @@ fn a_pipeline_with_missing_resolutions_does_not_run() {
         Stage::new("echo", vec!["a".into()]),
         Stage::new("wc", vec!["-l".into()]),
     ]);
-    let error = exec::run(&pipeline, &[], &scratch.path, &Cancel::new())
+    let error = exec::run(&pipeline, &[], &scratch.path, &Cancel::new(), None)
         .expect_err("nothing runs without a resolution per stage");
     assert!(matches!(error, ExecError::Io(_)));
 }
@@ -686,12 +687,45 @@ fn line(text: &str, at: &std::path::Path) -> exec::Ran {
     ran_and_opened(text, at).0
 }
 
+/// The same, for a session that has a directory of its own.
+fn line_given(text: &str, at: &std::path::Path, given: &std::path::Path) -> exec::Ran {
+    let plan = bravebot_agent::cmdline::compile(text, at, None)
+        .unwrap_or_else(|e| panic!("`{text}` should compile: {e}"));
+    exec::run_plan(
+        &plan,
+        &Cancel::new(),
+        exec::LIMIT,
+        &mut Vec::new(),
+        Some(given),
+    )
+    .unwrap_or_else(|e| panic!("`{text}` should run: {e}"))
+}
+
+/// What a program's own `env` printed for `name`, and nothing where it printed no such line.
+///
+/// The whole line rather than a substring of the output: every path here shares a prefix with the
+/// temporary directory the tests run in, so an assertion that a value merely appears somewhere
+/// passes for a value that is one of the others with something added to it.
+fn value_of(printed: &str, name: &str) -> Option<String> {
+    printed
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{name}=")))
+        .map(str::to_string)
+}
+
+/// A directory to stand in for the one a session is given, under `at`.
+fn given_directory(at: &std::path::Path) -> PathBuf {
+    let path = at.join("given");
+    std::fs::create_dir(&path).expect("the session's own directory");
+    path
+}
+
 /// The same, keeping the destinations the run opened for writing.
 fn ran_and_opened(text: &str, at: &std::path::Path) -> (exec::Ran, Vec<std::path::PathBuf>) {
     let plan = bravebot_agent::cmdline::compile(text, at, None)
         .unwrap_or_else(|e| panic!("`{text}` should compile: {e}"));
     let mut opened = Vec::new();
-    let ran = exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, &mut opened)
+    let ran = exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, &mut opened, None)
         .unwrap_or_else(|e| panic!("`{text}` should run: {e}"));
     (ran, opened)
 }
@@ -792,7 +826,7 @@ fn a_destination_that_cannot_be_opened_is_not_reported() {
     let plan = bravebot_agent::cmdline::compile("echo x > a-directory", &scratch.path, None)
         .expect("a literal target compiles");
     let mut opened = Vec::new();
-    let outcome = exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, &mut opened);
+    let outcome = exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, &mut opened, None);
 
     assert!(outcome.is_err(), "a directory was opened for writing");
     assert!(opened.is_empty(), "a target that never opened was reported");
@@ -896,6 +930,80 @@ fn an_assignment_reaches_the_step_it_was_written_in_front_of() {
     assert!(
         !after.stdout.contains("BRAVEBOT_LINE_MARK"),
         "it did not carry over to the next line"
+    );
+}
+
+/// A program is told where the session's own directory is, so one that wants somewhere to write
+/// finds it without a tool having been called to ask for one.
+#[test]
+fn a_stage_is_told_where_the_sessions_own_directory_is() {
+    let scratch = Scratch::new("line-given");
+    let given = given_directory(&scratch.path);
+
+    // `env` rather than a shell expansion: the line expands nothing, and what is being asked is
+    // what the process was handed.
+    let ran = line_given("env", &scratch.path, &given);
+
+    assert_eq!(
+        value_of(&ran.stdout, "BRAVEBOT_SCRATCH_DIR"),
+        Some(given.display().to_string()),
+        "{}",
+        ran.stdout
+    );
+}
+
+/// A session that has no directory of its own names none. A variable holding a path that is not
+/// there is worse than an absent one, which a program can test for.
+#[test]
+fn a_session_with_no_directory_of_its_own_names_none() {
+    // Set to something rather than removed: what this process was started with is another session's
+    // directory or none, so passing it on would name a directory that is not there.
+    let _guard = with_env(&[("BRAVEBOT_SCRATCH_DIR", Some("/nowhere/an-outer-session"))]);
+    let scratch = Scratch::new("line-not-given");
+
+    let ran = line("env", &scratch.path);
+
+    assert_eq!(
+        value_of(&ran.stdout, "BRAVEBOT_SCRATCH_DIR"),
+        None,
+        "{}",
+        ran.stdout
+    );
+}
+
+/// An assignment on the line wins, the way the same assignment in front of a program wins in a
+/// shell. What a step's own environment says is what that step is handed.
+#[test]
+fn a_steps_own_assignment_wins_over_the_directory_it_was_given() {
+    let scratch = Scratch::new("line-given-set");
+    let given = given_directory(&scratch.path);
+
+    let ran = line_given("BRAVEBOT_SCRATCH_DIR=elsewhere env", &scratch.path, &given);
+
+    assert_eq!(
+        value_of(&ran.stdout, "BRAVEBOT_SCRATCH_DIR"),
+        Some("elsewhere".to_string()),
+        "{}",
+        ran.stdout
+    );
+}
+
+/// Where a program puts a temporary file of its own is left alone. Such a file is named in no plan
+/// and read back by nothing, so a directory the map answers for is the wrong place for one.
+#[test]
+fn a_stage_keeps_the_temporary_directory_this_process_has() {
+    let scratch = Scratch::new("line-tmpdir");
+    let given = given_directory(&scratch.path);
+
+    // Whatever this process holds, rather than a value set here: the variable decides where every
+    // other test's own directory goes, so a test that rewrote it would take them with it.
+    let ran = line_given("env", &scratch.path, &given);
+
+    assert_eq!(
+        value_of(&ran.stdout, "TMPDIR"),
+        std::env::var("TMPDIR").ok(),
+        "{}",
+        ran.stdout
     );
 }
 
@@ -1062,6 +1170,59 @@ fn a_background_pipeline_does_not_see_this_agents_credentials() {
     assert!(
         printed.contains("the-users-own-key"),
         "the user's own environment did not reach a background program"
+    );
+}
+
+/// A program left running is told the same directory. One that goes on printing for minutes has
+/// more reason to want somewhere of its own to write than one that finishes, not less.
+#[test]
+fn a_background_stage_is_told_where_the_sessions_own_directory_is() {
+    let scratch = Scratch::new("background-given");
+    let given = given_directory(&scratch.path);
+
+    let pipeline = Pipeline::new(vec![Stage::new("env", Vec::new())]);
+    let resolved = resolve_all(&pipeline, &scratch.path).expect("env resolves");
+    let mut job =
+        past_text_file_busy(|| exec::start(&pipeline, &resolved, &scratch.path, Some(&given)))
+            .expect("it starts");
+    for _ in 0..100 {
+        if job.ended() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let printed = job.printed();
+    assert_eq!(
+        value_of(&printed, "BRAVEBOT_SCRATCH_DIR"),
+        Some(given.display().to_string()),
+        "{printed}"
+    );
+}
+
+/// And a session with none leaves a program running with the name absent, not with what an outer
+/// environment set it to.
+#[test]
+fn a_background_stage_of_a_session_with_no_directory_names_none() {
+    let _guard = with_env(&[("BRAVEBOT_SCRATCH_DIR", Some("/nowhere/an-outer-session"))]);
+    let scratch = Scratch::new("background-not-given");
+
+    let pipeline = Pipeline::new(vec![Stage::new("env", Vec::new())]);
+    let resolved = resolve_all(&pipeline, &scratch.path).expect("env resolves");
+    let mut job =
+        past_text_file_busy(|| start(&pipeline, &resolved, &scratch.path)).expect("it starts");
+    for _ in 0..100 {
+        if job.ended() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let printed = job.printed();
+    assert_eq!(
+        value_of(&printed, "BRAVEBOT_SCRATCH_DIR"),
+        None,
+        "{printed}"
     );
 }
 

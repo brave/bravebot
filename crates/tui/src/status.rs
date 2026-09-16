@@ -65,6 +65,8 @@ pub struct Facts<'a> {
     pub session_id: &'a str,
     pub directory: &'a Path,
     pub added_directories: &'a [std::path::PathBuf],
+    /// The session's own directory outside the project, or `None` where it has none.
+    pub scratch: Option<&'a Path>,
     pub model: Option<&'a str>,
     /// How hard the model is asked to think, or `None` where nothing is asked and the service
     /// applies its own default.
@@ -157,6 +159,16 @@ pub fn report(facts: &Facts<'_>) -> Report {
         lines.push(
             Line::new(t!(status_also_open), abbreviate(added))
                 .with_note(t!(status_added_directory)),
+        );
+    }
+
+    // Named for what it is, beside the directories a person opened themselves. The trust lines
+    // below cannot report it: it has no rule, which is the whole of what makes it different from
+    // an added directory, so without a line here a session holds a directory it may write in that
+    // nobody asked for and nothing says so.
+    if let Some(scratch) = facts.scratch {
+        lines.push(
+            Line::new(t!(status_scratch), abbreviate(scratch)).with_note(t!(status_scratch_note)),
         );
     }
 
@@ -489,6 +501,9 @@ mod tests {
             session_id: "1787860306-65099",
             directory: Path::new("/tmp/project"),
             added_directories: &[],
+            // No scratch directory, which is what a session on a machine that could not give it
+            // one looks like. The test about the line sets it itself.
+            scratch: None,
             model: None,
             effort: None,
             model_reads_effort: true,
@@ -1011,6 +1026,31 @@ mod tests {
         let shown = rendered(&report(&with_added));
         assert!(shown.contains("/tmp/notes"), "{shown}");
         assert!(shown.contains("added with /add-dir"), "{shown}");
+    }
+
+    /// The session's own directory outside the project, which nothing else on the panel can
+    /// report: it carries no trust rule, so the trust lines say nothing about it.
+    #[test]
+    fn the_sessions_scratch_directory_is_reported_for_what_it_is() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let scratch = std::path::PathBuf::from("/tmp/bravebot-scratch-1-2-3");
+        let mut with_scratch = facts(&config, &trust);
+        with_scratch.scratch = Some(&scratch);
+
+        let shown = rendered(&report(&with_scratch));
+        assert!(shown.contains("/tmp/bravebot-scratch-1-2-3"), "{shown}");
+        assert!(shown.contains(&*t!(status_scratch_note)), "{shown}");
+    }
+
+    /// A session that could not be given one says nothing about a directory it does not have.
+    #[test]
+    fn a_session_with_no_scratch_directory_reports_none() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+
+        let shown = rendered(&report(&facts(&config, &trust)));
+        assert!(!shown.contains(&*t!(status_scratch)), "{shown}");
     }
 
     /// A total is unactionable. The panel has to say which of the three things took the time, since
