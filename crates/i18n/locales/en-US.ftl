@@ -395,6 +395,14 @@ run-remember-explained = r: stop asking about this exact line, in this directory
 run-remember-where = it is written down here, and deleting the line is the way back:
 run-remember-only-asking = it stops the asking only: what it prints stays quarantined
 run-remember-every-session = every session started in this directory reads it, not just this one
+# Said where the person has already answered a prompt for this binary under other arguments, which
+# is the only thing a prompt can establish about a line that will be asked about however it is
+# answered. No pattern is suggested: which argument carried the message is the person's to decide.
+run-pattern-varies =
+    these arguments differ from the ones you were asked about before, so no key here ends the asking
+run-pattern-where = a pattern for the family is written in a settings file, not answered here:
+run-pattern-covers-unread = a pattern covers lines nobody has read, which is more than any key here grants
+run-pattern-only-asking = a pattern stops the asking and nothing else: what the line prints stays quarantined
 run-yes = run it
 run-always = always this session
 run-remember = remember it

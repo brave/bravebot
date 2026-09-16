@@ -655,6 +655,39 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         )));
     }
 
+    // What answers a line whose arguments differ from one run to the next, since no key on this
+    // screen does. Drawn only where the person has already answered a prompt for this binary under
+    // other arguments, so it is not a sentence every prompt carries. It names the file rather than
+    // a pattern to put in it: which argument held the message is a judgment about the program, and
+    // a box with a pattern already filled in would be this system making that judgment. The costs
+    // are given with it because a pattern grants more than anything here, and somebody answering
+    // the same shape of prompt all day would otherwise learn the durable form from nowhere.
+    if let Some(path) = &request.pattern {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", t!(run_pattern_varies)),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_pattern_where)),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("       {}", path.display()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        // The half that makes a pattern a wider grant than any key here, so it is the half that is
+        // coloured.
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_pattern_covers_unread)),
+            Style::default().fg(theme::running()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_pattern_only_asking)),
+            Style::default().fg(theme::muted()),
+        )));
+    }
+
     let mut key_spans = vec![
         Span::styled(
             "  y",
@@ -1509,6 +1542,7 @@ mod tests {
             // A line naming a file to write is asked about however it was answered, so the prompt
             // offers no key that would outlive the session.
             record: None,
+            pattern: None,
             plan: bravebot_core::command::Plan {
                 line: "git log --oneline | tee > out.txt".to_string(),
                 directory: std::path::PathBuf::from("/home/someone/project"),
@@ -1710,6 +1744,7 @@ mod tests {
         RunRequest {
             // Private input is asked about every time, so neither standing key is offered.
             record: None,
+            pattern: None,
             plan: bravebot_core::command::Plan {
                 line: "cat < /home/someone/.ssh/id_rsa".to_string(),
                 directory: std::path::PathBuf::from("/home/someone/project"),
@@ -1795,6 +1830,7 @@ mod tests {
             // What the driver hands over for such a line: it is asked about whatever is recorded,
             // so there is nowhere an answer to it would be written.
             record: None,
+            pattern: None,
         }
     }
 
@@ -1971,6 +2007,76 @@ mod tests {
     fn a_prompt_with_no_record_to_offer_draws_no_key_for_one() {
         let drawn = rendered_run(&a_run(false));
         assert!(!drawn.contains("remember it"), "{drawn}");
+    }
+
+    /// A run prompt for a line whose arguments have already differed, as the driver hands one over
+    /// once the same binary has been put to the person twice.
+    fn a_varying_run() -> RunRequest {
+        RunRequest {
+            pattern: Some(std::path::PathBuf::from(
+                "/home/someone/.bravebot/settings.json",
+            )),
+            ..a_recordable_run()
+        }
+    }
+
+    /// RUN-20: a line whose arguments differ next time is asked about again however it is answered
+    /// here, so the prompt says where the durable answer is written. Naming the file is the whole
+    /// of the advice: somebody told only that a pattern exists has been handed a chore without the
+    /// one fact they cannot get from the screen.
+    #[test]
+    fn a_prompt_for_a_line_whose_arguments_vary_names_the_settings_file() {
+        let drawn = fully_rendered_run(&a_varying_run());
+        assert!(
+            drawn.contains("/home/someone/.bravebot/settings.json"),
+            "the prompt advised a pattern without saying which file holds one: {drawn}"
+        );
+    }
+
+    /// RUN-20: a pattern grants more than any key on this screen, so the advice carries what it
+    /// costs. Advice that named only the relief would have somebody widening a grant on the
+    /// strength of a sentence that described half of it.
+    #[test]
+    fn a_prompt_for_a_line_whose_arguments_vary_says_what_a_pattern_costs() {
+        let drawn = fully_rendered_run(&a_varying_run());
+        assert!(
+            drawn.contains("covers lines nobody has read"),
+            "the advice left out what a pattern reaches that no key here does: {drawn}"
+        );
+        assert!(
+            drawn.contains("stays quarantined"),
+            "the advice left out that a pattern makes nothing readable: {drawn}"
+        );
+    }
+
+    /// RUN-20: no key here covers a family, so the advice must not read as one being offered. The
+    /// keys on the row are the same four whether the advice is drawn or not.
+    #[test]
+    fn advising_a_pattern_offers_no_key_that_grants_one() {
+        let drawn = fully_rendered_run(&a_varying_run());
+        assert!(
+            !drawn.contains("git commit *"),
+            "the prompt put a pattern on screen for somebody to accept: {drawn}"
+        );
+        assert_eq!(
+            run_answer_for(
+                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+                &a_varying_run()
+            ),
+            None,
+            "a key granted the family the advice says a file has to be edited for"
+        );
+    }
+
+    /// RUN-20: the advice is for the line whose arguments move, and saying it on every prompt would
+    /// be noise that hides the case it is for. A first prompt has nothing to compare against.
+    #[test]
+    fn a_prompt_for_a_line_nothing_has_varied_says_nothing_about_a_pattern() {
+        let drawn = fully_rendered_run(&a_recordable_run());
+        assert!(
+            !drawn.contains("settings.json"),
+            "a prompt advised a pattern for a line that repeats exactly: {drawn}"
+        );
     }
 
     /// Enter is the key most likely to be pressed out of habit, and this prompt starts a program.

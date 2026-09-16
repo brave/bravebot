@@ -25,6 +25,5 @@ docs/specs/naming-files.md:NAME-3: the rule outlives the read
 docs/specs/processors.md:PROC-9: the confinement is the capability set, not an operating system boundary
 docs/specs/routing.md:ROUTE-7: before adding a tool, ask what its routing field is
 docs/specs/sessions.md:SESSION-2: nothing untrusted is ever written down
-docs/specs/tools/run.md:RUN-20: no answer at a prompt grants a family, because nothing here tells a value from a program
 docs/specs/tools/tool-surface.md:TOOL-2: before adding a tool, ask what its routing field is
 docs/specs/trace.md:TRACE-2: the trail holds no content

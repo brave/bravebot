@@ -16,7 +16,7 @@ use bravebot_agent::{SessionScratch, Workspace};
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::permissions::Permissions;
-use bravebot_core::programs::TrustedPrograms;
+use bravebot_core::programs::{AskedAbout, TrustedPrograms};
 use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
 use bravebot_net::Egress;
@@ -2138,6 +2138,11 @@ fn event_loop(
     // Outlives every turn, which is the point: a turn begins with the exchange so far rather
     // than with nothing, so the user can say "try that again" and be understood. A resumed
     // session begins with an exchange that outlived the process it happened in.
+    // Every run prompt this session has drawn, so a second prompt for one binary under other
+    // arguments can say that a settings file is what ends the asking. It grants nothing and is not
+    // written down anywhere: a session that ends forgets what it asked, which is the same lifetime
+    // the list of programs it vouched for has.
+    let mut asked_about = AskedAbout::new();
     let (mut conversation, mut stored, mut programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
         Start::Fresh | Start::Choose => (
@@ -2661,6 +2666,9 @@ fn event_loop(
                 // A new session vouches for no program, on the same reasoning as the map: the
                 // list is a standing permission, and this begins a session that was never asked.
                 programs = TrustedPrograms::new();
+                // And nothing has been asked about, since the questions this list holds were put
+                // in a session that is over.
+                asked_about = AskedAbout::new();
                 // And a new directory, since nothing in the old one outlives the session that
                 // wrote it. The old one is removed either way: what the cleared context wrote is
                 // not something the session after it should find lying there.
@@ -2688,7 +2696,9 @@ fn event_loop(
                     // Everything the session holds is lent for the turn and taken back: a turn that
                     // writes untrusted data into a trusted path records that, and the next turn must
                     // honour it; a turn that has been had is a turn the next one can be asked about;
-                    // and a server somebody approved answers the next question without asking again.
+                    // a server somebody approved answers the next question without asking again;
+                    // and a run prompt already read is what tells the next one to name a settings
+                    // file instead of a key.
                     let continued = run_turn_animated(
                         terminal,
                         &mut session,
@@ -2700,6 +2710,7 @@ fn event_loop(
                         trust,
                         programs,
                         servers,
+                        asked_about,
                         &permissions,
                         stored.id(),
                     )?;
@@ -2708,6 +2719,7 @@ fn event_loop(
                     trust = continued.trust;
                     programs = continued.programs;
                     servers = continued.servers;
+                    asked_about = continued.asked_about;
 
                     session.keep_backups(workspace.take_backups());
 
@@ -4441,13 +4453,14 @@ fn remembered_record(
 /// What the session gets back from a turn and carries into the next one.
 ///
 /// A struct rather than a tuple because every field is something the session owns and lends for
-/// the length of one turn, and a caller taking five positional values back has no way of saying
+/// the length of one turn, and a caller taking six positional values back has no way of saying
 /// which is which.
 struct Continued {
     conversation: Conversation,
     trust: TrustStore,
     programs: TrustedPrograms,
     servers: Option<LanguageServers>,
+    asked_about: AskedAbout,
     events: Vec<Stamped>,
 }
 
@@ -4475,6 +4488,7 @@ fn run_turn_animated(
     // session that keeps it: built inside a turn it would be shut down at the end of that turn,
     // and the next message would ask the same person about the same language.
     servers: Option<LanguageServers>,
+    asked_about: AskedAbout,
     permissions: &Permissions,
     // This session's own identifier. It travels with the task because a run prompt may be answered
     // with the key whose grant outlives the session, and the record of that says which session
@@ -4563,6 +4577,7 @@ fn run_turn_animated(
     // "always" in a turn that then failed is still an answer the user gave.
     let fallback = trust.clone();
     let fallback_programs = programs.clone();
+    let fallback_asked = asked_about.clone();
 
     let worker = thread::spawn(move || {
         let mut sink = Trail::new();
@@ -4842,6 +4857,7 @@ fn run_turn_animated(
                 trust: fallback,
                 programs: fallback_programs,
                 servers,
+                asked_about: fallback_asked,
                 events,
             });
         }
@@ -4855,6 +4871,7 @@ fn run_turn_animated(
             trust: fallback,
             programs: fallback_programs,
             servers,
+            asked_about: fallback_asked,
             events,
         });
     }
@@ -4877,6 +4894,7 @@ fn run_turn_animated(
         Carried {
             trust: fallback,
             programs: fallback_programs,
+            asked: fallback_asked,
         },
         Occupied {
             budget: config.context_budget,
@@ -4894,6 +4912,7 @@ fn run_turn_animated(
         trust: carried.trust,
         programs: carried.programs,
         servers,
+        asked_about: carried.asked,
         events,
     })
 }
@@ -5031,13 +5050,16 @@ struct Line<'a> {
     wrote: Wrote,
 }
 
-/// What a turn hands to the next one: paths the person vouched for, and programs they allowed.
+/// What a turn hands to the next one: paths the person vouched for, programs they allowed, and the
+/// run prompts they have read.
 ///
-/// One value rather than two because they travel together in both directions, and a turn that
-/// reported neither hands on exactly what it was given.
+/// One value rather than three because they travel together in both directions, and a turn that
+/// reported none of them hands on exactly what it was given. The third is not a grant and sits here
+/// only because it has the same lifetime as the other two.
 struct Carried {
     trust: TrustStore,
     programs: TrustedPrograms,
+    asked: AskedAbout,
 }
 
 /// Fold a finished turn into the session.
@@ -5119,6 +5141,7 @@ fn fold_outcome(
             Carried {
                 trust: outcome.trust,
                 programs: outcome.programs,
+                asked: outcome.asked_about,
             }
         }
         Err(error) => {
@@ -11745,6 +11768,7 @@ mod tests {
             Carried {
                 trust: fallback,
                 programs: fallback_programs,
+                asked: AskedAbout::new(),
             },
             Occupied {
                 budget: 100_000,
@@ -11805,6 +11829,7 @@ mod tests {
             Carried {
                 trust: TrustStore::new("/work"),
                 programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
             },
             Occupied {
                 budget: 100_000,
@@ -11847,6 +11872,7 @@ mod tests {
             Carried {
                 trust: TrustStore::new("/work"),
                 programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
             },
             Occupied {
                 budget: 100_000,
@@ -11884,6 +11910,7 @@ mod tests {
             Carried {
                 trust: fallback,
                 programs: fallback_programs,
+                asked: AskedAbout::new(),
             },
             Occupied {
                 budget: 100_000,

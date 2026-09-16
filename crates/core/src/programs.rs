@@ -122,6 +122,63 @@ impl FromIterator<Command> for TrustedPrograms {
     }
 }
 
+/// The commands this session has already put to a person at a run prompt.
+///
+/// Not a grant, and no gate consults it. Membership stops no prompt, raises no label and reaches
+/// no file: everything in this list was asked about and is asked about again. It exists so that a
+/// prompt can say something the line in front of it does not, which is that this is a program
+/// whose arguments differ from one run to the next and so a program no key at a prompt will ever
+/// finish asking about.
+///
+/// Kept beside [`TrustedPrograms`] because it is keyed the same way, on the resolved path and the
+/// exact arguments, and because the two are read at the same moment. It is deliberately not part
+/// of [`crate::policy::Vouched`]: nothing here travels into a delegate or out of one, and nothing
+/// here is written into the session record, since an advisory sentence is not something a person
+/// carries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AskedAbout {
+    /// In the order they were asked about, with repeats collapsed.
+    ///
+    /// A list rather than a set because there is nothing to look a command up by: the question
+    /// asked of it is about the entries that do **not** match, so every one is read anyway.
+    asked: Vec<Command>,
+}
+
+impl AskedAbout {
+    /// Nothing has been asked about yet, which is where every session starts.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record that this exact command was put to a person.
+    pub fn record(&mut self, command: Command) {
+        if !self.asked.contains(&command) {
+            self.asked.push(command);
+        }
+    }
+
+    /// Whether some binary `line` names was asked about under an argument list `line` does not
+    /// hold.
+    ///
+    /// The whole of what a prompt can establish about a line whose arguments vary. It is an
+    /// observation and not an inference: the person was asked twice about one program and read two
+    /// different argument lists, which is the variation itself rather than a guess at which
+    /// position carries it. Nothing here says which argument differed, because deciding that is
+    /// the judgment [RUN-20] refuses to make.
+    ///
+    /// The whole line at once rather than a step at a time, and the entries the line itself holds
+    /// are not what it differs from. `grep TODO src | grep -v test` names one binary under two
+    /// argument lists, so a step-by-step reading would have that line, asked about a second time,
+    /// varying from itself.
+    ///
+    /// [RUN-20]: ../../../docs/specs/tools/run.md
+    pub fn arguments_have_varied(&self, line: &[Command]) -> bool {
+        self.asked.iter().any(|seen| {
+            line.iter().any(|command| seen.program == command.program) && !line.contains(seen)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +303,94 @@ mod tests {
             Some("/bin/ls -la".to_string()),
             "order is stable"
         );
+    }
+}
+
+/// What a prompt may say about a line whose arguments will differ next time.
+///
+/// RUN-20 refuses to let any key at a prompt cover a second argument list, and says the prompt
+/// gives advice instead where the line in front of the person is one of those. These are the whole
+/// of what decides which lines those are.
+#[cfg(test)]
+mod varying {
+    use super::*;
+
+    fn commit(message: &str) -> Command {
+        Command::new(
+            "/usr/bin/git",
+            vec!["commit".into(), "-m".into(), message.into()],
+        )
+    }
+
+    /// The case the advice exists for. A commit message is different every time, so the person is
+    /// asked about `git commit` again in this session and in every later one, and no key they can
+    /// press at the prompt will ever stop it. Two argument lists for one binary is the whole of
+    /// what establishes that, and it is an observation rather than a guess at which argument
+    /// carries the message.
+    #[test]
+    fn a_second_argument_list_for_one_binary_is_a_line_whose_arguments_vary() {
+        let mut asked = AskedAbout::new();
+        asked.record(commit("first"));
+        assert!(asked.arguments_have_varied(&[commit("second")]));
+    }
+
+    /// The line that repeats is the one RUN-19's key answers in full, so advice about a settings
+    /// file would be telling somebody to write a pattern where pressing a key would do.
+    #[test]
+    fn a_line_asked_about_twice_is_not_a_line_whose_arguments_vary() {
+        let mut asked = AskedAbout::new();
+        asked.record(commit("first"));
+        asked.record(commit("first"));
+        assert!(!asked.arguments_have_varied(&[commit("first")]));
+    }
+
+    /// A line naming one binary under two argument lists is still one line, and a second prompt for
+    /// it is the repeat RUN-19's key answers. Reading the steps one at a time would have it varying
+    /// from itself, and would advise a pattern for every pipeline that feeds a program into itself.
+    #[test]
+    fn a_line_naming_one_binary_twice_does_not_vary_from_itself() {
+        let line = [
+            Command::new("/usr/bin/grep", vec!["TODO".into(), "src".into()]),
+            Command::new("/usr/bin/grep", vec!["-v".into(), "test".into()]),
+        ];
+        let mut asked = AskedAbout::new();
+        for command in &line {
+            asked.record(command.clone());
+        }
+        assert!(!asked.arguments_have_varied(&line));
+    }
+
+    /// Nothing has varied until something has been asked about twice, so the first prompt of a
+    /// session says nothing about patterns. Advice on every prompt would be noise that hides the
+    /// case it is for.
+    #[test]
+    fn a_line_nothing_has_been_asked_about_has_no_arguments_that_have_varied() {
+        assert!(!AskedAbout::new().arguments_have_varied(&[commit("first")]));
+    }
+
+    /// Keyed on the resolved path for the reason a vouch is: `$PATH` and aliases decide what a
+    /// name means, and two binaries asked about under one name are two programs rather than one
+    /// whose arguments moved.
+    #[test]
+    fn a_second_binary_is_not_the_first_ones_arguments_varying() {
+        let mut asked = AskedAbout::new();
+        asked.record(Command::new("/usr/bin/grep", vec!["x".into()]));
+        assert!(
+            !asked
+                .arguments_have_varied(&[Command::new("/opt/homebrew/bin/grep", vec!["y".into()])]),
+            "two binaries sharing a name were read as one program"
+        );
+    }
+
+    /// A list is a list of lines put to somebody, not a grant, so nothing in it stops a prompt or
+    /// vouches for anything. A reader who mistook the two would have a session growing an
+    /// allowlist out of the questions it asked.
+    #[test]
+    fn asking_about_a_line_vouches_for_nothing() {
+        let mut asked = AskedAbout::new();
+        asked.record(commit("first"));
+        let programs = TrustedPrograms::new();
+        assert!(programs.is_empty());
+        assert!(!programs.contains("/usr/bin/git", &["commit".to_string()]));
     }
 }

@@ -541,6 +541,15 @@ pub struct Task {
     /// on whatever the developer happened to have installed, and a run would differ from the
     /// same run elsewhere for reasons nothing in the task described.
     pub home: Option<PathBuf>,
+    /// The run prompts this session has already put to the person, by program and arguments.
+    ///
+    /// Empty by default and for a caller that keeps nothing between turns. It grants nothing and
+    /// no gate reads it: what it decides is whether a run prompt says that this line's arguments
+    /// have already differed and so that a pattern in a settings file is what ends the asking.
+    ///
+    /// Carried by the caller for the reason `home` and `remembering` are: a turn is where a prompt
+    /// is drawn, and a session is where somebody answers the same shape of prompt all day.
+    pub asked_about: bravebot_core::programs::AskedAbout,
     /// The session this turn belongs to, where a run prompt's answer may outlive it.
     ///
     /// `None` by default and for every turn with nobody to put a prompt to: a one-shot run, a
@@ -651,6 +660,9 @@ impl Task {
             images: Vec::new(),
             piped: None,
             home: None,
+            // Nothing has been asked about until a caller says so, which is what a caller keeping
+            // nothing between turns is saying.
+            asked_about: bravebot_core::programs::AskedAbout::new(),
             // Nothing is remembered past the session unless a caller says which session this is,
             // which is the caller saying there is somebody a prompt could be put to.
             remembering: None,
@@ -719,6 +731,15 @@ impl Task {
     /// the correct behaviour for a caller that has not said where those live.
     pub fn with_home(mut self, home: Option<PathBuf>) -> Self {
         self.home = home;
+        self
+    }
+
+    /// Carry in the run prompts this session has already drawn.
+    ///
+    /// Said by a caller that holds a session together across turns. Without it every turn starts
+    /// with nothing to compare a line against, so no prompt says a line's arguments have varied.
+    pub fn already_asked_about(mut self, asked: bravebot_core::programs::AskedAbout) -> Self {
+        self.asked_about = asked;
         self
     }
 
@@ -847,6 +868,11 @@ pub struct Outcome {
     /// Travels back rather than being recorded by whoever drew the prompt, so there is one copy
     /// of the answer and nothing to disagree with it.
     pub programs: TrustedPrograms,
+    /// The run prompts put to the person after the turn, including any this one drew.
+    ///
+    /// Travels back for the reason [`Outcome::programs`] does, and grants nothing at all: a caller
+    /// that drops it loses a sentence of advice at a later prompt and nothing else.
+    pub asked_about: bravebot_core::programs::AskedAbout,
     /// Tokens the turn cost in total, summed over every round.
     ///
     /// A turn is several requests when the model calls tools, and each re-sends the whole
@@ -1733,6 +1759,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         .with_root(workspace.root())
         .with_scratch(workspace.scratch())
         .with_programs(programs)
+        .with_asked(task.asked_about.clone())
         .with_permissions(task.permissions.clone())
         .resuming(conversation.context());
 
@@ -2908,6 +2935,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // approved run may have added to the programs.
     let trust = policy.trust().clone();
     let programs = policy.programs().clone();
+    let asked_about = policy.asked().clone();
 
     // Said to the person, not to the planner, which has answered and gone. They are the one about
     // to act on a diff, and nothing else in the summary distinguishes a change that was compiled
@@ -2931,6 +2959,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         steps,
         trust,
         programs,
+        asked_about,
         tokens,
         output_tokens,
         context_tokens,

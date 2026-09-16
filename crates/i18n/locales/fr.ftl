@@ -375,6 +375,14 @@ run-remember-only-asking =
     cela arrête seulement la question : ce qu'elle affiche reste en quarantaine
 run-remember-every-session =
     toute session ouverte dans ce répertoire la lit, pas seulement celle-ci
+run-pattern-varies =
+    ces arguments diffèrent de ceux qui vous ont déjà été soumis : aucune touche ici n'arrête la question
+run-pattern-where =
+    un motif pour la famille s'écrit dans un fichier de configuration, il ne se répond pas ici :
+run-pattern-covers-unread =
+    un motif couvre des lignes que personne n'a lues, ce qui est plus que ce qu'accorde toute touche ici
+run-pattern-only-asking =
+    un motif arrête la question et rien d'autre : ce que la ligne affiche reste en quarantaine
 run-yes = l'exécuter
 run-always = toujours pour cette session
 run-remember = s'en souvenir
