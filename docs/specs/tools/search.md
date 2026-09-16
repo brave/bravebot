@@ -66,7 +66,9 @@ power of it, and an expansion past the cap falls back to matching the pattern li
 Otherwise it is quarantined whole. Unlike a listing, a search returns one reference for the whole
 result rather than one per hit, so its hits are not addresses.
 
-`verified-by: none`
+`verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is`
+`verified-by: bravebot_agent::turn::a_search_touching_one_unvouched_file_is_quarantined_whole`
+`verified-by: bravebot_agent::turn::untrusted_search_results_never_reach_the_model`
 
 <a id="SEARCH-3"></a>
 ### SEARCH-3: a truncated search tells the planner it is incomplete

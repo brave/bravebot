@@ -271,7 +271,10 @@ output, not a belief about the binary. The audited table in [command-line.md](co
 not one: a program absent from it is neither refused nor confined, only asked about, and what the
 table establishes is what an output may be labelled rather than what may run.
 
-`verified-by: none`
+`verified-by: bravebot_core::policy::a_command_nobody_vouched_for_is_put_to_a_person`
+`verified-by: bravebot_core::policy::a_fresh_policy_vouches_for_no_command`
+`verified-by: bravebot_agent::turn::an_approved_run_executes_and_the_user_saw_what_it_was`
+`verified-by: bravebot_agent::exec::the_users_own_environment_still_reaches_a_program`
 
 <a id="RUN-11"></a>
 ### RUN-11: a run has a wall-clock limit, and reaching it ends the run rather than failing it

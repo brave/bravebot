@@ -5455,6 +5455,26 @@ mod tests {
         }
     }
 
+    /// Nothing is touched, so there is no field for a person to approve: the list is the whole of
+    /// the call. A destination here, even an optional one, would be a routing argument on the one
+    /// tool whose answer to "what would a person be approving?" is "nothing".
+    #[test]
+    fn the_task_list_tool_offers_no_argument_that_names_a_destination() {
+        let tool = available(Scheduling::ArrangingALook)
+            .into_iter()
+            .find(|t| t.function.name == "todo_write")
+            .expect("todo_write is offered");
+        let properties = tool.function.parameters["properties"]
+            .as_object()
+            .expect("the arguments are an object");
+
+        assert_eq!(
+            properties.keys().collect::<Vec<_>>(),
+            vec!["todos"],
+            "todo_write advertises an argument beside the list itself"
+        );
+    }
+
     /// The model has to be told the list is replaced wholesale, or it will send only what changed
     /// and the finished tasks will vanish from the display.
     #[test]
@@ -6450,6 +6470,58 @@ mod tests {
             let (reporter, _) = call(list(&[("something", "nearly done")]));
             let rows = reporter.updates.last().expect("told");
             assert!(!rows[0].struck());
+        }
+
+        /// Every other tool answers "what would a person be approving?" with a path, a program or
+        /// a URL, and this one has no answer because it reaches nothing. Held to it two ways: the
+        /// call is given no capability at all and still works, and the trail it leaves records no
+        /// field checked before an effect and no capability producing data. Writing the list to a
+        /// file, or routing it anywhere a person would have to agree to, would fail the first and
+        /// show up in the second.
+        #[test]
+        fn a_task_list_decides_no_destination_and_needs_no_capability() {
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::none(),
+                &mut sink,
+            )
+            .expect("policy");
+            let mut reporter = RecordingReporter::default();
+            let produced = todo_write(
+                &mut policy,
+                &mut reporter,
+                &SlotStore::new(),
+                &list(&[
+                    ("Read the file", "completed"),
+                    ("Make the change", "pending"),
+                ]),
+            );
+
+            assert!(!produced.failed, "a list with no capability was refused");
+            assert!(
+                produced.origin.is_empty(),
+                "a task list named a destination: {}",
+                produced.origin
+            );
+            assert_eq!(
+                reporter.updates.last().expect("the display was told").len(),
+                2,
+                "the list did not reach the screen"
+            );
+
+            for event in sink.events() {
+                match event {
+                    bravebot_core::event::Event::ActionField { tool, field, .. } => {
+                        panic!("a task list decided '{field}' for '{tool}'")
+                    }
+                    bravebot_core::event::Event::Observed { capability, .. } => {
+                        panic!("a task list observed something through {capability}")
+                    }
+                    _ => {}
+                }
+            }
         }
 
         /// A list with no items is a list the model cleared, and the display must follow rather

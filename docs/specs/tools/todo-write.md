@@ -17,8 +17,10 @@ a confirmation.
 ### TODO-1: there is no routing, because nothing is touched
 
 The plan is shown to the user and reaches nothing else. It is the one tool with no destination.
+The call holds no capability, decides no destination, and touches no path.
 
-`verified-by: none`
+`verified-by: bravebot_agent::tools::the_task_list_tool_offers_no_argument_that_names_a_destination`
+`verified-by: bravebot_agent::tools::a_task_list_decides_no_destination_and_needs_no_capability`
 
 <a id="TODO-2"></a>
 ### TODO-2: an unrecognised status reads as outstanding work
