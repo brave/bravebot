@@ -676,6 +676,7 @@ command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fix
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-export = Exporter la transcription de la session vers un fichier markdown
 command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
+command-rewind = Lister les tours qu'un rembobinage peut atteindre, ou reculer d'autant
 command-exit = Partir
 
 
@@ -691,6 +692,17 @@ session-rewound-partly =
     session rembobinée avant le tour { $turn }, mais ces fichiers gardent ce qui a été
     écrit : { $paths }
 session-nothing-to-undo = rien à annuler dans cette session
+session-rewind-points = un rembobinage revient à l'un de ceux-ci, restaurant chaque ligne jusqu'à lui :
+session-rewind-point =
+    { $turns } en arrière : avant le tour { $turn }, { $asked }, restaure { $paths }
+session-rewind-point-wrote-nothing =
+    { $turns } en arrière : avant le tour { $turn }, { $asked }, aucun fichier à restaurer
+session-rewind-needs-a-number = /rewind demande un nombre de tours, comme /rewind 2
+session-rewind-goes-no-further =
+    { $kept ->
+        [one] cette session peut reculer d'un tour, pas plus
+       *[other] cette session peut reculer de { $kept } tours, pas plus
+    }
 session-exported = transcription exportée vers { $path }
 session-export-failed = impossible d'exporter la transcription : { $problem }
 session-add-dir-needs-a-path = /add-dir demande un répertoire, comme /add-dir ~/notes

@@ -501,6 +501,41 @@ run to arrive.
 `verified-by: bravebot_agent::turn::an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down`
 
 
+<a id="SESSION-21"></a>
+### SESSION-21: what a rewind would put back can be read before it happens
+
+`/rewind` with nothing after it lists the points the session can go back to, most recent first
+and numbered from one. Each row says how many turns back it is, which turn it would land before,
+what that turn was asked, and every path that turn wrote over, or that it wrote over none.
+`/rewind <n>` then goes back that many turns, which is what `/undo` said n times does, so what it
+puts back is every row from the first down to the one chosen: the list is read in the order it is
+printed, and the heading above it says so.
+
+`/rewind` given something that is not a number says what it takes. A number past what the session
+remembers rewinds nothing and says how far back it does go, rather than going as far as it can:
+somebody who asked for four turns and got two would be reading a tree two turns younger than they
+believe it is.
+
+**Why.** A rewind acts the moment it is typed, and it overwrites files, including edits a person
+made themselves since the turn. Deciding to run one is deciding about those files, so they have to
+be readable first, for the reason a write is shown as a diff before it is approved rather than
+reported after. Naming the paths rather than counting them is that same reason carried through: a
+count decides nothing.
+
+**Why a word of its own rather than an argument to `/undo`.** A command that takes no argument is
+only ever the bare word, which is what keeps `/undo the last thing I asked for` a prompt instead
+of a command with a six word argument; [commands.md](commands.md) owns that rule. A surface that
+takes a number cannot also have it, so the number is on a word that has one.
+
+`verified-by: bravebot_tui::app::the_bare_rewind_command_asks_for_the_list`
+`verified-by: bravebot_tui::app::the_rewind_command_carries_how_far_back_to_go`
+`verified-by: bravebot_tui::app::a_longer_word_starting_with_rewind_is_a_prompt`
+`verified-by: bravebot_tui::app::undo_with_something_after_it_is_still_a_prompt`
+`verified-by: bravebot_tui::app::the_list_names_what_each_point_would_put_back`
+`verified-by: bravebot_tui::app::the_list_of_a_session_with_no_points_says_there_is_nothing`
+`verified-by: bravebot_tui::state::going_back_further_than_the_session_remembers_rewinds_nothing`
+
+
 ## Known costs
 
 - **Two working directories can share a session store.** The directory name is derived by mapping

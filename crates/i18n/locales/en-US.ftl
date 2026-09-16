@@ -736,6 +736,7 @@ command-goal = Keep working until a condition you set is judged met
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-export = Export the session transcript to a markdown file
 command-undo = Rewind one turn and put back the files it wrote
+command-rewind = List the turns a rewind could go back to, or go back that many
 command-exit = Leave
 
 
@@ -751,6 +752,19 @@ session-rewound-partly =
     rewound the session to before turn { $turn }, but these files still hold what was
     written: { $paths }
 session-nothing-to-undo = nothing left to undo in this session
+session-rewind-points = a rewind goes back to one of these, putting back every row down to it:
+# One point a rewind could reach: how many turns back it is, which turn it would land before,
+# what that turn was asked, and every path it would put back.
+session-rewind-point =
+    { $turns } back: before turn { $turn }, { $asked }, puts back { $paths }
+session-rewind-point-wrote-nothing =
+    { $turns } back: before turn { $turn }, { $asked }, no files to put back
+session-rewind-needs-a-number = /rewind takes how many turns to go back, as in /rewind 2
+session-rewind-goes-no-further =
+    { $kept ->
+        [one] this session can go back one turn, no further
+       *[other] this session can go back { $kept } turns, no further
+    }
 session-exported = exported transcript to { $path }
 session-export-failed = could not export transcript: { $problem }
 session-add-dir-needs-a-path = /add-dir needs a directory, as in /add-dir ~/notes
