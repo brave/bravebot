@@ -5,8 +5,12 @@
 //! nothing is required that opencode does not require, no field is added however useful it would be,
 //! and a field this crate does not know is read past rather than refused.
 //!
-//! What this does not hold is a resolved credential. A token is named, by the variables in `env` or
-//! by `options.apiKey`, and read when a request needs signing.
+//! What this does not hold is a resolved credential. A block says where a token lives, in the
+//! variables `env` names or in `options.apiKey`, and it is read when a request needs signing. A block
+//! that says neither names no credential and is asked without one, which is what a local Ollama
+//! wants.
+
+use std::fmt;
 
 /// The endpoints known by the name a provider block gives them.
 ///
@@ -226,18 +230,59 @@ impl Provider {
         self.model(model).is_some()
     }
 
-    /// The bearer token, from the first variable that holds one or from the file.
+    /// The bearer token for this gateway, or why there is none.
     ///
     /// A variable first, so that a file naming one does not have the value read out from under it by
-    /// a stale `apiKey`. Absent where nothing holds a token: that is a request this configuration
-    /// cannot sign, and the caller reports it rather than sending an unauthenticated one.
-    pub fn token(&self, lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
+    /// a stale `apiKey`.
+    pub fn credential(&self, lookup: impl Fn(&str) -> Option<String>) -> Credential {
+        if !self.names_a_credential() {
+            return Credential::NotNeeded;
+        }
         self.env
             .iter()
             .filter_map(|name| lookup(name))
             .map(|value| value.trim().to_string())
             .find(|value| !value.is_empty())
             .or_else(|| self.api_key.clone())
+            .map_or(Credential::Absent, Credential::Token)
+    }
+
+    /// Whether the block says anywhere a token could live.
+    fn names_a_credential(&self) -> bool {
+        !self.env.is_empty() || self.api_key.is_some()
+    }
+}
+
+/// What a gateway block says about the credential its requests carry.
+///
+/// Three answers rather than two, because "no token" is two different situations and only one of
+/// them is a mistake. A block naming variables or an `apiKey` has said where a credential lives, so
+/// nothing holding one is a token that is missing or has gone stale. A block naming neither has said
+/// none is needed, which is how the tool this shape is borrowed from configures a local Ollama.
+///
+/// One answer rather than a pair the callers combine, because there are three of them and each has a
+/// different remedy: a request, a roster, and a diagnostic. Read as a bare `Option`, the second
+/// situation is indistinguishable from the first, and every caller reports a gateway that needs
+/// nothing as one somebody has to go and configure.
+#[derive(Clone, PartialEq, Eq)]
+pub enum Credential {
+    /// The token to attach, from the first variable that held one or from the file.
+    Token(String),
+    /// The block names where a token lives and nothing there holds one.
+    Absent,
+    /// The block names nowhere for a token to live, so its requests carry none.
+    NotNeeded,
+}
+
+/// Redacting rather than derived: the value is a long-lived bearer token, and a `Debug` that printed
+/// one would put a live credential in whatever assertion or log first fails.
+impl fmt::Debug for Credential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Token(_) => f.write_str("Token(<redacted>)"),
+            Self::Absent => f.write_str("Absent"),
+            Self::NotNeeded => f.write_str("NotNeeded"),
+        }
     }
 }
 
@@ -550,7 +595,10 @@ mod tests {
                 "options": {"apiKey": "a-token"}
             }}}"#);
         assert_eq!(provider.base_url, "https://openrouter.ai/api/v1");
-        assert_eq!(provider.token(|_| None).as_deref(), Some("a-token"));
+        assert_eq!(
+            provider.credential(|_| None),
+            Credential::Token("a-token".to_string())
+        );
     }
 
     /// A known name pointed somewhere else reaches where it was pointed. Otherwise the table would
@@ -583,11 +631,14 @@ mod tests {
                 "env": ["ABSENT_ONE", "PRESENT_ONE"],
                 "options": {"baseURL": "https://example.invalid/v1", "apiKey": "in-the-file"}
             }}}"#);
-        let token = provider.token(|name| match name {
+        let credential = provider.credential(|name| match name {
             "PRESENT_ONE" => Some("from-the-environment".to_string()),
             _ => None,
         });
-        assert_eq!(token.as_deref(), Some("from-the-environment"));
+        assert_eq!(
+            credential,
+            Credential::Token("from-the-environment".to_string())
+        );
     }
 
     /// Supported because it is opencode's field. A copied block that authenticates this way has to
@@ -597,7 +648,10 @@ mod tests {
         let provider = one(r#"{"provider": {"gw": {
                 "options": {"baseURL": "https://example.invalid/v1", "apiKey": "in-the-file"}
             }}}"#);
-        assert_eq!(provider.token(|_| None).as_deref(), Some("in-the-file"));
+        assert_eq!(
+            provider.credential(|_| None),
+            Credential::Token("in-the-file".to_string())
+        );
     }
 
     /// A request this configuration cannot sign is reported rather than sent unauthenticated.
@@ -607,8 +661,31 @@ mod tests {
                 "env": ["ABSENT_ONE"],
                 "options": {"baseURL": "https://example.invalid/v1"}
             }}}"#);
-        assert_eq!(provider.token(|_| None), None);
-        assert_eq!(provider.token(|_| Some("   ".to_string())), None);
+        assert_eq!(provider.credential(|_| None), Credential::Absent);
+        assert_eq!(
+            provider.credential(|_| Some("   ".to_string())),
+            Credential::Absent
+        );
+    }
+
+    /// The block a local Ollama is configured with in the tool this shape is borrowed from: an
+    /// endpoint and nothing else. Read as a token that is missing, every caller refuses a gateway
+    /// that wants no token, and the copied block reaches the model picker and then cannot answer.
+    ///
+    /// Distinct from the case above, which names a variable and is still refused: a block saying
+    /// where a credential lives and finding nothing there is a stale or missing token.
+    #[test]
+    fn a_provider_naming_no_credential_needs_none() {
+        let provider = one(r#"{"provider": {"ollama": {
+                "name": "Ollama (local)",
+                "options": {"baseURL": "http://localhost:11434/v1"}
+            }}}"#);
+        assert_eq!(provider.credential(|_| None), Credential::NotNeeded);
+        // Nothing is named, so nothing in the environment is consulted to decide it either.
+        assert_eq!(
+            provider.credential(|_| Some("in-the-environment".to_string())),
+            Credential::NotNeeded
+        );
     }
 
     /// Two gateways are ordinary. The block being a map is what makes a duplicate id

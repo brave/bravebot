@@ -183,42 +183,48 @@ struct ListedByGateway {
 /// The destination is the gateway's own endpoint, which came from configuration rather than from
 /// anything fetched.
 ///
-/// Bearer-authenticated because some gateways refuse the listing otherwise, and because a roster is a
-/// per-account fact wherever a gateway offers different models to different keys.
+/// Bearer-authenticated where the block named a credential, because some gateways refuse the listing
+/// otherwise, and because a roster is a per-account fact wherever a gateway offers different models to
+/// different keys. A block naming none is asked without one, which is what a local Ollama wants.
 ///
 /// What this account may reach is asked for first, where the gateway answers such a question, and the
 /// service-wide roster is the fallback. The narrower answer is the better one: a model the credential
 /// cannot reach is a row that fails the moment somebody picks it, and the wide list is nearly three
 /// times the size here. Only the fallback is guaranteed to exist, since the account-scoped route is a
 /// gateway's own extension rather than part of the shape.
+///
+/// With no credential there is no account to scope an answer to, so that request is not made at all.
+/// It would spend a round trip to be told the same thing the wide roster says.
 pub fn list_from_gateway<S: Sink>(
     policy: &mut Policy<'_, S>,
     provider: &bravebot_config::provider::Provider,
-    token: &str,
+    token: Option<&str>,
     egress: &Egress,
 ) -> Result<Vec<Model>, ChatError> {
-    match fetch_listing(policy, provider.account_models_url(), token, egress) {
-        Ok(listed) => Ok(offered_by_gateway(provider, listed)),
+    if token.is_some() {
         // Any failure falls through to the wide roster: a gateway with no such route answers 404,
         // one that has it under another name answers something undecodable, and neither is a reason
         // to offer nothing when a list that does work is one request away.
-        Err(_) => {
-            let listed = fetch_listing(policy, provider.models_url(), token, egress)?;
-            Ok(offered_by_gateway(provider, listed))
+        if let Ok(listed) = fetch_listing(policy, provider.account_models_url(), token, egress) {
+            return Ok(offered_by_gateway(provider, listed));
         }
     }
+
+    let listed = fetch_listing(policy, provider.models_url(), token, egress)?;
+    Ok(offered_by_gateway(provider, listed))
 }
 
 /// One roster request, decoded.
 fn fetch_listing<S: Sink>(
     policy: &mut Policy<'_, S>,
     url: String,
-    token: &str,
+    token: Option<&str>,
     egress: &Egress,
 ) -> Result<Vec<ListedByGateway>, ChatError> {
-    let request = Request::get(&url)
-        .header("accept", "application/json")
-        .header("authorization", format!("Bearer {token}"));
+    let mut request = Request::get(&url).header("accept", "application/json");
+    if let Some(token) = token {
+        request = request.header("authorization", format!("Bearer {token}"));
+    }
 
     let response = egress.fetch(policy, request, Label::untrusted_public())?;
     let label = response.body.label();

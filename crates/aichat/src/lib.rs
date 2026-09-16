@@ -167,6 +167,10 @@ pub struct AichatClient<'a> {
 ///
 /// Holds the resolved token rather than the means of resolving one, because a caller has already
 /// had to find it to know whether the request can be sent at all.
+///
+/// Optional, because a gateway block may name nowhere for a credential to live, and one that names
+/// none is somebody saying none is needed. The caller has decided that too: a block naming a
+/// credential nothing holds never reaches here.
 struct Gateway<'a> {
     provider: &'a bravebot_config::provider::Provider,
     /// What this gateway calls the model, which is the name the request carries.
@@ -175,7 +179,7 @@ struct Gateway<'a> {
     /// qualified by the provider's own id to say which service was meant, and that qualified form is
     /// one the gateway has never heard of.
     model: String,
-    token: String,
+    token: Option<String>,
 }
 
 impl<'a> AichatClient<'a> {
@@ -190,12 +194,15 @@ impl<'a> AichatClient<'a> {
         }
     }
 
-    /// Send this request to a configured gateway, bearer-authenticated, instead of to Brave.
+    /// Send this request to a configured gateway instead of to Brave, bearer-authenticated where the
+    /// gateway's block named a credential.
     ///
     /// The model has already decided this: a caller reaches for it because the name it holds is one
-    /// the provider offers. Nothing here re-decides that, and a token is required rather than
-    /// optional because an unauthenticated request to a gateway is one that fails at the far end for
-    /// a reason nothing local could explain.
+    /// the provider offers. Nothing here re-decides that, and neither is the token re-derived: `None`
+    /// is the caller saying the block named nowhere for one to live, which a local Ollama's block
+    /// does, and not a token it could not find. A block that named a credential nothing holds is
+    /// refused before this, because such a request fails at the far end for a reason nothing local
+    /// could explain.
     ///
     /// `model` is what this gateway calls it, taken rather than derived for the same reason the token
     /// is: the caller resolved the provider and the name together, and deriving one of them again
@@ -204,12 +211,12 @@ impl<'a> AichatClient<'a> {
         mut self,
         provider: &'a bravebot_config::provider::Provider,
         model: impl Into<String>,
-        token: impl Into<String>,
+        token: Option<String>,
     ) -> Self {
         self.gateway = Some(Gateway {
             provider,
             model: model.into(),
-            token: token.into(),
+            token,
         });
         self
     }
@@ -355,11 +362,12 @@ impl<'a> AichatClient<'a> {
                     object.entry(key.clone()).or_insert_with(|| value.clone());
                 }
             }
-            return Ok(
-                Request::post(gateway.provider.chat_completions_url(), encode(&body)?)
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {}", gateway.token)),
-            );
+            let mut http = Request::post(gateway.provider.chat_completions_url(), encode(&body)?)
+                .header("content-type", "application/json");
+            if let Some(token) = gateway.token.as_deref() {
+                http = http.header("authorization", format!("Bearer {token}"));
+            }
+            return Ok(http);
         }
 
         let body = encode(&body)?;
@@ -808,13 +816,18 @@ mod tests {
     }
 
     fn provider(models: &str) -> bravebot_config::provider::Provider {
-        let text = format!(
+        provider_block(&format!(
             r#"{{"provider": {{"openrouter": {{
                 "options": {{"baseURL": "https://openrouter.example.invalid/api/v1"}},
                 "models": {models}
             }}}}}}"#
-        );
-        let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        ))
+    }
+
+    /// The one provider a whole settings block configures, for a test that varies more than the
+    /// models.
+    fn provider_block(text: &str) -> bravebot_config::provider::Provider {
+        let serde_json::Value::Object(root) = serde_json::from_str(text).expect("json") else {
             panic!("not an object");
         };
         bravebot_config::provider::Provider::all(&root)
@@ -845,7 +858,7 @@ mod tests {
         let egress = Egress::new();
         let provider = provider(r#"{"z-ai/glm-4.6": {}}"#);
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "z-ai/glm-4.6", "a-token")
+            .for_gateway(&provider, "z-ai/glm-4.6", Some("a-token".to_string()))
             .prepare(&request("openrouter/z-ai/glm-4.6"))
             .expect("prepared");
 
@@ -865,7 +878,7 @@ mod tests {
             r#"{"z-ai/glm-4.6": {"options": {"provider": {"order": ["amazon-bedrock"]}}}}"#,
         );
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "z-ai/glm-4.6", "a-token")
+            .for_gateway(&provider, "z-ai/glm-4.6", Some("a-token".to_string()))
             .prepare(&request("openrouter/z-ai/glm-4.6"))
             .expect("prepared");
 
@@ -883,7 +896,7 @@ mod tests {
         let egress = Egress::new();
         let provider = provider(r#"{"z-ai/glm-4.6": {}}"#);
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "z-ai/glm-4.6", "a-token")
+            .for_gateway(&provider, "z-ai/glm-4.6", Some("a-token".to_string()))
             .prepare(&request("z-ai/glm-4.6"))
             .expect("prepared");
 
@@ -894,6 +907,37 @@ mod tests {
         assert_eq!(header(&http, "authorization"), Some("Bearer a-token"));
         assert_eq!(header(&http, "digest"), None);
         assert_eq!(header(&http, "Brave-Product"), None);
+    }
+
+    /// A local Ollama wants no credential, and `Bearer` with nothing after it is not the same request
+    /// as one carrying no credential at all: some services read the empty value as a bad token and
+    /// refuse, which is the failure this exists to avoid.
+    ///
+    /// Its own block rather than the shared fixture, because the fixture names the one service this
+    /// system has an endpoint compiled in for, and that service always wants a token. A test reading
+    /// as though OpenRouter were asked without one asserts the opposite of what it is named for.
+    #[test]
+    fn a_gateway_needing_no_credential_sends_no_authorization_header() {
+        let config = config();
+        let egress = Egress::new();
+        let provider = provider_block(
+            r#"{"provider": {"ollama": {
+                "name": "Ollama (local)",
+                "options": {"baseURL": "http://localhost:11434/v1"},
+                "models": {"qwen3-coder-oc:latest": {}}
+            }}}"#,
+        );
+        let http = AichatClient::new(&config, &egress)
+            .for_gateway(&provider, "qwen3-coder-oc:latest", None)
+            .prepare(&request("qwen3-coder-oc:latest"))
+            .expect("prepared");
+
+        assert_eq!(http.url, "http://localhost:11434/v1/chat/completions");
+        assert_eq!(header(&http, "authorization"), None);
+        assert_eq!(
+            body(&http).get("model"),
+            Some(&serde_json::json!("qwen3-coder-oc:latest"))
+        );
     }
 
     /// Nothing changes for Brave's endpoint, which is every existing request. A gateway is additive,
@@ -930,7 +974,11 @@ mod tests {
             }}}"#,
         );
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "anthropic/claude-sonnet-4.5", "a-token")
+            .for_gateway(
+                &provider,
+                "anthropic/claude-sonnet-4.5",
+                Some("a-token".to_string()),
+            )
             .prepare(&request("anthropic/claude-sonnet-4.5"))
             .expect("prepared");
 
@@ -956,7 +1004,7 @@ mod tests {
             r#"{"m": {"options": {"model": "something/else", "messages": [], "stream": true}}}"#,
         );
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "m", "a-token")
+            .for_gateway(&provider, "m", Some("a-token".to_string()))
             .prepare(&request("m"))
             .expect("prepared");
 
@@ -979,7 +1027,7 @@ mod tests {
         let provider =
             provider(r#"{"z-ai/glm-4.6": {"limit": {"context": 131072, "output": 8192}}}"#);
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "z-ai/glm-4.6", "a-token")
+            .for_gateway(&provider, "z-ai/glm-4.6", Some("a-token".to_string()))
             .prepare(&request("z-ai/glm-4.6"))
             .expect("prepared");
 

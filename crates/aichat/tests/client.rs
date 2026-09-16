@@ -1571,3 +1571,76 @@ fn a_listing_that_is_not_an_array_is_an_error() {
     let refused = bravebot_aichat::models::list(&mut policy, &config, &egress);
     assert!(refused.is_err(), "an envelope was accepted as a list");
 }
+
+/// A gateway block pointed at the mock server with no `models` key, which is the case whose roster is
+/// fetched at all.
+fn gateway_at(endpoint: &str) -> bravebot_config::provider::Provider {
+    let text =
+        format!(r#"{{"provider": {{"ollama": {{"options": {{"baseURL": "{endpoint}/v1"}}}}}}}}"#);
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+const GATEWAY_ROSTER: &str = r#"{"data":[{"id":"qwen3-coder:30b"}]}"#;
+
+/// Ollama serves its roster to anyone and rejects a request carrying a bearer token it has no
+/// account for, so the listing that fills the picker has to go unauthenticated. The service-wide
+/// route is the one asked: with no credential there is no account for `/models/user` to scope an
+/// answer to, and the mock server here answers one request, so asking it twice would hang.
+#[test]
+fn a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated() {
+    let (endpoint, received) = serve(GATEWAY_ROSTER);
+    let provider = gateway_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let models = bravebot_aichat::models::list_from_gateway(&mut policy, &provider, None, &egress)
+        .expect("the roster was fetched");
+    assert_eq!(models[0].key, "ollama/qwen3-coder:30b");
+
+    let captured = received.recv().expect("request captured");
+    assert_eq!(
+        captured.request_line, "GET /v1/models HTTP/1.1",
+        "the account-scoped route was asked for without an account"
+    );
+    assert_eq!(
+        captured.header("authorization"),
+        None,
+        "a gateway that names no credential was sent one"
+    );
+}
+
+/// The narrower roster is still worth a round trip where there is a credential to scope it to: a
+/// model the token cannot reach is a row that fails the moment somebody picks it.
+#[test]
+fn a_gateway_with_a_credential_is_asked_what_that_account_may_reach() {
+    let (endpoint, received) = serve(GATEWAY_ROSTER);
+    let provider = gateway_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    bravebot_aichat::models::list_from_gateway(&mut policy, &provider, Some("a-token"), &egress)
+        .expect("the roster was fetched");
+
+    let captured = received.recv().expect("request captured");
+    assert_eq!(captured.request_line, "GET /v1/models/user HTTP/1.1");
+    assert_eq!(captured.header("authorization"), Some("Bearer a-token"));
+}

@@ -3056,14 +3056,23 @@ fn fetch_models(config: &Config) -> Result<Vec<bravebot_aichat::models::Model>, 
 /// What comes back names the gateway the same way a configured model from it does, so one service
 /// does not appear twice under two names in the same list.
 ///
-/// A gateway nothing holds a credential for is not asked. The listing would come back refused, and
-/// the useful thing to say about that gateway is what `doctor` already says: no credential found.
+/// A gateway whose block named a credential nothing holds is not asked. The listing would come back
+/// refused, and the useful thing to say about that gateway is what `doctor` already says: no
+/// credential found.
+///
+/// A block naming no credential at all is asked, unauthenticated. That is somebody saying the gateway
+/// wants none, and it is the block a local Ollama is configured with. That block lists no models
+/// either, so not asking leaves it offering nothing.
 fn fetch_gateway_models(
     provider: &bravebot_config::provider::Provider,
 ) -> Result<Vec<bravebot_aichat::models::Model>, String> {
-    let token = provider
-        .token(|name| std::env::var(name).ok())
-        .ok_or_else(|| format!("no credential for {}", provider.display_name()))?;
+    let token = match provider.credential(|name| std::env::var(name).ok()) {
+        bravebot_config::provider::Credential::Token(token) => Some(token),
+        bravebot_config::provider::Credential::NotNeeded => None,
+        bravebot_config::provider::Credential::Absent => {
+            return Err(format!("no credential for {}", provider.display_name()));
+        }
+    };
 
     let mut sink = Trail::new();
     let egress = Egress::new();
@@ -3084,7 +3093,7 @@ fn fetch_gateway_models(
     )
     .map_err(|denial| denial.to_string())
     .and_then(|mut policy| {
-        bravebot_aichat::models::list_from_gateway(&mut policy, provider, &token, &egress)
+        bravebot_aichat::models::list_from_gateway(&mut policy, provider, token.as_deref(), &egress)
             .map_err(|error| error.to_string())
     })
 }
