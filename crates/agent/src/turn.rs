@@ -945,6 +945,12 @@ pub fn run<S: Sink + Send, C: Confirmer + Send>(
 /// The conversation is borrowed rather than returned because a turn that fails has still had
 /// one: what it asked, what it read, and what it was told are the very things the next turn
 /// needs in order to be told "try that again".
+///
+/// `servers` is borrowed for the same reason, and LSP-8 is why a caller running more than one turn
+/// has to own it: a server is started on the first question that needs one and kept for the
+/// session, so a set that ended with the turn would have the next message ask the same person
+/// about the same language and pay for a second index. `None` says this caller keeps no set
+/// between turns, and the turn then owns one of its own.
 #[allow(clippy::too_many_arguments)]
 pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
     config: &Config,
@@ -957,6 +963,7 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
     sink: &mut S,
     trust: TrustStore,
     programs: TrustedPrograms,
+    servers: Option<&mut crate::lsp::LanguageServers>,
     cancel: &Cancel,
 ) -> Result<Outcome, TurnError> {
     run_inner(
@@ -970,6 +977,7 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         sink,
         trust,
         programs,
+        servers,
         cancel,
     )
 }
@@ -1005,6 +1013,9 @@ pub fn run_cancellable<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         // A fresh conversation vouches for no program: the list belongs to a session, and this
         // begins one.
         TrustedPrograms::new(),
+        // And it begins and ends one, so a set kept past the turn would be kept past the session
+        // it belonged to. The turn owns the servers it starts and stops them on the way out.
+        None,
         cancel,
     )
 }
@@ -1047,6 +1058,10 @@ pub(crate) fn delegated(
         sink,
         trust,
         programs,
+        // Its own, not the parent session's. A delegate runs on a thread beside the turn that
+        // spawned it and beside its siblings, so a shared set would be one several of them held
+        // at once.
+        None,
         cancel,
     )
 }
@@ -1076,6 +1091,8 @@ pub fn run_with_trust<S: Sink + Send, C: Confirmer + Send>(
         sink,
         trust,
         TrustedPrograms::new(),
+        // One turn is the whole session here, so the set the turn owns is the session's.
+        None,
         &Cancel::new(),
     )
 }
@@ -1522,6 +1539,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     sink: &mut S,
     trust: TrustStore,
     programs: TrustedPrograms,
+    servers: Option<&mut crate::lsp::LanguageServers>,
     cancel: &Cancel,
 ) -> Result<Outcome, TurnError> {
     // First thing in the turn, so the wall figure covers the work that happens before the first
@@ -1602,14 +1620,15 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // LSP-5 asks the person before it does, so a session that never asks about a symbol never
     // prompts about a server.
     //
-    // Built per turn rather than per session, which is short of what LSP-8 asks for: a second turn
-    // starts a fresh server and re-indexes. The set has to outlive the turn to fix that, and the
-    // entry points that would carry it are the caller's, so it is left for the change that gives a
-    // session somewhere to keep one.
-    let mut servers = Some(crate::lsp::LanguageServers::new(
-        workspace.root().to_path_buf(),
-        task.home.clone(),
-    ));
+    // The caller's set where there is one, because the set belongs to the session and a session is
+    // many turns. One built here would be dropped on the way out and its processes shut down with
+    // it, so the next message would ask the same person about the same language and wait for a
+    // second index of the same tree. A caller that hands none over is one whose session is this
+    // turn, so what is built for it is still the session's.
+    let mut owned = servers.is_none().then(|| {
+        crate::lsp::LanguageServers::new(workspace.root().to_path_buf(), task.home.clone())
+    });
+    let mut servers = servers.or(owned.as_mut());
 
     // Built once and put in front of every round of this turn. Nothing here is stored in the
     // conversation, so a session running many turns holds one copy of AGENTS.md rather than one
@@ -2207,7 +2226,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                         remembering: task.remembering.as_deref(),
                         // A delegate is offered no way to delegate, and dispatch refuses one anyway.
                         delegated: task.delegate.is_some(),
-                        servers: servers.as_mut(),
+                        servers: servers.as_deref_mut(),
                         spawned: &mut spawned,
                         jobs: &mut jobs,
                         permission_mode: task.permission_mode,
