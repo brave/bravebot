@@ -9,6 +9,7 @@ governs:
   - crates/tui/src/status.rs
   - crates/tui/src/state.rs
   - crates/config/src/bedrock.rs
+  - crates/config/src/env_var.rs
   - crates/config/src/lib.rs
   - crates/aichat/src/lib.rs
   - crates/aichat/src/models.rs
@@ -627,7 +628,8 @@ leaves everything else in force.
 | `model`, anything else | the closest layer that set it wins |
 
 The project layers are read from the directory the process started in and no ancestor of it. Each
-layer fails independently: one that is missing, oversized, or unparseable leaves the others in force.
+layer fails independently: one that is missing, larger than 64 KB, or unparseable leaves the others
+in force.
 
 **Why.** An account is not the only scope a value belongs to. A credential profile is a property of
 the person, the gateway a particular checkout talks to is a property of that checkout, and something
@@ -651,6 +653,10 @@ Searching upward for the project layer is what this declines to do, because then
 session would depend on which directory somebody happened to change into, and the file found could sit
 above the thing being worked on. Refusing the whole stack over one bad layer is the other thing it
 declines: a mistake in a checkout must not decide that somebody's own profile no longer applies.
+
+The bound is there because these files are a handful of short strings and a session must start
+without waiting on one. A file that grew by accident, or that is not a settings file at all, is
+skipped rather than parsed, and 64 KB is far above anything a person writes by hand.
 
 The order and the merge rules are Claude Code's, down to the name `settings.local.json`, so that
 knowing where to put a value for one tool is knowing it for the other.
@@ -1006,6 +1012,131 @@ sent.
 `verified-by: bravebot_aichat::client::a_request_the_server_refused_is_not_sent_again_unchanged`
 `verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
 
+<a id="BACKEND-33"></a>
+### BACKEND-33: an `env` block names these twelve variables
+
+The `env` block of a settings file sets variables under their own names, and these are the names
+something reads:
+
+| Name | What it decides |
+|---|---|
+| `SERVICES_KEY_AICHAT` | the key a request to Brave's endpoint is signed with |
+| `BRAVE_SERVICES_KEY_ID` | which key that signature is checked against |
+| `BRAVE_AI_CHAT_ENDPOINT` | the host Brave's endpoint is reached at |
+| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host an imported subscription is spent against |
+| `BRAVE_AI_CHAT_DEFAULT_MODEL` | which model answers before anybody has chosen one |
+| `BRAVEBOT_CONTEXT_BUDGET` | how many prompt tokens a conversation may reach before it is shortened |
+| `BRAVEBOT_USE_BEDROCK` | `1` to reach models through somebody's own AWS account |
+| `AWS_REGION` | which region that account is reached in |
+| `AWS_PROFILE` | which profile in the AWS configuration names the credentials to sign with |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | the model the tier word `opus` names |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | the model the tier word `sonnet` names |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | the model the tier word `haiku` names |
+
+A gateway is not configured from this block: it is a `provider` entry, whose shape BACKEND-13
+states and whose credential BACKEND-16 names. The top-level `model` key is not one of these either, being a
+choice rather than a variable, and BACKEND-11 is what ranks it.
+
+**Why.** A configuration surface that is described but never named is one nobody can use without
+reading the source. Anything written *about* this system (the site somebody installs it from, a
+message telling a person what to set) is written from what is stated here, so a backend whose
+variables are named nowhere is a backend that reaches people undocumented however completely its
+behaviour is specified. Naming them is also what makes the set reviewable: a thirteenth variable is
+a change to this table, which a person reads, rather than a constant added to a file nobody is
+asked to look at.
+
+The AWS names keep the spelling another tool already gave them, and the switch and the budget carry
+this program's own prefix, for the reason BACKEND-24 gives about the file as a whole: a block
+copied from elsewhere should work unedited, while a name that decides what *this* program does
+belongs to this program and must not collide with whatever else a shared shell profile wanted.
+
+`verified-by: bravebot_config::lib::every_name_a_settings_block_may_set_reaches_the_configuration`
+`verified-by: bravebot_config::settings::an_env_block_is_read`
+
+<a id="BACKEND-34"></a>
+### BACKEND-34: a settings value is a string, and anything else is not a value
+
+Every value in a settings block is a JSON string. A name spelled with a number, a boolean, a null, a
+list or an object holds nothing, and holds nothing in the layers underneath it either: the closest
+layer that spelled the name is the layer that answered for it. Every other name in that file is
+unaffected.
+
+A block spelled as anything but a block is answered for the same way, one level up. A layer whose
+`env` is a number, a string, a list or a null sets no variable, and no variable is read from the
+layers under it either. The file still parses, so this is not the failed-layer case BACKEND-24
+describes, and the other blocks in it are read as they would have been.
+
+**Why.** What a variable takes is a string, and JSON has a distinct spelling for each of the other
+kinds. Coercing one invents a spelling the writer did not choose, `1` and `true` being far from
+obviously `"1"` and `"true"` to whoever reads the value back later, and the values here are hosts
+and credentials, where a guess about spelling is a guess about where a request goes. Dropping the name
+rather than the file keeps the damage to the thing that was mistyped, since the rest of the file
+still describes a working backend.
+
+A weaker layer is not fallen through to because the name was answered, by the file closest to the
+work. Falling through would make a typo in a checkout resolve quietly to a value from a file the
+person was not looking at, which is the one outcome worse than the name being unset. That is the
+reason the same thing happens to a whole block, and it is also where the rule costs the most: a
+single mistyped `env` takes a person's own variables away with the checkout's.
+
+`verified-by: bravebot_config::settings::a_value_that_is_not_a_string_is_left_out`
+`verified-by: bravebot_config::settings::a_value_that_is_not_a_string_leaves_the_name_unset_in_every_layer`
+`verified-by: bravebot_config::settings::a_block_that_is_not_a_block_leaves_no_names_under_it`
+`verified-by: bravebot_config::settings::a_model_that_is_blank_or_not_a_string_names_nothing`
+
+<a id="BACKEND-35"></a>
+### BACKEND-35: an exported variable, then the build, then the file
+
+For every name but the top-level `model` key, a value exported into the process environment outranks
+one this binary was built with, which outranks the `env` block. A variable exported blank does not
+displace a value the build carries; where the build carries none, the blank is what the
+configuration holds, so a missing credential is reported as empty rather than as absent.
+
+**Why.** An exported variable is the most specific thing a person said, and a file that overrode it
+would make `AWS_PROFILE=other bravebot` do nothing. The build sits above the file so that a released
+binary reaches the host it was given and signs with the credentials it was given, whatever the
+`.bravebot` directory of the checkout somebody happens to be working in says. That layer is the
+easiest thing on the machine to write to, which is the same reason BACKEND-1 gives for a file
+granting no capability at all.
+
+On a binary built with nothing, which is a source build, the file is what answers for all of it:
+the endpoint, the key id and the signing key included, and a project layer can name any of them.
+That is the case the file exists for, and what it costs is under Known costs.
+
+BACKEND-11 is the one exception and says why: a `model` key ranked here would lose to the baked-in
+default on every binary anybody was given.
+
+`verified-by: bravebot_config::lib::the_environment_outranks_the_settings_file`
+`verified-by: bravebot_config::lib::a_baked_in_value_outranks_the_settings_file`
+`verified-by: bravebot_config::lib::the_settings_file_applies_when_the_environment_is_silent`
+`verified-by: bravebot_config::lib::a_blank_variable_does_not_shadow_a_built_in_value`
+`verified-by: bravebot_config::lib::a_blank_variable_survives_when_nothing_was_built_in`
+
+<a id="BACKEND-36"></a>
+### BACKEND-36: a name nothing reads is kept and decides nothing
+
+Every name an `env` block sets is read into the settings and reported by `doctor` among the names
+that file set, whether or not anything consults it. A name outside BACKEND-33's table decides
+nothing: it configures nothing, it is not an error, and, like every name in the block, it is not
+exported. The switch that hands this agent's own credentials back to a program it starts is read
+from the process environment alone, so a file spelling that name changes nothing about what a
+subprocess is given.
+
+**Why.** This is the person's own configuration surface and a file people copy between tools, so it
+holds names written for something else and names written for a later version of this one. Refusing
+one would make a settings file from a newer release stop an older binary from starting, and
+discarding one silently would make a typo and a forward-looking entry look identical to whoever is
+debugging it, which is why `doctor` reports the names rather than only the ones that landed.
+
+Keeping a name is not the same as acting on one, and the distance between the two is the whole of
+what makes the file safe to read. A block that could switch off credential scrubbing would be a
+block that hands this agent's secrets to every command it runs, decided by whatever last edited a
+file in a checkout.
+
+`verified-by: bravebot_config::lib::a_name_nothing_consults_changes_nothing`
+`verified-by: bravebot_config::settings::a_name_this_crate_does_not_know_is_still_read`
+`verified-by: bravebot_config::settings::the_names_are_reportable_and_the_values_are_not`
+
 ## Known costs
 
 - **The effort level is the one field in a Bedrock request that a single provider defines.** The
@@ -1045,6 +1176,14 @@ sent.
   levels the Anthropic API defines, and a gateway row advertising `reasoning_effort` says it reads
   the parameter without saying which words it accepts. A model may reject or silently round a level
   it does not know, and no listing distinguishes that from honouring it.
+
+- **A blank exported variable reaches the file for the model and for nothing else.** BACKEND-11's
+  resolution treats a blank as absence the whole way down, so a `model` key still answers. BACKEND-35's
+  stops at the build: on a binary built with nothing, exporting a name blank leaves the configuration
+  holding the blank and the value in the file unread. The two orders are the same argument, that a
+  placeholder in a shell profile is not an instruction to discard anything, applied to one more source
+  in one of them than in the other, and which behaviour a person meets depends on which name they
+  blanked.
 
 - **A credential is resolved by running the AWS CLI.** Reaching Bedrock needs short-lived keys that
   expire during a session, and the tool that holds them is the one the person already signs in
