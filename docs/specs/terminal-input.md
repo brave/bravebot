@@ -75,6 +75,8 @@ sent nothing. What lingered was the row, which is the only place a person can se
 the marker out worked: left drawn, it says a file is going that is not.
 
 `verified-by: bravebot_tui::drop::deleting_the_marker_takes_the_attachment_off`
+`verified-by: bravebot_tui::state::deleting_a_marker_takes_the_picture_back`
+`verified-by: bravebot_tui::state::deleting_the_marker_takes_the_paste_back`
 `verified-by: bravebot_tui::drop::several_files_dropped_together_each_get_a_marker`
 `verified-by: bravebot_tui::drop::sending_a_line_clears_what_was_attached_to_it`
 `verified-by: bravebot_tui::render::an_attached_file_is_named_under_the_box`
