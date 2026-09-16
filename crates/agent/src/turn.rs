@@ -614,6 +614,10 @@ pub struct Task {
     /// the prompt in front of it, and its round bound. Nothing widens it, because the kernel
     /// built it before this turn existed and there is no method here that could.
     pub delegate: Option<bravebot_core::delegate::DelegateSpec>,
+    /// Whether live core rows are loaded and the remember tool is offered.
+    pub auto_memory_enabled: bool,
+    /// Where core memory lives on disk, when the state directory is known.
+    pub memory_store: Option<PathBuf>,
 }
 
 /// One tick of a loop, as the turn running it needs to know about it.
@@ -666,6 +670,8 @@ impl Task {
             // Asking, which is what a turn has always done.
             permission_mode: crate::PermissionMode::default(),
             delegate: None,
+            auto_memory_enabled: true,
+            memory_store: None,
         }
     }
 
@@ -778,6 +784,19 @@ impl Task {
         self.permission_mode = mode;
         self
     }
+
+    /// Say whether core memory is loaded for this turn.
+    pub fn with_auto_memory_enabled(mut self, enabled: bool) -> Self {
+        self.auto_memory_enabled = enabled;
+        self
+    }
+
+    /// Name the directory holding `core.jsonl`, usually from [`crate::memory::store_from_settings`].
+    pub fn with_memory_store(mut self, store: Option<PathBuf>) -> Self {
+        self.memory_store = store;
+        self
+    }
+
 }
 
 /// When the next tick of a self-paced loop is due, as the turn that has just ended asked for it.
@@ -1614,10 +1633,27 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // Built once and put in front of every round of this turn. Nothing here is stored in the
     // conversation, so a session running many turns holds one copy of AGENTS.md rather than one
     // per turn.
+    let core = if task.auto_memory_enabled {
+        task.memory_store
+            .as_deref()
+            .map(crate::memory::load_live_core)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if !core.is_empty() && task.delegate.is_none() {
+        reporter.notice(format!(
+            "recalled {} core memor{}",
+            core.len(),
+            if core.len() == 1 { "y" } else { "ies" }
+        ));
+    }
+
     let preamble = crate::preamble::compose(
         &mut policy,
         workspace,
         task.home.as_deref(),
+        &core,
         &catalogue,
         task.tick,
         task.working_towards.as_deref(),
@@ -1808,6 +1844,14 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     let offered = match &task.delegate {
         Some(spec) => tools::for_delegate(spec.capabilities()),
         None => tools::available(scheduling),
+    };
+    let offered = if task.auto_memory_enabled {
+        offered
+    } else {
+        offered
+            .into_iter()
+            .filter(|tool| tool.function.name != "remember")
+            .collect()
     };
 
     let mut steps = 0;
@@ -2205,6 +2249,8 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                         scheduling,
                         home: task.home.as_deref(),
                         remembering: task.remembering.as_deref(),
+                        auto_memory_enabled: task.auto_memory_enabled,
+                        memory_store: task.memory_store.as_deref(),
                         // A delegate is offered no way to delegate, and dispatch refuses one anyway.
                         delegated: task.delegate.is_some(),
                         servers: servers.as_mut(),

@@ -8,8 +8,8 @@
 //! event all resolve to refusal.
 
 use bravebot_agent::confirm::{
-    Confirmer, Decision, FetchRequest, Intent, ManifestRequest, OutputRequest, RunDecision,
-    RunRequest, ServerRequest, VouchRequest, WriteRequest,
+    Confirmer, Decision, FetchRequest, Intent, ManifestRequest, OutputRequest, RememberRequest,
+    RunDecision, RunRequest, ServerRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_core::ask::{Answer as UserAnswer, Asking};
@@ -54,6 +54,10 @@ impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
 
     fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
         ask_fetch(self.terminal, request).decision()
+    }
+
+    fn confirm_remember(&mut self, request: &RememberRequest) -> Decision {
+        ask_remember(self.terminal, request).decision()
     }
 
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
@@ -920,6 +924,26 @@ pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest)
     }
 }
 
+/// Ask whether to remember something, blocking until answered.
+pub fn ask_remember<B: Backend>(terminal: &mut Terminal<B>, request: &RememberRequest) -> Answer {
+    loop {
+        if terminal.draw(|frame| draw_remember(frame, request)).is_err() {
+            return Answer::Reject;
+        }
+
+        match event::read() {
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
+            Ok(TermEvent::Key(key)) => match answer_for(key) {
+                Some(Response::Answer(answer)) => return answer,
+                Some(Response::Scroll(_)) => continue,
+                None => continue,
+            },
+            Ok(_) => continue,
+            Err(_) => return Answer::Reject,
+        }
+    }
+}
+
 /// Put the language-server question to the user.
 ///
 /// Its own prompt rather than a run's, because what a yes grants has a different shape: a process
@@ -1034,6 +1058,77 @@ fn draw_server(frame: &mut ratatui::Frame, request: &ServerRequest) {
 /// The host is drawn on its own line rather than left inside the URL. A person skimming
 /// `https://example.com@evil.test/` reads the first name and the request goes to the second, so
 /// what they are actually answering about is put where it cannot be misread.
+fn draw_remember(frame: &mut ratatui::Frame, request: &RememberRequest) {
+    let area = centred(frame.area());
+    let inside = panel(frame, area, theme::ok(), t!(remember_title));
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{} ", t!(remember_verb)),
+                Style::default()
+                    .fg(theme::ok())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                request.kind.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::styled(
+            format!("  {}", t!(remember_mtype, mtype = request.mtype.as_str())),
+            Style::default().fg(theme::muted()),
+        ),
+        Line::raw(""),
+    ];
+    lines.extend(indented(
+        request.text.as_str(),
+        Style::default(),
+        inside.width as usize,
+    ));
+    lines.push(Line::raw(""));
+    lines.extend(indented(
+        t!(remember_explained),
+        Style::default().fg(theme::muted()),
+        inside.width as usize,
+    ));
+
+    let keys = Line::from(vec![
+        Span::styled(
+            "  y",
+            Style::default()
+                .fg(theme::ok())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" {}    ", t!(remember_yes))),
+        Span::styled(
+            "n",
+            Style::default()
+                .fg(theme::fail())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" {}    ", t!(remember_no))),
+        Span::styled(
+            "ctrl-c",
+            Style::default()
+                .fg(theme::muted())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {}", t!(stop_the_turn)),
+            Style::default().fg(theme::muted()),
+        ),
+    ]);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inside);
+
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), rows[0]);
+    frame.render_widget(Paragraph::new(keys), rows[1]);
+}
+
 fn draw_fetch(frame: &mut ratatui::Frame, request: &FetchRequest) {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::ok(), t!(fetch_title));

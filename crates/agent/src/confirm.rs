@@ -282,6 +282,24 @@ impl FetchRequest {
     }
 }
 
+/// A row the planner asked to put in persistent memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RememberRequest {
+    /// `core` or `episodic`, which is what a person is routing on.
+    pub kind: String,
+    /// The memory text, exactly as it would be stored.
+    pub text: String,
+    /// What kind of fact this is, for recall and display.
+    pub mtype: String,
+}
+
+impl RememberRequest {
+    /// A short description for a prompt line.
+    pub fn summary(&self) -> String {
+        format!("remember {} ({})", self.kind, self.mtype)
+    }
+}
+
 /// A language server the planner would like started.
 ///
 /// Its own question rather than a reuse of [`RunRequest`], because what a yes grants has a different
@@ -475,6 +493,13 @@ pub trait Confirmer {
     /// consent to talk to it and never a claim about what it returns.
     fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision;
 
+    /// Ask about putting something in persistent memory. Implementations must default to refusal
+    /// when they cannot ask.
+    ///
+    /// Separate from [`Confirmer::confirm_write`] because what a yes grants is different: this
+    /// text is recalled on every later turn in the system prompt when `kind` is core.
+    fn confirm_remember(&mut self, request: &RememberRequest) -> Decision;
+
     /// Ask whether to start a language server. Implementations must default to refusal when they
     /// cannot ask.
     ///
@@ -579,6 +604,10 @@ impl Confirmer for Unattended {
         Decision::Reject
     }
 
+    fn confirm_remember(&mut self, _request: &RememberRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
         Decision::Reject
     }
@@ -632,6 +661,10 @@ impl Confirmer for ApproveWrites {
         Decision::Reject
     }
 
+    fn confirm_remember(&mut self, _request: &RememberRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
         Decision::Reject
     }
@@ -675,6 +708,10 @@ impl Confirmer for ChoosesFirst {
 
     /// Refuses. Nothing about a test double is a person agreeing to talk to a host.
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_remember(&mut self, _request: &RememberRequest) -> Decision {
         Decision::Reject
     }
 
@@ -740,6 +777,10 @@ impl Confirmer for ApproveRuns {
         Decision::Reject
     }
 
+    fn confirm_remember(&mut self, _request: &RememberRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
         Decision::Reject
     }
@@ -783,6 +824,10 @@ impl Confirmer for RemembersRuns {
 
     /// Refuses. Nothing about a test double is a person agreeing to talk to a host.
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_remember(&mut self, _request: &RememberRequest) -> Decision {
         Decision::Reject
     }
 
@@ -832,6 +877,10 @@ impl Confirmer for ReadsOutput {
         Decision::Reject
     }
 
+    fn confirm_remember(&mut self, _request: &RememberRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
         Decision::Reject
     }
@@ -877,6 +926,10 @@ impl Confirmer for ApproveFetches {
         Decision::Approve
     }
 
+    fn confirm_remember(&mut self, _request: &RememberRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
         Decision::Reject
     }
@@ -917,6 +970,10 @@ impl Confirmer for ApprovePlans {
     }
 
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_remember(&mut self, _request: &RememberRequest) -> Decision {
         Decision::Reject
     }
 
@@ -990,6 +1047,10 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
         self.timing(|inner| inner.confirm_fetch(request))
+    }
+
+    fn confirm_remember(&mut self, request: &RememberRequest) -> Decision {
+        self.timing(|inner| inner.confirm_remember(request))
     }
 
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
@@ -1093,6 +1154,11 @@ mod tests {
         }
 
         fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+            std::thread::sleep(self.0);
+            Decision::Reject
+        }
+
+        fn confirm_remember(&mut self, _request: &RememberRequest) -> Decision {
             std::thread::sleep(self.0);
             Decision::Reject
         }

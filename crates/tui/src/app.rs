@@ -85,6 +85,9 @@ const STATUS_COMMAND: &str = "/status";
 /// The line that summarises the conversation so far, in place of sending all of it.
 const COMPACT_COMMAND: &str = "/compact";
 
+/// The line that edits core memories stored for every session.
+const MEMORY_COMMAND: &str = "/memory";
+
 /// The line that starts a new session in place of this one.
 const CLEAR_COMMAND: &str = "/clear";
 
@@ -126,7 +129,7 @@ pub struct Command {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 16] {
+pub fn commands() -> [Command; 17] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -172,6 +175,11 @@ pub fn commands() -> [Command; 16] {
             name: COMPACT_COMMAND,
             argument: "",
             description: t!(command_compact),
+        },
+        Command {
+            name: MEMORY_COMMAND,
+            argument: "",
+            description: t!(command_memory),
         },
         Command {
             name: BTW_COMMAND,
@@ -317,6 +325,8 @@ pub enum Action {
     Export(Option<String>),
     /// Undo the last turn. Needs the workspace and conversation.
     Undo,
+    /// Edit core memories on disk. Needs the terminal, which the loop owns.
+    EditMemory,
     Quit,
 }
 
@@ -1017,6 +1027,9 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
     }
     if line.trim() == COMPACT_COMMAND {
         return Action::Compact;
+    }
+    if line.trim() == MEMORY_COMMAND {
+        return Action::EditMemory;
     }
     // The question is taken verbatim and never sent as a prompt: it goes out over a copy of the
     // conversation and the copy is thrown away, so nothing about it joins the exchange.
@@ -2221,6 +2234,10 @@ fn event_loop(
                 choose_editing(terminal, &mut session);
                 needs_draw = true;
             }
+            Action::EditMemory => {
+                edit_memory(terminal, &mut session);
+                needs_draw = true;
+            }
             Action::AddDirectory(directory) => {
                 // The snapshot holds a trust map without this directory's rule in it, while the
                 // directory itself would stay open.
@@ -3030,6 +3047,53 @@ fn choose_effort(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, session:
 }
 
 /// Open the panel of preferences and keep what the person chose.
+fn edit_memory(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, session: &mut Session) {
+    let enabled = bravebot_config::Settings::load().auto_memory_enabled();
+    if crate::memory_prompt::edit(
+        terminal,
+        enabled,
+        |frame| {
+            render::draw(frame, session);
+        },
+        |term, initial| match edit_line_in_external_editor(term, initial) {
+            Ok(Some(text)) => Ok(Some(text)),
+            Ok(None) => Ok(None),
+            Err(message) => Err(message),
+        },
+    ) {
+        session.note(t!(memory_saved));
+    }
+}
+
+/// Hand the terminal to the user's editor and take back what they saved.
+fn edit_line_in_external_editor(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    initial: &str,
+) -> Result<Option<String>, String> {
+    if hand_back_terminal(terminal.backend_mut()).is_err() {
+        return Err(t!(editor_scratch_unusable, problem = "terminal"));
+    }
+    if terminal.show_cursor().is_err() {
+        return Err(t!(editor_scratch_unusable, problem = "terminal"));
+    }
+    match crate::editor::edit(initial) {
+        Ok(text) => {
+            if take_over_terminal(terminal.backend_mut()).is_err() {
+                return Err(t!(editor_scratch_unusable, problem = "terminal"));
+            }
+            if terminal.clear().is_err() {
+                return Err(t!(editor_scratch_unusable, problem = "terminal"));
+            }
+            Ok(Some(text))
+        }
+        Err(failure) => {
+            let _ = take_over_terminal(terminal.backend_mut());
+            let _ = terminal.clear();
+            Err(failure.to_string())
+        }
+    }
+}
+
 fn choose_editing(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, session: &mut Session) {
     if let Some(row) = crate::config_prompt::choose(terminal, session.editing(), |frame| {
         render::draw(frame, session);
@@ -3908,9 +3972,13 @@ fn run_turn_animated(
     // the same one: the person may press the key while this turn runs, and the two halves reading it
     // at different moments is how they would come to disagree.
     let permission_mode = session.permission_mode();
+    let settings = bravebot_config::Settings::load();
+    let memory_store = bravebot_agent::memory::store_from_settings(&settings);
     let mut task = Task::new(prompt)
         .with_rounds(None)
         .with_home(bravebot_agent::home::directory())
+        .with_auto_memory_enabled(settings.auto_memory_enabled())
+        .with_memory_store(memory_store)
         // There is somebody in front of this, so a run prompt here may offer the key whose answer
         // outlives the session. A one-shot run says nothing here and reads no record.
         .remembering(Some(session_id.to_string()))
@@ -4078,6 +4146,13 @@ fn run_turn_animated(
                 // Nothing is noted on the transcript: an approval covers this one URL and leaves
                 // no standing permission behind, so there is no decision to record.
                 let _ = answer_tx.send(crate::remote_confirm::Reply::Fetch(answer.decision()));
+            }
+            crate::remote_confirm::ToMain::Remember(request) => {
+                let answer = crate::confirm::ask_remember(terminal, &request);
+                if answer == crate::confirm::Answer::Interrupt {
+                    cancel.cancel();
+                }
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Remember(answer.decision()));
             }
             crate::remote_confirm::ToMain::Vouch(request) => {
                 let answer = crate::confirm::ask_vouch(terminal, &request);

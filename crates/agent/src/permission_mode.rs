@@ -188,6 +188,15 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    fn confirm_remember(&mut self, request: &crate::confirm::RememberRequest) -> Decision {
+        match self.mode {
+            PermissionMode::Bypass => Decision::Approve,
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.inner.confirm_remember(request)
+            }
+        }
+    }
+
     /// Asked in every mode but bypass, including plan mode and accepting edits.
     ///
     /// Accepting edits does not start servers: what that mode grants is writes to this tree, and a

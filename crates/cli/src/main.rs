@@ -5,7 +5,8 @@
 mod progress;
 
 use bravebot_agent::confirm::{
-    Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RunDecision, RunRequest,
+    Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RememberRequest,
+    RunDecision, RunRequest,
     ServerRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::turn::{self, Task};
@@ -401,8 +402,11 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     // the run over: below the flag the model is whatever was recorded or configured, and a script
     // that never named one did not ask for what it did not get.
     let named_on_the_command_line = named.is_some();
+    let memory_store = bravebot_agent::memory::store_from_settings(&settings);
     let mut task = Task::new(prompt)
         .with_home(bravebot_agent::home::directory())
+        .with_auto_memory_enabled(settings.auto_memory_enabled())
+        .with_memory_store(memory_store)
         .with_model(model_asked_for(named, bravebot_tui::store::load_model()))
         .with_effort(bravebot_tui::store::load_effort())
         .with_permissions(permissions)
@@ -801,6 +805,10 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
 
     fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
         self.refusing.confirm_fetch(request)
+    }
+
+    fn confirm_remember(&mut self, request: &RememberRequest) -> Decision {
+        self.refusing.confirm_remember(request)
     }
 
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision {

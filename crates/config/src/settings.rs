@@ -94,6 +94,9 @@ pub struct Settings {
     /// not recognise has to reach the interface to be reported there rather than be dropped here as
     /// though the file had said nothing.
     editor_mode: Option<String>,
+    /// Whether core memory is loaded and the remember tool is offered, when the file named it.
+    auto_memory_enabled: Option<bool>,
+    auto_memory_directory: Option<String>,
     keybindings: BTreeMap<String, String>,
     attribution: Attribution,
     providers: Vec<crate::provider::Provider>,
@@ -235,6 +238,8 @@ impl Settings {
             permissions: permission_lists(root),
             model: word(root, "model"),
             editor_mode: word(root, "editorMode"),
+            auto_memory_enabled: bool_key(root, "autoMemoryEnabled"),
+            auto_memory_directory: word(root, "autoMemoryDirectory"),
             keybindings: keybindings_block(root),
             attribution: attribution_block(root),
             providers: crate::provider::Provider::all(root),
@@ -270,6 +275,19 @@ impl Settings {
     /// wins. This is what answers for somebody who has never made one.
     pub fn editor_mode(&self) -> Option<&str> {
         self.editor_mode.as_deref()
+    }
+
+    /// Whether core memory is on. Absent from every layer means on.
+    pub fn auto_memory_enabled(&self) -> bool {
+        self.auto_memory_enabled.unwrap_or(true)
+    }
+
+    /// The memory store directory from settings, if the file named one.
+    ///
+    /// A path as written in the file (`~/…` expands against the profile home). Absent means the
+    /// caller should use the default beside the state directory.
+    pub fn auto_memory_directory(&self) -> Option<&str> {
+        self.auto_memory_directory.as_deref()
     }
 
     /// What the settings in force say a commit message and a pull request may carry.
@@ -377,6 +395,13 @@ fn read(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
 /// Strings only, on the footing everything else here reads them: a number or a boolean where a word
 /// belongs would have to be given a spelling nobody chose. Blank is absence rather than a choice of
 /// nothing, since a key set to `""` is how somebody comments one out without deleting the line.
+fn bool_key(root: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<bool> {
+    match root.get(key) {
+        Some(serde_json::Value::Bool(value)) => Some(*value),
+        _ => None,
+    }
+}
+
 fn word(root: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
     match root.get(key) {
         Some(serde_json::Value::String(word)) => Some(word.trim())
@@ -1472,4 +1497,14 @@ mod tests {
             Some(&"alt-e".to_string())
         );
     }
+
+    #[test]
+    fn auto_memory_directory_is_read_from_settings() {
+        let settings = Settings::parse(r#"{"autoMemoryDirectory": "/tmp/custom-memory"}"#);
+        assert_eq!(
+            settings.auto_memory_directory(),
+            Some("/tmp/custom-memory")
+        );
+    }
+
 }

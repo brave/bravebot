@@ -1532,6 +1532,13 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
             bravebot_agent::confirm::Decision::Reject
         }
 
+        fn confirm_remember(
+            &mut self,
+            _request: &bravebot_agent::confirm::RememberRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
         /// Refuses. A test double is not a person agreeing to a plan.
         fn confirm_manifest(
             &mut self,
@@ -1815,6 +1822,13 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
     fn confirm_fetch(
         &mut self,
         _request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_remember(
+        &mut self,
+        _request: &bravebot_agent::confirm::RememberRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
     }
@@ -2540,6 +2554,13 @@ impl bravebot_agent::Confirmer for SaysOnce {
     fn confirm_fetch(
         &mut self,
         _request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_remember(
+        &mut self,
+        _request: &bravebot_agent::confirm::RememberRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
     }
@@ -3307,6 +3328,14 @@ fn a_stale_edit_is_refused() {
         ) -> bravebot_agent::Decision {
             bravebot_agent::Decision::Reject
         }
+
+        fn confirm_remember(
+            &mut self,
+            _request: &bravebot_agent::confirm::RememberRequest,
+        ) -> bravebot_agent::Decision {
+            bravebot_agent::Decision::Reject
+        }
+
         /// Refuses. A test double is not a person agreeing to a plan.
         fn confirm_manifest(
             &mut self,
@@ -5000,6 +5029,13 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
         fn confirm_fetch(
             &mut self,
             _request: &bravebot_agent::confirm::FetchRequest,
+        ) -> bravebot_agent::Decision {
+            bravebot_agent::Decision::Reject
+        }
+
+        fn confirm_remember(
+            &mut self,
+            _request: &bravebot_agent::confirm::RememberRequest,
         ) -> bravebot_agent::Decision {
             bravebot_agent::Decision::Reject
         }
@@ -8469,6 +8505,13 @@ impl bravebot_agent::Confirmer for AnswersWith {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_remember(
+        &mut self,
+        _request: &bravebot_agent::confirm::RememberRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
     /// Refuses. A test double is not a person agreeing to a plan.
     fn confirm_manifest(
         &mut self,
@@ -8854,6 +8897,13 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
     fn confirm_fetch(
         &mut self,
         _request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_remember(
+        &mut self,
+        _request: &bravebot_agent::confirm::RememberRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
     }
@@ -10115,6 +10165,13 @@ impl bravebot_agent::Confirmer for ReadsWhatItRan {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_remember(
+        &mut self,
+        _request: &bravebot_agent::confirm::RememberRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
     /// Refuses. A test double is not a person agreeing to a plan.
     fn confirm_manifest(
         &mut self,
@@ -10452,6 +10509,13 @@ impl bravebot_agent::Confirmer for VouchesForFiles {
     fn confirm_fetch(
         &mut self,
         _request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_remember(
+        &mut self,
+        _request: &bravebot_agent::confirm::RememberRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
     }
@@ -13804,6 +13868,13 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
     ) -> bravebot_agent::Decision {
         self.asked.push(request.url.clone());
         bravebot_agent::Decision::Approve
+    }
+
+    fn confirm_remember(
+        &mut self,
+        _request: &bravebot_agent::confirm::RememberRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
     }
 
     /// Refuses. A test double is not a person agreeing to a plan.

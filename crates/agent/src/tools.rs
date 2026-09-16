@@ -457,6 +457,39 @@ pub fn available(scheduling: Scheduling) -> Vec<Tool> {
             }),
         ),
         Tool::function(
+            "remember",
+            "Save something in persistent memory for later turns. \
+             Use `kind: core` ONLY for stable, high-level facts about the USER that are \
+             broadly useful to recall on every future turn, regardless of topic. Good \
+             examples: the user's name, their profession, languages they speak, durable \
+             preferences (e.g. 'prefers concise answers', 'uses metric units'. \
+             Core memories are injected into the system prompt on EVERY later turn, \
+             so keep them general, and long-lived — not task- or conversation-specific \
+             details. \
+             Do NOT use `core` for one-off facts, the current task or transient context.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["core", "episodic"],
+                        "description": "Where this memory goes. `core` is recalled on every turn \
+                                        in the system prompt; `episodic` is for task-specific \
+                                        notes recalled by similarity when configured."
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "What to remember, in plain language."
+                    },
+                    "mtype": {
+                        "type": "string",
+                        "description": "What kind of memory this is, e.g. fact or preference."
+                    }
+                },
+                "required": ["kind", "text", "mtype"]
+            }),
+        ),
+        Tool::function(
             "ask_user",
             "Ask the user up to four questions and wait for their answers. Only for what you \
              cannot find out yourself: which of two approaches to take, whether something is in \
@@ -829,7 +862,8 @@ pub fn for_delegate(capabilities: &bravebot_core::capability::CapabilitySet) -> 
     available(Scheduling::ArrangingALook)
         .into_iter()
         .filter(|tool| match tool.function.name.as_str() {
-            "spawn_agent" | "ask_user" | "todo_write" | "schedule_next" | "fetch_url" => false,
+            "spawn_agent" | "ask_user" | "todo_write" | "schedule_next" | "fetch_url"
+            | "remember" => false,
             "write_file" | "edit_file" => capabilities.contains(Capability::FileWrite),
             "run" | "read_output" | "job_output" => capabilities.contains(Capability::ShellExec),
             // LSP-9: asking a server is its own grant, so a delegate holding file reads has not
@@ -1028,6 +1062,10 @@ pub struct Tools<'a> {
     /// instead which effects may happen with nobody to see them. The identifier is what the reading
     /// back uses to tell this session's own answers from an earlier session's.
     pub remembering: Option<&'a str>,
+    /// Whether persistent core memory is loaded and the remember tool is offered.
+    pub auto_memory_enabled: bool,
+    /// Directory holding `core.jsonl`, when the state directory is known.
+    pub memory_store: Option<&'a std::path::Path>,
 }
 
 /// The background pipelines a turn has started.
@@ -1389,6 +1427,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "lsp" => Some("path"),
         "load_skill" => Some("name"),
         "fetch_url" => Some("url"),
+        "remember" => Some("text"),
         "job_output" => Some("job"),
         _ => None,
     }
@@ -1659,6 +1698,9 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         // point somewhere, so this one is refused here too: the gate would pass it, since the
         // capability really is held.
         "fetch_url" if !tools.delegated => fetch_url(policy, tools, confirmer, &arguments),
+        "remember" if !tools.delegated && tools.auto_memory_enabled => {
+            remember(policy, tools, confirmer, &arguments)
+        }
         "job_output" => job_output(policy, tools, &arguments),
         // A delegate ends when it answers, and a tick the person timed has its next look coming
         // already, so neither is offered this and a call from either is answered as an unknown
@@ -3393,6 +3435,100 @@ fn run<S: Sink, C: Confirmer>(
         // A run that produced nothing still says what happened. The plan is safe to repeat back:
         // a person endorsed it, so it is not something an attacker chose.
         Err(error) => problem(format!("error: `{displayed}` did not run: {error}")),
+    }
+}
+
+fn remember<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    _confirmer: &mut C,
+    arguments: &Value,
+) -> Produced {
+    let Some(kind_arg) = argument(arguments, "kind") else {
+        return problem(
+            "error: 'kind' is required and must be a string, either 'core' or 'episodic'",
+        );
+    };
+    let Some(text_arg) = argument(arguments, "text") else {
+        return problem("error: 'text' is required and must be a string");
+    };
+    let Some(mtype_arg) = argument(arguments, "mtype") else {
+        return problem("error: 'mtype' is required and must be a string");
+    };
+
+    let kind = match policy.read_planner_argument("remember", "kind", &kind_arg) {
+        Ok(value) => value,
+        Err(denial) => return problem(format!("refused: {denial}")),
+    };
+    let text = match policy.read_planner_argument("remember", "text", &text_arg) {
+        Ok(value) => value,
+        Err(denial) => return problem(format!("refused: {denial}")),
+    };
+    let mtype = match policy.read_planner_argument("remember", "mtype", &mtype_arg) {
+        Ok(value) => value,
+        Err(denial) => return problem(format!("refused: {denial}")),
+    };
+
+    if kind != "core" && kind != "episodic" {
+        return problem(format!(
+            "error: kind must be 'core' or 'episodic', not '{kind}'"
+        ));
+    }
+    if kind == "episodic" {
+        return problem(
+            "refused: episodic memory is not configured in this build. Use kind: core for \
+             stable facts, or say what you would have remembered and let the user decide."
+                .to_string(),
+        );
+    }
+
+    if bravebot_core::incognito::engaged() {
+        return Produced::new(
+            Labelled::new(
+                "remembered for this turn only; incognito does not write memory files".to_string(),
+                bravebot_core::label::Label::trusted_public(),
+            ),
+            "core memory",
+            "incognito: not written to disk",
+        );
+    }
+
+    policy.endorse_remember(&kind, &text, &mtype);
+    if let Err(denial) = policy.before_remember(&kind, &text, &mtype) {
+        return problem(format!("refused: {denial}"));
+    }
+
+    let store = match tools.memory_store {
+        Some(path) => path,
+        None => {
+            return problem(
+                "refused: there is no home directory to keep memory in. Say what you would have \
+                 remembered and let the user add it with /memory."
+                    .to_string(),
+            );
+        }
+    };
+
+    let row = crate::memory::CoreRow::new(mtype.clone(), text.clone());
+    let saved_to = store.join("core.jsonl");
+    match crate::memory::append_core(store, row) {
+        Ok(()) => Produced::new(
+            Labelled::new(
+                format!("saved core memory: [{mtype}] {text}"),
+                bravebot_core::label::Label::trusted_public(),
+            ),
+            "core memory",
+            format!("written to {}", saved_to.display()),
+        ),
+        Err(crate::memory::MemoryError::AtCap) => problem(
+            "refused: core memory is full (20 live rows). Tell the user to edit /memory or remove \
+             something before adding more."
+                .to_string(),
+        ),
+        Err(crate::memory::MemoryError::Locked) => problem(
+            "refused: another session is writing memory. Try again in a moment.".to_string(),
+        ),
+        Err(other) => problem(format!("error: could not save memory: {other}")),
     }
 }
 
@@ -5691,6 +5827,10 @@ mod tests {
             }
 
             fn confirm_fetch(&mut self, _request: &crate::confirm::FetchRequest) -> Decision {
+                Decision::Reject
+            }
+
+            fn confirm_remember(&mut self, _request: &crate::confirm::RememberRequest) -> Decision {
                 Decision::Reject
             }
 

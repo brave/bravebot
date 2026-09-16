@@ -507,6 +507,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.issue_grant("fetch_url", "url", url.to_string());
     }
 
+    /// Record that remembering this exact row was authorised.
+    pub fn endorse_remember(&mut self, kind: &str, text: &str, mtype: &str) {
+        self.issue_grant("remember", "kind", kind.to_string());
+        self.issue_grant("remember", "text", text.to_string());
+        self.issue_grant("remember", "mtype", mtype.to_string());
+    }
+
+    /// The gate a remember call passes immediately before the store is written.
+    pub fn before_remember(&mut self, kind: &str, text: &str, mtype: &str) -> Gated<()> {
+        self.consume_grant("remember", "kind", kind)?;
+        self.consume_grant("remember", "text", text)?;
+        self.consume_grant("remember", "mtype", mtype)?;
+        Ok(())
+    }
+
     /// The gate a fetch passes immediately before the request goes out. Returns the label the
     /// body will carry.
     ///
@@ -6368,6 +6383,29 @@ mod tests {
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink);
         assert!(policy.before_fetch("https://example.com").is_err());
+    }
+
+    #[test]
+    fn a_remember_without_an_endorsement_is_refused() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        assert!(
+            policy
+                .before_remember("core", "likes tea", "fact")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn an_endorsement_for_one_row_does_not_remember_another() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        policy.endorse_remember("core", "one", "fact");
+        assert!(
+            policy
+                .before_remember("core", "two", "fact")
+                .is_err()
+        );
     }
 
     /// A deny rule has to hold at the point the request goes out, not only where a person is

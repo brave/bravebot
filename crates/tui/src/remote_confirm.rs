@@ -20,8 +20,8 @@
 //! decision taken against a question nobody matched is worse than no decision at all.
 
 use bravebot_agent::confirm::{
-    Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RunDecision, RunRequest,
-    ServerRequest, VouchRequest, WriteRequest,
+    Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RememberRequest,
+    RunDecision, RunRequest, ServerRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Shown,
@@ -89,6 +89,8 @@ pub enum ToMain {
     ReadOutput(OutputRequest),
     /// A URL the planner wants fetched. The main thread must reply.
     Fetch(FetchRequest),
+    /// A row the planner wants remembered. The main thread must reply.
+    Remember(RememberRequest),
     /// A quarantined file the model would like to read. The main thread must reply.
     Vouch(VouchRequest),
     /// A language server the planner would like started. The main thread must reply.
@@ -144,6 +146,7 @@ pub enum Reply {
     Run(RunDecision),
     ReadOutput(Decision),
     Fetch(Decision),
+    Remember(Decision),
     Vouch(Decision),
     Server(Decision),
     Manifest(Decision),
@@ -210,6 +213,13 @@ impl Confirmer for RemoteConfirmer {
         match self.exchange(ToMain::Fetch(request.clone())) {
             Some(Reply::Fetch(decision)) => decision,
             // A reply to another question is not consent to leave this machine.
+            _ => Decision::Reject,
+        }
+    }
+
+    fn confirm_remember(&mut self, request: &RememberRequest) -> Decision {
+        match self.exchange(ToMain::Remember(request.clone())) {
+            Some(Reply::Remember(decision)) => decision,
             _ => Decision::Reject,
         }
     }
@@ -720,6 +730,7 @@ mod tests {
                     ToMain::Run(_) => seen.push("run"),
                     ToMain::ReadOutput(_) => seen.push("read_output"),
                     ToMain::Fetch(_) => seen.push("fetch"),
+                    ToMain::Remember(_) => seen.push("remember"),
                     ToMain::Vouch(_) => seen.push("vouch"),
                     ToMain::Server(_) => seen.push("server"),
                     ToMain::Manifest(_) => seen.push("manifest"),

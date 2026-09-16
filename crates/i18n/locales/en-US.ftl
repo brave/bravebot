@@ -421,6 +421,31 @@ fetch-explained =
 fetch-yes = fetch it
 fetch-no = don't
 
+remember-title = remember this?
+remember-verb = Remember
+remember-mtype = type: { $mtype }
+remember-explained =
+    Core memory is recalled in the system prompt on every later turn. Episodic memory is not available in this build.
+remember-yes = remember it
+remember-no = don't
+
+memory-title = Core memory
+memory-disabled = Memory is turned off in settings (autoMemoryEnabled). Turn it on to edit core memories.
+memory-no-home = No ~/.bravebot directory is configured, so there is nowhere to keep memory.
+memory-empty = No core memories yet. Press a to write one in your editor, then Enter to save.
+memory-at-cap = Core memory is full (20 rows). Delete one before adding another.
+memory-keys = ↑↓/jk move · a add · e edit text · m pick type · d delete · Enter save · Esc save & close · Ctrl-C discard
+memory-keys-read-only = ↑↓/jk move · Esc close · Ctrl-C close
+memory-saved = Core memory saved.
+memory-read-only = Incognito: you can read core memory here but nothing is written to disk.
+memory-read-only-tag = read only
+memory-empty-read-only = No core memories on disk yet.
+memory-not-writable = Could not save: this session cannot write to ~/.bravebot.
+memory-mtype-title = Memory type
+memory-mtype-keys = ↑↓/jk move · Enter choose · Esc cancel
+memory-mtype-hint-fact = stable fact for every turn
+memory-mtype-hint-preference = general preference
+
 
 ## Starting a language server
 
@@ -728,6 +753,7 @@ command-add-dir = Open another directory, and trust it for this session
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
 command-compact = Summarise the conversation so far, keeping the recent part
+command-memory = Edit core memories stored for every session
 command-btw = Ask something beside the work, without putting it in the conversation
 command-clear = Start a new session here, keeping this one resumable
 command-loop = Send a prompt again and again, on your interval or at a pace each turn sets
@@ -946,6 +972,7 @@ verb-ask-user = Ask
 verb-run = Run
 verb-read-output = Read output
 verb-fetch-url = Fetch
+verb-remember = Remember
 verb-job-output = Job
 verb-spawn-agent = Delegate
 verb-schedule-next = Schedule

@@ -10,17 +10,18 @@ governs:
 ## Scope
 
 Before the planner is asked anything, its context is pre-filled with instructions nobody typed
-this turn: `AGENTS.md`, which says how work is done somewhere, and the name and description of
-every skill on offer. This spec is about **resolution**: which files are looked for, where, in
-what order, and where what they say ends up.
+this turn: `AGENTS.md`, which says how work is done somewhere, the name and description of every
+skill on offer, and when memory is on the live rows in `core.jsonl`. This spec is about
+**resolution**: which files are looked for, where, in what order, and where what they say ends up.
 
 It does not cover what a skill file looks like or what any source is trusted for, which is
-[skills.md](skills.md), nor what a label means once assigned, which is [labels.md](labels.md).
+[skills.md](skills.md), nor what a label means once assigned, which is [labels.md](labels.md), nor
+the episodic store or how similarity recall is placed, which is [memory.md](memory.md).
 
 ## The sources
 
 <a id="INSTR-1"></a>
-### INSTR-1: four sources, and no others
+### INSTR-1: five sources, and no others
 
 | File | Applies to |
 |---|---|
@@ -28,6 +29,7 @@ It does not cover what a skill file looks like or what any source is trusted for
 | `~/.bravebot/skills/<name>/SKILL.md` | every project |
 | `<workspace>/AGENTS.md`, else `CLAUDE.md`, else `.claude/CLAUDE.md` | this project |
 | `<workspace>/.bravebot/skills/<name>/SKILL.md` | this project |
+| `~/.bravebot/agent_memory/core.jsonl` | every project when memory is on |
 
 The two roots are spelled differently on purpose: the user's own directory is already `.bravebot`,
 so its skills sit directly beneath it, while a project keeps its own out of the way in a dotted
@@ -42,7 +44,8 @@ should not have them ignored over the spelling. This is still one source, resolv
 
 There is no search of parent directories and no nested instructions file. A file at any other path
 is an ordinary file, read only when something asks for it by name, or when the source names it,
-which is [INSTR-8](#INSTR-8).
+which is [INSTR-8](#INSTR-8). Episodic recall is not a source here; it is
+[memory.md](memory.md#MEM-8). Row shape, caps, and writes for `core.jsonl` are there too.
 
 **Why no walking upwards.** A rule that walked upwards would pick up instructions from whatever
 happened to be above a project on this machine, which is a different set of instructions on the
@@ -101,9 +104,9 @@ by name rather than merging is what lets a project override one skill without re
 <a id="INSTR-5"></a>
 ### INSTR-5: what is resolved goes into the system prompt, never into the conversation
 
-Standing instructions and the catalogue of skill names are put in front of each request as part
-of the system prompt. They are not appended to the stored conversation, so a session running many
-turns carries one copy of them however long it runs.
+Standing instructions, the catalogue of skill names, and live core memory are put
+in front of each request as part of the system prompt. They are not appended to the stored
+conversation, so a session running many turns carries one copy of them however long it runs.
 
 **Why.** The system prompt belongs to the build rather than to the conversation. Sending the same
 instructions as a message each turn would accumulate a copy per turn, crowding out the task and

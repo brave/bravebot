@@ -20,6 +20,7 @@ pub mod goal;
 pub mod home;
 pub mod lsp;
 pub mod manifest;
+pub mod memory;
 pub mod mode;
 pub mod permission_mode;
 pub mod permissions;

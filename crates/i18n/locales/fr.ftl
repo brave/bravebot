@@ -407,6 +407,45 @@ fetch-yes = le récupérer
 fetch-no = ne pas le récupérer
 
 
+## Mémoriser pour les tours suivants
+
+remember-title = s'en souvenir ?
+remember-verb = Mémoriser
+remember-mtype = type : { $mtype }
+remember-explained =
+    La mémoire centrale est rappelée dans l'invite système à chaque tour suivant. La mémoire
+    épisodique n'est pas disponible dans cette version.
+remember-yes = s'en souvenir
+remember-no = non
+
+memory-title = Mémoire centrale
+memory-disabled =
+    La mémoire est désactivée dans les réglages (autoMemoryEnabled). Activez-la pour modifier la
+    mémoire centrale.
+memory-no-home =
+    Aucun répertoire ~/.bravebot n'est configuré ; il n'y a nulle part pour stocker la mémoire.
+memory-empty =
+    Aucune mémoire centrale pour l'instant. Appuyez sur a pour en écrire une dans votre éditeur,
+    puis Entrée pour enregistrer.
+memory-at-cap =
+    La mémoire centrale est pleine (20 lignes). Supprimez-en une avant d'en ajouter une autre.
+memory-keys =
+    ↑↓/jk naviguer · a ajouter · e modifier le texte · m choisir le type · d supprimer · Entrée
+    enregistrer · Échap enregistrer et fermer · Ctrl-C annuler
+memory-keys-read-only = ↑↓/jk naviguer · Échap fermer · Ctrl-C fermer
+memory-saved = Mémoire centrale enregistrée.
+memory-read-only =
+    Incognito : vous pouvez lire la mémoire centrale ici, mais rien n'est écrit sur le disque.
+memory-read-only-tag = lecture seule
+memory-empty-read-only = Aucune mémoire centrale sur le disque pour l'instant.
+memory-not-writable =
+    Impossible d'enregistrer : cette session ne peut pas écrire dans ~/.bravebot.
+memory-mtype-title = Type de mémoire
+memory-mtype-keys = ↑↓/jk naviguer · Entrée choisir · Échap annuler
+memory-mtype-hint-fact = fait stable à chaque tour
+memory-mtype-hint-preference = préférence générale
+
+
 ## Démarrer un serveur de langage
 
 server-title = démarrer un serveur de langage ?
@@ -673,6 +712,7 @@ command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
 command-loop = Renvoyer une consigne encore et encore, à votre intervalle ou au rythme de chaque tour
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-export = Exporter la transcription de la session vers un fichier markdown
+command-memory = Modifier la mémoire centrale conservée pour chaque session
 command-undo = Annuler le dernier tour et restaurer les fichiers
 command-exit = Partir
 
@@ -864,6 +904,7 @@ verb-ask-user = Demander
 verb-run = Exécuter
 verb-read-output = Lire la sortie
 verb-fetch-url = Récupérer
+verb-remember = Mémoriser
 verb-job-output = Tâche
 verb-spawn-agent = Déléguer
 verb-schedule-next = Programmer

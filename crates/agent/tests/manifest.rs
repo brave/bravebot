@@ -747,6 +747,13 @@ impl bravebot_agent::confirm::Confirmer for ApprovesThePlanOnly {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_remember(
+        &mut self,
+        _request: &bravebot_agent::confirm::RememberRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
     fn confirm_server(
         &mut self,
         _request: &bravebot_agent::confirm::ServerRequest,

@@ -26,6 +26,7 @@ pub mod indicator;
 pub mod keybindings;
 pub mod logo;
 pub mod loops;
+pub mod memory_prompt;
 pub mod markdown;
 pub mod model_prompt;
 pub mod reasoning;
