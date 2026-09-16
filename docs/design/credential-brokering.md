@@ -30,10 +30,13 @@ The spec ranks how a credential may be held, and this document uses those tiers 
 
 | tier | what the account holds |
 | --- | --- |
-| Delegated | nothing. Something else performs the action, or a boundary adds the real value on the way out |
-| Granted | a bounded derivative the issuer minted: a right to one action, scoped and expiring |
-| Held briefly | a bearer secret, fetched at the step that uses it and dropped after |
+| Delegated | nothing. Redeeming what the agent holds needs the assent of something it cannot impersonate |
+| Granted | a bounded derivative the issuer minted, the bound fixed before issue and enforced beyond the agent's reach |
+| Held briefly | a bearer secret the issuer mints on demand and ends, unrefreshable without asking it again |
 | Held | a bearer secret, held indefinitely |
+
+The definitions are [credential-protection.md](../specs/credential-protection.md)'s, restated here
+for reading. Where this document and that one differ, that one is right.
 
 Take the highest tier the far end offers. Anything lower is a deliberate, recorded choice.
 
@@ -111,7 +114,10 @@ display connection. So the app splits in two.
 │  UI helper       Agents panel, prompt windows                        │
 │                  same uid as bravebot, so not a second domain        │
 │  spawned child   proxy configured to the egress socket, sends        │
-│                  requests that still carry a placeholder             │
+│                  requests that still carry a placeholder.            │
+│                  Ignoring that configuration reaches the network     │
+│                  directly, where a placeholder authenticates to      │
+│                  nothing: advice, not a boundary                     │
 └────┬─────────────────────────────────────────────────────────────────┘
      │ two channels, in a place the person cannot claim
      │   control  Mach in the system domain on macOS; a socket in a
@@ -167,7 +173,10 @@ Three things follow, and they shape everything downstream.
 ## The store
 
 Brave Vault owns this and we do not add a second one. Its own storage, moved into the
-`_bravevault` account, is the answer on all three platforms.
+`_bravevault` account, is the answer on all three platforms. Being the one process that holds every
+credential, at rest and in use, it is also the one that owes
+[CRED-23](../specs/credential-protection.md#CRED-23): buffers cleared as they are dropped, and its
+pages kept out of a core dump.
 
 **Where the store choice is actually interesting is unlock, and that is the phase 1 risk.**
 `_bravevault` has no login session, so the login keychain on macOS and gnome-keyring on Linux are
@@ -307,8 +316,10 @@ enrolment, discards the design. The tests below are what carry that rule.
 
 Brave Vault's grants gain two properties.
 
-**Lifetimes** are `once`, `task`, `session` and `never`, the same four bravebot's prompting rules
-use. `never` means the question is put every time rather than cached. `session` is a span of time and
+**Lifetimes** are `once`, `task`, `session` and `never`. They are the broker's own, not a set
+bravebot already has: its run prompt separates running once from running always
+([PROMPT-6](../specs/prompting.md#PROMPT-6)), so `task` and `session` have no counterpart there.
+`never` means the question is put every time rather than cached. `session` is a span of time and
 has nothing to do with `grab-session`. `task` is the addition, running to the end of the turn
 series a person's typed prompt started.
 
@@ -401,8 +412,9 @@ different operating-system user.
 
 ## The two paths
 
-**Both reach Delegated**, which is why the tier is not what separates them. In each the agent holds
-nothing and the broker decides every use and can refuse. What differs is who makes the call.
+**Both reach Delegated, and they do not bound the same thing.** In each the agent holds nothing, so
+on custody they are equal. What differs is how much the broker can check, and that follows from
+what it is handed.
 
 **Performed.** The broker performs the action whole and reports the outcome. Sending mail, signing a
 request, calling an API. No placeholder, no proxy, no certificate work, at a fraction of the cost,
@@ -410,6 +422,42 @@ and it covers most of what new capabilities need.
 
 **Substituted.** For actions only the agent can perform: `git push`, arbitrary HTTP, a tool that
 authenticates for itself. The agent gets `bvb-<32 hex>`, unique per session and credential.
+
+**On `perform` the broker is the client.** It is handed an action and arguments against a schema it
+owns, so every check that schema can express is available: that each envelope address equals the
+granted recipient, that no unknown field is present, that the encoded body is inside the cap.
+Nothing has to be inferred from a byte stream, because the broker builds the request itself.
+
+**At the egress boundary the broker is a proxy.** Having terminated TLS it can read the request, so
+it can check whatever is true of any HTTP request: that the destination fields agree, that the
+placeholder sits where the grant said, that the signing scheme is one it implements, that a
+redirect is revalidated, and what the bytes cost against a cap. What it cannot check is what the
+request means. Sending a mail and reading a mailbox are the same host, the same credential
+position and the same method family; only the path and the body separate them, and separating them
+needs a parser for that provider's API. Writing one turns the boundary into a performer with a
+certificate authority in front of it, at which point `perform` is cheaper and bounds more.
+
+**Substitution is safe where the issuer bounds what the boundary cannot see.** This is the rule
+that decides which path a capability takes, and it is sharper than asking whether the broker could
+perform the action. The boundary matches on host, so every dimension carried in the path, the
+method or the body is invisible to it. A capability is substitutable when the issuer can be asked
+to bound that dimension before it mints, and must be performed when it cannot.
+
+`git push` is the case that passes. The repository is in the path, so the boundary cannot bound
+which repository is pushed to, and it does not need to: a GitHub App installation token is minted
+for one repository with named permissions, expires in an hour, and is refreshable by nobody. That
+is [CRED-7](../specs/credential-protection.md#CRED-7) enforced where the agent cannot reach.
+
+Email is the case that fails. The boundary cannot see a recipient, and no mail provider will scope
+a token to one. Provider scoping separates sending from reading and stops there, so the only thing
+that can bound the recipient is a component that reads the envelope, which is the broker
+performing the action.
+
+**So the ordering is not an accident.** Performing is phase 3 and substitution is phase 4 because
+performing costs less and bounds more, and substitution is the narrower mechanism besides: it
+speaks only HTTP, fails against a client that pins, depends on a child honouring a proxy
+configuration that is advice rather than a boundary, and reaches nothing whose secret never
+travels.
 
 **The position is part of the request, so the person approves it.** A grant names where the
 placeholder may appear, as a specific header or field, and a request carrying it anywhere else
@@ -506,6 +554,43 @@ is the supported alternative, and the setup command says so rather than degradin
 The worked example, in the terms above. Everything here is phase 3, and it needs phases 1 and 2
 first.
 
+```
+  SETUP, once
+
+  person ──1──> helper ──2──> broker ── keeps the refresh token and the
+                                        PKCE verifier, and releases neither
+
+  1  consents at the provider, send scope and not read
+  2  relays the authorisation code back over the control channel
+
+  bravebot is on neither leg.
+```
+
+```
+  PER MESSAGE
+
+  bravebot's account            │   broker, no session, uid _bravevault
+  ──────────────────            │   ──────────────────────────────────
+  gates pass: the recipient     │
+  is trusted, and releasable    │
+  once that axis exists         │
+                                │
+  request  item, action,        │
+           destination  ───────>│   the caller is the pinned binary
+                       <────────│   no grant in force, so ask
+  the helper draws the prompt   │
+  in this account, so a         │
+  same-uid attacker can forge   │
+  the answer          ─────────>│   mints the grant
+                       <────────│   a grant id
+                                │
+  perform  grant, args  ───────>│   unexpired, unspent, envelope equals
+                                │   the approved recipient, body inside
+                                │   the byte cap, caps hold
+                                │   reads the token, calls the provider
+        sent or not sent <──────│   an outcome, never bytes
+```
+
 **Setup, once.** The UI helper begins an authorisation-code flow with PKCE. The broker generates
 the verifier and keeps it, handing out only the challenge. The helper opens the browser and
 listens on loopback, because it is the component in the person's session and the broker never
@@ -518,30 +603,33 @@ verifier.
 **Per message.**
 
 1. The planner proposes `send_mail`. It can see labels and the tool's rule so it can plan around
-   them; nothing it says decides anything.
-2. bravebot's gates run before the broker is involved. The capability must be granted. The
-   recipient is routing, so it must be releasable and trusted, which is what stops mail the agent
-   read from naming the recipient of mail it sends. The body is content carried to an effect and
-   takes the release rule.
-3. Unless a grant is in force, the action lands on `asked`. `request --item mail --action perform
-   --to <recipient>` either matches a pre-authorised grant or raises a prompt through the helper,
-   never through the conversation. The person sees the recipient, the subject, the body, the item's
-   label, and the lifetimes on offer. Never the credential itself: a helper that rendered bytes
-   would be a read path.
-4. The answer mints a grant: bravebot's handle, the mail item, `send_mail`, that recipient, a
-   lifetime, caps.
-5. `perform --grant <id> --action send_mail --args {...}`. Both ends verify: the broker checks
-   bravebot's signature or binary path; bravebot checks the peer is `_bravevault` on Linux, the
-   publisher on Windows, and the system Mach namespace on macOS.
-6. The broker checks the grant is unexpired and unspent, a verified helper session for this uid
-   is connected if the grant is standing, every envelope address matches the one approved or is
-   absent, unknown args fields are absent, the encoded body is inside the byte cap for this
-   capability and task, and the rate and spread caps hold. All counted at request, before anything
-   runs.
-7. The broker reads the token from its store, refreshes it if needed, and calls the provider
-   itself.
-8. It returns an outcome, sent or not sent with a message id, and never bytes. It appends to the
-   trail, which bravebot cannot write.
+them; nothing it says decides anything. 2. bravebot's gates run before the broker is involved. The
+capability must be granted. The recipient is routing, so it must be releasable and trusted, which
+is what stops mail the agent read from naming the recipient of mail it sends. Only the trusted
+half fires today, for the reason **Email** gives above. The body is content carried to an effect
+and takes the release rule. 3. Unless a grant is in force, the action has to be asked about.
+`request --item mail --action perform --to <recipient>` either matches a pre-authorised grant or
+raises a prompt through the helper, never through the conversation. The person sees the recipient,
+the subject, the body, the item's label, and the lifetimes on offer. Never the credential itself:
+a helper that rendered bytes would be a read path. 4. The answer mints a grant: bravebot's handle,
+the mail item, `send_mail`, that recipient, a lifetime, caps. 5. `perform --grant <id> --action
+send_mail --args {...}`. Both ends verify: the broker checks bravebot's signature or binary path;
+bravebot checks the peer is `_bravevault` on Linux, the publisher on Windows, and the system Mach
+namespace on macOS. 6. The broker checks the grant is unexpired and unspent, a verified helper
+session for this uid is connected if the grant is standing, every envelope address matches the one
+approved or is absent, unknown args fields are absent, the encoded body is inside the byte cap for
+this capability and task, and the rate and spread caps hold. All of it counted as this call is
+admitted, before anything runs, rather than after the provider answers. 7. The broker reads the
+token from its store, refreshes it if needed, and calls the provider itself. The refresh is the
+broker's to make and not bravebot's, which is what keeps a refreshable token off
+[CRED-9](../specs/credential-protection.md#CRED-9)'s reading of a permanent credential: the gates
+ask about the agent's custody, and the agent has none. 8. It returns an outcome, sent or not sent
+with a message id, and never bytes. It appends to the trail, which bravebot cannot write.
+
+**What the person is asked, in total.** One consent at the provider during setup. Then one approval
+per grant, drawn by the helper and never in the conversation, which a standing grant in the Agents
+panel replaces for as long as they choose. They are never shown the credential and never asked to
+paste one.
 
 **What bravebot never held**: the access token, the refresh token, the PKCE verifier, or any call
 that would return them.
@@ -549,8 +637,104 @@ that would return them.
 **Where it fails on purpose.** Broker down: refuse, never degrade. Recipient drawn from untrusted
 content: refused before the broker is called. Body over the cap: refused even with an approval.
 A compromised bravebot can forge the approval and gets one grant, for one recipient, bounded by
-caps and expiry, and still cannot obtain the token. With no grant and no helper connection the
+caps and expiry, and still cannot obtain the token. The provider's answer is checked before it is
+returned, since a response that quoted the credential back would be a read path opened by the far
+end rather than by any call here, and the outcome bravebot receives is a fixed shape rather than
+whatever the provider replied. With no grant and no helper connection the
 send refuses. A standing grant with no helper connection refuses at the broker, not in bravebot.
+
+## Pushing to one repository, end to end
+
+The worked example of the substituted path, and the contrast that establishes the rule above.
+**Nothing here is in scope for the phases below**: source control is listed in the capability
+inventory and waits on phase 4. It is written out because phase 4 holds most of the cost and is
+otherwise described only in the abstract.
+
+```
+  SETUP, once
+
+  person installs the App on selected repositories
+       │
+       ▼
+  broker holds a GitHub App private key, and uses it for nothing but
+  signing a JWT that lives ten minutes
+
+  PER USE, the broker mints rather than stores:
+
+  POST /app/installations/{id}/access_tokens
+       repositories: one
+       permissions:  contents: write
+       │
+       ▼
+  an installation token: one repository, one hour, and nobody can
+  refresh it. A new one costs another JWT, which needs the App key
+```
+
+```
+  PER PUSH
+
+  bravebot's account            │   broker
+  ──────────────────            │   ──────
+  request  item, placeholder,   │
+           github.com,          │
+           Authorization ──────>│   the caller is the pinned binary
+                       <────────│   no grant in force, so ask
+  the helper draws the prompt   │
+  in this account, so a         │
+  same-uid attacker can forge   │
+  the answer          ─────────>│   mints the grant, then the
+                                │   installation token
+                       <────────│   bvb-<32 hex>
+                                │
+  git push, with the            │
+  placeholder as the   ────────>│   egress, over a connection this
+  password                      │   boundary terminated: destination
+                                │   fields agree on github.com, the
+                                │   placeholder is in the granted
+                                │   position, the caps hold
+                                │   → the real token is swapped in
+        the pack is accepted <──│
+```
+
+**The repository is in the path, and the boundary matches on host.** So nothing at the boundary
+bounds which repository is pushed to, and `request` has no argument that could: it names an item,
+an action, a destination and a position. What bounds the repository is GitHub, which minted a token
+reaching one of them. Replace the App with a personal access token and the same flow pushes
+anywhere that token reaches: the mechanism is unchanged and the bound is gone.
+
+**Substitution here means terminating the push's TLS.** `git` honours a proxy and tunnels HTTPS
+through `CONNECT`, so without terminating that connection the boundary sees a hostname and nothing
+else, and cannot reach the header it is meant to rewrite. That brings the local certificate
+authority, the trust store `git` actually consults, and the two failures reported distinctly: a
+store this design cannot configure, and a server that pins.
+
+**The position is inside an encoded value, which the position rule does not yet cover.** A push
+over HTTPS sends `Authorization: Basic` over a base64 of `x-access-token:<token>`, so the
+placeholder does not sit in a header value but in a field inside one. Substituting it means
+decoding that value, replacing one half and re-encoding, and a rule naming "a specific header or
+field" does not say whether that is permitted or how a mismatch is reported. Phase 4 has to settle
+it, because the alternative is a boundary that rewrites bytes inside a value it did not parse.
+
+**The placeholder is what `git` writes down.** A push over HTTPS puts its credential in a URL or a
+credential helper, and both are places [CRED-11](../specs/credential-protection.md#CRED-11) forbids
+a real one to land. What is persisted to `.git/config` or a helper is `bvb-<32 hex>`, which
+authenticates to nothing without the boundary that substitutes it. That is a property worth having
+for its own sake: it survives the repository being copied, shared or committed.
+
+**What the person is asked, in total.** One App installation, once, naming the repositories it
+covers. Then one approval per grant, as for mail. The repository scope is chosen at installation
+rather than at approval, so a prompt that says "push to this repository" is describing GitHub's
+bound and not one this design enforces.
+
+**What bravebot never held**: the App private key, the JWT, the installation token, or any call
+that would return them.
+
+**Where it fails on purpose.** Broker down: refuse, never degrade. A child that ignores its proxy
+configuration reaches GitHub directly and fails to authenticate, because a placeholder is not a
+credential. A server that pins, or a runtime whose trust store cannot be configured, fails at
+connection time and says which of the two it was. A placeholder appearing anywhere but the granted
+position fails the request rather than being substituted. A redirect is returned rather than
+followed, so the next request is matched against the grant like any other.
 
 ## Build order
 
@@ -639,8 +823,8 @@ credential, or there is nowhere to perform or intercept the action.
 | not covered | fails | why |
 | --- | --- | --- |
 | ambient authority: a logged-in `gh`, `aws sso`, `docker.sock`, a metadata endpoint | hold | there is no credential to hand the broker. It never sees anything, and only confinement helps |
-| credentials already on disk: `~/.aws`, `~/.ssh`, tool caches | hold | the broker did not obtain them. Migrating one in helps only if the original copy can be deleted, and an SSO cache regenerates itself |
-| key material such as an SSH key | intercept | the secret never travels, so there is nothing to substitute. Covering it means the broker becomes a signing oracle, which is `ssh-agent`, and this design does not build one |
+| credentials already on disk: `~/.aws`, `~/.ssh`, tool caches | hold | the broker did not obtain them. Enrolling one is the upward route [discovery](credential-discovery.md) offers, and it moves a tier only where the original copy can be rotated and deleted; an SSO cache regenerates itself, so it cannot |
+| key material such as an SSH key | intercept | the secret never travels, so there is nothing to substitute. Performing it is possible and is what `ssh-agent` does, so this is a scoping decision rather than a limit of the design: these phases do not build a signing oracle |
 | passcodes, magic links, reset links | hold | they arrive through the capability somebody granted, so the bound is provider-side scoping, which is phase 6 |
 | clients that pin certificates | intercept | no interception point. This fails at connection time and says why |
 | non-HTTP protocols: SMTP and IMAP directly, SSH, database wire protocols | intercept | the egress boundary is HTTP-shaped. Either the broker performs the whole action or there is no path |
