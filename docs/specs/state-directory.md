@@ -4,6 +4,7 @@ title: The state directory
 status: normative
 governs:
   - crates/agent/src/home.rs
+  - crates/agent/src/remembered.rs
   - crates/config/src/settings.rs
   - crates/tui/src/store.rs
   - crates/tui/src/update.rs
@@ -22,8 +23,8 @@ guards:
 `~/.bravebot`, the directory holding what outlives a session, and who on the machine may read what
 is written into it. The prompt history, the model, theme, effort and editing choices, the answer to
 the update question, session records, a language server's index of a workspace, skills, standing
-instructions and an imported subscription all live here, and so do the command lines somebody asked to
-be remembered past a session once the key that records them exists.
+instructions, an imported subscription and the command lines somebody asked to be remembered past a
+session all live here.
 
 What each of those files means belongs to the spec for that subject:
 [sessions.md](sessions.md) for a session record, [tools/run.md](tools/run.md) for the remembered

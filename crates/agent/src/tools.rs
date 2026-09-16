@@ -926,6 +926,12 @@ pub struct Output {
     /// Recorded on the slot by the turn loop, since only a slot minted from a command may be
     /// offered to the user for reading.
     pub printed_by: Option<crate::report::Command>,
+    /// Whether the line ran unasked because a record already covers it.
+    ///
+    /// Read where a quarantined result says what would lift the quarantine: the advice about
+    /// vouching is advice about a prompt, and no prompt will return here for this line until
+    /// somebody deletes the entry.
+    pub covered_by_record: bool,
     /// The media type, where what this produced is a picture.
     ///
     /// Recorded on the slot by the turn loop, and what makes a picture reach a processor as a part
@@ -1015,6 +1021,13 @@ pub struct Tools<'a> {
     ///
     /// Initialized to the workspace root and updated when `run` specifies a `directory`.
     pub run_directory: &'a mut std::path::PathBuf,
+    /// The session whose run prompts may have their answers remembered past it.
+    ///
+    /// `None` for a turn with nobody to put a prompt to, which reads no record and writes none:
+    /// what a record answers is a prompt, and where no prompt can be drawn it would be saying
+    /// instead which effects may happen with nobody to see them. The identifier is what the reading
+    /// back uses to tell this session's own answers from an earlier session's.
+    pub remembering: Option<&'a str>,
 }
 
 /// The background pipelines a turn has started.
@@ -1156,6 +1169,12 @@ struct Produced {
     /// Recorded on the slot by the turn loop, because only a slot minted from a command may be
     /// offered to the user for reading.
     printed_by: Option<crate::report::Command>,
+    /// Whether the line ran unasked because a record already covers it.
+    ///
+    /// What it changes is the advice on a quarantined result: telling a planner that a person
+    /// vouching for every stage would make the output visible is advice about a prompt, and no
+    /// prompt will be drawn for this line again until somebody deletes the entry.
+    covered_by_record: bool,
     /// When the planner asked for the next tick of a self-paced loop.
     wakeup: Option<crate::turn::Wakeup>,
     /// The media type, where what this produced is a picture.
@@ -1199,6 +1218,7 @@ impl Produced {
             usage: Usage::default(),
             inference: std::time::Duration::ZERO,
             printed_by: None,
+            covered_by_record: false,
             picture: None,
             wakeup: None,
             background: None,
@@ -1594,6 +1614,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 usage: produced.usage,
                 inference: produced.inference,
                 printed_by: produced.printed_by,
+                covered_by_record: produced.covered_by_record,
                 picture: produced.picture,
                 wakeup: produced.wakeup,
                 delegate: produced.delegate,
@@ -1673,6 +1694,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         usage: produced.usage,
         inference: produced.inference,
         printed_by: produced.printed_by,
+        covered_by_record: produced.covered_by_record,
         picture: produced.picture,
         wakeup: produced.wakeup,
         delegate: produced.delegate,
@@ -1704,6 +1726,7 @@ fn problem(text: impl Into<String>) -> Produced {
         usage: Usage::default(),
         inference: std::time::Duration::ZERO,
         printed_by: None,
+        covered_by_record: false,
         picture: None,
         background: None,
         delegate: Vec::new(),
@@ -3007,6 +3030,26 @@ fn read_output<S: Sink, C: Confirmer>(
     }
 }
 
+/// The record of lines somebody asked to be remembered past this session, for this workspace.
+///
+/// `None` where this session has none, which is two cases with one answer: a turn with nobody to
+/// put a prompt to, and a machine that names no state directory. Both mean the record says nothing
+/// and every run asks, which is what a session did before the key existed.
+///
+/// A session that adds nothing to `~/.bravebot` is not one of them: it still honours what an
+/// earlier session recorded, for the reason it still reads the model and the theme, and what it
+/// does not do is add to it ([`crate::remembered::may_be_added_to`]).
+///
+/// Keyed by the workspace root rather than by whatever directory this call would run in. A line is
+/// only ever recorded where it runs at the root, so the root is the tree the person answered about.
+fn remembered_record(tools: &Tools<'_>) -> Option<crate::remembered::Store> {
+    tools.remembering?;
+    Some(crate::remembered::Store::new(
+        tools.home?,
+        tools.workspace.root(),
+    ))
+}
+
 /// Run a program, after a person approves the exact arguments.
 ///
 /// The order is the whole of the safety argument, and it is the same order a write goes through:
@@ -3113,8 +3156,37 @@ fn run<S: Sink, C: Confirmer>(
         ));
     }
 
-    if policy.plan_needs_approval(&plan) {
-        let request = crate::confirm::RunRequest { plan: plan.clone() };
+    // The record of lines somebody asked to be remembered past the session, where this session has
+    // somewhere to keep one and somebody to have pressed the key. Read here rather than once at the
+    // start of the session: the file belongs to every session begun in this directory, so a line
+    // recorded a minute ago in another one is covered by this run, and one deleted a minute ago is
+    // not. A session with nobody to put a prompt to reads nothing at all.
+    let record = remembered_record(tools);
+    let recalled = record.as_ref().map(|store| store.read());
+    if let Some(lines) = &recalled {
+        policy.recall(lines.clone());
+    }
+
+    let asking = policy.plan_needs_approval(&plan);
+    // Whether the record is what stopped the question. Read where the result is quarantined: the
+    // advice about vouching is advice about a prompt, and no prompt will return here for this line
+    // until somebody deletes the entry.
+    let covered_by_record = !asking && recalled.as_ref().is_some_and(|lines| lines.covers(&plan));
+
+    if asking {
+        let request = crate::confirm::RunRequest {
+            plan: plan.clone(),
+            // Offered only where it would stop a later prompt, which the policy decides: not for a
+            // line releasing private data, not for one naming a file to write, not for one running
+            // outside the workspace root, and not where a rule the person wrote in advance already
+            // says to ask. The path is what the prompt shows, since a person cannot endorse a
+            // record they were not shown.
+            record: record
+                .as_ref()
+                .filter(|_| policy.may_remember(&plan))
+                .filter(|_| crate::remembered::may_be_added_to())
+                .map(|store| store.path().to_path_buf()),
+        };
         let answer = confirmer.confirm_run(&request);
         if !answer.approved() {
             return problem(
@@ -3137,6 +3209,21 @@ fn run<S: Sink, C: Confirmer>(
             for command in request.would_vouch_for() {
                 policy.remember_command(command);
             }
+        }
+        // The second of the two refusals RUN-19 makes, at the layer that acts on the answer. The
+        // policy is asked again rather than the drawing being read back: a front end answering
+        // with a key the prompt never offered must not be able to put a line into a record that
+        // outlives the session, and a guard that consulted what was drawn would be resting on the
+        // very thing it is there to check. `may_be_added_to` is asked a second time too, inside
+        // the store, for the mode that adds nothing to the state directory.
+        if answer.record
+            && policy.may_remember(&plan)
+            && let (Some(store), Some(session)) = (record.as_ref(), tools.remembering)
+        {
+            store.remember(
+                &bravebot_core::remembered::RememberedLine::of(&plan),
+                session,
+            );
         }
     }
 
@@ -3294,6 +3381,7 @@ fn run<S: Sink, C: Confirmer>(
                 line: displayed.clone(),
                 outcome,
             });
+            produced.covered_by_record = covered_by_record;
             produced
         }
         // A run that produced nothing still says what happened. The plan is safe to repeat back:
@@ -3795,7 +3883,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
         // Everything the kernel settled, taken off the policy here on the turn's own thread. From
         // this point the delegate needs nothing further from the run that spawned it, which is
         // what lets the two run at the same time.
-        let seeded = crate::delegate::seed(policy, spec);
+        let seeded = crate::delegate::seed(policy, spec, tools.remembering);
         produced = produced.delegating(id, seeded);
     }
 

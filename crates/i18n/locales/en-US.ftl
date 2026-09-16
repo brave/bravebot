@@ -384,8 +384,13 @@ run-private-not-remembered =
     private input is asked about every time, so this one cannot be remembered
 run-assignment-not-remembered =
     an assignment in front of a program is asked about every time, so this one cannot be remembered
+run-remember-explained = r: stop asking about this exact line, in this directory, from now on
+run-remember-where = it is written down here, and deleting the line is the way back:
+run-remember-only-asking = it stops the asking only: what it prints stays quarantined
+run-remember-every-session = every session started in this directory reads it, not just this one
 run-yes = run it
-run-always = always
+run-always = always this session
+run-remember = remember it
 run-no = don't
 
 
@@ -560,9 +565,19 @@ status-trusted = trusted
 status-untrusted = untrusted
 status-programs = Programs
 status-every-run-is-asked = every run is put to you
+status-nothing-vouched-this-session = nothing vouched for this session; the lines below run unasked
 status-trusted-commands = Trusted commands
 status-trusted-commands-note = run unasked, and their output is trusted
 status-and-more = … and { $count } more
+status-remembered = Remembered lines
+status-remembered-note = run unasked in this directory, and their output stays quarantined
+status-remembered-this-session = remembered in this session
+status-remembered-earlier = remembered in an earlier session
+status-remembered-where = delete a line from { $path } to be asked again
+status-remembered-and-more = { $count ->
+    [one] … and 1 more, { $earlier } of them from an earlier session
+   *[other] … and { $count } more, { $earlier } of them from an earlier session
+    }
 
 # Which deployment is being talked to. Left as they are where a language borrows the English
 # abbreviation, which is common for these four.

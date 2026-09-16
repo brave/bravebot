@@ -241,6 +241,14 @@ pub struct Policy<'sink, S: Sink> {
     root: Option<std::path::PathBuf>,
     /// Which programs the user has stopped being asked about, by resolved path.
     programs: crate::programs::TrustedPrograms,
+    /// The command lines somebody asked to be remembered past the session, for this directory.
+    ///
+    /// Refreshed by the driver wherever a run prompt would be drawn rather than held from the start
+    /// of the session, because the record is a file every session in this directory writes to and a
+    /// line recorded a minute ago in another one is covered by this turn. Empty is the state of a
+    /// session that has nowhere to keep such a record and of one with nobody to put a prompt to,
+    /// and it means every run asks.
+    remembered: crate::remembered::Remembered,
     /// Rules the user wrote in advance about what to ask them about.
     ///
     /// Consulted at the gates that ask, and nowhere else. Empty is the state a session with no
@@ -340,6 +348,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             trust: TrustStore::new(),
             root: None,
             programs: crate::programs::TrustedPrograms::new(),
+            remembered: crate::remembered::Remembered::new(),
             permissions: crate::permissions::Permissions::new(),
             vouch_asked: std::collections::BTreeSet::new(),
             fetching: None,
@@ -568,6 +577,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The programs vouched for, including any this turn recorded.
     pub fn programs(&self) -> &crate::programs::TrustedPrograms {
         &self.programs
+    }
+
+    /// Hand over the record of lines somebody asked to be remembered past the session.
+    ///
+    /// Called with what the record holds now, immediately before the question of whether to ask
+    /// about a line, and not once at the start of a session: the file is shared by every session
+    /// begun in the directory, and reading it once would leave this turn answering from a copy that
+    /// was already out of date. A driver that cannot put a prompt to anybody hands over nothing, so
+    /// what a covered line grants is never exercised where nobody could have been asked.
+    ///
+    /// Replaces rather than adds, for the same reason: the file is the state, and an entry somebody
+    /// deleted has to stop covering the line it named.
+    pub fn recall(&mut self, remembered: crate::remembered::Remembered) {
+        self.remembered = remembered;
     }
 
     /// Install the rules a person wrote in advance about what to ask them about.
@@ -3071,20 +3094,25 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// The questions in order: private input first and unconditionally, then a write, then the tree
     /// the line runs in, then an environment assignment, then a rule the user wrote in advance, then
-    /// the proof road, then the vouched list.
+    /// the proof road, then the vouched list, then the record of lines somebody asked to be
+    /// remembered past the session.
     ///
     /// True unless the audited table accounts for **every** step, a rule the user wrote in advance
-    /// covers the line, or this session's user has vouched for every step of it. There is no
+    /// covers the line, this session's user has vouched for every step of it, or the record holds
+    /// this exact line. There is no
     /// read-only category and there is no way to declare one:
     /// `foo --bar` might write to disk and nothing here can tell, and a step calling itself harmless
     /// would only help if the declaration were honest. So a program nobody has vouched for is always
     /// asked about, however innocuous it looks.
     ///
-    /// Three things may answer the question and nothing else: a person having answered it before, in
-    /// this session, for this program with these exact arguments; a rule the person wrote in advance,
+    /// Four things may answer the question and nothing else: a person having answered it before, in
+    /// this session, for this program with these exact arguments; that person having asked, at a
+    /// prompt, for their answer to one exact line to last past the session, which
+    /// [`crate::remembered`] holds; a rule the person wrote in advance,
     /// which stops the asking without raising any label; and the audited table in [`crate::pure`]
     /// establishing that these exact arguments write nothing and read only paths the user vouched
-    /// for. The table matches argv, but it is not a property of the argv in the sense this rules
+    /// for. The middle two grant strictly less than a vouch: they stop the question and leave every
+    /// label where it was. The table matches argv, but it is not a property of the argv in the sense this rules
     /// out: an entry is a claim checked by hand against one program's full option list,
     /// which is why it may answer at all. Never something a step declares about itself, and never
     /// anything derived from what a program printed, which is `(U,priv)` and could say anything.
@@ -3182,6 +3210,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return false;
         }
 
+        // Last of the four, and the only one whose answer was given in another session. It is
+        // reached only past the questions above it, which is what keeps an entry honest about what
+        // it covers: a recorded line met here with private input fed to it, with a file to write, in
+        // another tree, or with an assignment in front of a program is asked about like any other,
+        // because those were refused before this was consulted.
+        if self.remembered.covers(plan) {
+            self.allow(
+                "approval",
+                "the user asked at a prompt for this exact line to be remembered past the \
+                 session, no prompt"
+                    .to_string(),
+            );
+            return false;
+        }
+
         self.allow(
             "approval",
             "nothing can establish that a program changes nothing, and not every step was \
@@ -3189,6 +3232,39 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 .to_string(),
         );
         true
+    }
+
+    /// Whether a prompt for this plan may offer to record its answer past the session.
+    ///
+    /// The same refusals the record itself is read past, asked before the prompt is drawn so
+    /// that a key is never offered where it would stop no prompt. A line releasing private data is
+    /// asked about every time, as is one naming a file to write, one running anywhere but the
+    /// workspace root, and one writing an assignment in front of a program, and a rule the person
+    /// wrote in advance decides ahead of any keypress: an `ask` rule is a standing instruction to be
+    /// asked, and a key must not overturn it.
+    ///
+    /// The assignment is the one refusal an entry's key could have accounted for, since it holds
+    /// every assignment in a field of its own, and it is refused anyway: RUN-8 asks about such a
+    /// line before this record is reached, so the key would record an entry that stopped no later
+    /// prompt. Keeping the assignment in the key and out of what may be written is deliberate, so
+    /// that an entry arriving from anywhere else cannot cover a line with something put in front of
+    /// it.
+    ///
+    /// Read-only, and it writes no audit entry: it is a question about what to draw rather than a
+    /// gate anything passes, and the gate is [`Policy::plan_needs_approval`] above.
+    ///
+    /// The refusal is made twice, here and again where the answer is acted on, for the reason
+    /// RUN-6 gives about the key that vouches: an invariant about what a record may hold does not
+    /// rest on a drawing.
+    pub fn may_remember(&self, plan: &crate::command::Plan) -> bool {
+        !plan.releases_private()
+            && plan.writes.is_empty()
+            && self.runs_at_the_root(plan)
+            && !plan.carries_an_assignment()
+            && matches!(
+                self.permissions.for_pipeline(&self.plan_lines(plan)),
+                crate::permissions::Decision::Unmatched
+            )
     }
 
     /// Record that a person approved this exact plan.
@@ -5855,6 +5931,165 @@ mod tests {
 
     fn vouched(program: &str, args: &[&str]) -> crate::programs::Command {
         crate::programs::Command::new(program, args.iter().map(|a| a.to_string()).collect())
+    }
+
+    /// A record holding exactly one line, as reading the file would produce.
+    fn recalling(plan: &crate::command::Plan) -> crate::remembered::Remembered {
+        let mut record = crate::remembered::Remembered::new();
+        record.record(
+            crate::remembered::RememberedLine::of(plan),
+            "an-earlier-session",
+        );
+        record
+    }
+
+    /// RUN-19: what the key is for. A line somebody asked to be remembered runs without a prompt in
+    /// a session that never asked about it, which is the one thing the vouched list cannot do.
+    #[test]
+    fn a_line_remembered_past_the_session_is_not_asked_about() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        assert!(
+            policy.plan_needs_approval(&a_plan()),
+            "a fresh session had something remembered before it was handed a record"
+        );
+        policy.recall(recalling(&a_plan()));
+        assert!(!policy.plan_needs_approval(&a_plan()));
+    }
+
+    /// RUN-19: it stops only the asking. What a covered line prints carries the label it would have
+    /// carried anyway, which is untrusted and private, because an assertion about output is one
+    /// only somebody looking at it can make.
+    #[test]
+    fn output_of_a_line_remembered_past_the_session_is_still_untrusted_and_private() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&a_plan()));
+        let label = label_of(&mut policy, &a_plan());
+        assert_eq!(label.integrity, Integrity::Untrusted);
+        assert_eq!(
+            label.confidentiality,
+            crate::label::Confidentiality::Private
+        );
+    }
+
+    /// RUN-19: a covered line is not an entry in the vouched list, and puts none there. One list
+    /// serving both would make a covered line's output trusted on the strength of a keypress from a
+    /// session that has ended.
+    #[test]
+    fn a_line_remembered_past_the_session_vouches_for_nothing() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&a_plan()));
+        assert!(!policy.plan_needs_approval(&a_plan()));
+        assert!(
+            policy.programs().is_empty(),
+            "reading the record put an entry in the vouched list"
+        );
+    }
+
+    /// RUN-19: private input asks every time whatever is recorded. The record cannot account for
+    /// what is fed to the first step, because that is not in the line, so the question is refused
+    /// before the record is consulted.
+    #[test]
+    fn a_remembered_line_fed_private_input_is_asked_about_anyway() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&a_plan()));
+        let mut fed = a_plan();
+        fed.stdin = Some(Label::new(
+            Integrity::Untrusted,
+            crate::label::Confidentiality::Private,
+        ));
+        assert!(policy.plan_needs_approval(&fed));
+        assert!(!policy.may_remember(&fed), "the key was offered for it too");
+    }
+
+    /// RUN-19: a line naming a file to write is asked about however often it was answered, since a
+    /// write has a destination as well as a program.
+    #[test]
+    fn a_remembered_line_that_writes_is_asked_about_anyway() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        let mut writing = a_plan();
+        writing.writes = vec![std::path::PathBuf::from("/work/out.txt")];
+        policy.recall(recalling(&writing));
+        assert!(policy.plan_needs_approval(&writing));
+        assert!(
+            !policy.may_remember(&writing),
+            "the key was offered for it too"
+        );
+    }
+
+    /// RUN-19: what `make check` does depends on the tree it runs in, so a line running anywhere
+    /// but the workspace root is asked about whatever is recorded.
+    #[test]
+    fn a_remembered_line_run_outside_the_root_is_asked_about_anyway() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        let mut elsewhere = a_plan();
+        elsewhere.directory = std::path::PathBuf::from("/work/vendor");
+        policy.recall(recalling(&elsewhere));
+        assert!(policy.plan_needs_approval(&elsewhere));
+        assert!(
+            !policy.may_remember(&elsewhere),
+            "the key was offered for it too"
+        );
+    }
+
+    /// RUN-19: a rule the person wrote in advance decides first. An `ask` rule is a standing
+    /// instruction to be asked, and a keypress from an earlier session must not overturn it.
+    #[test]
+    fn an_ask_rule_takes_back_a_line_remembered_past_the_session() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_permissions(permissions(&[], &["Bash(git log)"], &[]));
+        policy.recall(recalling(&a_plan()));
+        assert!(policy.plan_needs_approval(&a_plan()));
+        assert!(
+            !policy.may_remember(&a_plan()),
+            "the key was offered under a rule that asks anyway"
+        );
+    }
+
+    /// RUN-19: an assignment decides what a program loads before its own arguments are read, so
+    /// RUN-8 asks about such a line before the record is reached. The key is not offered for one
+    /// either, since an entry it wrote would stop no later prompt.
+    #[test]
+    fn a_remembered_line_carrying_an_environment_assignment_is_asked_about_anyway() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&with_an_assignment()));
+        assert!(policy.plan_needs_approval(&with_an_assignment()));
+        assert!(
+            !policy.may_remember(&with_an_assignment()),
+            "the key was offered for it too"
+        );
+    }
+
+    /// RUN-19: the key is offered for the ordinary line, which is what the refusals above are
+    /// exceptions to.
+    #[test]
+    fn the_key_is_offered_for_a_line_nothing_refuses_it_for() {
+        let mut sink = RecordingSink::new();
+        let policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        assert!(policy.may_remember(&a_plan()));
+    }
+
+    /// RUN-19: the record is read afresh wherever a prompt would be drawn, so an entry somebody
+    /// deleted stops covering the line it named without the session being restarted.
+    #[test]
+    fn a_record_handed_over_again_replaces_what_it_held() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&a_plan()));
+        assert!(!policy.plan_needs_approval(&a_plan()));
+        policy.recall(crate::remembered::Remembered::new());
+        assert!(
+            policy.plan_needs_approval(&a_plan()),
+            "a line deleted from the record was still covered"
+        );
     }
 
     /// Rules as a settings file would have carried them, with every rule required to parse: a

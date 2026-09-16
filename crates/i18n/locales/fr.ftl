@@ -365,8 +365,16 @@ run-private-not-remembered =
     une entrée privée est soumise à chaque fois, celle-ci ne peut donc pas être retenue
 run-assignment-not-remembered =
     une affectation placée devant un programme est soumise à chaque fois, celle-ci ne peut donc pas être retenue
+run-remember-explained =
+    r : ne plus rien demander pour cette ligne exacte, dans ce répertoire, à partir de maintenant
+run-remember-where = elle est écrite ici, et supprimer la ligne est le chemin du retour :
+run-remember-only-asking =
+    cela arrête seulement la question : ce qu'elle affiche reste en quarantaine
+run-remember-every-session =
+    toute session ouverte dans ce répertoire la lit, pas seulement celle-ci
 run-yes = l'exécuter
-run-always = toujours
+run-always = toujours pour cette session
+run-remember = s'en souvenir
 run-no = ne pas l'exécuter
 
 
@@ -526,9 +534,21 @@ status-trusted = fiable
 status-untrusted = non fiable
 status-programs = Programmes
 status-every-run-is-asked = chaque exécution vous est soumise
+status-nothing-vouched-this-session =
+    rien n'a été approuvé pour cette session ; les lignes ci-dessous s'exécutent sans rien demander
 status-trusted-commands = Commandes fiables
 status-trusted-commands-note = exécutées sans rien demander, et leur sortie est fiable
 status-and-more = … et { $count } de plus
+status-remembered = Lignes mémorisées
+status-remembered-note =
+    exécutées sans rien demander dans ce répertoire, et leur sortie reste en quarantaine
+status-remembered-this-session = mémorisée dans cette session
+status-remembered-earlier = mémorisée dans une session antérieure
+status-remembered-where = supprimez une ligne de { $path } pour qu'elle soit redemandée
+status-remembered-and-more = { $count ->
+    [one] … et 1 de plus, dont { $earlier } d'une session antérieure
+   *[other] … et { $count } de plus, dont { $earlier } d'une session antérieure
+    }
 
 # Le français emprunte les trois premières abréviations telles quelles.
 environment-local = local

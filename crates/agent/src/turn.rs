@@ -541,6 +541,17 @@ pub struct Task {
     /// on whatever the developer happened to have installed, and a run would differ from the
     /// same run elsewhere for reasons nothing in the task described.
     pub home: Option<PathBuf>,
+    /// The session this turn belongs to, where a run prompt's answer may outlive it.
+    ///
+    /// `None` by default and for every turn with nobody to put a prompt to: a one-shot run, a
+    /// session whose channel has closed. Such a turn reads no record of remembered lines and writes
+    /// none, because what a record answers is a prompt, and where no prompt can be drawn it would
+    /// be saying instead which effects may happen with nobody there to see them.
+    ///
+    /// The session's own identifier rather than a flag, because the reading back has to say which
+    /// answers a person is still carrying from an earlier session and a flat list cannot.
+    /// Supplied per turn for the reason `home` is: which session this is belongs to the caller.
+    pub remembering: Option<String>,
     /// The model to request, when the user has chosen one.
     ///
     /// `None` means the configured default applies. Supplied per turn rather than read here for
@@ -640,6 +651,9 @@ impl Task {
             images: Vec::new(),
             piped: None,
             home: None,
+            // Nothing is remembered past the session unless a caller says which session this is,
+            // which is the caller saying there is somebody a prompt could be put to.
+            remembering: None,
             model: None,
             effort: None,
             tick: None,
@@ -705,6 +719,15 @@ impl Task {
     /// the correct behaviour for a caller that has not said where those live.
     pub fn with_home(mut self, home: Option<PathBuf>) -> Self {
         self.home = home;
+        self
+    }
+
+    /// Name the session whose run prompts may have their answers remembered past it.
+    ///
+    /// Said only by a caller that can put a prompt to somebody. Without it a turn neither reads the
+    /// record of remembered lines nor writes one, and every run asks.
+    pub fn remembering(mut self, session: Option<String>) -> Self {
+        self.remembering = session;
         self
     }
 
@@ -2180,6 +2203,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                         cancel,
                         scheduling,
                         home: task.home.as_deref(),
+                        remembering: task.remembering.as_deref(),
                         // A delegate is offered no way to delegate, and dispatch refuses one anyway.
                         delegated: task.delegate.is_some(),
                         servers: servers.as_mut(),
@@ -2570,16 +2594,33 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                             // From `printed_by` rather than the tool's name, which is the same
                             // condition the provenance above is recorded under: a result carries a
                             // command when a command produced it.
-                            let vouching = if output.printed_by.is_some() {
-                                "\n\nThis is about the command rather than about what it \
-                                 printed, and it is not the end of the road. To see this one, \
-                                 call read_output with the reference: the user is shown it and \
-                                 decides, and if they agree it comes back as text you can read. \
-                                 To stop being asked, a person vouching for every stage of the \
-                                 exact command makes what it prints visible from then on. To \
-                                 read a file, use read_file."
-                            } else {
-                                ""
+                            //
+                            // The half about vouching is left out where a record already stops the
+                            // asking for this exact line: no prompt will return there for anybody
+                            // to answer, so advice about what to press at one is advice about
+                            // something that will not happen, and `read_output` is then the whole
+                            // of what can be said.
+                            let vouching = match (
+                                output.printed_by.is_some(),
+                                output.covered_by_record,
+                            ) {
+                                (false, _) => "",
+                                (true, true) => {
+                                    "\n\nThis is about the command rather than about what it \
+                                     printed, and it is not the end of the road. To see this one, \
+                                     call read_output with the reference: the user is shown it and \
+                                     decides, and if they agree it comes back as text you can read. \
+                                     To read a file, use read_file."
+                                }
+                                (true, false) => {
+                                    "\n\nThis is about the command rather than about what it \
+                                     printed, and it is not the end of the road. To see this one, \
+                                     call read_output with the reference: the user is shown it and \
+                                     decides, and if they agree it comes back as text you can read. \
+                                     To stop being asked, a person vouching for every stage of the \
+                                     exact command makes what it prints visible from then on. To \
+                                     read a file, use read_file."
+                                }
                             };
                             format!(
                                 "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{capped}{vouching}",
