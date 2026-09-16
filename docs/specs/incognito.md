@@ -131,7 +131,8 @@ could ever spend, so the refusal comes before the device is registered. Forgetti
 because removing a stored secret leaves less behind rather than more, which is the direction this
 mode points.
 
-`verified-by: none`
+`verified-by: bravebot_cli::running::an_import_is_refused_in_an_incognito_session`
+`verified-by: bravebot_cli::running::forgetting_an_import_is_allowed_in_an_incognito_session`
 
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so

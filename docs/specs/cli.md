@@ -104,7 +104,10 @@ was released.
 A configuration error, a refused argument, and a turn that could not run all fail rather than
 exiting successfully with an explanation on stdout.
 
-`verified-by: none`
+`verified-by: bravebot_cli::running::a_configuration_error_exits_non_zero`
+`verified-by: bravebot_cli::running::a_refused_argument_exits_non_zero`
+`verified-by: bravebot_cli::running::a_turn_that_could_not_run_exits_non_zero`
+`verified-by: bravebot_cli::main::a_turn_something_was_refused_in_does_not_succeed`
 
 <a id="CLI-7"></a>
 ### CLI-7: `doctor` reports configuration and confinement without changing anything

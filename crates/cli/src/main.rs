@@ -2635,6 +2635,30 @@ mod tests {
         assert!(served.succeeded());
     }
 
+    /// A turn that was refused something did not do what it was asked, however much of a reply it
+    /// produced on the way. The refusal is a line on stderr and the reply still goes to stdout, so
+    /// a script piping one command into the next has only the status to tell it that the work it
+    /// asked for did not all happen.
+    #[test]
+    fn a_turn_something_was_refused_in_does_not_succeed() {
+        let refused = Finished {
+            reply: "ok",
+            notices: &[],
+            attempt: None,
+            trail: None,
+            clean: false,
+            not_served: None,
+            named_on_the_command_line: false,
+        };
+        let allowed = Finished {
+            clean: true,
+            ..refused
+        };
+
+        assert!(!refused.succeeded());
+        assert!(allowed.succeeded());
+    }
+
     /// Below the flag the model is whatever was recorded or configured, so failing here would have
     /// a script that names no model exit non-zero over a choice made in a terminal. It is still
     /// reported, which is the whole of what a person needs to see it.
