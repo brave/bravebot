@@ -610,8 +610,11 @@ pub fn available(scheduling: Scheduling) -> Vec<Tool> {
                                         server, a watcher, a log follower. Use it when you need \
                                         the program still up while you do something else, such \
                                         as starting a server and then fetching a page from it. \
-                                        Call job_output with the name to see what it has \
-                                        printed. Must be one pipeline with no redirection, and \
+                                        While this turn is still going you are told when it \
+                                        ends, with how it ended and what it printed, so nothing \
+                                        has to poll for that. Call job_output with the name to \
+                                        see what it has printed before then. \
+                                        Must be one pipeline with no redirection, and \
                                         it is killed when this turn ends. Defaults to false, \
                                         which waits and hands back the output."
                     }
@@ -1067,6 +1070,38 @@ struct Job {
     /// rather than one offset into the composed text, because output arriving on one stream moves
     /// where the other sits in that composition.
     seen: crate::exec::Seen,
+    /// Whether somebody has already been given the account of how this one ended.
+    ///
+    /// Set by whichever route got there first, so the finish is news exactly once: the turn's own
+    /// look between rounds, or a `job_output` call whose answer already said it had ended. Without
+    /// it a planner that waited for a build would be told a second time, with the output gone,
+    /// since the bytes go to whoever was handed them.
+    reported: bool,
+}
+
+/// A background job's finish, as the turn is told about it (CMDLINE-14).
+///
+/// The name and the outcome are the driver's own: a name this module minted, and a verdict read off
+/// exit codes and a clock. Nothing here was read out of a byte the pipeline printed. What it
+/// *printed* is content, and it carries the label the kernel fixed before anything started.
+pub struct Ended {
+    /// The name the planner was given for it.
+    pub name: String,
+    /// The line as the person approved it.
+    pub line: String,
+    /// How it ended.
+    pub outcome: crate::report::Outcome,
+    /// What it printed that nobody has been handed yet, cut to the cap where it may be read.
+    ///
+    /// `None` where it printed nothing since anybody last looked, which is the job whose exit code
+    /// is the whole of its account: a reference to an empty slot spends a name the planner is
+    /// reading the numbering of and says nothing. A count of bytes and never a look at one.
+    pub printed: Option<Labelled<String>>,
+    /// The whole of it, where the cap cut the sample down.
+    ///
+    /// Beside the sample for the reason a run's is: the cap bounds what a conversation holds and
+    /// not what the program printed, so the middle has to exist somewhere a later call can reach.
+    pub whole: Option<Labelled<String>>,
 }
 
 impl Jobs {
@@ -1099,9 +1134,74 @@ impl Jobs {
                 line,
                 label,
                 seen: crate::exec::Seen::default(),
+                reported: false,
             },
         );
         name
+    }
+
+    /// Every job that has ended and whose finish nobody has been told about yet (CMDLINE-14).
+    ///
+    /// Polled rather than waited on, so a turn asking between rounds is never held by a program
+    /// behaving as intended: a job still running answers immediately. The exit is what makes this
+    /// news, so the planner is told about a build that finished whether or not it thought to ask,
+    /// and a job whose account has already been given is passed over rather than reported twice.
+    ///
+    /// The output is taken as it is handed over, which is what stops it being handed over again:
+    /// `seen` moves, so a `job_output` call after this reports what arrived after this and not the
+    /// whole log a second time.
+    pub fn ended(&mut self) -> Vec<Ended> {
+        let mut finished = Vec::new();
+        for (name, job) in self.running.iter_mut() {
+            if job.reported || !job.running.ended() {
+                continue;
+            }
+            job.reported = true;
+            let printed = job.running.since(&mut job.seen);
+            // Capped only where the planner may read it, exactly as a run's output is: what it may
+            // not read is quarantined whole, and there is nothing of it in the conversation to
+            // bound.
+            let sample = if job.label.is_trusted() {
+                bounded(&printed)
+            } else {
+                None
+            };
+            let (printed, whole) = match sample {
+                Some(sample) => (sample, Some(Labelled::new(printed, job.label))),
+                None => (printed, None),
+            };
+            finished.push(Ended {
+                name: name.clone(),
+                line: job.line.clone(),
+                outcome: how_it_ended(job.running.codes()),
+                printed: (!printed.is_empty()).then(|| Labelled::new(printed, job.label)),
+                whole,
+            });
+        }
+        finished
+    }
+}
+
+/// How a job that has ended finished, read off the exit code of each of its steps.
+///
+/// Structure and nothing else: no byte of what the pipeline printed reaches this. Failed rather
+/// than succeeded where a step did not exit zero, because a planner that waited for a build and was
+/// told it exited 0 reports a red build as green, and where the output is quarantined that sentence
+/// is the only account of it the planner ever gets.
+fn how_it_ended(codes: &[Option<i32>]) -> crate::report::Outcome {
+    let failed: Vec<String> = codes
+        .iter()
+        .enumerate()
+        .filter(|(_, code)| **code != Some(0))
+        .map(|(at, code)| match code {
+            Some(code) => format!("step {} exited {code}", at + 1),
+            None => format!("step {} was killed", at + 1),
+        })
+        .collect();
+    if failed.is_empty() {
+        crate::report::Outcome::Succeeded
+    } else {
+        crate::report::Outcome::Failed(failed.join(", "))
     }
 }
 
@@ -1182,11 +1282,6 @@ struct Produced {
     /// Recorded on the slot by the turn loop, and what makes a picture reach a processor as a part
     /// rather than as a body. The driver's own, from a table of extensions.
     picture: Option<String>,
-    /// The name of a pipeline this call left running, where it started one.
-    ///
-    /// Reported so a person watching sees that something was started rather than run, which is a
-    /// different thing to have agreed to.
-    background: Option<String>,
     /// The delegates the kernel has approved and nobody has started yet.
     ///
     /// Started by the turn rather than here, because a delegate outlives the call that asked for
@@ -1221,7 +1316,6 @@ impl Produced {
             covered_by_record: false,
             picture: None,
             wakeup: None,
-            background: None,
             delegate: Vec::new(),
         }
     }
@@ -1255,13 +1349,17 @@ impl Produced {
     ///
     /// The name is the driver's own, so the planner is told it as text rather than being handed a
     /// reference: there is nothing quarantined about it, and nothing has been printed yet.
+    ///
+    /// It says the finish arrives by itself, because it does (CMDLINE-14), and a planner that does
+    /// not know that spends a round per look asking whether a build has finished.
     fn started_in_the_background(mut self, job: String) -> Self {
         self.text = Labelled::trusted(format!(
-            "started in the background as {job}. Nothing has been read from it yet: call \
-             job_output with \"{job}\" to see what it has printed, and again later for what is \
-             new. It is killed when this turn ends."
+            "started in the background as {job}. Nothing has been read from it yet. If it ends \
+             while this turn is still going you are told so, with how it ended and what it \
+             printed, without having to ask; call job_output with \"{job}\" before then to see \
+             what it has printed so far, and again later for what is new. It is killed when this \
+             turn ends."
         ));
-        self.background = Some(job);
         self
     }
 
@@ -1728,7 +1826,6 @@ fn problem(text: impl Into<String>) -> Produced {
         printed_by: None,
         covered_by_record: false,
         picture: None,
-        background: None,
         delegate: Vec::new(),
     }
 }
@@ -3561,25 +3658,7 @@ fn job_output<S: Sink>(
     // what the pipeline printed. Worked out before the kill below, so a job that had already ended
     // is reported as what it did rather than as what the kill would have done to it.
     let outcome = if ended {
-        let failed: Vec<String> = job
-            .running
-            .codes()
-            .iter()
-            .enumerate()
-            .filter(|(_, code)| **code != Some(0))
-            .map(|(at, code)| match code {
-                Some(code) => format!("step {} exited {code}", at + 1),
-                None => format!("step {} was killed", at + 1),
-            })
-            .collect();
-        // Failed rather than Succeeded where a step did not exit zero. A planner that waited for a
-        // build to finish and was told it exited 0 reports a red build as green, and where the
-        // output is quarantined that sentence is the only account of it the planner ever gets.
-        if failed.is_empty() {
-            crate::report::Outcome::Succeeded
-        } else {
-            crate::report::Outcome::Failed(failed.join(", "))
-        }
+        how_it_ended(job.running.codes())
     } else if kill {
         crate::report::Outcome::Stopped(ran_for)
     } else {
@@ -3587,6 +3666,13 @@ fn job_output<S: Sink>(
         // was stopped stops asking about a program that is still printing.
         crate::report::Outcome::Running { ran_for, waited }
     };
+
+    // This answer is the account of the finish, so the turn's own look between rounds does not give
+    // it a second time (CMDLINE-14). A killed job is finished too: the planner asked for the end of
+    // it and was told what it had done, and news of it exiting afterwards is news of nothing.
+    if ended || kill {
+        job.reported = true;
+    }
 
     if kill {
         job.running.kill();

@@ -202,6 +202,8 @@ subscription-unusable =
     l'abonnement importé n'a pas pu être utilisé ({ $problem }) ; ce tour utilise donc
     l'offre gratuite
 
+background-job-finished = `{ $command }` s'est terminé en arrière-plan : { $outcome }
+
 
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
 

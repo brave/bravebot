@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/cmdline.rs
   - crates/agent/src/exec.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/turn.rs
   - crates/agent/src/programs.rs
   - crates/core/src/command.rs
   - crates/core/src/pure.rs
@@ -585,11 +586,22 @@ earned. A background run that is still going when the session ends is killed.
 The output of a background run obeys every other clause here. Backgrounding changes when the planner
 is told, never what it is allowed to read.
 
+**How the turn is told.** The turn asks its jobs between rounds whether any has ended, and puts the
+handle, the exit status and what it printed since anybody last looked into the conversation as a
+message of its own. Asking is polling and costs nothing: a job still running answers immediately,
+and nothing waits here, because a background job is for the program meant to keep going and a turn
+that waited would wait out a server. The account is given once, by whichever of the two routes got
+there first: a `job_output` call that already said the job had ended is the account, and the look
+between rounds passes over it rather than repeating it with the output gone.
+
 **Why this is a parameter and not the `&` token.** As syntax it would be one more thing the compiler
 has to model and one more thing a reader has to spot in a line. As a parameter it is a field on the
 call, visible in the prompt, and impossible to hide inside an argument.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_background_jobs_finish_reaches_the_turn_without_the_planner_asking`
+`verified-by: bravebot_agent::turn::a_silent_background_jobs_exit_code_reaches_the_turn_by_itself`
+`verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_quarantined_where_nobody_vouched_for_the_line`
+`verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept`
 
 <a id="CMDLINE-15"></a>
 ### CMDLINE-15: a program that wants a terminal is refused before it starts

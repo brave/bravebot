@@ -1527,6 +1527,141 @@ fn collect_delegates<S: Sink, R: Reporter>(
     Ok(collected)
 }
 
+/// Tell the turn about every background job that has ended since it last looked (CMDLINE-14).
+///
+/// The exit is what says so, rather than the planner deciding to ask. A job's finish arrives as a
+/// message of its own, the way a delegate's report does and for the same reason: the call that
+/// started it was answered rounds ago, and a result cannot be given twice.
+///
+/// Waiting for none of them. A background job is for the program that is meant to keep going, so a
+/// turn that waited here would wait out a server, which is the whole of what backgrounding exists
+/// to avoid. What is still running when the turn ends is killed with it, as it always was.
+///
+/// Nothing here reads what a job printed. The handle and the status are the driver's own structure,
+/// worked out from a name it minted and the exit codes it collected, and the output goes through
+/// the same gate as any other result: a job nobody vouched for hands the planner a reference.
+fn collect_jobs<S: Sink, R: Reporter>(
+    jobs: &mut tools::Jobs,
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    reporter: &mut R,
+) -> Result<(), TurnError> {
+    for ended in jobs.ended() {
+        let origin = format!("what `{}` printed", ended.line);
+        // Whichever way the label went: it is their directory, and a person who let a program run
+        // in it is entitled to read what it printed and to be told how it ended. "12 lines,
+        // quarantined" says neither.
+        let (lines, total) = match &ended.printed {
+            Some(printed) => released_lines(policy, "job_output", printed, KEPT_LINES, KEPT_WIDTH),
+            None => (Vec::new(), 0),
+        };
+
+        // A job that printed nothing still has news, and it is the case this clause is most needed
+        // for: a build that failed silently is reported by its exit code and by nothing else. The
+        // status then goes out on its own rather than as a reference to an empty slot, which would
+        // spend a name the planner is reading the numbering of and hold nothing.
+        let reserved = ended
+            .printed
+            .as_ref()
+            .map(|_| conversation.next_reference());
+        let presented = match (&ended.printed, &reserved) {
+            (Some(printed), Some(slot)) => Some(
+                policy
+                    .present(
+                        "job_output",
+                        slot.clone(),
+                        &origin,
+                        printed,
+                        conversation.quarantine(),
+                    )
+                    .map_err(|d| TurnError::Precommit(d.to_string()))?,
+            ),
+            _ => None,
+        };
+
+        // The transcript says the job is over, because nothing else in it does: the row drawn when
+        // the job started said only that something had been started. From the outcome, which is
+        // the driver's own words about exit codes, so nothing of what the job printed is in it.
+        reporter.narration(t!(
+            background_job_finished,
+            command = ended.line.clone(),
+            outcome = ended.outcome.summary()
+        ));
+
+        // Nothing withheld unless the gate withheld it. A job that printed nothing has nothing to
+        // keep from the planner, and drawing that row as content out of its reach would say the
+        // opposite of what happened.
+        reporter.printed(crate::report::Printed {
+            command: ended.line.clone(),
+            lines,
+            total,
+            read_by_the_planner: !matches!(presented, Some(Presentation::Quarantined(_))),
+            outcome: ended.outcome.clone(),
+        });
+
+        // In front of what it printed, so a long log does not bury the verdict, and said from the
+        // exit codes either way: a program's own bytes do not say whether it did what it was asked.
+        let told = format!(
+            "{TOOL_BUDGET_SPENT} The background job you started as {} has finished. {}",
+            ended.name,
+            ended.outcome.describe()
+        );
+
+        let body = match &presented {
+            None => format!("{told} It printed nothing since you last looked."),
+            Some(Presentation::Visible(text)) => {
+                // A cap bounds what the conversation holds and not what the program printed, so
+                // the whole of it goes into a slot of its own. Without it the one case where the
+                // cap bites is the one case with no way back to the middle, and a job the turn has
+                // reported cannot be started again to get it.
+                let rest = match (&ended.whole, reserved) {
+                    (Some(whole), Some(slot)) => {
+                        // The slot this result already reserved, which a visible presentation
+                        // leaves unfilled. A second name would leave a hole in the numbering the
+                        // planner is reading, which is what the reserving above is careful about.
+                        let reference = policy
+                            .keep_whole(
+                                "job_output",
+                                slot,
+                                &origin,
+                                whole,
+                                conversation.quarantine(),
+                            )
+                            .map_err(|d| TurnError::Precommit(d.to_string()))?;
+                        // Only a slot a program printed may be offered to the user for reading, so
+                        // the provenance is recorded where the slot is minted, together with the
+                        // line as the person approved it.
+                        policy.came_from_command(
+                            &reference.slot,
+                            &ended.line,
+                            conversation.quarantine(),
+                        );
+                        format!(
+                            "\n\nThe whole of this output, middle included, is a reference:\n{}",
+                            reference.describe()
+                        )
+                    }
+                    _ => String::new(),
+                };
+                format!("{told} What it printed since you last looked:\n\n{text}{rest}")
+            }
+            Some(Presentation::Quarantined(reference)) => {
+                policy.came_from_command(&reference.slot, &ended.line, conversation.quarantine());
+                format!(
+                    "{told} What it printed could not be shown to you: {}\n\nThis is about who \
+                     answered for the command rather than about what it printed. To see it, call \
+                     read_output with the reference: the user is shown it and decides.",
+                    reference.describe()
+                )
+            }
+        };
+
+        conversation.push(Message::user(body));
+        conversation.observed(policy.context_integrity());
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter + ?Sized + Send>(
     config: &Config,
@@ -1911,6 +2046,11 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                 &mut cached,
                 false,
             )?;
+
+            // And whatever exited while it was running, for the same reason and in the same place:
+            // the finish of a background job is news the turn is told rather than something the
+            // planner has to remember to ask about (CMDLINE-14).
+            collect_jobs(&mut jobs, &mut policy, conversation, &mut reporter)?;
 
             // Before the request rather than after the reply that overflowed. The figure being
             // compared is the last round's, so this is one round late by construction, which is why

@@ -14166,10 +14166,12 @@ fn the_middle_of_a_capped_job_output_stays_reachable() {
     }
     std::fs::write(scratch.path.join("big.log"), &log).unwrap();
 
-    // Printed and then over, so what the job has printed is all of what it will print: a job
-    // still running would make the size of the result a race against the clock.
+    // Printed and then left running. Everything it will print has been printed by the time the
+    // sleep below is over, so the size of the result is not a race against the clock; and it has
+    // not ended, so this exercises the job_output call rather than the account the turn gives of a
+    // job that finished, which is a path of its own with a test of its own.
     let script = scratch.path.join("noisy");
-    std::fs::write(&script, "#!/bin/sh\ncat big.log\n").unwrap();
+    std::fs::write(&script, "#!/bin/sh\ncat big.log\nsleep 30\n").unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -14356,6 +14358,265 @@ fn a_job_output_call_reports_the_code_a_finished_job_exited_with() {
     assert!(
         !after.contains("It exited 0"),
         "a job that failed was reported to the planner as having exited 0: {after}"
+    );
+}
+
+/// The half of CMDLINE-14 that never landed, and what made a background job only half useful: a
+/// build started in the background finished, nothing said so, and a planner that did not happen to
+/// call job_output again answered as though it had never run. The exit is what has to tell the
+/// turn, because the planner has no way of knowing when to ask.
+#[test]
+fn a_background_jobs_finish_reaches_the_turn_without_the_planner_asking() {
+    let scratch = Scratch::new("background-finish-told");
+
+    // Prints and exits, so it is over while the turn is still going, which is the case nothing
+    // reported. Nothing waits on it: the ordinary round that follows is what it finishes during.
+    let script = scratch.path.join("build");
+    std::fs::write(&script, "#!/bin/sh\necho FINISH-MARKER-GRAULT\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // No job_output call anywhere in this sequence. The account has to arrive without one.
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./build","background":true}"#),
+        tool_request("run", r#"{"command":"sleep 1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Vouched for, so what it printed comes back as text: a reference would say nothing about
+    // whether the output had been handed over at all.
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start the build and get on with something else"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let told = bodies
+        .iter()
+        .find(|body| body.contains("you started as job:1 has finished"))
+        .expect("the turn was never told the job ended");
+    assert!(
+        told.contains("It exited 0."),
+        "the status of the job that ended never reached the planner: {told}"
+    );
+    assert!(
+        told.contains("FINISH-MARKER-GRAULT"),
+        "what the job printed never reached the planner: {told}"
+    );
+}
+
+/// A job that printed nothing still has news, and it is the case the clause is most needed for: a
+/// step that failed silently is reported by its exit code and by nothing else. A planner told a
+/// build finished and not that it failed reports a red build as green.
+#[test]
+fn a_silent_background_jobs_exit_code_reaches_the_turn_by_itself() {
+    let scratch = Scratch::new("background-finish-failed");
+
+    let script = scratch.path.join("failing");
+    std::fs::write(&script, "#!/bin/sh\nexit 3\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./failing","background":true}"#),
+        tool_request("run", r#"{"command":"sleep 1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and get on with something else"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let told = bodies
+        .iter()
+        .find(|body| body.contains("you started as job:1 has finished"))
+        .expect("the turn was never told the job ended");
+    // The whole sentence, because the negative half is the point: a planner told the job finished
+    // and nothing more reads it as having worked. Asserted against the job's own account rather
+    // than against the request, which carries the successful sleep of the round before it too.
+    assert!(
+        told.contains("as job:1 has finished. It failed: step 1 exited 3."),
+        "the code a silent job exited with never reached the planner: {told}"
+    );
+    assert!(
+        told.contains("It printed nothing since you last looked"),
+        "a job that printed nothing was not said to have printed nothing: {told}"
+    );
+}
+
+/// Backgrounding changes when the planner is told, never what it is allowed to read. A finish that
+/// arrives unasked goes through the same gate a job_output call's answer does, so output nobody
+/// vouched for reaches the planner as a reference and not as bytes.
+#[test]
+fn what_an_ended_job_printed_is_quarantined_where_nobody_vouched_for_the_line() {
+    let scratch = Scratch::new("background-finish-quarantined");
+
+    let script = scratch.path.join("noisy");
+    std::fs::write(&script, "#!/bin/sh\necho SENTINEL-UNASKED-PLUGH\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./noisy","background":true}"#),
+        tool_request("run", r#"{"command":"sleep 1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Approves each run without vouching, so the output stays untrusted.
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        bodies
+            .iter()
+            .all(|body| !body.contains("SENTINEL-UNASKED-PLUGH")),
+        "what an ended job printed reached the planner unvouched for"
+    );
+    let told = bodies
+        .iter()
+        .find(|body| body.contains("you started as job:1 has finished"))
+        .expect("the turn was never told the job ended");
+    assert!(
+        told.contains("could not be shown to you"),
+        "the planner was not told the output exists and is out of reach: {told}"
+    );
+    assert!(
+        told.contains("read_output"),
+        "the planner was left with no way to ask for what it may not read: {told}"
+    );
+}
+
+/// The cap on what a result may spend of a conversation is not lifted by the result arriving
+/// unasked. A job that printed a long log has a middle too, and it has to exist somewhere: the job
+/// is over, so starting it again is not a way back to it.
+#[test]
+fn what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept() {
+    let scratch = Scratch::new("background-finish-capped");
+
+    let mut log = String::new();
+    for line in 0..2000 {
+        if line == 1000 {
+            log.push_str("MIDDLE-MARKER-THUD\n");
+        }
+        log.push_str(&format!("line {line} of a long build log\n"));
+    }
+    std::fs::write(scratch.path.join("big.log"), &log).unwrap();
+
+    let script = scratch.path.join("noisy");
+    std::fs::write(&script, "#!/bin/sh\ncat big.log\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./noisy","background":true}"#),
+        tool_request("run", r#"{"command":"sleep 1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Vouching is what makes the output readable, and a readable result is the only one the cap
+    // ever bites on.
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let told = bodies
+        .iter()
+        .find(|body| body.contains("you started as job:1 has finished"))
+        .expect("the turn was never told the job ended");
+    assert!(
+        told.contains("line 0 of a long build log"),
+        "what the job printed never reached the planner: {told}"
+    );
+    assert!(
+        !told.contains("MIDDLE-MARKER-THUD"),
+        "the whole of it entered the conversation, so the cap did nothing"
+    );
+    assert!(
+        told.contains("The whole of this output, middle included, is a reference"),
+        "the middle of what the job printed exists nowhere but the sample: {told}"
     );
 }
 
