@@ -365,8 +365,8 @@ the model or the messages a turn built would be deciding what was asked rather t
 ### BACKEND-16: a gateway credential is named rather than resolved ahead of time
 
 Where a gateway's credential lives is named by its block: variables that may hold it, or a value
-written in the file. It is read at the point a request needs it, and a request that cannot be
-authenticated is refused with the remedy named rather than sent.
+written in the file. It is read at the point a request needs it, and a request whose block named a
+credential that nothing holds is refused with the remedy named rather than sent.
 
 **Why.** Read once at startup, a credential goes stale in a session where somebody exported a new
 one. Sent without one, the request fails at the far end for a reason nothing local could explain,
@@ -380,10 +380,29 @@ signature over the request, so there is no credential for a block to name and no
 Which set of AWS credentials to sign with comes from the profile the block names, resolved when a
 request needs it, which is the same moment and the same reason a token is read.
 
+**A block naming no credential is the second exception.** An empty `env` and no `options.apiKey` is
+the person saying this gateway wants none, so its requests carry no `authorization` header and its
+roster is asked for without one. A block that does name somewhere for a credential to live, and finds
+nothing there, is a stale or missing token and is still refused.
+
+**Why the distinction is where it is.** The reason above holds for the second case and not the first:
+a gateway that wants no credential answers an unauthenticated request, so nothing fails at the far end
+for a reason nothing local could explain, and a refusal names a remedy that does not exist. Requiring
+a value instead would require a field of a block that does not have one, which BACKEND-13 rules out,
+and a dummy `apiKey` teaches people to write fake credentials into a file they paste into issues.
+Deciding it by endpoint rather than by what the block says would refuse the same local service reached
+across a LAN or through a reverse proxy. BACKEND-5 is unaffected: such a gateway is reachable, so
+offering its models is not offering rows that fail when picked.
+
 `verified-by: bravebot_config::provider::a_named_variable_holds_the_token_before_the_file_does`
 `verified-by: bravebot_config::provider::a_token_written_into_the_file_is_still_read`
 `verified-by: bravebot_config::provider::a_provider_with_nothing_holding_a_token_has_none`
+`verified-by: bravebot_config::provider::a_provider_naming_no_credential_needs_none`
 `verified-by: bravebot_agent::backend::a_gateway_with_nothing_holding_a_token_refuses_the_request`
+`verified-by: bravebot_agent::backend::a_gateway_naming_no_credential_sends_unauthenticated`
+`verified-by: bravebot_aichat::lib::a_gateway_needing_no_credential_sends_no_authorization_header`
+`verified-by: bravebot_aichat::client::a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated`
+`verified-by: bravebot_cli::main::a_gateway_needing_no_credential_is_reported_as_needing_none`
 
 <a id="BACKEND-17"></a>
 ### BACKEND-17: a gateway named by a name this system knows needs no endpoint written down
@@ -450,9 +469,10 @@ network. Where it names none, the gateway itself is asked, and what it answers i
 that cannot be fetched contributes nothing and takes nothing away from the rest of the roster.
 
 What the credential in use may reach is asked for ahead of what the service offers generally, and the
-wider roster answers only where the narrower question does not. Nothing is capped: every model
-reported that can call tools is offered, ordered with the model a session would use first and the rest
-by name.
+wider roster answers only where the narrower question does not. A block naming no credential has no
+account for that narrower question to be about, so only the wider one is asked. Nothing is capped:
+every model reported that can call tools is offered, ordered with the model a session would use first
+and the rest by name.
 
 **Why.** A block naming no models is the ordinary case, not a mistake: the tool this shape is borrowed
 from resolves a roster from a registry, so the commonest block copied in names a credential and
@@ -472,7 +492,8 @@ Asking what the credential may reach is asking the question a person actually ha
 cannot serve is a row that fails the moment it is picked, and the two answers differ by a factor of
 three, so the wide roster is mostly rows that would not work. It is a fallback rather than the only
 request because that narrower route is a gateway's own extension: one that does not answer it has to
-end up with a roster anyway.
+end up with a roster anyway. With no credential named there is nothing for the narrow answer to be
+narrower than, so that request spends a round trip to be told what the wide one says.
 
 No cap, because a picker filters as somebody types and any limit is this system deciding they may not
 choose a model their gateway serves. Ordering does that work instead, and it is needed precisely
@@ -491,6 +512,8 @@ the same conservative default a stated roster gets.
 `verified-by: bravebot_aichat::models::a_gateway_that_reports_no_capabilities_still_offers_its_models`
 `verified-by: bravebot_aichat::models::a_fetched_entry_with_no_usable_name_is_dropped`
 `verified-by: bravebot_aichat::models::fetched_gateway_models_are_not_marked_premium`
+`verified-by: bravebot_aichat::client::a_gateway_with_a_credential_is_asked_what_that_account_may_reach`
+`verified-by: bravebot_aichat::client::a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated`
 `verified-by: bravebot_tui::app::a_fetched_roster_leads_with_the_model_in_force`
 `verified-by: bravebot_tui::app::a_fetched_roster_nobody_has_chosen_from_is_still_sorted`
 
@@ -1190,6 +1213,19 @@ file in a checkout.
   placeholder in a shell profile is not an instruction to discard anything, applied to one more source
   in one of them than in the other, and which behaviour a person meets depends on which name they
   blanked.
+
+- **A gateway that wants a credential and was told of none is refused by the service rather than
+  here.** BACKEND-16 reads a block naming no credential as the person saying none is wanted, so a
+  block naming a service that does want one, and naming none, sends an unauthenticated request and
+  gets that service's own rejection where a local refusal named the remedy. What the block says is
+  the only statement available about whether a credential is wanted; the endpoint does not answer it,
+  a private deployment behind a name this system knows being free to want none and a local service
+  being reachable at one of those names. Deciding by endpoint would buy the better message for the
+  names BACKEND-17 compiles in and pay for it by refusing every gateway outside them that wants
+  nothing. A block whose `apiKey` is written blank, or whose `env` lists only blank names, names no
+  credential by that same reading, since a blank in this file is read as nothing having been written
+  there. A placeholder somebody meant to fill in later is therefore read as them saying none is
+  wanted, and the refusal that would have pointed at it does not happen.
 
 - **A credential is resolved by running the AWS CLI.** Reaching Bedrock needs short-lived keys that
   expire during a session, and the tool that holds them is the one the person already signs in

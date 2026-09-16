@@ -129,6 +129,7 @@ doctor-backend-aichat = Brave Leo
 doctor-backend-gateway = { $gateway } (passerelle)
 doctor-gateway-token = trouvé (jamais affiché)
 doctor-gateway-token-absent = aucun trouvé (définissez une variable nommée dans `env`)
+doctor-gateway-token-not-needed = aucun requis (le bloc n'en nomme aucun)
 doctor-gateway-models-absent = aucun configuré (la passerelle est interrogée)
 doctor-region = région
 doctor-profile = profil

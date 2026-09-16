@@ -872,7 +872,10 @@ mod tests {
             let (provider, model) = config.provider_for(&config.default_model).expect("gateway");
             assert_eq!(model, "z-ai/glm-4.6");
             assert_eq!(provider.base_url, "https://openrouter.ai/api/v1");
-            assert_eq!(provider.token(|_| None).as_deref(), Some("test-token"));
+            assert_eq!(
+                provider.credential(|_| None),
+                provider::Credential::Token("test-token".to_string())
+            );
             assert!(provider.models.is_empty());
         }
     }
@@ -888,16 +891,14 @@ mod tests {
             .expect("gateway configured before its token is resolved");
         let provider = &config.providers[0];
         assert_eq!(
-            provider
-                .token(|name| match name {
-                    "OPENROUTER_API_KEY" => Some("environment-token".into()),
-                    _ => None,
-                })
-                .as_deref(),
-            Some("environment-token")
+            provider.credential(|name| match name {
+                "OPENROUTER_API_KEY" => Some("environment-token".into()),
+                _ => None,
+            }),
+            provider::Credential::Token("environment-token".to_string())
         );
         // Missing gateway tokens are reported by the gateway client, not as missing Brave keys.
-        assert_eq!(provider.token(|_| None), None);
+        assert_eq!(provider.credential(|_| None), provider::Credential::Absent);
         assert!(!config.serves_aichat());
     }
 

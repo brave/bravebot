@@ -13,6 +13,7 @@ use bravebot_aichat::protocol::ChatRequest;
 use bravebot_aichat::{AichatClient, ChatError, Completion, Progress, Subscription};
 use bravebot_bedrock::{BedrockClient, BedrockError};
 use bravebot_config::Config;
+use bravebot_config::provider::Credential;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
@@ -27,11 +28,14 @@ use std::fmt;
 pub enum BackendError {
     Aichat(ChatError),
     Bedrock(BedrockError),
-    /// A gateway is configured but nothing holds its bearer token.
+    /// A gateway's block says where its bearer token lives and nothing there holds one.
     ///
     /// Refused here rather than sent unauthenticated, on the same footing as a Bedrock tier whose
     /// model cannot be resolved: a request the configuration cannot sign fails at the far end for a
     /// reason nothing local could explain, and the remedy is naming a variable that holds one.
+    ///
+    /// A block naming nowhere for a token to live is not this. That is somebody saying none is
+    /// needed, and there is nothing for them to go and fix.
     NoGatewayToken {
         provider: String,
     },
@@ -378,12 +382,30 @@ fn gateway_client<'a>(
     wire_model: &str,
     egress: &'a Egress,
 ) -> Result<AichatClient<'a>, BackendError> {
-    let token = provider
-        .token(|name| std::env::var(name).ok())
-        .ok_or_else(|| BackendError::NoGatewayToken {
-            provider: provider.display_name().to_string(),
-        })?;
+    let token = gateway_token(provider, |name| std::env::var(name).ok())?;
     Ok(AichatClient::new(config, egress).for_gateway(provider, wire_model, token))
+}
+
+/// What to attach to `provider`'s requests, or the refusal its block earned.
+///
+/// Only a block that named a credential is refused for not holding one. A block naming none is
+/// somebody saying the gateway wants none, which is how a local Ollama is configured, and refusing it
+/// names a remedy that does not exist.
+///
+/// `None` rather than an empty token, and separate from building the client so that is assertable:
+/// `Bearer` with nothing after it is a different request from one carrying no credential, and a
+/// service that reads the empty value as a bad token refuses it.
+fn gateway_token(
+    provider: &bravebot_config::provider::Provider,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<Option<String>, BackendError> {
+    match provider.credential(lookup) {
+        Credential::Token(token) => Ok(Some(token)),
+        Credential::NotNeeded => Ok(None),
+        Credential::Absent => Err(BackendError::NoGatewayToken {
+            provider: provider.display_name().to_string(),
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -420,15 +442,32 @@ mod tests {
 
     /// Every roster at once, so a configuration alone cannot say where a request goes.
     fn with_a_gateway() -> Config {
-        let mut config = both_backends();
-        let serde_json::Value::Object(root) = serde_json::from_str(
+        with_providers(
             r#"{"provider": {"openrouter": {
                 "env": ["A_TOKEN_VARIABLE"],
                 "options": {"baseURL": "https://openrouter.example.invalid/api/v1"},
                 "models": {"z-ai/glm-4.6": {}, "anthropic/claude-sonnet-4.5": {}}
             }}}"#,
         )
-        .expect("json") else {
+    }
+
+    /// A gateway in the shape a local Ollama is configured with: an endpoint, a name to show, and
+    /// nowhere named for a credential to live.
+    fn with_a_credential_free_gateway() -> Config {
+        with_providers(
+            r#"{"provider": {"ollama": {
+                "name": "Ollama (local)",
+                "options": {"baseURL": "http://localhost:11434/v1"},
+                "models": {"qwen3-coder-oc:latest": {}}
+            }}}"#,
+        )
+    }
+
+    /// Every backend, with the gateways a settings block configures, so what a test varies is the
+    /// block and nothing else.
+    fn with_providers(block: &str) -> Config {
+        let mut config = both_backends();
+        let serde_json::Value::Object(root) = serde_json::from_str(block).expect("json") else {
             panic!("not an object");
         };
         config.providers = bravebot_config::provider::Provider::all(&root);
@@ -553,6 +592,34 @@ mod tests {
         assert!(
             format!("{failure}").contains("openrouter"),
             "the failure does not say which gateway: {failure}"
+        );
+    }
+
+    /// A block naming nowhere for a credential to live is somebody saying the gateway wants none,
+    /// which is how the tool this shape is borrowed from configures a local Ollama. Refused, such a
+    /// block reaches the model picker and then cannot answer a turn, and the remedy the refusal names
+    /// does not exist.
+    ///
+    /// What it attaches is asserted and not only that it is allowed: an empty token would satisfy a
+    /// test that stopped at the refusal, and `Bearer` with nothing after it is what a service reads as
+    /// a bad credential.
+    #[test]
+    fn a_gateway_naming_no_credential_sends_unauthenticated() {
+        let config = with_a_credential_free_gateway();
+        let egress = Egress::new();
+        let (provider, wire) = config
+            .provider_for("qwen3-coder-oc:latest")
+            .expect("offered");
+
+        assert_eq!(
+            gateway_token(provider, |_| Some("in-the-environment".to_string()))
+                .expect("not refused"),
+            None,
+            "a gateway that names no credential was given one anyway"
+        );
+        assert!(
+            gateway_client(&config, provider, wire, &egress).is_ok(),
+            "a gateway that names no credential was refused one"
         );
     }
 

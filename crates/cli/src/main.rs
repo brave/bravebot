@@ -1497,13 +1497,18 @@ fn report_gateway(provider: &bravebot_config::provider::Provider) {
 /// Separate from the printing so the withholding is testable. The value here is a long-lived bearer
 /// token, so a diagnostic that echoed one would put a live credential in every issue somebody pastes
 /// this into.
+///
+/// Three answers, because a block that named nowhere for a credential to live needs none and there is
+/// nothing for anybody to go and set. Reported as absent, it reads as the thing to fix on a gateway
+/// that is working.
 fn gateway_credential(
     provider: &bravebot_config::provider::Provider,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> &'static str {
-    match provider.token(lookup).is_some() {
-        true => t!(doctor_gateway_token),
-        false => t!(doctor_gateway_token_absent),
+    match provider.credential(lookup) {
+        bravebot_config::provider::Credential::Token(_) => t!(doctor_gateway_token),
+        bravebot_config::provider::Credential::Absent => t!(doctor_gateway_token_absent),
+        bravebot_config::provider::Credential::NotNeeded => t!(doctor_gateway_token_not_needed),
     }
 }
 
@@ -2017,6 +2022,33 @@ mod tests {
         assert_ne!(
             gateway_credential(&provider, |_| None),
             gateway_credential(&provider, |_| Some("anything".to_string()))
+        );
+    }
+
+    /// A gateway whose block names no credential needs none, and saying "none found" of it reads as
+    /// something to go and set on a gateway that is working. Distinct from the case above, which names
+    /// a variable and really does want a token in it.
+    #[test]
+    fn a_gateway_needing_no_credential_is_reported_as_needing_none() {
+        let needs_none = configured_gateway(
+            r#"{"provider": {"ollama": {
+                "options": {"baseURL": "http://localhost:11434/v1"}
+            }}}"#,
+        );
+        let names_one = configured_gateway(
+            r#"{"provider": {"gw": {
+                "env": ["ABSENT_ONE"],
+                "options": {"baseURL": "https://example.invalid/v1"}
+            }}}"#,
+        );
+
+        assert_eq!(
+            gateway_credential(&needs_none, |_| None),
+            t!(doctor_gateway_token_not_needed)
+        );
+        assert_eq!(
+            gateway_credential(&names_one, |_| None),
+            t!(doctor_gateway_token_absent)
         );
     }
 
