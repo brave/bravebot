@@ -283,6 +283,80 @@ impl StoredManifest {
     }
 }
 
+/// Write a manifest run into the session store, finished or not, and say what it is called.
+///
+/// One function for both callers, because a run started from a session and a run started from the
+/// command line are the same run and have to be written down the same way: a reader opening one
+/// with `--resume` should not be able to tell which of the two started it.
+///
+/// `None` where there is nothing worth writing: a run the person cancelled, or a failure that
+/// produced no attempt to look at. Every other outcome is written, because the run somebody needs
+/// to read is the one that stopped. The id it returns is how a session names the run it started.
+///
+/// Best-effort, like everything else under `~/.bravebot`: a run that cannot be written down still
+/// ran, and failing the command because the record did not save would be the wrong trade. The id
+/// comes back regardless, since there is no reading of the disk here to tell.
+pub fn record_manifest_run(
+    project: &Path,
+    prompt: &str,
+    outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
+) -> Option<String> {
+    let (stored, trust) = match outcome {
+        Ok(finished) => (
+            finished
+                .attempt
+                .as_ref()
+                .map(|attempt| StoredManifest::of(attempt, None)),
+            finished.trust.clone(),
+        ),
+        Err(bravebot_agent::TurnError::Manifest { attempt, detail }) => (
+            Some(StoredManifest::of(attempt, Some(detail.clone()))),
+            TrustStore::new(project),
+        ),
+        // Cancelled, or a failure with nothing to show. Nothing worth a record.
+        Err(_) => (None, TrustStore::new(project)),
+    };
+
+    let stored = stored?;
+
+    let conversation = bravebot_agent::Conversation::new();
+    let snapshot = conversation.snapshot();
+    let todos = BTreeMap::new();
+    let programs = TrustedPrograms::new();
+    let tokens = outcome.as_ref().map(|o| o.tokens).unwrap_or(0);
+    // One turn, so the breakdown and the total say the same thing. Written anyway, because a
+    // reader comparing runs should not have to special-case where the figure came from.
+    let spend = BTreeMap::from([(1, tokens)]);
+    // Where that one turn's time went, on the same footing. A manifest run is the case where this
+    // matters most: a run nobody is watching that spent its afternoon blocked on an approval
+    // nobody was there to give leaves this as the only trace of it.
+    let timing = BTreeMap::from([(1, outcome.as_ref().map(|o| o.timing).unwrap_or_default())]);
+    let mut handle = Handle::begin(project);
+    handle.save(
+        prompt,
+        Standing {
+            // Empty, and it has to be: a manifest run has no conversation, which is the same
+            // fact that makes it unresumable. Filling this with something conversation-shaped
+            // would make the picker offer to continue a run that cannot be continued.
+            conversation: &snapshot,
+            turns: 1,
+            tokens,
+            spend: &spend,
+            timing: &timing,
+            model: outcome.as_ref().ok().map(|o| o.model.as_str()),
+            todos: &todos,
+            // None, and there can be none: an aside is a question a person types beside a
+            // conversation, and a manifest run has neither.
+            asides: &[],
+            trust: &trust,
+            programs: &programs,
+            directories: &[],
+            manifest: Some(&stored),
+        },
+    );
+    Some(handle.id().to_string())
+}
+
 /// One trust rule as it is written down.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredRule {
@@ -1801,6 +1875,145 @@ mod tests {
         assert_eq!(mode, 0o600, "the exported transcript is at {mode:o}");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An empty project, and an empty store for it.
+    ///
+    /// The store is under `~/.bravebot` rather than under the project, so removing the project
+    /// leaves the records behind and the next run of the test counts them too. Cleared at both
+    /// ends: at the start so a run that was killed does not fail the next one, and at the end so
+    /// a checkout is not left with test records in the picker.
+    fn an_empty_project(name: &str) -> PathBuf {
+        let root = crate::testutil::scratch_dir(name);
+        forget_the_project(&root);
+        std::fs::create_dir_all(&root).expect("create");
+        root
+    }
+
+    /// Remove a test project and every record written about it.
+    fn forget_the_project(root: &Path) {
+        let _ = std::fs::remove_dir_all(root);
+        if let Some(store) = project_directory(root) {
+            let _ = std::fs::remove_dir_all(store);
+        }
+    }
+
+    /// Write a plain turn session down, so a run recorded beside it has something to be beside.
+    ///
+    /// Its own function because [`Standing`] borrows everything it carries, so the empty maps a
+    /// conversation-less fixture needs have to outlive the call rather than the expression.
+    fn save_a_turn_session(handle: &mut Handle) {
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        handle.save(
+            "what do the specs say",
+            Standing {
+                conversation: &snapshot,
+                turns: 1,
+                tokens: 0,
+                spend: &BTreeMap::new(),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &TrustStore::new("/work"),
+                programs: &TrustedPrograms::default(),
+                directories: &[],
+                manifest: None,
+            },
+        );
+    }
+
+    /// A failed run, with everything it produced. The success path cannot be built here, since an
+    /// [`bravebot_agent::Outcome`] carries a released reply that only the agent may set, so the
+    /// failure is what these tests use: it is also the run somebody most needs to read.
+    fn a_failed_run() -> Result<bravebot_agent::Outcome, bravebot_agent::TurnError> {
+        Err(bravebot_agent::TurnError::Manifest {
+            attempt: Box::new(bravebot_agent::manifest::Attempt {
+                shape: Some("read the specs, then write a summary".to_string()),
+                proposed: Some("{\"steps\": []}".to_string()),
+                plan: Some("1. [read] read docs/specs/manifest.md".to_string()),
+                steps: vec!["1. [read] read docs/specs/manifest.md: 4kB".to_string()],
+            }),
+            detail: "step 2 had nothing to write".to_string(),
+        })
+    }
+
+    /// MANIFEST-11. A session that starts a run stays a conversation and the run becomes a record
+    /// of its own, so the presence of a manifest in a record is still what makes it a manifest
+    /// run. Written the other way round, the session's own record would be both at once and the
+    /// picker would have to ask which half of it Enter was about.
+    #[test]
+    fn a_manifest_run_is_recorded_apart_from_the_session() {
+        let root = an_empty_project("bravebot-session-manifest-run");
+
+        let mut session = Handle::begin(&root);
+        save_a_turn_session(&mut session);
+
+        let run = record_manifest_run(&root, "summarise the specs", &a_failed_run())
+            .expect("the run was not written down");
+
+        assert_ne!(run, session.id(), "the run took the session's own record");
+
+        let listed = list(&root);
+        assert_eq!(listed.len(), 2, "one of the two records is missing");
+        let manifests: Vec<&Summary> = listed.iter().filter(|row| row.manifest).collect();
+        assert_eq!(manifests.len(), 1, "exactly one row is a manifest run");
+        assert_eq!(manifests[0].id, run);
+
+        let written = load(&root, &run).expect("the run's record does not load");
+        let stored = written.manifest.expect("the run left no manifest");
+        assert_eq!(
+            stored.failure.as_deref(),
+            Some("step 2 had nothing to write")
+        );
+        assert!(
+            stored.describe().contains("read docs/specs/manifest.md"),
+            "the plan is not in the record: {}",
+            stored.describe()
+        );
+
+        forget_the_project(&root);
+    }
+
+    /// The other half of the same clause, and the reason for splitting the records at all: a
+    /// conversation with a manifest run in it must not become unresumable.
+    #[test]
+    fn a_session_that_started_a_run_can_still_be_resumed() {
+        let root = an_empty_project("bravebot-session-manifest-resumable");
+
+        let mut session = Handle::begin(&root);
+        save_a_turn_session(&mut session);
+        record_manifest_run(&root, "summarise the specs", &a_failed_run()).expect("written");
+
+        let record = load(&root, session.id()).expect("the session does not load");
+        assert!(
+            record.manifest.is_none(),
+            "the session's own record reads as a manifest run"
+        );
+        let row = list(&root)
+            .into_iter()
+            .find(|row| row.id == session.id())
+            .expect("the session is not in the list");
+        assert!(
+            !row.manifest,
+            "the picker would refuse Enter on the session"
+        );
+
+        forget_the_project(&root);
+    }
+
+    /// A run the person stopped has nothing in it to read, so it leaves nothing, exactly as it
+    /// does from the command line. A record for every interrupted run would fill the picker with
+    /// rows whose whole content is that somebody changed their mind.
+    #[test]
+    fn a_cancelled_run_leaves_no_record() {
+        let root = an_empty_project("bravebot-session-manifest-cancelled");
+
+        let cancelled = Err(bravebot_agent::TurnError::Cancelled);
+        assert!(record_manifest_run(&root, "summarise the specs", &cancelled).is_none());
+        assert!(list(&root).is_empty(), "a stopped run was written down");
+
+        forget_the_project(&root);
     }
 
     #[test]

@@ -502,7 +502,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     // picker says so, but "cannot be continued" is a different thing from "leaves no trace":
     // the run somebody needs to read is the one that stopped, and until now it left nothing.
     if mode == Mode::Manifest {
-        record_manifest_run(&workspace, &task.prompt, &outcome);
+        bravebot_tui::sessions::record_manifest_run(workspace.root(), &task.prompt, &outcome);
     }
 
     match outcome {
@@ -942,93 +942,26 @@ fn print_trace(output: &mut impl Write, sink: &RecordingSink) {
     }
 }
 
-/// Write a manifest run into the session store, finished or not.
-///
-/// Best-effort, like everything else under `~/.bravebot`: a run that cannot be written down still
-/// ran, and failing the command because the record did not save would be the wrong trade.
-fn record_manifest_run(
-    workspace: &bravebot_agent::Workspace,
-    prompt: &str,
-    outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
-) {
-    use bravebot_core::programs::TrustedPrograms;
-    use bravebot_tui::sessions::{Handle, Standing, StoredManifest};
-
-    let (stored, trust) = match outcome {
-        Ok(finished) => (
-            finished
-                .attempt
-                .as_ref()
-                .map(|attempt| StoredManifest::of(attempt, None)),
-            finished.trust.clone(),
-        ),
-        Err(bravebot_agent::TurnError::Manifest { attempt, detail }) => (
-            Some(StoredManifest::of(attempt, Some(detail.clone()))),
-            TrustStore::new(workspace.root()),
-        ),
-        // Cancelled, or a failure with nothing to show. Nothing worth a record.
-        Err(_) => (None, TrustStore::new(workspace.root())),
-    };
-
-    let Some(stored) = stored else {
-        return;
-    };
-
-    let conversation = bravebot_agent::Conversation::new();
-    let snapshot = conversation.snapshot();
-    let todos = std::collections::BTreeMap::new();
-    let programs = TrustedPrograms::new();
-    let tokens = outcome.as_ref().map(|o| o.tokens).unwrap_or(0);
-    // One turn, so the breakdown and the total say the same thing. Written anyway, because a
-    // reader comparing runs should not have to special-case where the figure came from.
-    let spend = std::collections::BTreeMap::from([(1, tokens)]);
-    // Where that one turn's time went, on the same footing. A manifest run is the case where this
-    // matters most: it is the mode nobody is watching, so a run that spent its afternoon blocked on
-    // an approval nobody was there to give leaves this as the only trace of it.
-    let timing = std::collections::BTreeMap::from([(
-        1,
-        outcome.as_ref().map(|o| o.timing).unwrap_or_default(),
-    )]);
-    let mut handle = Handle::begin(workspace.root());
-    handle.save(
-        prompt,
-        Standing {
-            // Empty, and it has to be: a manifest run has no conversation, which is the same
-            // fact that makes it unresumable. Filling this with something conversation-shaped
-            // would make the picker offer to continue a run that cannot be continued.
-            conversation: &snapshot,
-            turns: 1,
-            tokens,
-            spend: &spend,
-            timing: &timing,
-            model: outcome.as_ref().ok().map(|o| o.model.as_str()),
-            todos: &todos,
-            // None, and there can be none: an aside is a question a person types beside a
-            // conversation, and a manifest run has neither.
-            asides: &[],
-            trust: &trust,
-            programs: &programs,
-            directories: &[],
-            manifest: Some(&stored),
-        },
-    );
-}
 fn resume_named(id: &str, skip_permissions: bool) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
         eprintln!("{}", t!(cli_directory_unknown));
         return ExitCode::FAILURE;
     };
     match bravebot_tui::sessions::load(&directory, id) {
+        // Printing what a run produced is what naming one here is for (SESSION-10), and a session
+        // that started a run says to name it. So this answers on stdout and succeeds: the id was
+        // real, the record was read, and the person got the thing they asked for. Reporting it as a
+        // failure would make the line the session printed read as advice that does not work.
         Some(record) if record.manifest.is_some() => {
-            eprintln!("{}", bravebot_tui::resume::manifest_note());
+            println!("{}", t!(cli_manifest_run, id = id));
             if let Some(stored) = &record.manifest {
                 let report = stored.describe();
                 if !report.is_empty() {
-                    eprintln!();
-                    eprint!("{report}");
+                    println!();
+                    print!("{report}");
                 }
             }
-            ExitCode::FAILURE
+            ExitCode::SUCCESS
         }
         Some(record) => interactive(
             bravebot_tui::app::Start::Resuming(Box::new(record)),

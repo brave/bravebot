@@ -11,6 +11,7 @@ governs:
   - crates/tui/src/sessions.rs
   - crates/tui/src/resume.rs
   - crates/tui/src/confirm.rs
+  - crates/tui/src/app.rs
 guards:
   - symbol: Policy::before_planning
   - symbol: Policy::adopt_manifest
@@ -151,9 +152,15 @@ explanation over whatever the plan named next.
 <a id="MANIFEST-9"></a>
 ### MANIFEST-9: the default is the turn loop
 
-An unqualified run, and every session, is still observe-decide-act. Manifest is an opt-in on the
-command line. An unknown name is refused rather than guessed, because guessing wrong here would
-silently run the mode the user did not ask for.
+An unqualified run, and every session, is still observe-decide-act. Manifest is an opt-in: a mode
+named on the command line, or a command typed in a session, which starts one run and gives the
+session back afterwards (MANIFEST-11). What a session may not do is hold the mode. A session is
+several turns over one conversation and each of them decides what to do next after the last one
+read something, so a session that was in this mode would be a contradiction; one run started from
+one is not.
+
+An unknown mode name is refused rather than guessed, because guessing wrong here would silently run
+the mode the user did not ask for.
 
 Piped stdin is refused rather than dropped. A pipe is observed context, and this mode does not
 observe before it plans. Name a workspace file instead.
@@ -164,6 +171,8 @@ observe before it plans. Name a workspace file instead.
 `verified-by: bravebot_cli::main::an_unknown_mode_is_refused_rather_than_guessed`
 `verified-by: bravebot_cli::main::a_leading_mode_flag_is_a_task_not_an_unknown_option`
 `verified-by: bravebot_agent::manifest::piped_input_is_refused_rather_than_dropped`
+`verified-by: bravebot_tui::app::a_session_can_ask_for_a_manifest_run`
+`verified-by: bravebot_tui::app::a_manifest_run_needs_a_task_to_plan`
 
 <a id="MANIFEST-10"></a>
 ### MANIFEST-10: a plan runs only once somebody has said yes to it
@@ -207,13 +216,53 @@ what makes one question about the whole of it worth more than a question per ste
 `verified-by: bravebot_cli::main::a_plan_is_answered_by_whoever_typed_the_command`
 `verified-by: bravebot_cli::main::a_plan_is_refused_where_nobody_can_be_asked`
 
+<a id="MANIFEST-11"></a>
+### MANIFEST-11: a run started from a session is a run, not a mode the session holds
+
+A session starts one run, waits for it, and comes back to the turn loop. It is blocked for the
+duration: there is no planner in a manifest run to hand a line to, so nothing about the session
+carries on beside it, and the person can read, edit and stop but not send.
+
+The conversation is neither read nor written. It does not go in, because the planner that reads the
+task may hold the task string and the driver's own words and nothing else (MANIFEST-1); and nothing
+comes back out, because a step's result is quarantined and there is no planner left to show it to
+(MANIFEST-8). What the transcript shows is the goal as the planner understood it, the frozen plan,
+each step as it runs, and the reply, all of it released for a screen and none of it in the exchange
+a later turn resumes. So the run leaves the conversation exactly as a declined plan leaves the
+workspace.
+
+The run is written down as its own record, by the same code the command line uses, and the session
+records its name. That is what keeps the presence of a manifest in a record the thing that makes it
+a manifest run: the session's record is still a conversation and still resumes, the run's record
+still has no conversation and is still refused by the picker, and neither has to become a question
+about which half of a record is being asked about. A run the person stopped is not written, as it is
+not from the command line: there is nothing in it to read. That is read off the key they pressed and
+not off the error that came back, since the two keys that stop a run reach it as a decline at the
+plan prompt and as a cancellation a step later, and a person pressing one of them asked for the same
+thing at both moments.
+
+Approval reaches the session prompt rather than the terminal one, since the session is the place a
+plan can be drawn and scrolled. Everything else about the question is MANIFEST-10's, unchanged: it
+is asked once, it has no standing form, and it does not approve the writes.
+
+A session is also the only place a permission mode exists, so it is the only place a manifest run
+meets one. Bypassing approves the plan, as MANIFEST-10 says. Plan mode is the one that refuses: a
+plan with a write in it does not run at all, decided from the frozen plan before the plan is put to
+anybody ([permission-modes.md](permission-modes.md#MODE-3)).
+
+`verified-by: bravebot_tui::sessions::a_manifest_run_is_recorded_apart_from_the_session`
+`verified-by: bravebot_tui::sessions::a_session_that_started_a_run_can_still_be_resumed`
+`verified-by: bravebot_tui::sessions::a_cancelled_run_leaves_no_record`
+`verified-by: bravebot_tui::app::a_run_the_person_stopped_is_read_off_the_key_and_not_off_the_error`
+`verified-by: bravebot_tui::app::a_manifest_run_is_not_a_prompt`
+
 ## Known costs
 
-- **A plan is answered on one line, with no way back to the steps above it.** The terminal question
-  prints the plan and reads a line, so a plan longer than the window is scrolled to in the terminal's
-  own scrollback rather than in anything this tool draws, and there is no going back to re-read a
-  step once the answer is typed. The session prompt is the one that can be scrolled, and no session
-  starts a manifest run yet (MANIFEST-9).
+- **A plan answered at a terminal is answered on one line, with no way back to the steps above it.**
+  The terminal question prints the plan and reads a line, so a plan longer than the window is
+  scrolled to in the terminal's own scrollback rather than in anything this tool draws, and there is
+  no going back to re-read a step once the answer is typed. A run started from a session does not
+  have this cost: that prompt is drawn and scrolled (MANIFEST-11).
 - **A processing step's instruction is not on the line.** What the person reads is which slots it
   reads and which it fills, and the sentence a processor is given is left off, so a plan that
   transforms text under an instruction nobody read still passes the gate. It routes nothing, which

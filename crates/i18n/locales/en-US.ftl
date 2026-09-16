@@ -81,6 +81,7 @@ cli-workspace-problem = workspace error: { $problem }
 cli-interface-problem = interface error: { $problem }
 cli-directory-unknown = cannot tell which directory this is
 cli-no-such-session = no session { $id } in this directory
+cli-manifest-run = { $id } is a manifest run, so there is nothing to continue; this is what it did
 cli-nothing-to-continue = no session to continue in this directory
 cli-fork-needs-a-name = --fork requires a session id
 cli-piped-input-unreadable = warning: could not read piped input: { $problem }
@@ -732,6 +733,7 @@ command-btw = Ask something beside the work, without putting it in the conversat
 command-clear = Start a new session here, keeping this one resumable
 command-loop = Send a prompt again and again, on your interval or at a pace each turn sets
 command-goal = Keep working until a condition you set is judged met
+command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-export = Export the session transcript to a markdown file
 command-undo = Rewind the last turn and restore files
 command-exit = Leave
@@ -916,6 +918,16 @@ btw-uninterruptible = the question cannot be interrupted; it takes one request
 btw-ended-unexpectedly = the question ended unexpectedly
 btw-answered = asked beside the work, and answered there; { $chord } opens it again
 btw-failed = the question could not be answered: { $problem }
+
+# What the session says about a manifest run started from it. The plan, each step and the reply are
+# shown as they happen, so what is left to say is that a run is starting, where it was written down,
+# and what went wrong where something did. That a run is not a turn of the conversation is what the
+# mode is for rather than news about this run, so it is not said here.
+manifest-needs-a-task = /manifest takes the task to plan, as in /manifest summarise the docs
+manifest-began = planning the whole task first; the session waits here until the run ends
+manifest-ended-unexpectedly = the run ended unexpectedly
+manifest-failed = the run stopped: { $problem }
+manifest-recorded = recorded as { $id }; read it again with bravebot --resume { $id }
 
 
 ## The opening screen

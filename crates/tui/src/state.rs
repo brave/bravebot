@@ -4985,6 +4985,39 @@ impl Session {
         }
     }
 
+    /// Leave a manifest run the session started, adding what it cost to the session's total.
+    ///
+    /// [`Session::end_aside`] in every respect but the breakdown, and charged to the same turn for
+    /// the same reason. What differs is that an aside is one model call, so all of its wall clock is
+    /// inference, while a run plans, walks steps and waits at prompts and comes back having measured
+    /// that split itself. Charging the whole of it to inference would report the minutes a person
+    /// spent reading a plan as minutes a model spent thinking, and the plan prompt is the longest
+    /// wait this mode has.
+    ///
+    /// `spent` is `None` from a run that stopped, which carries no breakdown back. Then only the
+    /// wall clock is charged and the breakdown is left absent, exactly as [`Session::fail`] does:
+    /// time nothing has claimed reads better than time claimed by the wrong thing.
+    pub fn end_run(&mut self, tokens: u64, spent: Option<bravebot_agent::timing::Timing>) {
+        self.status = Status::Idle;
+        self.streaming.clear();
+        // Read before the timer is cleared, as an aside's is.
+        let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.started = None;
+        self.phase = None;
+        self.running = None;
+        self.tokens += tokens;
+        if self.turns > 0 {
+            *self.spend.entry(self.turns).or_insert(0) += tokens;
+            let entry = self.timing.entry(self.turns).or_default();
+            entry.wall_ms += took;
+            if let Some(spent) = spent {
+                entry.inference_ms += spent.inference_ms;
+                entry.tools_ms += spent.tools_ms;
+                entry.stalled_ms += spent.stalled_ms;
+            }
+        }
+    }
+
     pub fn note(&mut self, message: impl Into<String>) {
         self.transcript.push(Entry::system(message));
     }
@@ -9516,6 +9549,72 @@ mod tests {
             assert_eq!(
                 turn.inference_ms, turn.wall_ms,
                 "an aside's wait was not counted as time spent on the model"
+            );
+        }
+
+        /// A manifest run measures its own split, and the longest thing in it is usually a person
+        /// reading a whole plan before answering for it. Charged as an aside's wait is, that wait
+        /// would be reported as time a model spent thinking.
+        #[test]
+        fn a_run_charges_its_wait_to_the_person_rather_than_to_the_model() {
+            use bravebot_agent::timing::Timing;
+            let mut s = session();
+
+            s.type_char('a');
+            s.submit();
+            s.complete("reply", Vec::new(), 400);
+
+            s.begin_aside();
+            s.end_run(
+                250,
+                Some(Timing {
+                    wall_ms: 999_999,
+                    inference_ms: 300,
+                    tools_ms: 100,
+                    stalled_ms: 600_000,
+                }),
+            );
+
+            let turn = s
+                .timing_by_turn()
+                .get(&1)
+                .copied()
+                .expect("turn 1 recorded");
+            assert_eq!(turn.inference_ms, 300);
+            assert_eq!(turn.tools_ms, 100);
+            assert_eq!(
+                turn.stalled_ms, 600_000,
+                "the ten minutes at the plan prompt were not kept as a wait"
+            );
+            assert_ne!(
+                turn.wall_ms, 999_999,
+                "the worker's wall figure overwrote the session's own"
+            );
+            assert_eq!(s.tokens, 650, "the run's tokens are not in the total");
+        }
+
+        /// A run that stopped brings no breakdown back, so the wall clock is charged and the split
+        /// is left absent. Time nothing has claimed reads better than time claimed by the wrong
+        /// thing, which is what `fail` already does for a turn.
+        #[test]
+        fn a_run_that_stopped_still_accounts_for_its_wall_clock() {
+            let mut s = session();
+
+            s.type_char('a');
+            s.submit();
+            s.complete("reply", Vec::new(), 400);
+
+            s.begin_aside();
+            s.end_run(0, None);
+
+            let turn = s
+                .timing_by_turn()
+                .get(&1)
+                .copied()
+                .expect("turn 1 recorded");
+            assert_eq!(
+                turn.inference_ms, 0,
+                "a run with no breakdown was charged as inference anyway"
             );
         }
 

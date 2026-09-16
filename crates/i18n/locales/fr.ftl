@@ -87,6 +87,7 @@ cli-workspace-problem = erreur d'espace de travail : { $problem }
 cli-interface-problem = erreur d'interface : { $problem }
 cli-directory-unknown = impossible de savoir de quel répertoire il s'agit
 cli-no-such-session = aucune session { $id } dans ce répertoire
+cli-manifest-run = { $id } est une exécution planifiée : il n'y a rien à poursuivre, voici ce qu'elle a fait
 cli-nothing-to-continue = aucune session à reprendre dans ce répertoire
 cli-fork-needs-a-name = --fork nécessite un identifiant de session
 cli-piped-input-unreadable = avertissement : impossible de lire l'entrée redirigée : { $problem }
@@ -672,6 +673,7 @@ command-btw = Demander quelque chose à côté du travail, sans le mettre dans l
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
 command-loop = Renvoyer une consigne encore et encore, à votre intervalle ou au rythme de chaque tour
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
+command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-export = Exporter la transcription de la session vers un fichier markdown
 command-undo = Annuler le dernier tour et restaurer les fichiers
 command-exit = Partir
@@ -841,6 +843,16 @@ btw-uninterruptible = la question ne peut pas être interrompue ; elle prend une
 btw-ended-unexpectedly = la question s'est terminée de façon inattendue
 btw-answered = demandé à côté du travail, et répondu là ; { $chord } l'ouvre à nouveau
 btw-failed = la question n'a pas pu recevoir de réponse : { $problem }
+
+# Ce que la session dit d'une exécution planifiée lancée depuis elle. Le plan, chaque étape et la
+# réponse s'affichent au fur et à mesure ; il ne reste donc à dire qu'une exécution commence, où
+# elle a été enregistrée, et ce qui a échoué là où quelque chose a échoué. Qu'une exécution ne soit
+# pas un tour de la conversation tient au mode et non à cette exécution : cela n'est pas dit ici.
+manifest-needs-a-task = /manifest prend la tâche à planifier, comme /manifest résume la documentation
+manifest-began = la tâche entière est planifiée d'abord ; la session attend ici jusqu'à la fin de l'exécution
+manifest-ended-unexpectedly = l'exécution s'est terminée de façon inattendue
+manifest-failed = l'exécution s'est arrêtée : { $problem }
+manifest-recorded = enregistré sous { $id } ; à relire avec bravebot --resume { $id }
 
 
 ## L'écran d'accueil
