@@ -16,6 +16,7 @@ pub mod env_var {
     include!("env_var.rs");
 }
 
+pub mod hooks;
 mod obfuscate;
 mod settings;
 #[cfg(test)]
