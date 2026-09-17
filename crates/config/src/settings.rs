@@ -13,6 +13,11 @@
 //! wholesale. Copying that resolution rather than inventing one means somebody who knows where to
 //! put a value for one of these tools knows it for the other.
 //!
+//! A fourth file is read where the command line named one, after all three and by the same rules.
+//! Those three are properties of a person, a checkout and a machine, and none of them is a property
+//! of one invocation, which is what a job configuring one run differently from the next has to be
+//! able to say. [`name_a_settings_file`] is how the entry point says it.
+//!
 //! Blocks borrowing the shape of whichever tool already reads them, so that one copied from
 //! elsewhere works unedited rather than being rewritten first. A different spelling for the same
 //! values would be a second thing to learn for no gain:
@@ -51,6 +56,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// The file each layer is named by, inside its own directory.
@@ -70,6 +76,28 @@ const PROJECT_DIR: &str = ".bravebot";
 /// A settings file is a handful of short strings. Bounded so a file that grew by accident, or was
 /// replaced by something else entirely, is refused rather than parsed.
 const MAX_BYTES: u64 = 64 * 1024;
+
+/// The file the command line named, for the layer that sits above the three that are found.
+///
+/// Process-wide because the thing it is a property of is: `--settings` configures this run of the
+/// program, and [`Settings::load`] answers the interface, a one-shot run, and the list of variables
+/// a subprocess is built with, none of which is reached from the entry point that parsed the flag.
+/// Threading the path to each of them would be the same value passed through code that has nothing
+/// to say about it, and the one caller that was missed would read a different configuration from
+/// the rest of the process.
+///
+/// [`Settings::layered`] takes the answer as an argument instead, so every rule about how the layer
+/// resolves is checked without this being set under any of it.
+static NAMED: OnceLock<PathBuf> = OnceLock::new();
+
+/// Read `path` as a settings layer above the three that are found, for the rest of this process.
+///
+/// Called once, from the entry point, before anything has read a setting. First call wins: a second
+/// one is a caller disagreeing with the first about how this process is configured, and the half of
+/// the program that had already read the answer could not be told about the change anyway.
+pub fn name_a_settings_file(path: PathBuf) {
+    let _ = NAMED.set(path);
+}
 
 /// The `env` block, or empty when there is no file or it cannot be read.
 ///
@@ -187,25 +215,35 @@ pub fn user_settings_file(directory: &Path) -> PathBuf {
 }
 
 impl Settings {
-    /// Read every settings layer in force for this user, in this directory.
+    /// Read every settings layer in force for this user, in this directory, plus the file the
+    /// command line named.
     pub fn load() -> Self {
-        Self::layered(home(), std::env::current_dir().ok().as_deref())
+        Self::layered(
+            home(),
+            std::env::current_dir().ok().as_deref(),
+            NAMED.get().map(PathBuf::as_path),
+        )
     }
 
-    /// As [`Settings::load`], for a named home and working directory, so a test needs no ambient
-    /// ones.
+    /// As [`Settings::load`], for a named home, working directory and command line, so a test needs
+    /// no ambient ones.
     ///
     /// The working directory is where the process started and not an ancestor of it. A session begun
     /// in a subdirectory therefore reads no project settings, which is the same rule Claude Code
     /// applies and is the reason this walks nothing: a search upward would make what configures a
     /// session depend on which directory somebody happened to `cd` into, and the file it eventually
     /// found could sit above the thing being worked on.
-    pub fn layered(home: Option<PathBuf>, cwd: Option<&Path>) -> Self {
+    ///
+    /// `named` is read last, so what it sets beats every file that was found. Taken as an argument
+    /// rather than read from [`NAMED`] here, so the order and the merge rules are checked without a
+    /// process-wide switch in force under every other test in this binary.
+    pub fn layered(home: Option<PathBuf>, cwd: Option<&Path>, named: Option<&Path>) -> Self {
         let project = cwd.map(|cwd| cwd.join(PROJECT_DIR));
         let paths = [
             home.map(|home| home.join(SETTINGS_FILE)),
             project.as_ref().map(|dir| dir.join(SETTINGS_FILE)),
             project.as_ref().map(|dir| dir.join(LOCAL_SETTINGS_FILE)),
+            named.map(Path::to_path_buf),
         ];
 
         let mut merged = serde_json::Map::new();
@@ -213,6 +251,13 @@ impl Settings {
         let mut winner = BTreeMap::new();
         let mut contested = BTreeMap::new();
         for path in paths.into_iter().flatten() {
+            // A file already read as a layer above is not read again. Naming one of the three
+            // explicitly is an ordinary thing to do, and reading it twice would report every name
+            // in it as an override of itself, list it twice among the layers, and double every
+            // entry in a list that unions rather than overrides.
+            if found.contains(&path) {
+                continue;
+            }
             let Some(root) = read(&path) else { continue };
             for name in env_names(&root) {
                 // Whoever set it before lost it here, which is the only thing worth telling somebody:
@@ -233,7 +278,7 @@ impl Settings {
 
     /// Read one layer, for a home directory and nothing beside it.
     pub fn from_home(home: Option<PathBuf>) -> Self {
-        Self::layered(home, None)
+        Self::layered(home, None, None)
     }
 
     /// Read the `env` block, the `model` key and the scrub list out of settings JSON.
@@ -1131,6 +1176,8 @@ mod tests {
     struct Layers {
         home: PathBuf,
         cwd: PathBuf,
+        /// The file a command line named, where one of these tests names one.
+        named: Option<PathBuf>,
     }
 
     impl Layers {
@@ -1145,6 +1192,7 @@ mod tests {
             Self {
                 home,
                 cwd: root.join("cwd"),
+                named: None,
             }
         }
 
@@ -1165,8 +1213,43 @@ mod tests {
             self
         }
 
+        /// A file the command line named, outside every directory the layers above are found in:
+        /// the point of the flag is a file that is a property of neither the person nor the
+        /// checkout, so one written inside either would not be the case under test.
+        fn named(mut self, text: &str) -> Self {
+            let path = self
+                .home
+                .parent()
+                .expect("the scratch root")
+                .join("named.json");
+            std::fs::write(&path, text).expect("named layer");
+            self.named = Some(path);
+            self
+        }
+
+        /// The command line naming a file that is already one of the three found layers.
+        fn naming_the_project_layer(mut self) -> Self {
+            self.named = Some(self.cwd.join(PROJECT_DIR).join(SETTINGS_FILE));
+            self
+        }
+
+        /// A file the command line named that nobody wrote, for the failure case.
+        fn naming_nothing(mut self) -> Self {
+            self.named = Some(
+                self.home
+                    .parent()
+                    .expect("the scratch root")
+                    .join("was-never-written.json"),
+            );
+            self
+        }
+
         fn read(&self) -> Settings {
-            Settings::layered(Some(self.home.clone()), Some(&self.cwd))
+            Settings::layered(
+                Some(self.home.clone()),
+                Some(&self.cwd),
+                self.named.as_deref(),
+            )
         }
     }
 
@@ -1204,6 +1287,105 @@ mod tests {
             .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
             .read();
         assert_eq!(settings.get("AWS_PROFILE"), Some("just-this-machine"));
+    }
+
+    /// The point of naming a file on the command line: a run configured differently from the last
+    /// one in the same directory, by somebody who can edit neither the home directory nor the
+    /// checkout. Naming a file is a stronger statement than a file being found where one was looked
+    /// for, so it wins over all three.
+    #[test]
+    fn a_file_the_command_line_named_beats_every_layer_that_was_found() {
+        let settings = Layers::new("named-wins")
+            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
+            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
+            .named(r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#)
+            .read();
+        assert_eq!(settings.get("AWS_PROFILE"), Some("the-ci-account"));
+    }
+
+    /// A fourth layer rather than a replacement for the three. A job that wants one value changed
+    /// would otherwise lose the configuration the checkout carries, which it wants as well, and
+    /// would have to restate a whole configuration to move a profile.
+    #[test]
+    fn a_name_a_command_line_file_left_alone_keeps_the_answer_below_it() {
+        let settings = Layers::new("named-leaves-the-rest")
+            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn"}}"#)
+            .named(r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#)
+            .read();
+        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
+        assert_eq!(
+            settings.get("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            Some("opus-arn")
+        );
+        assert_eq!(settings.get("AWS_PROFILE"), Some("the-ci-account"));
+    }
+
+    /// The lists are the exception for every layer, this one included: an entry only ever narrows
+    /// what is possible, so a file named on the command line adds to them rather than handing back
+    /// a variable the person's own file withheld from a subprocess.
+    #[test]
+    fn a_command_line_file_adds_to_the_names_kept_from_a_program() {
+        let settings = Layers::new("named-scrub-union")
+            .global(r#"{"run": {"scrubEnv": ["PERSONAL_TOKEN"]}}"#)
+            .named(r#"{"run": {"scrubEnv": ["CI_TOKEN"]}}"#)
+            .read();
+        let mut named: Vec<&str> = settings.scrubbed().collect();
+        named.sort_unstable();
+        assert_eq!(named, ["CI_TOKEN", "PERSONAL_TOKEN"]);
+    }
+
+    /// `doctor` has to name it for the same reason it names the other three: a value somebody did
+    /// not expect now has a fourth place it could have come from, and this is the only one that is
+    /// not in a directory they would think to look in.
+    #[test]
+    fn a_command_line_file_is_reported_as_the_layer_that_won_a_name() {
+        let layers = Layers::new("named-reported")
+            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
+            .named(r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#);
+        let settings = layers.read();
+        let file = layers.named.clone().expect("the file that was named");
+
+        let reported: Vec<PathBuf> = settings.layers().map(Path::to_path_buf).collect();
+        assert_eq!(reported, [layers.home.join(SETTINGS_FILE), file.clone()]);
+        assert_eq!(
+            settings.overridden().collect::<Vec<_>>(),
+            [("AWS_PROFILE", file.as_path())]
+        );
+    }
+
+    /// Each layer fails independently, and being named on a command line does not change that: the
+    /// entry point refuses a path that is there to be checked before the run starts, and what is
+    /// left for this to decide is that a file going missing under a running process does not throw
+    /// away somebody's own profile.
+    #[test]
+    fn a_command_line_file_that_is_not_there_leaves_the_found_layers_in_force() {
+        let settings = Layers::new("named-absent")
+            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
+            .naming_nothing()
+            .read();
+        assert_eq!(settings.get("AWS_PROFILE"), Some("personal"));
+        assert_eq!(settings.layers().count(), 1);
+    }
+
+    /// Naming a file that is already being read is ordinary, since the flag is how somebody says
+    /// which configuration a run uses whether or not it is one they keep. Read twice, it would be
+    /// listed twice, report the names it sets as overrides of itself, and double the entries in
+    /// the lists that union rather than override.
+    #[test]
+    fn a_command_line_file_that_is_already_a_layer_is_read_once() {
+        let layers = Layers::new("named-twice")
+            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .naming_the_project_layer();
+        let settings = layers.read();
+
+        assert_eq!(settings.layers().count(), 2);
+        assert_eq!(settings.overridden().count(), 0);
+        assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["A_TOKEN"]);
+        assert_eq!(settings.get("AWS_PROFILE"), Some("shared"));
+        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
     }
 
     /// Naming a variable here only ever takes it away from a subprocess, so the layers add up. An
