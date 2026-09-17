@@ -658,7 +658,9 @@ pub struct Watching {
     /// spawned, then the commands in the order they ran.
     ///
     /// A position rather than a name, because it is also where the highlight sits in the list, and
-    /// the two must not be able to disagree.
+    /// the two must not be able to disagree. What that costs is that a row arriving ahead of this
+    /// one moves it, so whatever inserts the row moves this with it: a position left where it was
+    /// is a different row from the one somebody opened.
     pub at: usize,
     /// Whether the list is what is on the screen, rather than the row at `at`.
     pub listing: bool,
@@ -1754,7 +1756,19 @@ impl Session {
             return;
         }
         self.streaming.push_str(text);
-        self.scroll = 0;
+        self.back_to_the_tail();
+    }
+
+    /// Put the turn's own view back at its tail for something the turn has just done.
+    ///
+    /// Nothing while the delegate view is open, because `scroll` is that view's position then and
+    /// the turn's own is held aside until it closes. A person who went to read a delegate or what
+    /// a command printed asked for that screen, and a row arriving under the turn is not them
+    /// asking for another.
+    fn back_to_the_tail(&mut self) {
+        if self.watching.is_none() {
+            self.scroll = 0;
+        }
     }
 
     /// The part of the reply taking shape that is meant for the person watching.
@@ -1823,8 +1837,19 @@ impl Session {
     }
 
     /// A delegate has begun, drawn where the call that started it happened.
+    ///
+    /// Nothing about the view moves for it. Where the view is open, the row it is on is a place
+    /// in a list this inserts a row into, so a place at or after the new delegate's moves with
+    /// it: without that, a delegate starting takes the screen from somebody reading a command,
+    /// since the commands are listed after the delegates.
     pub fn delegate_started(&mut self, delegation: bravebot_agent::report::Delegation) {
-        self.scroll = 0;
+        let inserted = self.asides.len() + self.delegates().len();
+        if let Some(watching) = &mut self.watching
+            && watching.at >= inserted
+        {
+            watching.at += 1;
+        }
+        self.back_to_the_tail();
         let mut entry = Entry::system("");
         entry.speaker = Speaker::Delegate;
         entry.delegate = Some(Delegate {
@@ -2154,7 +2179,7 @@ impl Session {
     /// on its own rather than being dropped: content released for a screen and then not drawn is
     /// the worst of both.
     pub fn show(&mut self, shown: Shown) {
-        self.scroll = 0;
+        self.back_to_the_tail();
         match self.working_lines().last_mut() {
             Some(entry) if entry.speaker == Speaker::Tool && entry.shown.is_none() => {
                 entry.shown = Some(shown);
@@ -6250,6 +6275,86 @@ mod tests {
                 session.watched_delegate().map(|delegate| delegate.kind),
                 Some("reader"),
                 "a delegate starting took the screen from the one being read"
+            );
+        }
+
+        /// The rows are grouped by kind, so a delegate starting arrives ahead of every command in
+        /// the list. A person reading what a command printed was moved onto that delegate by an
+        /// event they did not ask for.
+        #[test]
+        fn a_new_delegate_does_not_take_the_screen_from_a_command_being_read() {
+            let mut session = Session::new("none");
+            ran(&mut session, "cargo test", false);
+            assert!(session.watch(), "a command was not something to look at");
+
+            spawn(&mut session, "reader", "find the parser");
+            assert_eq!(
+                session
+                    .watched_output()
+                    .map(|output| output.command.as_str()),
+                Some("cargo test"),
+                "a delegate starting took the screen from the command being read"
+            );
+        }
+
+        /// The same shift under the list: the highlight is the row somebody moved it to, and a
+        /// delegate arriving above it must not leave them pointed at a different row.
+        #[test]
+        fn a_new_delegate_does_not_move_the_lists_highlight() {
+            let mut session = Session::new("none");
+            ran(&mut session, "cargo test", false);
+            ran(&mut session, "cargo build", false);
+            session.watch();
+            session.watch_previous();
+
+            spawn(&mut session, "reader", "find the parser");
+            assert_eq!(
+                session
+                    .watched_output()
+                    .map(|output| output.command.as_str()),
+                Some("cargo test"),
+                "a delegate starting moved the list's highlight to another row"
+            );
+        }
+
+        /// Somebody reading back up an open view is reading; a delegate they did not ask for
+        /// starting must not drop them at its tail.
+        #[test]
+        fn a_new_delegate_leaves_an_open_view_where_its_reader_put_it() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.watch();
+            session.scroll_up(6);
+
+            spawn(&mut session, "checker", "run the build");
+            assert_eq!(
+                session.scroll, 6,
+                "a delegate starting pulled the open view back to its tail"
+            );
+        }
+
+        /// The same rule for everything else the turn reports while the view is open: content
+        /// released for the person to read, and the reply taking shape under it. Both land
+        /// several times a second during a turn, so either one moving the view is the run
+        /// somebody opened being the run they cannot keep on the screen.
+        #[test]
+        fn nothing_the_turn_reports_moves_an_open_view() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.watch();
+            session.scroll_up(6);
+
+            session.show(quarantined("notes0.md"));
+            assert_eq!(
+                session.scroll, 6,
+                "a released preview pulled the open view back to its tail"
+            );
+
+            session.reporting_for(None);
+            session.streaming("the turn is thinking");
+            assert_eq!(
+                session.scroll, 6,
+                "the reply taking shape pulled the open view back to its tail"
             );
         }
 

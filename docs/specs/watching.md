@@ -241,6 +241,10 @@ could not keep on the screen.
 
 `verified-by: bravebot_tui::state::a_delegate_that_finishes_is_still_the_one_being_watched`
 `verified-by: bravebot_tui::state::a_new_delegate_does_not_take_the_screen_from_the_one_being_read`
+`verified-by: bravebot_tui::state::a_new_delegate_does_not_take_the_screen_from_a_command_being_read`
+`verified-by: bravebot_tui::state::a_new_delegate_does_not_move_the_lists_highlight`
+`verified-by: bravebot_tui::state::a_new_delegate_leaves_an_open_view_where_its_reader_put_it`
+`verified-by: bravebot_tui::state::nothing_the_turn_reports_moves_an_open_view`
 
 <a id="WATCH-11"></a>
 ### WATCH-11: the footer speaks in the interface's own words, and the turn's own row names the key
