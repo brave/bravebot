@@ -54,7 +54,8 @@ trusted inside a `vendor` marked untrusted, and the rest of that directory stays
 The file can be edited afterwards, which is usually the point of naming it. Naming one also works
 in a directory declined at startup.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_named_file_is_still_trusted_after_it_is_edited`
+`verified-by: bravebot_agent::turn::a_referenced_file_is_trusted_though_the_workspace_is_not`
 
 <a id="NAME-4"></a>
 ### NAME-4: typing `@` offers what is in the workspace, so the choice is informed

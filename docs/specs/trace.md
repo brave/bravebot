@@ -43,6 +43,7 @@ on a screen and written to a file without any release, and it is what makes the 
 for a workspace nobody vouched for.
 
 `verified-by: bravebot_agent::turn::nothing_recorded_about_a_request_carries_the_credential_in_its_url`
+`verified-by: bravebot_agent::turn::the_trail_records_the_slot_and_the_path_rather_than_the_content`
 
 <a id="TRACE-3"></a>
 ### TRACE-3: an assertion a person made is recorded as one
