@@ -17618,3 +17618,458 @@ fn a_delegate_does_not_fire_the_turn_s_own_moments() {
     let fired = std::fs::read_to_string(scratch.path.join("fired.txt")).expect("the hook ran");
     assert_eq!(fired, "fired\n", "a delegate fired the turn's own moment");
 }
+
+mod usage {
+    use super::*;
+    use bravebot_agent::Spent;
+    use bravebot_agent::report::{DelegateId, Reporter};
+    use std::net::TcpStream;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    const WAIT: Duration = Duration::from_secs(5);
+
+    /// Holding the reply lets tests inspect progress before another request can finish.
+    struct Pending {
+        body: String,
+        stream: TcpStream,
+    }
+
+    impl Pending {
+        fn answer(mut self, reply: &str) {
+            let frames = as_sse(reply);
+            let _ = write!(
+                self.stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                frames.len()
+            );
+        }
+
+        // Wake the streaming reader without completing a model reply. A 401 here would race
+        // the stop with a distinct backend failure before the reader can observe cancellation.
+        fn interrupted_stream(mut self) {
+            let frame = ": waiting\n\n";
+            let _ = write!(
+                self.stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frame}",
+                frame.len()
+            );
+        }
+
+        fn refuse(mut self) {
+            let _ = write!(
+                self.stream,
+                "HTTP/1.1 401 Unauthorized\r\nContent-Length: 14\r\nConnection: close\r\n\r\nPRIVATE_ERROR!"
+            );
+        }
+    }
+
+    /// Requests are exposed only after their bodies arrive. No sleep decides when a turn stops.
+    fn controlled_server() -> (String, mpsc::Receiver<Pending>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { break };
+                stream.set_read_timeout(Some(WAIT)).unwrap();
+                stream.set_write_timeout(Some(WAIT)).unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                let mut length = 0;
+                loop {
+                    line.clear();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                if reader.read_exact(&mut body).is_err() {
+                    continue;
+                }
+                let pending = Pending {
+                    body: String::from_utf8(body).unwrap(),
+                    stream: reader.into_inner(),
+                };
+                if pending.body.contains(A_CHECK_ASKING) {
+                    pending.answer(&a_check_finding_nothing());
+                } else if tx.send(pending).is_err() {
+                    break;
+                }
+            }
+        });
+        (endpoint, rx)
+    }
+
+    #[derive(Default)]
+    struct Reports {
+        spent: Vec<Spent>,
+        delegates: Vec<bool>,
+    }
+
+    struct Live(Arc<Mutex<Reports>>);
+
+    impl Reporter for Live {
+        fn todos(&mut self, _: Vec<bravebot_core::todo::Row>) {}
+        fn spent(&mut self, spent: Spent) {
+            self.0.lock().unwrap().spent.push(spent);
+        }
+        fn delegate_finished(
+            &mut self,
+            _: DelegateId,
+            _: String,
+            failed: bool,
+            _: Option<bravebot_agent::report::Reported>,
+        ) {
+            self.0.lock().unwrap().delegates.push(failed);
+        }
+    }
+
+    struct Run {
+        pending: mpsc::Receiver<Pending>,
+        finished: mpsc::Receiver<(Result<turn::Outcome, turn::TurnError>, String)>,
+        reports: Arc<Mutex<Reports>>,
+        cancel: bravebot_core::cancel::Cancel,
+    }
+
+    impl Run {
+        fn start(
+            name: &str,
+            mut conversation: bravebot_agent::Conversation,
+            compact: bool,
+        ) -> Self {
+            let scratch = Scratch::new(name);
+            std::fs::write(scratch.path.join("input.txt"), "private input").unwrap();
+            let workspace = Workspace::new(&scratch.path).unwrap();
+            let (endpoint, pending) = controlled_server();
+            let config = if compact {
+                config_with_budget(&endpoint, 1_000)
+            } else {
+                config_for(&endpoint)
+            };
+            let reports = Arc::new(Mutex::new(Reports::default()));
+            let mut reporter = Live(Arc::clone(&reports));
+            let cancel = bravebot_core::cancel::Cancel::new();
+            let token = cancel.clone();
+            let (tx, finished) = mpsc::channel();
+            thread::spawn(move || {
+                let _scratch = scratch;
+                let result = turn::resume(
+                    &config,
+                    &bravebot_net::Egress::new(),
+                    &workspace,
+                    &Task::new("PARENT-TASK: inspect input.txt"),
+                    &mut conversation,
+                    &mut bravebot_agent::confirm::ApproveWrites,
+                    &mut reporter,
+                    &mut RecordingSink::new(),
+                    bravebot_core::trust::TrustStore::new(workspace.root()),
+                    bravebot_core::programs::TrustedPrograms::new(),
+                    None,
+                    &token,
+                );
+                drop(_scratch);
+                let _ = tx.send((
+                    result,
+                    serde_json::to_string(&conversation.snapshot()).unwrap(),
+                ));
+            });
+            Self {
+                pending,
+                finished,
+                reports,
+                cancel,
+            }
+        }
+
+        fn request(&self) -> Pending {
+            self.pending
+                .recv_timeout(WAIT)
+                .expect("next request arrived")
+        }
+        fn progress(&self) -> Spent {
+            self.reports
+                .lock()
+                .unwrap()
+                .spent
+                .last()
+                .copied()
+                .unwrap_or_default()
+        }
+        fn finish(&self) -> Result<turn::Outcome, turn::TurnError> {
+            let (result, snapshot) = self.finished.recv_timeout(WAIT).expect("turn ended");
+            assert!(
+                !snapshot.contains("PRIVATE_ERROR!"),
+                "raw backend error entered context"
+            );
+            result
+        }
+        fn interrupt(&self, request: Pending, stop: bool) {
+            if stop {
+                self.cancel.cancel();
+                request.interrupted_stream();
+            } else {
+                request.refuse();
+            }
+        }
+    }
+
+    impl Drop for Run {
+        fn drop(&mut self) {
+            self.cancel.cancel();
+        }
+    }
+
+    fn assert_usage(spent: Spent, tokens: u64, output: u64, cached: u64) {
+        assert_eq!(
+            (spent.tokens, spent.output_tokens, spent.cached.read_tokens),
+            (tokens, output, cached)
+        );
+    }
+
+    fn assert_ending(error: turn::TurnError, stopped: bool) {
+        if stopped {
+            assert!(matches!(
+                error.ending(),
+                bravebot_agent::Ending::Stopped { .. }
+            ));
+        } else {
+            assert_eq!(
+                error.ending().diagnosis().unwrap().category,
+                bravebot_agent::Category::Unauthorized
+            );
+        }
+    }
+
+    fn planner_and_processor_usage(stop: bool) {
+        let run = Run::start(
+            &format!("usage-processor-{stop}"),
+            bravebot_agent::Conversation::new(),
+            false,
+        );
+        run.request().answer(&tool_request_with_cache(
+            "read_file",
+            r#"{"path":"input.txt"}"#,
+            10,
+            2,
+            3,
+        ));
+        let second = run.request();
+        let after_read = run.progress();
+        second.answer(&tool_request_with_cache(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"summarise this"}"#,
+            20,
+            3,
+            4,
+        ));
+        let processor = run.request();
+        let before_processor = run.progress();
+        let document = format!(
+            "{}\\nsummary",
+            bravebot_core::processor::ProcessorSpec::NOTE_MARKER
+        );
+        processor.answer(&reply_with_cache(&document, 100, 7, 30));
+        let next = run.request();
+        let after_processor = run.progress();
+        run.interrupt(next, stop);
+        assert_ending(run.finish().unwrap_err(), stop);
+        assert_usage(after_read, 12, 2, 3);
+        assert_usage(before_processor, 35, 5, 7);
+        assert_usage(after_processor, 142, 12, 37);
+        assert_usage(run.progress(), 142, 12, 37);
+        assert_eq!(run.progress().context_tokens, 20);
+    }
+
+    /// Completed calls must remain visible while a later planner request fails.
+    #[test]
+    fn planner_and_processor_progress_survives_failure() {
+        planner_and_processor_usage(false);
+    }
+
+    /// Stopping a pending request must not discard earlier planner and processor work.
+    #[test]
+    fn planner_and_processor_progress_survives_cancellation() {
+        planner_and_processor_usage(true);
+    }
+
+    fn compaction_usage(stop: bool) {
+        let run = Run::start(
+            &format!("usage-compaction-{stop}"),
+            a_long_conversation(),
+            true,
+        );
+        run.request().answer(&reply_with_cache(
+            "they were porting the parser",
+            400,
+            60,
+            40,
+        ));
+        let next = run.request();
+        let after_summary = run.progress();
+        run.interrupt(next, stop);
+        assert_ending(run.finish().unwrap_err(), stop);
+        assert_usage(after_summary, 460, 60, 40);
+        assert_usage(run.progress(), 460, 60, 40);
+    }
+
+    /// A summary is billed before the planner request that may fail.
+    #[test]
+    fn compaction_progress_survives_failure() {
+        compaction_usage(false);
+    }
+
+    /// Cancellation cannot make a completed summary free.
+    #[test]
+    fn compaction_progress_survives_cancellation() {
+        compaction_usage(true);
+    }
+
+    fn outstanding_delegate_usage(ending: &str) {
+        for child_fails in [false, true] {
+            let run = Run::start(
+                &format!("usage-delegates-{ending}-{child_fails}"),
+                bravebot_agent::Conversation::new(),
+                false,
+            );
+            run.request().answer(&tool_request_with_cache(
+                "spawn_agent",
+                r#"{"kind":"reader","task":"CHILD-TASK"}"#,
+                10,
+                7,
+                3,
+            ));
+            let first = run.request();
+            let second = run.request();
+            let (parent, child) = if first.body.contains("PARENT-TASK") {
+                (first, second)
+            } else {
+                (second, first)
+            };
+            assert!(parent.body.contains("PARENT-TASK"));
+            assert!(!child.body.contains("PARENT-TASK"));
+            // The parent has already polled for finished delegates and sent its next request.
+            // The child is held here, so it cannot have been collected by that poll.
+            child.answer(&tool_request_with_cache(
+                "list_files",
+                r#"{"directory":"."}"#,
+                30,
+                1,
+                5,
+            ));
+            let child_next = run.request();
+            assert!(!child_next.body.contains("PARENT-TASK"));
+            let parent_only = run.progress();
+            match ending {
+                "done" => parent.answer(&reply_with_cache("waiting", 20, 2, 4)),
+                "failed" => parent.refuse(),
+                "stopped" => run.interrupt(parent, true),
+                _ => unreachable!(),
+            }
+            // Cancellation ends the delegate's pending request too; no usage is estimated.
+            if ending == "stopped" {
+                child_next.interrupted_stream();
+            } else if child_fails {
+                child_next.refuse();
+            } else {
+                child_next.answer(&reply_with_cache("child done", 40, 3, 6));
+            }
+            let (child_tokens, child_output, child_cache) = if child_fails || ending == "stopped" {
+                (31, 1, 5)
+            } else {
+                (74, 4, 11)
+            };
+            if ending == "done" {
+                let last = run.request();
+                assert!(last.body.contains("PARENT-TASK"));
+                assert_usage(
+                    run.progress(),
+                    39 + child_tokens,
+                    9 + child_output,
+                    7 + child_cache,
+                );
+                last.answer(&reply_with_cache("done", 50, 4, 8));
+            }
+            let result = run.finish();
+            assert_usage(parent_only, 17, 7, 3);
+            let (parent_tokens, parent_output, parent_cache) = if ending == "done" {
+                (93, 13, 15)
+            } else {
+                (17, 7, 3)
+            };
+            assert_usage(
+                run.progress(),
+                parent_tokens + child_tokens,
+                parent_output + child_output,
+                parent_cache + child_cache,
+            );
+            assert_eq!(
+                run.reports.lock().unwrap().delegates,
+                vec![child_fails || ending == "stopped"]
+            );
+            if ending == "done" {
+                let outcome = result.unwrap();
+                assert_eq!(outcome.tokens, parent_tokens + child_tokens);
+                assert_eq!(outcome.output_tokens, parent_output + child_output);
+                assert_eq!(outcome.cached.read_tokens, parent_cache + child_cache);
+            } else {
+                assert_ending(result.unwrap_err(), ending == "stopped");
+            }
+        }
+    }
+    /// The successful outcome must include both successful and failed delegates exactly once.
+    #[test]
+    fn successful_parents_collect_outstanding_delegate_usage_once() {
+        outstanding_delegate_usage("done");
+    }
+
+    /// A parent cannot skip delegate accounting when its own request fails first.
+    #[test]
+    fn failed_parents_collect_outstanding_delegate_usage_once() {
+        outstanding_delegate_usage("failed");
+    }
+
+    /// The stop ends both pending requests without discarding either run's completed work.
+    #[test]
+    fn stopped_parents_collect_outstanding_delegate_usage_once() {
+        outstanding_delegate_usage("stopped");
+    }
+
+    /// Time waiting for the final request is real even when it yields no billable usage.
+    #[test]
+    fn the_last_request_keeps_elapsed_time_on_failure_and_cancellation() {
+        for stop in [false, true] {
+            let run = Run::start(
+                &format!("usage-last-clock-{stop}"),
+                bravebot_agent::Conversation::new(),
+                false,
+            );
+            run.request().answer(&tool_request_with_usage(
+                "list_files",
+                r#"{"directory":"."}"#,
+                10,
+                2,
+            ));
+            let pending = run.request();
+            let earlier = run.progress().timing.inference_ms;
+            // Request receipt establishes the pending state. This delay supplies time to measure.
+            thread::sleep(Duration::from_millis(40));
+            run.interrupt(pending, stop);
+            assert_ending(run.finish().unwrap_err(), stop);
+            assert!(
+                run.progress().timing.inference_ms >= earlier + 30,
+                "{:?}",
+                run.progress()
+            );
+            assert_eq!(run.progress().tokens, 12);
+        }
+    }
+}

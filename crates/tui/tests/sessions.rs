@@ -1757,3 +1757,95 @@ fn a_point_before_turn_two(conversation: &Conversation) -> bravebot_tui::state::
         was_wrote: true,
     }
 }
+
+/// All endings use the existing spend and timing records, including after a resume.
+#[test]
+fn completed_failed_and_stopped_usage_survives_session_storage() {
+    use bravebot_agent::{Category, Diagnosis, Ending, Spent};
+    use bravebot_tui::state::Session;
+    let scratch = Scratch::new("all-ending-usage");
+    let mut session = Session::new("none");
+    let spent = Spent {
+        tokens: 120,
+        timing: bravebot_agent::timing::Timing {
+            inference_ms: 8,
+            tools_ms: 3,
+            stalled_ms: 2,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    for (index, ending) in [
+        Ending::Done,
+        Ending::Failed(Diagnosis::of(Category::Transport)),
+        Ending::Stopped { attempts: None },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let factor = index as u64 + 1;
+        let spent = Spent {
+            tokens: spent.tokens * factor,
+            timing: bravebot_agent::timing::Timing {
+                inference_ms: 8 * factor,
+                tools_ms: 3 * factor,
+                stalled_ms: 2 * factor,
+                ..Default::default()
+            },
+            ..spent
+        };
+        session.type_char('x');
+        session.submit().unwrap();
+        session.progressed(spent);
+        session.progressed(spent);
+        match ending {
+            Ending::Done => {
+                session.complete("done", vec![], spent.tokens);
+                session.spent_time(spent.timing);
+            }
+            Ending::Failed(_) => session.fail("failed", ending),
+            Ending::Stopped { attempts } => {
+                session.stopped(attempts);
+                session.restore("x");
+            }
+        }
+    }
+    assert_eq!(session.tokens, 720);
+    assert_eq!(
+        session.spend_by_turn(),
+        &BTreeMap::from([(1, 120), (2, 240), (3, 360)])
+    );
+    assert_eq!(session.timing_total().inference_ms, 48);
+    for turn in 1..=3 {
+        let timing = session.timing_by_turn()[&turn];
+        let factor = turn as u64;
+        assert_eq!(
+            (timing.inference_ms, timing.tools_ms, timing.stalled_ms),
+            (8 * factor, 3 * factor, 2 * factor)
+        );
+    }
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(&scratch.project);
+    handle.save(
+        "usage",
+        Standing {
+            conversation: &conversation.snapshot(),
+            turns: session.turns,
+            tokens: session.tokens,
+            spend: session.spend_by_turn(),
+            timing: session.timing_by_turn(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &a_trust_map(),
+            programs: &a_program_list(),
+            directories: &[],
+            manifest: None,
+            rewind: &[],
+        },
+    );
+    let record = sessions::load(&scratch.project, handle.id()).unwrap();
+    assert_eq!(record.tokens, 720);
+    assert_eq!(&record.spend, session.spend_by_turn());
+    assert_eq!(&record.timing, session.timing_by_turn());
+}

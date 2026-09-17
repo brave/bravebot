@@ -9,7 +9,8 @@ governs:
 ## Scope
 
 How long a turn may go on, what happens when it does not stop, and what is said when it goes on
-without producing anything or ends without checking anything.
+without producing anything or ends without checking anything. What completed requests cost survives
+a later failure or stop.
 
 ## Clauses
 
@@ -95,3 +96,29 @@ twenty rounds reading is not asked about a build it has no reason to have done.
 
 `verified-by: bravebot_agent::turn::a_turn_that_writes_without_running_is_asked_about_it`
 `verified-by: bravebot_agent::turn::a_turn_that_wrote_and_ran_is_not_asked_about_it`
+
+<a id="TURN-5"></a>
+### TURN-5: completed work remains charged when a turn fails or stops
+
+The turn reports cumulative usage after completed planner, processor and compaction calls, and
+when delegates are collected. Each report replaces the previous total. A delegate retains its own
+progress until collection, so it cannot overwrite the parent's total. Collection adds either its
+successful outcome or its retained progress on failure, once. A failed or stopped parent collects
+outstanding delegates before returning and reports the resulting total and elapsed timing.
+
+Only requests that returned a usable completion contribute usage here. Recovering usage from an
+unusable reply, or a request cancelled after protocol completion, is outside this clause. Timing
+keeps the existing measurements; this does not measure the union of overlapping delegate requests.
+Raw backend errors remain outside planner context and user-facing history.
+
+**Why.** A later error or stop does not undo the cost of requests that already finished.
+
+`verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_failure`
+`verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_cancellation`
+`verified-by: bravebot_agent::turn::compaction_progress_survives_failure`
+`verified-by: bravebot_agent::turn::compaction_progress_survives_cancellation`
+`verified-by: bravebot_agent::turn::successful_parents_collect_outstanding_delegate_usage_once`
+`verified-by: bravebot_agent::turn::failed_parents_collect_outstanding_delegate_usage_once`
+`verified-by: bravebot_agent::turn::stopped_parents_collect_outstanding_delegate_usage_once`
+`verified-by: bravebot_agent::turn::the_last_request_keeps_elapsed_time_on_failure_and_cancellation`
+`verified-by: bravebot_agent::shared::what_a_delegate_has_spent_is_not_reported_as_what_the_turn_has`

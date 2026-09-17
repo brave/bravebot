@@ -104,6 +104,8 @@ pub enum ToMain {
     Todos(Vec<Row>),
     /// The model has written this many output tokens so far. No reply.
     Written(u64),
+    /// Cumulative usage from completed requests.
+    Spent(bravebot_agent::Spent),
     /// The turn is waiting on the model again. No reply.
     Phase(Phase),
     /// The model said something between tool calls. No reply.
@@ -282,6 +284,10 @@ impl RemoteReporter {
 }
 
 impl Reporter for RemoteReporter {
+    fn spent(&mut self, spent: bravebot_agent::Spent) {
+        let _ = self.outbound.send(ToMain::Spent(spent));
+    }
+
     fn todos(&mut self, rows: Vec<Row>) {
         // Deliberately ignored. Unlike a write, there is no decision resting on this arriving,
         // so a closed channel means the display is gone, not that the turn should stop.
@@ -787,6 +793,7 @@ mod tests {
                     ToMain::Server(_) => seen.push("server"),
                     ToMain::Manifest(_) => seen.push("manifest"),
                     ToMain::Todos(_) => seen.push("todos"),
+                    ToMain::Spent(_) => seen.push("spent"),
                     ToMain::Written(_) => seen.push("written"),
                     ToMain::Phase(_) => seen.push("phase"),
                     ToMain::Narration(_) => seen.push("narration"),
@@ -860,5 +867,22 @@ mod tests {
 
         let mut reporter = RemoteReporter::new(outbound);
         reporter.output_tokens(7);
+    }
+    /// A worker can finish with an error after sending progress, so totals travel on their own.
+    #[test]
+    fn cumulative_usage_reaches_the_main_thread_unchanged() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let mut reporter = RemoteReporter::new(outbound);
+        let spent = bravebot_agent::Spent {
+            tokens: 120,
+            ..Default::default()
+        };
+        reporter.spent(spent);
+        reporter.spent(spent);
+        drop(reporter);
+        for _ in 0..2 {
+            assert!(matches!(inbound.recv().unwrap(), ToMain::Spent(total) if total == spent));
+        }
+        assert!(inbound.recv().is_err());
     }
 }
