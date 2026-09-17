@@ -304,7 +304,7 @@ impl StoredRewind {
             timing: snapshot.timing.clone(),
             cached: snapshot.cached,
             trust: Some(stored_rules(&snapshot.trust)),
-            programs: stored_programs(&snapshot.programs),
+            programs: stored_programs(&snapshot.programs, project),
             title: snapshot.title.clone(),
             wrote: snapshot.was_wrote,
             prompt: point.prompt.clone(),
@@ -442,14 +442,21 @@ fn stored_rules(trust: &TrustStore) -> Vec<StoredRule> {
         .collect()
 }
 
-/// A list of vouched-for commands as it is written down.
-fn stored_programs(programs: &TrustedPrograms) -> Vec<StoredCommand> {
+/// A list of vouched-for commands as it is written down, with a tree inside the project kept
+/// relative to it the way a trust rule's path and a rewind's are.
+fn stored_programs(programs: &TrustedPrograms, project: &Path) -> Vec<StoredCommand> {
     programs
         .iter()
         .map(|c| StoredCommand {
             program: c.program.clone(),
             args: c.args.clone(),
-            directory: Some(c.directory.display().to_string()),
+            directory: Some(
+                c.directory
+                    .strip_prefix(project)
+                    .unwrap_or(&c.directory)
+                    .display()
+                    .to_string(),
+            ),
         })
         .collect()
 }
@@ -459,14 +466,21 @@ fn stored_programs(programs: &TrustedPrograms) -> Vec<StoredCommand> {
 /// The one place a missing tree is filled in, so the reading that predates the field lives here
 /// rather than at each caller. A tree that no longer exists is written down as it was and comes
 /// back as it was: it matches no run, so every run asks, which is the direction to fail in.
+///
+/// A tree written down relative is joined to `root`, so it names the checkout being resumed rather
+/// than the one the entry was granted in. An absolute one is read as it stands, which is both the
+/// tree outside the project this build writes in full and the tree inside it that a record written
+/// by the build before this one holds.
 fn restored_programs(programs: &[StoredCommand], root: &Path) -> TrustedPrograms {
     TrustedPrograms::from_iter(programs.iter().map(|c| {
         bravebot_core::programs::Command::new(
             c.program.clone(),
             c.args.clone(),
-            c.directory
-                .as_deref()
-                .map_or_else(|| root.to_path_buf(), std::path::PathBuf::from),
+            match c.directory.as_deref().map(Path::new) {
+                None => root.to_path_buf(),
+                Some(written) if written.is_absolute() => written.to_path_buf(),
+                Some(written) => root.join(written),
+            },
         )
     }))
 }
@@ -644,8 +658,13 @@ pub struct StoredCommand {
     pub program: String,
     #[serde(default)]
     pub args: Vec<String>,
-    /// The tree the vouch was given in, absolute, or absent in a record written before entries
-    /// held one.
+    /// The tree the vouch was given in, relative to the project where it is inside it and absolute
+    /// where it is not, or absent in a record written before entries held one.
+    ///
+    /// Relative because the project is what the entry was granted against, so a checkout that is
+    /// moved or renamed keeps its entries and an unrelated checkout standing where it used to be
+    /// inherits none of them. The empty string is the project root, which is what
+    /// `strip_prefix` leaves of it.
     ///
     /// Absent reads as the workspace root, which is what such an entry meant when it was written:
     /// a vouch could only be spent at the root then, so restoring one as root-scoped resumes the
@@ -1011,7 +1030,7 @@ impl Handle {
                 .map(|(turn, rows)| (*turn, rows.iter().map(StoredTask::of).collect()))
                 .collect(),
             trust: Some(stored_rules(standing.trust)),
-            programs: stored_programs(standing.programs),
+            programs: stored_programs(standing.programs, &self.project),
             directories: standing
                 .directories
                 .iter()
@@ -1786,6 +1805,77 @@ mod tests {
         assert!(
             !vouched.contains("/usr/bin/git", &["log".to_string()], Path::new("/work/sub")),
             "an entry with no recorded tree came back covering one it never named"
+        );
+    }
+
+    /// A tree inside the project is written down against the project, so what lands in the record
+    /// is the tree the checkout holds rather than where this machine happens to keep the checkout.
+    /// A tree outside it is written in full, since there is nothing to write it against.
+    #[test]
+    fn a_tree_inside_the_project_is_written_down_relative() {
+        let make = |tree: &str| {
+            bravebot_core::programs::Command::new(
+                "/usr/bin/make",
+                vec!["check".to_string()],
+                tree.to_string(),
+            )
+        };
+        let programs =
+            TrustedPrograms::from_iter([make("/work"), make("/work/sub"), make("/elsewhere")]);
+
+        let written = stored_programs(&programs, Path::new("/work"));
+
+        let trees: Vec<Option<&str>> = written.iter().map(|c| c.directory.as_deref()).collect();
+        assert_eq!(
+            trees,
+            vec![Some("/elsewhere"), Some(""), Some("sub")],
+            "a tree inside the project was not written down against it"
+        );
+    }
+
+    /// A tree written down relative comes back under the directory the resumed session works in,
+    /// so a checkout that was moved or renamed keeps its entries and a different checkout standing
+    /// where it used to be inherits none of them. A tree written down in full comes back as it was
+    /// written, which is the tree outside the project and the record an older build wrote alike.
+    #[test]
+    fn a_tree_written_down_relative_comes_back_under_the_resumed_root() {
+        let mut record = a_record();
+        record.programs = vec![
+            StoredCommand {
+                program: "/usr/bin/make".to_string(),
+                args: vec!["check".to_string()],
+                directory: Some("sub".to_string()),
+            },
+            StoredCommand {
+                program: "/usr/bin/git".to_string(),
+                args: vec!["log".to_string()],
+                directory: Some(String::new()),
+            },
+            StoredCommand {
+                program: "/bin/ls".to_string(),
+                args: Vec::new(),
+                directory: Some("/elsewhere".to_string()),
+            },
+        ];
+
+        let vouched = record.trusted_programs(Path::new("/moved"));
+
+        let check = ["check".to_string()];
+        assert!(
+            vouched.contains("/usr/bin/make", &check, Path::new("/moved/sub")),
+            "a tree written down relative did not come back under the resumed root"
+        );
+        assert!(
+            !vouched.contains("/usr/bin/make", &check, Path::new("/work/sub")),
+            "a tree written down relative came back under a root nobody resumed"
+        );
+        assert!(
+            vouched.contains("/usr/bin/git", &["log".to_string()], Path::new("/moved")),
+            "the project root, which is written down as the empty string, did not come back"
+        );
+        assert!(
+            vouched.contains("/bin/ls", &[], Path::new("/elsewhere")),
+            "a tree written down in full did not come back as it was written"
         );
     }
 

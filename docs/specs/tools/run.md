@@ -261,6 +261,7 @@ meaning is not in its argv, not the setting of a variable.
 `verified-by: bravebot_core::programs::vouching_in_one_tree_says_nothing_about_the_same_command_in_another`
 `verified-by: bravebot_agent::turn::a_line_vouched_for_outside_the_root_is_asked_about_again_at_the_root`
 `verified-by: bravebot_agent::turn::a_symlinked_spelling_of_the_vouched_tree_is_the_same_entry`
+`verified-by: bravebot_agent::turn::a_second_spelling_of_the_vouched_tree_is_the_same_entry`
 `verified-by: bravebot_tui::confirm::a_run_prompt_names_the_tree_the_entry_would_be_given_in`
 `verified-by: bravebot_core::policy::a_vouched_line_carrying_an_environment_assignment_is_asked_about`
 `verified-by: bravebot_core::policy::output_of_a_vouched_line_carrying_an_environment_assignment_is_untrusted`
@@ -278,6 +279,15 @@ one command in two directories are two grants, and a report drawing them as one 
 nothing about which of the two is held. A line somebody asked to be remembered past the session is a
 separate record holding less, which [RUN-19](#RUN-19) governs, and it puts no entry in this list.
 
+A tree inside the project is written into the record relative to it and comes back under the
+directory the resumed session works in, as a rewind's paths and the trust map's rules are
+([SESSION-22](../sessions.md#SESSION-22)); a tree outside the project is written in full, there
+being nothing to write it against. So a checkout that is moved or renamed keeps its entries, and an
+unrelated checkout standing where it used to be inherits none of them. Records are found by the
+directory a session ran in, which a second checkout at that path inherits, so a tree written in full
+would be an entry answering in a tree nobody vouched for: the hole this clause's own key exists to
+close, one checkout out.
+
 A record written before an entry held a tree restores as one given at the workspace root, which is
 the only place such an entry could ever have been spent. Nothing else is migrated: reading it any
 other way would either widen a permission nobody gave or drop one they did.
@@ -290,6 +300,8 @@ does not appear, so it has to be readable back.
 `verified-by: bravebot_tui::status::every_vouched_command_is_listed_however_many_there_are`
 `verified-by: bravebot_tui::status::the_report_names_the_tree_each_vouched_command_runs_unasked_in`
 `verified-by: bravebot_tui::sessions::an_entry_recorded_without_a_tree_comes_back_scoped_to_the_root`
+`verified-by: bravebot_tui::sessions::a_tree_inside_the_project_is_written_down_relative`
+`verified-by: bravebot_tui::sessions::a_tree_written_down_relative_comes_back_under_the_resumed_root`
 
 <a id="RUN-10"></a>
 ### RUN-10: the vouched-for list is not an allowlist and must never become one

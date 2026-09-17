@@ -16798,6 +16798,63 @@ fn a_symlinked_spelling_of_the_vouched_tree_is_the_same_entry() {
     );
 }
 
+/// RUN-8, on every platform: `sub` and `./sub` name one directory, so a vouch given through one
+/// covers a line spelled with the other.
+///
+/// The symlink test above is the same clause and cannot run on Windows, which is where spellings of
+/// one path actually diverge. A leading `.` is the second spelling every platform has: `Path` folds
+/// an interior `.` away by itself, so `sub/./x` would prove nothing, but `./sub` is a name the
+/// resolution step has to do the work for.
+#[test]
+fn a_second_spelling_of_the_vouched_tree_is_the_same_entry() {
+    let scratch = Scratch::new("run-8-vouched-tree-spelled-twice");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    let seen = confirmer.seen.clone();
+
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cargo --version","directory":"sub"}"#),
+        tool_request(
+            "run",
+            r#"{"command":"cargo --version","directory":"./sub"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("test a vouched tree is one tree however it is spelled"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn completes");
+
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        1,
+        "a second spelling of the tree the person vouched in was put to them again"
+    );
+    assert_eq!(
+        asked[0].plan.directory.canonicalize().unwrap(),
+        scratch.path.join("sub").canonicalize().unwrap(),
+        "the vouch was given in the subdirectory both calls named"
+    );
+}
+
 enum Served {
     /// A complete reply, streamed the way a real one arrives.
     Reply(String),

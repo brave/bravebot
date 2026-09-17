@@ -126,6 +126,10 @@ fn a_trust_map() -> TrustStore {
 /// Two different trees rather than one, so the round trip is tested on the thing it could silently
 /// drop: a list whose entries all named the same directory would come back correct even from a
 /// reader that filled every tree in with the root.
+///
+/// Both trees are outside the scratch project, so this is the round trip for a tree written down in
+/// full. The tree inside the project, which is written down against it, is pinned by the unit tests
+/// on `stored_programs` and `restored_programs`.
 fn a_program_list() -> TrustedPrograms {
     TrustedPrograms::from_iter([
         bravebot_core::programs::Command::new("/usr/bin/git", vec!["log".to_string()], "/work"),
