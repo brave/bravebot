@@ -1,5 +1,8 @@
 //! Safe failure details and distinct turn endings.
 
+use crate::timing::Timing;
+use bravebot_aichat::protocol::Cached;
+
 /// Fixed failure categories, distinguished by what the user can do about them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -121,6 +124,24 @@ impl Ending {
             Self::Done | Self::Stopped { .. } => None,
         }
     }
+}
+
+/// Cumulative usage from completed requests, retained even if the turn later fails.
+///
+/// Reports replace the previous total rather than adding to it. Requests that return an error
+/// contribute no usage.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Spent {
+    /// Every round added together, as the service counted them.
+    pub tokens: u64,
+    /// Of those, the ones the model wrote.
+    pub output_tokens: u64,
+    /// What the last completed request came to, which is occupancy rather than cost.
+    pub context_tokens: u64,
+    /// How much of the total the service served out of its prompt cache.
+    pub cached: Cached,
+    /// Time measured so far. The session uses its own wall clock, starting when Enter is pressed.
+    pub timing: Timing,
 }
 
 #[cfg(test)]

@@ -4246,6 +4246,7 @@ fn manifest_animated(
             // Progress, with no reply to give. The goal as the planner understood it and the frozen
             // plan both arrive as narration, and each step as an activity, so the transcript of a
             // run reads the way the transcript of a turn does.
+            crate::remote_confirm::ToMain::Spent(_) => {}
             crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
             crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
             crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
@@ -4945,6 +4946,7 @@ fn run_turn_animated(
             // No reply: each of these is recorded and the next redraw, one iteration away,
             // shows it. That is what makes a long turn legible while it runs.
             crate::remote_confirm::ToMain::Todos(rows) => session.set_todos(rows),
+            crate::remote_confirm::ToMain::Spent(spent) => session.progressed(spent),
             crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
             crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
             crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
@@ -5001,25 +5003,7 @@ fn run_turn_animated(
     let events = sink.events().to_vec();
 
     if let Err(turn::TurnError::Cancelled { attempts }) = &outcome {
-        session.stopped(*attempts);
-        // Not when the cancel was somebody leaving. Restoring returns the session to idle, which
-        // would put it back in the loop it was on its way out of, and hand back a prompt to a box
-        // nobody is going to see.
-        if session.is_quitting() {
-            return Ok(Continued {
-                conversation,
-                trust: fallback,
-                programs: fallback_programs,
-                servers,
-                asked_about: fallback_asked,
-                events,
-            });
-        }
-        session.restore(prompt);
-        // What was lined up behind it stays lined up, and the loop sends the next one as it does
-        // after any turn. A stop is aimed at the turn in flight: the prompts behind it are ones
-        // the person typed and has not taken back, and throwing them away made stopping a turn
-        // that had gone wrong cost every prompt they had queued while it did.
+        finish_cancelled_turn(session, prompt, *attempts);
         return Ok(Continued {
             conversation,
             trust: fallback,
@@ -5217,6 +5201,14 @@ struct Carried {
     asked: AskedAbout,
 }
 
+/// A quit keeps the session quitting; an ordinary stop may return its prompt to the editor.
+fn finish_cancelled_turn(session: &mut Session, prompt: &str, attempts: Option<u32>) {
+    session.stopped(attempts);
+    if !session.is_quitting() {
+        session.restore(prompt);
+    }
+}
+
 /// Fold a finished turn into the session.
 #[allow(clippy::too_many_arguments)]
 fn fold_outcome(
@@ -5346,10 +5338,6 @@ fn fold_outcome(
                 bravebot_agent::Ending::Stopped { attempts } => session.stopped(attempts),
                 bravebot_agent::Ending::Done => {}
             }
-            // The panel reports the last turn's cache split, and this turn is now the last one. It
-            // measured nothing, so leaving the turn before it on the panel would report a figure
-            // against an exchange that never finished.
-            session.restore_cache(None);
             if let Some(last) = session.transcript.last_mut() {
                 last.trail = trail;
             }
@@ -12416,5 +12404,172 @@ mod tests {
         }
         assert_eq!(exported.matches("503").count(), 1);
         assert!(session.finished.unwrap().failed());
+    }
+    /// Repeated reports must not charge a stopped turn twice, even when restoring its prompt.
+    #[test]
+    fn the_cancellation_path_charges_progress_before_restoring_or_quitting() {
+        for quitting in [false, true] {
+            let mut session = Session::new("none");
+            type_line(&mut session, "work");
+            session.submit().unwrap();
+            let spent = bravebot_agent::Spent {
+                tokens: 37,
+                cached: bravebot_aichat::protocol::Cached {
+                    read_tokens: 5,
+                    ..Default::default()
+                },
+                timing: bravebot_agent::timing::Timing {
+                    inference_ms: 11,
+                    tools_ms: 7,
+                    stalled_ms: 3,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            session.progressed(bravebot_agent::Spent {
+                tokens: 17,
+                ..spent
+            });
+            session.progressed(spent);
+            session.progressed(spent);
+            if quitting {
+                session.quit();
+            }
+            finish_cancelled_turn(&mut session, "work", Some(1));
+            assert_eq!(session.tokens, 37);
+            assert_eq!(session.spend_by_turn().get(&1), Some(&37));
+            assert_eq!(session.finished.unwrap().tokens, 37);
+            assert_eq!(
+                session.finished.unwrap().ending,
+                bravebot_agent::Ending::Stopped { attempts: Some(1) }
+            );
+            assert_eq!(session.timing_total().inference_ms, 11);
+            assert_eq!(session.timing_total().tools_ms, 7);
+            assert_eq!(session.timing_total().stalled_ms, 3);
+            assert_eq!(session.cached().unwrap().read_tokens, 5);
+            assert_eq!(session.is_quitting(), quitting);
+            if !quitting {
+                assert_eq!(session.input(), "work");
+            }
+        }
+    }
+
+    /// The final outcome owns success accounting; progress must not charge the same work again.
+    #[test]
+    fn successful_outcomes_replace_progress_and_empty_following_turns_cost_nothing() {
+        for stopped in [false, true] {
+            let mut session = Session::new("none");
+            type_line(&mut session, "first");
+            session.submit().unwrap();
+            let spent = bravebot_agent::Spent {
+                tokens: 73,
+                timing: bravebot_agent::timing::Timing {
+                    inference_ms: 13,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            session.progressed(spent);
+            session.progressed(spent);
+            session.complete("done", vec![], 97);
+            session.spent_time(bravebot_agent::timing::Timing {
+                inference_ms: 19,
+                ..Default::default()
+            });
+            assert_eq!(session.tokens, 97);
+            assert_eq!(session.timing_total().inference_ms, 19);
+            type_line(&mut session, "second");
+            session.submit().unwrap();
+            if stopped {
+                finish_cancelled_turn(&mut session, "second", Some(0));
+            } else {
+                fold_outcome(
+                    &mut session,
+                    Err(turn::TurnError::Precommit("PRIVATE_ERROR".into())),
+                    Trail::new(),
+                    Carried {
+                        trust: TrustStore::new("/work"),
+                        programs: TrustedPrograms::new(),
+                        asked: AskedAbout::new(),
+                    },
+                    Occupied {
+                        budget: 1000,
+                        guessed: false,
+                        last_request_tokens: 0,
+                    },
+                    Asked {
+                        name: "test-model".into(),
+                        comparable: true,
+                    },
+                    Line {
+                        text: "second",
+                        wrote: Wrote::ThePerson,
+                    },
+                    &workspace_for_test(),
+                );
+            }
+            assert_eq!(session.tokens, 97);
+            assert_eq!(session.finished.unwrap().tokens, 0);
+            assert_eq!(session.timing_total().inference_ms, 19);
+            assert_eq!(session.spend_by_turn().get(&1), Some(&97));
+            assert_eq!(session.spend_by_turn().get(&2).copied().unwrap_or(0), 0);
+            assert!(!render::as_markdown(&session, "test").contains("PRIVATE_ERROR"));
+        }
+    }
+
+    /// Safe error reporting must retain completed usage without putting raw diagnostics in history.
+    #[test]
+    fn a_failed_outcome_charges_only_the_latest_progress() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "work");
+        session.submit().unwrap();
+        for tokens in [17, 43, 43] {
+            session.progressed(bravebot_agent::Spent {
+                tokens,
+                cached: bravebot_aichat::protocol::Cached {
+                    read_tokens: 7,
+                    ..Default::default()
+                },
+                timing: bravebot_agent::timing::Timing {
+                    inference_ms: 23,
+                    tools_ms: 11,
+                    stalled_ms: 5,
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+        }
+        fold_outcome(
+            &mut session,
+            Err(turn::TurnError::Precommit("PRIVATE_ERROR".into())),
+            Trail::new(),
+            Carried {
+                trust: TrustStore::new("/work"),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+            },
+            Occupied {
+                budget: 1000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            Asked {
+                name: "test-model".into(),
+                comparable: true,
+            },
+            Line {
+                text: "work",
+                wrote: Wrote::ThePerson,
+            },
+            &workspace_for_test(),
+        );
+        assert_eq!(session.tokens, 43);
+        assert_eq!(session.finished.unwrap().tokens, 43);
+        assert_eq!(session.spend_by_turn().get(&1), Some(&43));
+        assert_eq!(session.timing_total().inference_ms, 23);
+        assert_eq!(session.timing_total().tools_ms, 11);
+        assert_eq!(session.timing_total().stalled_ms, 5);
+        assert_eq!(session.cached().unwrap().read_tokens, 7);
+        assert!(!render::as_markdown(&session, "test").contains("PRIVATE_ERROR"));
     }
 }
