@@ -5,6 +5,27 @@
 # .envrc itself is gitignored — never commit real key material.
 
 # ---------------------------------------------------------------------------
+# Which GitHub account gh acts as. Only needed if you have more than one, and
+# commented out because most people do not.
+#
+# gh reads no git config, so the account it has active is not necessarily the
+# one git commits as. The two disagreeing is quiet until it is expensive: the
+# commits are authored correctly and the pull request opened after the push
+# comes from the other account, and a pull request's author cannot be
+# reassigned, only closed and opened again.
+#
+# Give each account its own config directory, then name one here:
+#
+#   GH_CONFIG_DIR="$HOME/.config/gh-<account>" gh auth login
+#
+# A directory rather than GH_TOKEN because direnv exports reach every process
+# started here, including bravebot's own `run`, and a path is not a secret:
+# gh reads the keyring per invocation. For one command against another
+# account, prefix that command instead of editing this line.
+# ---------------------------------------------------------------------------
+#export GH_CONFIG_DIR="$HOME/.config/gh-<account>"
+
+# ---------------------------------------------------------------------------
 # Which environment to use. This is the only line to change day to day.
 #
 # Three things have to agree, which is why they are set together rather than
