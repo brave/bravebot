@@ -23,6 +23,7 @@ count-turns = { $count ->
 cli-tagline = bravebot { $version }: a general-purpose agent resistant to prompt injection
 cli-usage-heading = Usage:
 cli-usage-interactive = Start an interactive session
+cli-usage-plain = Start a session in lines, taking nothing from the terminal
 cli-usage-task = Run a single task
 cli-usage-piped = ...with piped input, never trusted
 cli-usage-resume = Pick up a session in this directory
@@ -43,6 +44,23 @@ cli-key-leave = Leave
 
 cli-commands-heading = Interactive commands:
 cli-name-a-file = Include a workspace file as trusted context
+
+## A session in lines: no screen of its own, no colour, nothing repainted
+
+cli-plain-opening =
+    bravebot { $version } in lines, { $model }. A line is a prompt; the end of the input
+    (Ctrl-D) ends the session.
+# Said where `--plain` was given with something other than a terminal on stdin. The lines it reads
+# are prompts, and nothing vouches for what a pipe carries.
+cli-plain-needs-a-terminal =
+    --plain reads what you type, so its input must be a terminal. Use -p to run one task
+    with piped input, which is read as quarantined context.
+# Said where --plain was given alongside another way of starting. It starts a session rather than
+# describing one, so there is nothing for it to combine with.
+cli-plain-takes-nothing-else =
+    --plain starts a session and takes no other arguments. --incognito,
+    --dangerously-skip-permissions and --settings go with it; everything else is another way of
+    starting.
 
 ## How much a session asks before it acts, drawn under the input box
 #
@@ -573,10 +591,13 @@ plan-nothing-yet =
     nothing has been read or written yet, so declining leaves everything as it is.
 plan-yes = run it
 plan-no = don't
-# Where the question is a line on a terminal rather than a panel: what to type, and the one answer
-# that runs the plan. Any other line, and end of input, declines.
+# Where a question is a line on a terminal rather than a panel: what a yes looks like, and the one
+# answer that approves. Any other line, and the end of the input, refuses. Shared by every question
+# put in lines, so one affirmative covers them all.
+line-answer = [y/N]
+line-answer-yes = y
+# The plan's own line, which names what saying yes runs.
 plan-answer = run it? [y/N]
-plan-answer-yes = y
 
 
 ## Vouching for a quarantined file
@@ -686,7 +707,6 @@ status-every-run-is-asked = every run is put to you
 status-nothing-vouched-this-session = nothing vouched for this session; the lines below run unasked
 status-trusted-commands = Trusted commands
 status-trusted-commands-note = run unasked, and their output is trusted
-status-and-more = … and { $count } more
 status-remembered = Remembered lines
 status-remembered-note = run unasked in this directory, and their output stays quarantined
 status-remembered-this-session = remembered in this session
@@ -1114,7 +1134,6 @@ turn-ended-unexpectedly = the turn ended unexpectedly
 btw-needs-a-question = /btw takes the question to ask, which the conversation will not read
 btw-uninterruptible = the question cannot be interrupted; it takes one request
 btw-ended-unexpectedly = the question ended unexpectedly
-btw-answered = asked beside the work, and answered there; { $chord } opens it again
 btw-failed = the question could not be answered: { $problem }
 
 # What the session says about a manifest run started from it. The plan, each step and the reply are

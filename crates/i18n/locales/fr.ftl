@@ -33,6 +33,7 @@ cli-tagline =
     bravebot { $version } : un agent polyvalent résistant à l'injection de prompt
 cli-usage-heading = Utilisation :
 cli-usage-interactive = Démarrer une session interactive
+cli-usage-plain = Démarrer une session en lignes, sans rien prendre au terminal
 cli-usage-task = Exécuter une seule tâche
 cli-usage-piped = ... avec une entrée redirigée, jamais fiable
 cli-usage-resume = Reprendre une session dans ce répertoire
@@ -53,6 +54,23 @@ cli-key-leave = Partir
 
 cli-commands-heading = Commandes interactives :
 cli-name-a-file = Inclure un fichier de l'espace de travail comme contexte fiable
+
+## Une session en lignes : pas d'écran à elle, pas de couleur, rien de redessiné
+
+cli-plain-opening =
+    bravebot { $version } en lignes, { $model }. Une ligne est une demande ; la fin de
+    l'entrée (Ctrl-D) termine la session.
+# Dit lorsque --plain est donné avec autre chose qu'un terminal sur l'entrée standard. Les lignes
+# qu'il lit sont des demandes, et rien ne se porte garant de ce qu'un tube transporte.
+cli-plain-needs-a-terminal =
+    --plain lit ce que vous tapez, donc son entrée doit être un terminal. Utilisez -p pour
+    exécuter une seule tâche avec une entrée redirigée, lue comme un contexte mis en quarantaine.
+# Dit lorsque --plain est donné à côté d'une autre manière de démarrer. Il démarre une session
+# plutôt qu'il ne la décrit, donc il n'y a rien à combiner avec lui.
+cli-plain-takes-nothing-else =
+    --plain démarre une session et ne prend aucun autre argument. --incognito,
+    --dangerously-skip-permissions et --settings vont avec lui ; tout le reste est une autre
+    manière de démarrer.
 
 mode-accept-edits = ⏵ modifications acceptées
 mode-plan = ⏸ mode plan
@@ -531,8 +549,13 @@ plan-nothing-yet =
     rien n'a encore été lu ni écrit, donc refuser laisse tout en l'état.
 plan-yes = l'exécuter
 plan-no = ne pas l'exécuter
+# Là où une question est une ligne sur un terminal plutôt qu'un panneau : à quoi ressemble un oui,
+# et la seule réponse qui approuve. Toute autre ligne, et la fin de l'entrée, refuse. Partagé par
+# toutes les questions posées en lignes, pour qu'un seul oui les couvre.
+line-answer = [o/N]
+line-answer-yes = o
+# La ligne propre au plan, qui nomme ce qu'un oui exécute.
 plan-answer = l'exécuter ? [o/N]
-plan-answer-yes = o
 
 
 ## Approuver un fichier en quarantaine
@@ -628,7 +651,6 @@ status-nothing-vouched-this-session =
     rien n'a été approuvé pour cette session ; les lignes ci-dessous s'exécutent sans rien demander
 status-trusted-commands = Commandes fiables
 status-trusted-commands-note = exécutées sans rien demander, et leur sortie est fiable
-status-and-more = … et { $count } de plus
 status-remembered = Lignes mémorisées
 status-remembered-note =
     exécutées sans rien demander dans ce répertoire, et leur sortie reste en quarantaine
@@ -1008,7 +1030,6 @@ turn-ended-unexpectedly = le tour s'est terminé de façon inattendue
 btw-needs-a-question = /btw prend la question à poser, que la conversation ne lira pas
 btw-uninterruptible = la question ne peut pas être interrompue ; elle prend une requête
 btw-ended-unexpectedly = la question s'est terminée de façon inattendue
-btw-answered = demandé à côté du travail, et répondu là ; { $chord } l'ouvre à nouveau
 btw-failed = la question n'a pas pu recevoir de réponse : { $problem }
 
 # Ce que la session dit d'une exécution planifiée lancée depuis elle. Le plan, chaque étape et la

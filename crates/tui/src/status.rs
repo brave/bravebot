@@ -21,11 +21,13 @@ use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
 use std::path::Path;
 
-/// How many vouched commands are listed before the rest become a count.
+/// How many remembered lines are listed before the rest become a count.
 ///
-/// The trust map is listed in full because a rule nobody can read is a file whose footing has to
-/// be remembered. This list is capped for now; whether that is the same problem is #57.
-const MAX_COMMANDS: usize = 6;
+/// The two standing permissions above this one are listed in full, because a permission nobody can
+/// read back is one whose effect has to be remembered instead. This record is the one that can be
+/// read somewhere else: it is a file, and the line below the list says where it is, so the count
+/// says how much more is in a file the reader has just been pointed at.
+const MAX_REMEMBERED: usize = 6;
 
 /// One line of the report: a label, a value, and an optional aside.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -441,14 +443,11 @@ pub fn report(facts: &Facts<'_>) -> Report {
             )
             .with_note(t!(status_trusted_commands_note)),
         );
-        for command in vouched.iter().take(MAX_COMMANDS) {
+        // Every one of them, however many there are: a vouched command that the report will not
+        // show is a permission with nothing anywhere to say it is held, since the prompt it
+        // answers is the thing that has stopped appearing.
+        for command in vouched.iter() {
             lines.push(Line::new("", command.display()));
-        }
-        if vouched.len() > MAX_COMMANDS {
-            lines.push(Line::new(
-                "",
-                t!(status_and_more, count = vouched.len() - MAX_COMMANDS),
-            ));
         }
     }
 
@@ -467,7 +466,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
             )
             .with_note(t!(status_remembered_note)),
         );
-        for entry in entries.iter().take(MAX_COMMANDS) {
+        for entry in entries.iter().take(MAX_REMEMBERED) {
             lines.push(Line::new("", entry.line.display()).with_note(
                 match entry.answered_in == facts.session_id {
                     true => t!(status_remembered_this_session),
@@ -475,11 +474,11 @@ pub fn report(facts: &Facts<'_>) -> Report {
                 },
             ));
         }
-        if entries.len() > MAX_COMMANDS {
+        if entries.len() > MAX_REMEMBERED {
             // How many of each was left out, not just how many: the two lifetimes are the point,
             // and a person deciding what to delete cannot tell from a bare count which answers
             // they are still carrying from another session.
-            let left_out = &entries[MAX_COMMANDS..];
+            let left_out = &entries[MAX_REMEMBERED..];
             let earlier = left_out
                 .iter()
                 .filter(|entry| entry.answered_in != facts.session_id)
@@ -842,6 +841,28 @@ mod tests {
         assert!(shown.contains("output is trusted"), "{shown}");
     }
 
+    /// RUN-9: every command vouched for is readable back, however many there are. A vouched
+    /// command is the one permission whose whole effect is that a prompt stops appearing, so one
+    /// the report leaves out is a standing grant with nothing anywhere to say it is held.
+    #[test]
+    fn every_vouched_command_is_listed_however_many_there_are() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let vouched = TrustedPrograms::from_iter((0..12).map(|nth| {
+            bravebot_core::programs::Command::new("/usr/bin/make", vec![format!("check-{nth:02}")])
+        }));
+        let mut facts = facts(&config, &trust);
+        facts.programs = &vouched;
+
+        let shown = rendered(&report(&facts));
+        for nth in 0..12 {
+            assert!(
+                shown.contains(&format!("/usr/bin/make check-{nth:02}")),
+                "{shown}"
+            );
+        }
+    }
+
     /// The ordinary case has to say so rather than say nothing, or a user reading the report
     /// cannot tell the difference between "no program is vouched for" and "this report does not
     /// cover programs".
@@ -916,7 +937,7 @@ mod tests {
     fn a_shortened_list_of_remembered_lines_says_how_many_came_from_an_earlier_session() {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
-        let lines = record_of(MAX_COMMANDS + 3);
+        let lines = record_of(MAX_REMEMBERED + 3);
         let mut facts = facts(&config, &trust);
         facts.remembered = Some(Remembered {
             lines: &lines,

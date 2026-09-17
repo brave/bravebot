@@ -6,15 +6,18 @@ governs:
   - crates/cli/src/main.rs
   - crates/cli/src/exit.rs
   - crates/cli/src/json.rs
+  - crates/cli/src/plain.rs
 ---
 
 ## Scope
 
-Running bravebot without the interactive interface: a one-shot task, piped input, `doctor`, and
-what goes where on the way out. The interactive session is
+Running bravebot without the interface that draws: a one-shot task, piped input, `doctor`, a
+session in lines, and what goes where on the way out. The interface that draws is
 [terminal-input.md](terminal-input.md) and [terminal-transcript.md](terminal-transcript.md).
 
-A one-shot run has nobody to ask, and most of what makes it different follows from that.
+A one-shot run has nobody to ask, and most of what makes it different follows from that. A session
+in lines (CLI-14) has somebody, and everything that makes *it* different follows from the terminal
+it does not take.
 
 ## Clauses
 
@@ -530,3 +533,81 @@ that did not parse is visible by its absence from that list.
 `verified-by: bravebot_config::settings::a_command_line_file_that_is_already_a_layer_is_read_once`
 `verified-by: bravebot_config::settings::a_file_the_command_line_named_beats_every_layer_that_was_found`
 `verified-by: bravebot_config::settings::a_name_a_command_line_file_left_alone_keeps_the_answer_below_it`
+
+<a id="CLI-14"></a>
+### CLI-14: `--plain` is a session in lines, and takes nothing from the terminal
+
+The flag starts an ordinary session, with the same turns, the same conversation carried between
+them, the same trust map and the same questions, and with nothing drawn. None of what the interface
+that draws takes ([terminal-input.md](terminal-input.md)) is taken here: no raw mode, no screen of
+its own, no mouse reporting, no bracketed paste, no focus reporting and no keyboard enhancement. So
+what the terminal held before is where it stays, the session's own lines are added to its
+scrollback, nothing is repainted, and nothing moves on its own.
+
+A line typed is a prompt, and Enter sends it. A blank line is not a prompt. The end of the input
+ends the session, which is the only way out of it: no chord is read, because none can be. The
+keyboard is the terminal's, so its own interrupt ends the process and its own end of file ends the
+session.
+
+stdin must be a terminal, and `--plain` is refused where it is not, naming `-p` as the invocation
+that reads a pipe. The reply goes to stdout and everything else to stderr, which is CLI-5's
+division, so a session in lines is as pipeable as a one-shot run.
+
+Every question is put the same way: what it is about, a line at a time, then the question, then how
+to answer it. Only the affirmative approves. Any other line refuses, and so does the end of the
+input. One answer per question and no second key, so the answers that record something, stop asking
+about these programs and remember this line, are not offered, and nothing answered here outlives
+the session. The startup question about the working directory
+([trust-map.md](trust-map.md)) is put the same way, and the end of the input in place of an answer
+to that one starts no session at all.
+
+It composes with `--incognito`, `--dangerously-skip-permissions` and the `--settings` file of
+CLI-13, which belong to every way of starting, and with nothing else: it starts a session rather
+than describing one.
+
+**Why.** A viewport repainted in place is not a document a screen reader can follow, and what
+leaves the top of it is in this program's own scroller rather than in the terminal's scrollback,
+where a person's own tooling knows how to look. [terminal-input.md](terminal-input.md) says what
+the interface takes and why each part of it is needed; the answer to somebody who cannot use the
+result is not a smaller version of the same thing, it is a session that takes none of it.
+
+A line rather than a panel for every question, because the panel is the takeover: a box drawn over
+a transcript needs the screen the transcript is on. What a line loses is the second and third key,
+the ones that grant something standing, and that is the right thing to lose here rather than to
+spell as more letters after `y`. A standing permission granted by a mistyped character cannot be
+taken back, and saying yes again next time costs a keystroke.
+
+Prompts are read only from a terminal because they are the trusted input, and what CLI-3 settles is
+that a pipe carries bytes nothing vouched for. A session reading prompts from a pipe would take its
+instructions from whatever fed it, and answer its own approval questions out of the same bytes,
+which is the whole guarantee inverted for the sake of a convenience `-p` already provides.
+
+**What it does not have.** Everything that was a drawing: the scroller and its search, the key
+list, the slash commands, `@` naming a file, a picture on the clipboard, the audit trail under a
+key. No session record is written either, so nothing picks a session in lines up again, and a
+`--resume` reached for afterwards will not find it. Each of those is a thing the interface draws or
+a thing that needs what it draws, and a session in lines is the turns without them.
+
+**A known cost.** A line typed before a question was asked is read as the answer to it. The
+terminal queues what is typed and this reads a line at a time, so somebody who pastes several lines
+at once has typed all of them before anything asked them anything, and a question raised while
+those lines are still queued takes the next one as its answer. Only the affirmative approves, so
+the line has to be exactly that word for an effect to follow, and every other line refuses. The
+interface that draws is not exposed to this because bracketed paste tells it where a paste begins
+and ends, which is one of the modes this mode does not take: reading the queue ahead of a question
+needs the terminal put in a state a session in lines does not put it in.
+
+`verified-by: bravebot_cli::plain::a_session_in_lines_asks_the_terminal_for_nothing`
+`verified-by: bravebot_cli::plain::the_reply_is_the_only_thing_on_the_reply_stream`
+`verified-by: bravebot_cli::plain::the_end_of_the_input_ends_the_session`
+`verified-by: bravebot_cli::plain::a_blank_line_is_not_a_turn`
+`verified-by: bravebot_cli::plain::a_failed_turn_says_so_beside_and_the_session_goes_on`
+`verified-by: bravebot_cli::plain::only_the_affirmative_approves_and_silence_refuses`
+`verified-by: bravebot_cli::plain::a_substituted_model_is_said_beside_the_reply`
+`verified-by: bravebot_cli::plain::a_write_is_asked_about_with_the_change_it_would_make`
+`verified-by: bravebot_cli::plain::a_write_a_processor_produced_carries_what_it_said_about_it`
+`verified-by: bravebot_cli::plain::a_run_is_asked_about_one_argument_to_a_row`
+`verified-by: bravebot_cli::plain::the_startup_question_is_asked_in_lines_and_answered_the_same_way`
+`verified-by: bravebot_cli::plain::the_mode_that_asks_about_nothing_is_not_asked_about_the_directory`
+`verified-by: bravebot_cli::running::a_session_in_lines_is_refused_where_its_input_is_not_a_terminal`
+`verified-by: bravebot_cli::main::a_named_settings_file_composes_with_the_other_flags_before_dispatch`
