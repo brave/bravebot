@@ -137,6 +137,8 @@ leaves the page's URL behind as text and text has another key.
 On macOS this reads the pasteboard through `osascript`. On Linux it needs `wl-paste` or `xclip`.
 
 `verified-by: bravebot_tui::app::an_empty_paste_goes_and_reads_the_clipboard_instead`
+`verified-by: bravebot_tui::app::an_empty_paste_mid_turn_goes_and_reads_the_clipboard_too`
+`verified-by: bravebot_tui::app::ctrl_v_reads_the_clipboard_during_a_turn_too`
 `verified-by: bravebot_tui::app::a_paste_that_carried_text_is_left_alone`
 `verified-by: bravebot_tui::app::which_key_carries_a_picture_is_said_once_per_session`
 `verified-by: bravebot_tui::clipboard::a_picture_wins_over_the_text_beside_it`
