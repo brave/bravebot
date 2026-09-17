@@ -280,6 +280,7 @@ mod tests {
             existing: None,
             intent: Intent::Create,
             untrusted: false,
+            remark: None,
         }
     }
 

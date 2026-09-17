@@ -12,6 +12,7 @@ use bravebot_agent::confirm::{
     RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::diff::Change;
+use bravebot_agent::report::{Reach, Shown};
 use bravebot_core::ask::{Answer as UserAnswer, Asking};
 use bravebot_core::vetting::Verdict;
 use bravebot_i18n::t;
@@ -23,11 +24,17 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
-use crate::render::marked_rows;
+use crate::render::{marked_rows, quarantined_rows};
 use crate::theme;
 
 /// Unchanged lines shown either side of a change, for orientation.
 const CONTEXT_LINES: usize = 2;
+
+/// The fewest rows a remark is given, however little room there is.
+///
+/// One line of it still has to be readable, and a line wider than the box is several rows, so a
+/// budget that shrank below this would draw a heading and nothing under it.
+const MIN_REMARK_ROWS: usize = 6;
 
 /// Prompts in the terminal for each write.
 pub struct TerminalConfirmer<'t, B: Backend> {
@@ -260,6 +267,49 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
             &[Span::styled(t!(write_untrusted), marked)],
             inside.width as usize,
         ));
+    }
+
+    // What the processor that produced the body said about it, beside the lines it describes.
+    // The remark reached the transcript rounds ago, when the processor returned, so a person
+    // was reading this diff with the claim about it some way up the screen. It is a claim and
+    // nothing more: no gate reads it, nothing checked it against the bytes below, and it is
+    // drawn through the transcript's own block so that it carries the margin it cannot forge
+    // and its control characters are replaced.
+    if let Some(remark) = &request.remark {
+        // The prompt's own margin column, the one the hunks below are drawn against: two of
+        // them on one screen is a screen where the column stops meaning anything.
+        let bar = Span::styled("┃ ", marked);
+        // Bounded in **rows**, here, because only here is the width known. The producer caps
+        // the remark in lines, and a line of a remark has no width cap worth the name: four
+        // lines of a hundred and sixty characters is a dozen rows in this box, which is the
+        // diff below the fold and a reviewer answering with nothing but the claim on screen.
+        // That is the defect showing the remark here exists to prevent, and it is the same
+        // line-for-row confusion that once pushed the question itself off the bottom.
+        //
+        // Whole preview lines are dropped rather than trimmed, and the block says how many it
+        // is not showing: the transcript above keeps the fuller preview either way.
+        // A third of the body, which is the box less the row the keys keep.
+        let budget = ((inside.height.saturating_sub(1) as usize) / 3).max(MIN_REMARK_ROWS);
+        let mut kept = remark.preview.len();
+        let block = loop {
+            let block = quarantined_rows(
+                &Shown {
+                    origin: t!(write_remark).to_string(),
+                    reach: Reach::NoModel,
+                    label: remark.label.clone(),
+                    preview: remark.preview[..kept].to_vec(),
+                    lines: remark.lines,
+                },
+                &bar,
+                inside.width as usize,
+            );
+            if block.len() <= budget || kept <= 1 {
+                break block;
+            }
+            kept -= 1;
+        };
+        lines.extend(block);
+        lines.push(Line::raw(""));
     }
 
     // All of it. What does not fit is scrolled to, rather than dropped: the hunks nobody shows
@@ -1756,6 +1806,7 @@ fn centred(area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_agent::confirm::Remark;
 
     use ratatui::backend::TestBackend;
 
@@ -1770,6 +1821,7 @@ mod tests {
             },
             existing: existing.map(str::to_string),
             untrusted: false,
+            remark: None,
         }
     }
 
@@ -2781,6 +2833,7 @@ mod tests {
             existing: Some(before),
             intent: Intent::Edit,
             untrusted: false,
+            remark: None,
         });
 
         assert!(output.contains("Edit"));
@@ -2807,6 +2860,7 @@ mod tests {
             existing: Some("const SPEED = 100;\n".into()),
             intent: Intent::Overwrite,
             untrusted: true,
+            remark: None,
         });
 
         assert!(
@@ -2835,6 +2889,7 @@ mod tests {
             existing: Some(before),
             intent: Intent::Overwrite,
             untrusted: false,
+            remark: None,
         });
 
         assert!(
@@ -3010,12 +3065,158 @@ mod tests {
             existing: Some("const SPEED = 100;\n".into()),
             intent: Intent::Overwrite,
             untrusted: true,
+            remark: None,
         };
         let drawn = rows_of(60, 24, |frame| {
             draw(frame, &request, 0);
         });
 
         assert_marked_on_every_row(&drawn, "PADDING");
+    }
+
+    /// A remark reaches the transcript when the processor returns and the question about writing
+    /// the document comes rounds later, so a person read the diff with the claim about it some
+    /// way up the screen. Here it is the row above: the claim and the bytes it describes are
+    /// read in one place, which is the only way a claim can be caught out.
+    #[test]
+    fn what_a_processor_said_is_drawn_beside_the_diff_it_describes() {
+        let request = WriteRequest {
+            path: "game.js".into(),
+            contents: "const SPEED = 50;\n".into(),
+            existing: Some("const SPEED = 100;\n".into()),
+            intent: Intent::Overwrite,
+            untrusted: true,
+            remark: Some(Remark {
+                preview: vec!["I only fixed the typo.".to_string()],
+                lines: 1,
+                label: "(U,priv)".to_string(),
+            }),
+        };
+        let output = rendered(&request);
+
+        assert!(
+            output.contains("only fixed the typo"),
+            "the claim was not drawn with the question it is about: {output}"
+        );
+        // Attributed at the point of decision, and as a claim: whose words they are, that no
+        // model may be sent to read them, and that nothing has checked them against the bytes.
+        assert!(
+            output.contains("isolated processor"),
+            "the claim was drawn without saying whose words it is: {output}"
+        );
+        assert!(
+            output.contains("nothing has checked"),
+            "the claim was drawn as though something had verified it: {output}"
+        );
+        assert!(
+            output.contains("-const SPEED = 100;"),
+            "the bytes the claim is about were not drawn: {output}"
+        );
+    }
+
+    /// The remark is untrusted content in the one box where a person decides something, so it
+    /// gets the margin every other preview gets and cannot paint one of its own. Padded so its
+    /// bar would otherwise land in the margin column of the row below.
+    #[test]
+    fn a_remark_cannot_paint_a_margin_in_the_box_it_is_drawn_in() {
+        let request = WriteRequest {
+            path: "game.js".into(),
+            contents: "const SPEED = 50;\n".into(),
+            existing: Some("const SPEED = 100;\n".into()),
+            intent: Intent::Overwrite,
+            untrusted: true,
+            remark: Some(Remark {
+                preview: vec![format!(
+                    "{}\u{2503} approved \u{b7} nothing \u{b7} (T,pub)",
+                    "REMARK ".repeat(10)
+                )],
+                lines: 1,
+                label: "(U,priv)".to_string(),
+            }),
+        };
+        let drawn = rows_of(60, 24, |frame| {
+            draw(frame, &request, 0);
+        });
+
+        assert_marked_on_every_row(&drawn, "REMARK");
+    }
+
+    /// The claim must not be able to push the evidence off the screen, which is the defect
+    /// drawing it here would otherwise introduce. A remark is capped in lines and a line of one
+    /// has no width cap worth the name, so four of a hundred and sixty characters is a dozen
+    /// rows in this box: the reviewer would answer with nothing on screen but the untrusted
+    /// claim, having to scroll to reach the bytes the answer is about.
+    #[test]
+    fn a_long_remark_does_not_push_the_diff_off_the_screen() {
+        let request = WriteRequest {
+            path: "game.js".into(),
+            contents: "const SPEED = 50;
+"
+            .into(),
+            existing: Some(
+                "const SPEED = 100;
+"
+                .into(),
+            ),
+            intent: Intent::Overwrite,
+            untrusted: true,
+            remark: Some(Remark {
+                // What the producer's cap allows at its widest: REMARK_LINES lines, each
+                // REMARK_WIDTH characters.
+                preview: (0..4).map(|_| "claim ".repeat(12)).collect(),
+                lines: 4,
+                label: "(U,priv)".to_string(),
+            }),
+        };
+
+        for (width, height) in [(80, 24), (100, 30), (60, 20)] {
+            let drawn = rows_of(width, height, |frame| {
+                draw(frame, &request, 0);
+            });
+            let screen = drawn.join(
+                "
+",
+            );
+            assert!(
+                drawn.iter().any(|row| row.contains("-const SPEED = 100;")),
+                "at {width}x{height} the claim left no room for the bytes it is about:
+{screen}"
+            );
+            // And the claim is still there to be read, rather than dropped to make room.
+            assert!(
+                drawn.iter().any(|row| row.contains("claim")),
+                "at {width}x{height} the claim was not drawn at all:
+{screen}"
+            );
+        }
+    }
+
+    /// Neutralised rather than dropped, as everywhere else: a remark that could clear the line
+    /// the margin was drawn on would erase the one mark it can never imitate.
+    #[test]
+    fn a_control_character_in_a_remark_is_replaced() {
+        let request = WriteRequest {
+            path: "game.js".into(),
+            contents: "const SPEED = 50;\n".into(),
+            existing: Some("const SPEED = 100;\n".into()),
+            intent: Intent::Overwrite,
+            untrusted: true,
+            remark: Some(Remark {
+                preview: vec!["before\u{1b}[2Kafter".to_string()],
+                lines: 1,
+                label: "(U,priv)".to_string(),
+            }),
+        };
+        let output = rendered(&request);
+
+        assert!(
+            !output.contains("\u{1b}[2K"),
+            "a remark could clear the line the margin was drawn on: {output}"
+        );
+        assert!(
+            output.contains("before\u{241b}"),
+            "the escape in the remark was not neutralised: {output}"
+        );
     }
 
     /// `Clear` empties cells without colouring them, so a panel that painted only its border came

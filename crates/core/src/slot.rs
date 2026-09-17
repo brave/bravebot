@@ -185,6 +185,14 @@ enum Entry {
         ///
         /// The driver's own sentence, never anything read.
         origin: Option<String>,
+        /// What the processor that produced this document said about it, where it said anything.
+        ///
+        /// Content, and kept labelled for that reason: unlike `from_command`, which is the
+        /// driver's own rendering of an argv, this is text a model wrote over bytes nobody
+        /// vouched for. It is held beside the document so that the approval the document is put
+        /// to can show the claim made about it, and it is released for a screen and nowhere
+        /// else.
+        remark: Option<Labelled<String>>,
     },
     Unread(Deferred),
 }
@@ -241,6 +249,14 @@ impl Entry {
             Self::Read { origin, .. } => origin.as_deref(),
             // Nothing has been read, so the path is the whole of what there is to say.
             Self::Unread(deferred) => Some(&deferred.path),
+        }
+    }
+
+    fn remark(&self) -> Option<&Labelled<String>> {
+        match self {
+            Self::Read { remark, .. } => remark.as_ref(),
+            // Nothing has produced this yet, so nothing has been said about it.
+            Self::Unread(_) => None,
         }
     }
 }
@@ -357,6 +373,21 @@ impl SlotStore {
         self.picture_of(id).is_some()
     }
 
+    /// Record what the processor that produced this document said about it.
+    pub(crate) fn mark_remark(&mut self, id: &SlotId, said: Labelled<String>) {
+        if let Some(Entry::Read { remark, .. }) = self.slots.get_mut(id) {
+            *remark = Some(said);
+        }
+    }
+
+    /// What was said about the document this slot holds, still labelled.
+    ///
+    /// Only the policy layer may ask, and it comes back wrapped: this is a model's words about
+    /// bytes nobody vouched for, so nothing outside the gates gets to read it.
+    pub(crate) fn remark_of(&self, id: &SlotId) -> Option<&Labelled<String>> {
+        self.slots.get(id).and_then(Entry::remark)
+    }
+
     /// The file a slot is waiting on, where it is waiting on one.
     ///
     /// Metadata, like everything else a caller may ask a slot store: a path the planner chose
@@ -457,6 +488,7 @@ impl SlotStore {
                 from_command: None,
                 picture: None,
                 origin: None,
+                remark: None,
             },
         );
         Ok(measured)
@@ -546,6 +578,7 @@ impl SlotWriter<'_> {
                 from_command: None,
                 picture: None,
                 origin: None,
+                remark: None,
             },
         );
         Ok(())
@@ -580,6 +613,7 @@ impl SlotWriter<'_> {
                 from_command: None,
                 picture: None,
                 origin: None,
+                remark: None,
             },
         );
         Ok(measured)

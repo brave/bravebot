@@ -3007,6 +3007,71 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(Labelled::new(text, label))
     }
 
+    /// Record what the processor that produced a document said about it.
+    ///
+    /// Held beside the document rather than only reported, so the approval the document is put to
+    /// can show the claim that was made about it. Content, and kept labelled as such: it is a
+    /// model's words over bytes nobody vouched for, and only [`Policy::remark_for_review`]
+    /// releases it, for a screen.
+    pub fn came_with_a_remark(
+        &mut self,
+        slot: &SlotId,
+        said: &Labelled<String>,
+        slots: &mut crate::slot::SlotStore,
+    ) {
+        slots.mark_remark(slot, said.clone());
+        self.allow(
+            "slot",
+            format!(
+                "{slot} came with what the processor said about it, which goes to a screen and \
+                 nowhere else"
+            ),
+        );
+    }
+
+    /// What a processor said about the document in a slot, shaped for the screen an approval is
+    /// read on.
+    ///
+    /// The claim and not the evidence. Nothing checks a remark against the document it
+    /// accompanies and nothing could, so what an approval is given from is the diff beside this:
+    /// a remark that says one line changed sits next to the lines that did. It is released for a
+    /// display and for nothing else, and no gate reads it, so a write decides the same with it as
+    /// without it.
+    ///
+    /// Capped here, without being read, for the reason every other preview is: a processor that
+    /// answers with a screenful of prose must not be able to push the diff out of the box the
+    /// approval is read in.
+    pub fn remark_for_review(
+        &mut self,
+        slot: &SlotId,
+        slots: &crate::slot::SlotStore,
+        cap: usize,
+        width: usize,
+    ) -> Option<(Vec<String>, usize, Label)> {
+        let said = slots.remark_of(slot)?.clone();
+        let label = said.label();
+        let shaped = self.render_in_place("write_file", &said, |text| {
+            let lines = text.lines().count();
+            let kept: Vec<String> = text
+                .lines()
+                .take(cap)
+                .map(|line| {
+                    let mut line = line.to_string();
+                    if line.chars().count() > width {
+                        line = line.chars().take(width).collect::<String>();
+                        line.push('…');
+                    }
+                    line
+                })
+                .collect();
+            (kept, lines)
+        });
+        let proof =
+            self.authorise_display_release("what a processor said about the write it produced");
+        let (preview, lines) = shaped.declassify(&proof);
+        Some((preview, lines, label))
+    }
+
     /// Take a person's word that they have read a command's output and it may enter the planner's
     /// context.
     ///
@@ -4715,6 +4780,76 @@ mod tests {
         );
         let note = produced.note.expect("it said something");
         assert_eq!(note.declassify(&proof), "I left the imports alone.");
+    }
+
+    /// A remark is a claim about a document, and the question about writing that document comes
+    /// later, so the claim is kept beside the document rather than only reported. Capped on the
+    /// way out, because the box a decision is read in is small and a processor that answers with
+    /// a screenful of prose would otherwise push the bytes out of it.
+    #[test]
+    fn what_was_said_about_a_document_is_released_for_the_screen_it_is_approved_on() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        slots
+            .writer_for(SlotId::new("ref:1"), Label::untrusted_private())
+            .unwrap()
+            .write("the document")
+            .unwrap();
+
+        let said = Labelled::new(
+            "one
+two
+three
+four
+five
+"
+            .to_string(),
+            Label::untrusted_private(),
+        );
+        policy.came_with_a_remark(&SlotId::new("ref:1"), &said, &mut slots);
+
+        let (preview, lines, label) = policy
+            .remark_for_review(&SlotId::new("ref:1"), &slots, 3, 80)
+            .expect("the claim made about the document");
+        assert_eq!(preview, vec!["one", "two", "three"]);
+        assert_eq!(lines, 5, "the count must say what the cap left out");
+        assert_eq!(
+            label,
+            Label::untrusted_private(),
+            "the claim was released as something better than it is"
+        );
+
+        // A release to a screen is a release, and the trail says so: nothing untrusted reaches a
+        // display without a line saying it did.
+        let released = sink.events().iter().any(|event| match event {
+            Event::GatePassed { gate, detail } => {
+                *gate == "display"
+                    && detail.contains("what a processor said about the write it produced")
+            }
+            _ => false,
+        });
+        assert!(released, "the release was not recorded in the trail");
+    }
+
+    /// Nothing said about a document is nothing to draw beside it, rather than whatever was said
+    /// last. A write of the planner's own words is the ordinary case and has no claim behind it.
+    #[test]
+    fn a_document_nobody_said_anything_about_has_nothing_to_show() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        slots
+            .writer_for(SlotId::new("ref:1"), Label::untrusted_private())
+            .unwrap()
+            .write("the document")
+            .unwrap();
+
+        assert!(
+            policy
+                .remark_for_review(&SlotId::new("ref:1"), &slots, 3, 80)
+                .is_none()
+        );
     }
 
     /// A processor with nothing to change says so and leaves the line out. The whole of what it

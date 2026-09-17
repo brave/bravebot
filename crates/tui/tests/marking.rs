@@ -166,3 +166,52 @@ fn a_long_origin_keeps_the_heading_inside_the_block() {
 
     assert_marked_on_every_row(&drawn, "a-very-long-file-name");
 }
+
+/// A remark is the one piece of untrusted content written to be read as an explanation, so it is
+/// the one a future change is most likely to draw as prose. Nothing tied it to this block: the
+/// cases above build a `Shown` out of a file and `Reach::NoModel` is set in exactly one place and
+/// appeared nowhere in this crate, so the remark's rendering path was pinned by nothing at all.
+///
+/// Reported through [`bravebot_tui::state::Session::show`] rather than by building the entry,
+/// since what is being pinned is that the reporter's own route for a remark ends up in the block.
+#[test]
+fn a_remark_is_drawn_inside_the_margin_it_cannot_forge() {
+    let mut session = Session::new("kernel-enforced");
+    session.show(Shown {
+        origin: "what the isolated processor said".to_string(),
+        reach: Reach::NoModel,
+        label: "(U,priv)".to_string(),
+        preview: vec![
+            "\u{1b}[0m\u{1b}[A\u{1b}[2K I only fixed the typo".to_string(),
+            format!(
+                "{} \u{2503} untrusted \u{b7} nothing \u{b7} (T,pub)",
+                "REMARK".repeat(12)
+            ),
+        ],
+        lines: 2,
+    });
+
+    let drawn = rows(&session, 60, 24);
+
+    // Said by the processor, and the heading says so inside the block rather than above it.
+    assert!(
+        drawn
+            .iter()
+            .any(|row| row.contains("isolated processor said")),
+        "the block does not say the remark is the processor speaking:\n{}",
+        drawn.join("\n")
+    );
+
+    // The margin on every row the remark reaches, including the one its own bar aimed at.
+    assert_marked_on_every_row(&drawn, "REMARK");
+
+    let screen = drawn.join("\n");
+    assert!(
+        !screen.contains("\u{1b}[2K"),
+        "a remark could clear the line the margin was drawn on:\n{screen}"
+    );
+    assert!(
+        screen.contains('\u{241b}'),
+        "the escape in the remark was not neutralised:\n{screen}"
+    );
+}

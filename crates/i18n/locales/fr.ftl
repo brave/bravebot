@@ -328,6 +328,8 @@ write-too-large-to-show =
     le changement est trop grand pour être montré : { $added } lignes en remplacent
     { $removed }
 write-untrusted = non fiable : personne n'a lu ceci, et le modèle ne l'a jamais vu
+write-remark =
+    ce que le processeur isolé a dit de ce changement, que rien n'a vérifié par rapport à lui
 write-unchanged = { $count ->
     [one] … { $count } ligne inchangée
    *[other] … { $count } lignes inchangées
