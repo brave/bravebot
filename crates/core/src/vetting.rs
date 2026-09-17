@@ -1,26 +1,28 @@
-//! Checking one quarantined slot for an injection attempt, so a person deciding about it has a
+//! Checking quarantined content for an injection attempt, so a person deciding about it has a
 //! second opinion in front of them.
 //!
-//! A quarantined slot has two ways out. What a program printed can be read aloud, where a person
-//! reads the bytes and says the planner may have them. A file has the trust map, answered by
-//! naming the path, by opening a directory, or at the startup question. Everything else stays
-//! quarantined for the life of the session, and somebody who wants the agent to use a fetched page
-//! has to read every byte themselves or vouch for a whole path.
+//! Quarantined content has three ways out, and all three end at a person. What a program printed
+//! can be read aloud. A file's path can be written into the trust map. One slot's bytes can be
+//! promoted once, on the planner's request, and leave nothing behind. Everything else stays
+//! quarantined for the life of the session.
 //!
-//! This is the third way, and it is deliberately the smallest of the three. The planner names a
-//! slot; a second model instance reads the content and answers with one word about whether it
-//! looks like an attempt to give instructions; the word is drawn on the prompt the person answers.
-//! The bytes are on their screen either way, and the decision is still theirs.
+//! A check runs before every one of those prompts. A second model instance reads the content and
+//! answers with one word about whether it looks like an attempt to give instructions, and the word
+//! is drawn on the prompt the person answers. The bytes are on their screen either way, and the
+//! decision is still theirs.
+//!
+//! **Which prompt is being drawn is not the check's business.** A check reads content and says a
+//! word about it; nothing in what it is given says whether the answer will promote one slot or
+//! write a rule about a path. That is what lets the same check serve all three.
 //!
 //! # What confines the check
 //!
 //! Not a subprocess. There is no untrusted *code* here: the call is made by the same driver that
 //! makes every other call, and a second process would confine the wrong thing. What confines it is
 //! that it holds less than a processor does. A [`crate::processor::ProcessorSpec`] can mint one
-//! slot; a [`VettingSpec`] cannot mint anything. It names one slot to read and the planner's word
-//! about what the slot is supposed to hold, and it has no output label, no output reference, and
-//! no destination of any kind. The only things that come back are a word from a fixed set and free
-//! text for a person to read.
+//! slot; a [`VettingSpec`] cannot mint anything. It carries the one piece of content to read, still
+//! labelled, and it has no output label, no output reference, and no destination of any kind. The
+//! only things that come back are a word from a fixed set and free text for a person to read.
 //!
 //! # What contains the content
 //!
@@ -31,7 +33,7 @@
 //! signposting for the reader on the other end, and the encoding is the containment.
 
 use crate::policy::SpecAuthority;
-use crate::slot::SlotId;
+use crate::value::Labelled;
 
 /// The line that opens what the driver itself says about the content.
 pub(crate) const TRUSTED_METADATA_BEGINS: &str = "======== BEGIN TRUSTED METADATA ========";
@@ -92,35 +94,47 @@ impl std::fmt::Display for Verdict {
 
 /// What the driver fixed about one check before it ran.
 ///
-/// Built only by [`crate::policy::Policy::before_vetting`], which takes a `SpecAuthority` that is
-/// minted inside the policy module and nowhere else. Every field is private, no method takes
-/// `&mut self`, and there is deliberately no field naming anywhere a result could go: a check that
-/// could name a destination would be a processor, and a processor is the thing this is narrower
-/// than.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Built only by the `before_vetting` family on [`crate::policy::Policy`], which takes a
+/// `SpecAuthority` that is minted inside the policy module and nowhere else. Every field is
+/// private, no method takes `&mut self`, and there is deliberately no field naming anywhere a
+/// result could go: a check that could name a destination would be a processor, and a processor is
+/// the thing this is narrower than.
+///
+/// The content is carried here rather than fetched later, which is what "fixed before the call"
+/// means: the one thing a check will read is settled when the spec is built, and there is no store
+/// left for a second piece to be reached through.
+#[derive(Debug, Clone)]
 pub struct VettingSpec {
-    reads: SlotId,
+    reads: Labelled<String>,
+    named: String,
     origin: String,
-    expects: String,
+    expects: Option<String>,
 }
 
 impl VettingSpec {
     pub(crate) fn new(
-        reads: SlotId,
+        reads: Labelled<String>,
+        named: impl Into<String>,
         origin: impl Into<String>,
-        expects: impl Into<String>,
+        expects: Option<String>,
         _authority: &SpecAuthority,
     ) -> Self {
         Self {
             reads,
+            named: named.into(),
             origin: origin.into(),
-            expects: expects.into(),
+            expects,
         }
     }
 
-    /// The one slot the check may read, and the only thing it will be given.
-    pub fn reads(&self) -> &SlotId {
-        &self.reads
+    /// The one piece of content the check may read, still labelled.
+    pub(crate) fn reads(&self) -> Labelled<String> {
+        self.reads.clone()
+    }
+
+    /// What the audit trail calls what is being checked: a reference's name, or a path.
+    pub fn named(&self) -> &str {
+        &self.named
     }
 
     /// Where the content came from, as the driver's own record of it.
@@ -128,18 +142,30 @@ impl VettingSpec {
         &self.origin
     }
 
-    /// What the planner says the slot is supposed to hold.
+    /// What the planner says the content is supposed to hold, where the planner asked for the
+    /// check.
     ///
     /// The planner's own words, checked public before the spec was built, on the same footing a
     /// processor's instruction sits on: it is not content anybody read, it is the sentence the
     /// driver is about to send.
-    pub fn expects(&self) -> &str {
-        &self.expects
+    ///
+    /// `None` where the driver ran the check on its own initiative, before a prompt the planner did
+    /// not ask for. Nothing claimed anything about these bytes, and a spec that filled the gap in
+    /// would be putting words the planner never said into another model's prompt.
+    pub fn expects(&self) -> Option<&str> {
+        self.expects.as_deref()
     }
 
     /// The check as the audit trail describes it. Never the content, and never what came back.
+    ///
+    /// A slot is named alongside where its bytes came from, because a reference name means nothing
+    /// to somebody reading a trail. A file is its own origin, and saying so twice would be noise.
     pub fn describe(&self) -> String {
-        format!("a check over {} from {}", self.reads, self.origin)
+        if self.named == self.origin {
+            format!("a check over {}", self.named)
+        } else {
+            format!("a check over {} from {}", self.named, self.origin)
+        }
     }
 }
 

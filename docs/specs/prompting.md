@@ -34,6 +34,10 @@ command that printed them; a vetting prompt shows the bytes, where they came fro
 check said about them rather than the word alone; the prompt about a directory a settings file
 asked for shows the path it would open. A person cannot endorse a routing field they were not shown.
 
+Every prompt a check was run for shows what it said, and the three are drawn out of one row builder
+rather than three, so a prompt cannot carry a verdict and forget to say what it was. Which prompts
+those are is [CHECK-10](vetting.md#CHECK-10).
+
 The plan prompt shows the task in the person's own words and then every step, in order, each naming
 its tier, what it would do, and every routing field the step fixes rather than the headline one
 alone. Every step, never a count and never the first few: one answer covers all of them, and the
@@ -44,6 +48,8 @@ step below the fold is as binding as the first.
 `verified-by: bravebot_tui::confirm::a_run_prompt_shows_the_argv_the_binary_and_the_directory`
 `verified-by: bravebot_tui::confirm::the_output_prompt_shows_the_bytes_and_the_command`
 `verified-by: bravebot_tui::confirm::the_vet_prompt_shows_the_bytes_and_where_they_came_from`
+`verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`
+`verified-by: bravebot_tui::confirm::the_vouch_prompt_says_what_a_check_found`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_shows_the_directory_it_would_open`
 `verified-by: bravebot_tui::confirm::the_plan_prompt_shows_the_task_and_every_step`
 `verified-by: bravebot_core::manifest::a_described_step_names_every_routing_field_it_fixes`
@@ -82,8 +88,10 @@ run one keypress settles.
 
 Content in a prompt is untrusted like any other. An untrusted body is marked as such,
 and command output is drawn inside the margin. So is the content a vetting prompt shows, and so is
-the sentence the check wrote about it: that sentence is free text about bytes an attacker may own,
-and it is the one line on such a screen a reader might otherwise take for the program's.
+the sentence the check wrote about it, on whichever of the three prompts it was written for: that
+sentence is free text about bytes an attacker may own, and it is the one line on such a screen a
+reader might otherwise take for the program's. The verdict word is the driver's and sits outside the
+margin; the sentence is not, and sits inside it.
 
 A manifest plan's steps are the one body here drawn without a bar, and the reason for the rule is
 what says so: they are the driver's own rendering of a plan that came from a context holding the task

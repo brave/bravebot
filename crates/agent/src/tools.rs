@@ -35,6 +35,7 @@ use bravebot_core::policy::{Destination, Policy};
 use bravebot_core::slot::{SlotId, SlotStore};
 use bravebot_core::todo::{self, Item, List, Status};
 use bravebot_core::value::Labelled;
+use bravebot_core::vetting::Verdict;
 use serde_json::{Value, json};
 
 use crate::lsp::LanguageServers;
@@ -1844,7 +1845,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             "refused: this turn is in plan mode, so writing is refused however the user would \
              have answered. Do not retry; say what you would change and why.",
         ),
-        "read_file" => read_file(policy, tools.workspace, tools.slots, confirmer, &arguments),
+        "read_file" => read_file(policy, tools, confirmer, &arguments),
         "list_files" => list_files(policy, tools.workspace, &arguments),
         "search" => search(policy, tools.workspace, &arguments),
         "lsp" => lsp(policy, tools, confirmer, &arguments),
@@ -2053,12 +2054,12 @@ fn wait_from(arguments: &Value) -> Result<Option<std::time::Duration>, &'static 
 
 fn read_file<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
-    workspace: &Workspace,
-    slots: &SlotStore,
+    tools: &mut Tools<'_>,
     confirmer: &mut C,
     arguments: &Value,
 ) -> Produced {
-    let found = match path_argument(policy, "read_file", Purpose::Read, slots, arguments) {
+    let workspace = tools.workspace;
+    let found = match path_argument(policy, "read_file", Purpose::Read, tools.slots, arguments) {
         Ok(found) => found,
         Err(refusal) => return problem(refusal),
     };
@@ -2098,6 +2099,11 @@ fn read_file<S: Sink, C: Confirmer>(
     // later one sees the file. A yes writes the same rule `@` and the startup question write, so
     // nothing here is a second route to trusting content.
     //
+    // Checked before it is asked, as every prompt that promotes content is. The person is told what
+    // a confined second opinion made of the file, and the word decides nothing: what promotes the
+    // file is their answer. Without this the quickest way past a check would be to ask to read the
+    // file, which is the defect this covers.
+    //
     // Asked once per path per turn, and only for a path that is quarantined, so a planner retrying
     // a read does not put the same question up twice.
     //
@@ -2124,6 +2130,13 @@ fn read_file<S: Sink, C: Confirmer>(
     let keyed = workspace.trust_key(&proposed_path);
 
     let media = crate::workspace::media_for(&proposed_path);
+
+    // What a check over this file cost, where one was made. Carried out of the block so it can be
+    // put on whatever this call ends up handing back: a check is a model request, and the turn's
+    // figure has to cover the requests the driver made on its own behalf as well as the planner's.
+    let mut spent = Usage::default();
+    let mut waited = std::time::Duration::ZERO;
+
     if policy.read_is_quarantined(&keyed)
         && media.is_none()
         && workspace.names_a_file(&proposed_path)
@@ -2142,21 +2155,58 @@ fn read_file<S: Sink, C: Confirmer>(
             let proof = policy.authorise_display_release("the head of a quarantined file");
             shaped.declassify(&proof)
         };
+
+        // The second opinion, over the whole file rather than over the preview. What a yes here
+        // grants is that this file's text may be read, so the lines under the cut are part of what
+        // is being trusted, and a check over the head alone would report on the part of the file an
+        // injection attempt has the least reason to be in.
+        //
+        // Not made in the one mode that draws no prompt: bypassing answers this question yes without
+        // showing anybody anything, so a check there is a model call whose word nobody reads. A
+        // verdict is still filled in, and it is the one that claims nothing.
+        let checked = (tools.permission_mode != crate::PermissionMode::Bypass).then(|| {
+            let spec = policy.before_vetting_a_path(&proposed_path, body);
+            let asked_at = std::time::Instant::now();
+            (
+                crate::vet::run(policy, &mut tools.chat, &spec),
+                asked_at.elapsed(),
+            )
+        });
+        let (verdict, reason) = match checked {
+            Some((checked, elapsed)) => {
+                spent = checked.usage;
+                waited = elapsed;
+                let reason = checked.reason.map(|reason| {
+                    let proof = policy.authorise_display_release("what a check said about content");
+                    reason.declassify(&proof)
+                });
+                (checked.verdict, reason)
+            }
+            None => (Verdict::Inconclusive("the check was not made"), None),
+        };
+
         let request = crate::confirm::VouchRequest {
             path: proposed_path.clone(),
             preview,
             truncated,
+            verdict,
+            reason,
         };
         if confirmer.confirm_vouch(&request) == Decision::Approve {
             policy.vouch_for_named_path(&keyed);
         }
     }
 
+    // What a check cost, on whatever comes back. Every way out below goes through this, including
+    // the ones that report a refusal: the request was made and somebody is paying for it whether or
+    // not the read that followed handed anything over.
+    let priced = |produced: Produced| produced.costing(spent).waiting(waited);
+
     // A reference to a file the planner may not read already is that file, so reading it has
     // nothing to hand back but another name for the same thing, which reads as the read having
     // failed. One planner went four references deep before giving up. Nothing to do but say so.
     if destination == Destination::Reference && policy.read_is_quarantined(&keyed) {
-        return confirmed(
+        return priced(confirmed(
             format!(
                 "{shown_path} already names that file, and nothing will show you what is in \
                  it. Give {shown_path} to spawn_processor to work on, and name {shown_path} as \
@@ -2166,7 +2216,7 @@ fn read_file<S: Sink, C: Confirmer>(
                  though you do not."
             ),
             format!("nothing to read: {shown_path} already holds it"),
-        );
+        ));
     }
 
     // A picture, decided from the extension: the driver's own table, so nothing read chooses this.
@@ -2177,7 +2227,7 @@ fn read_file<S: Sink, C: Confirmer>(
     // the content this arrangement exists to keep out of it. So a vouched-for directory does not
     // make a picture readable, and there is no trust question here to ask.
     if let Some(media) = media {
-        return match workspace.read_attachment(policy, &path, media) {
+        return priced(match workspace.read_attachment(policy, &path, media) {
             Ok(encoded) => {
                 let weight = workspace.survey(&proposed_path).unwrap_or(0);
                 Produced::new(
@@ -2189,7 +2239,7 @@ fn read_file<S: Sink, C: Confirmer>(
                 .of_a_picture(media)
             }
             Err(e) => problem(format!("error: {e}")),
-        };
+        });
     }
 
     // A file the planner may not see need not be opened yet. Whether it may see it is a question
@@ -2202,7 +2252,7 @@ fn read_file<S: Sink, C: Confirmer>(
     // moment the planner asked, which is the one thing this branch exists to avoid. The reference
     // is of the file, and what is read from it is read when something needs the bytes.
     if policy.read_is_quarantined(&keyed) {
-        return match workspace.survey(&proposed_path) {
+        return priced(match workspace.survey(&proposed_path) {
             // Deferred under the keyed name as well. The slot carries the map's answer about this
             // file, and the answer that quarantined it is the one it has to carry: keyed one way
             // and labelled the other, a file held back for being untrusted would arrive in the
@@ -2212,10 +2262,10 @@ fn read_file<S: Sink, C: Confirmer>(
             }
             // A path that names nothing is said so now, exactly as an eager read would have.
             Err(e) => problem(format!("error: {e}")),
-        };
+        });
     }
 
-    match workspace.read_page(policy, &path, offset, limit) {
+    priced(match workspace.read_page(policy, &path, offset, limit) {
         Ok(page) => {
             // Reshaped inside the kernel, so the driver never holds the text. Only
             // `Policy::present` decides whether the planner sees what comes out.
@@ -2227,7 +2277,7 @@ fn read_file<S: Sink, C: Confirmer>(
             Produced::new(rendered, shown_path, note).of_content()
         }
         Err(e) => problem(format!("error: {e}")),
-    }
+    })
 }
 
 /// The text a slot holds for a file, read at the moment something needs it.
@@ -3307,13 +3357,16 @@ fn watch_file<S: Sink>(
 /// the instruction is the planner's, and the label on the result is computed by the kernel from
 /// Show a command's output to the user, and give it to the planner if they agree.
 ///
-/// The one place bytes cross out of quarantine into the planner's context on nothing but a
-/// person's say-so, and the order is what makes that defensible: the output is released for
+/// One of the places bytes cross out of quarantine into the planner's context on nothing but a
+/// person's say-so, and the order is what makes that defensible: the output is checked, released for
 /// display, put in front of the person in full, and only then, if they agree, does an endorsement
 /// exist for the kernel to consume.
 ///
-/// The driver never reads it. The text goes from the slot to the screen and, on approval, from the
-/// kernel to the planner; nothing here branches on a byte of it.
+/// **The verdict is not consulted here.** Nothing in this function branches on what the check said:
+/// the word travels to the prompt, the prompt draws it, and what decides is the answer.
+///
+/// The driver never reads the output. The text goes from the slot to the screen and, on approval,
+/// from the kernel to the planner; nothing here branches on a byte of it.
 fn read_output<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -3338,8 +3391,35 @@ fn read_output<S: Sink, C: Confirmer>(
         ));
     }
 
+    // The second opinion, before the question rather than after it. No `expects`: the planner asked
+    // for the output to be read, not for it to be checked, and it has said nothing about what the
+    // command printed.
+    //
+    // Not made in the one mode that draws no prompt: bypassing answers this question yes without
+    // showing anybody anything, so a check there is a model call whose word nobody reads. A verdict
+    // is still filled in, and it is the one that claims nothing.
+    let mut spent = Usage::default();
+    let mut waited = std::time::Duration::ZERO;
+    let (verdict, reason) = if tools.permission_mode == crate::PermissionMode::Bypass {
+        (Verdict::Inconclusive("the check was not made"), None)
+    } else {
+        let spec = match policy.before_vetting(&slot, None, tools.slots) {
+            Ok(spec) => spec,
+            Err(denial) => return problem(format!("refused: {denial}")),
+        };
+        let asked_at = std::time::Instant::now();
+        let checked = crate::vet::run(policy, &mut tools.chat, &spec);
+        spent = checked.usage;
+        waited = asked_at.elapsed();
+        let reason = checked.reason.map(|reason| {
+            let proof = policy.authorise_display_release("what a check said about content");
+            reason.declassify(&proof)
+        });
+        (checked.verdict, reason)
+    };
+
     // Released for the person to read, which is the whole of what this call is for. A display
-    // release cannot feed an effect, and this one feeds a screen.
+    // release cannot feed an effect, and both of these feed a screen.
     let shown = {
         let content = match policy.resolve("read_output", &slot, tools.slots) {
             Ok(content) => content,
@@ -3357,13 +3437,17 @@ fn read_output<S: Sink, C: Confirmer>(
             .to_string(),
         output: shown,
         reference: slot.to_string(),
+        verdict,
+        reason,
     };
 
     if confirmer.confirm_read_output(&request) == Decision::Reject {
         return problem(format!(
             "refused: the user did not let you read {slot}. Do not ask for it again. Work with \
              what you have, or say in your reply what you needed from it."
-        ));
+        ))
+        .costing(spent)
+        .waiting(waited);
     }
 
     // The approval is what makes these bytes readable, and it is bound to this exact reference.
@@ -3372,7 +3456,10 @@ fn read_output<S: Sink, C: Confirmer>(
     match policy.read_output(&slot, tools.slots) {
         Ok(text) => {
             let lines = tally(request.lines(), "line", "lines");
-            Produced::new(text, format!("what {slot} held"), format!("{lines}, read")).of_content()
+            Produced::new(text, format!("what {slot} held"), format!("{lines}, read"))
+                .of_content()
+                .costing(spent)
+                .waiting(waited)
         }
         Err(denial) => problem(format!("refused: {denial}")),
     }
@@ -3428,16 +3515,13 @@ fn vet_content<S: Sink, C: Confirmer>(
         return problem(refusal);
     }
 
-    let spec = match policy.before_vetting(&slot, &expects, tools.slots) {
+    let spec = match policy.before_vetting(&slot, Some(&expects), tools.slots) {
         Ok(spec) => spec,
         Err(denial) => return problem(format!("refused: {denial}")),
     };
 
     let asked_at = std::time::Instant::now();
-    let checked = match crate::vet::run(policy, &mut tools.chat, tools.slots, &spec) {
-        Ok(checked) => checked,
-        Err(denial) => return problem(format!("refused: {denial}")),
-    };
+    let checked = crate::vet::run(policy, &mut tools.chat, &spec);
     let waited = asked_at.elapsed();
 
     // Released for the person to read, which is the whole of what this call is for. A display
@@ -3457,7 +3541,9 @@ fn vet_content<S: Sink, C: Confirmer>(
 
     let request = crate::confirm::VetRequest {
         origin: spec.origin().to_string(),
-        expects: spec.expects().to_string(),
+        // Never absent on this route: the argument is required above, and this is the one entry
+        // point into a check that carries what the planner claimed.
+        expects: spec.expects().unwrap_or_default().to_string(),
         content: shown,
         verdict: checked.verdict,
         reason,

@@ -1,8 +1,8 @@
-//! Running one confined check over a quarantined slot.
+//! Running one confined check over quarantined content.
 //!
-//! The kernel decides which slot a check may read, assembles the two blocks it reads them in, and
-//! is the only thing that reads the reply. This makes the call. Everything about it is chosen
-//! here and none of it by anything read:
+//! The kernel decides what a check may read, assembles the two blocks it reads them in, and is the
+//! only thing that reads the reply. This makes the call. Everything about it is chosen here and
+//! none of it by anything read:
 //!
 //! - **No tools.** The request carries no tool list, so there is nothing to call.
 //! - **No memory.** The messages are built from nothing each time.
@@ -11,13 +11,12 @@
 //!   it runs under names no destination at all, so there is no result for it to place anywhere.
 //!
 //! What comes back is a word from a fixed set and free text for a person to read. Neither is given
-//! to the planner, and the word promotes nothing by itself: what promotes a slot is a person
+//! to the planner, and the word promotes nothing by itself: what promotes content is a person
 //! answering the prompt the word is drawn on.
 
 use bravebot_aichat::protocol::{ChatRequest, Message, Usage};
 use bravebot_core::event::Sink;
-use bravebot_core::policy::{Denial, Policy};
-use bravebot_core::slot::SlotStore;
+use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_core::vetting::{Verdict, VettingSpec};
 
@@ -86,21 +85,19 @@ pub struct Checked {
 
 /// Run one check to completion.
 ///
-/// **A call that failed is a verdict of inconclusive, not an error.** A timeout, a refusal in
-/// transit, a backend that is down: none of them says anything about the content, and every one
-/// of them has to land on the prompt that says the check did not complete. Returning an error
-/// here would leave that conversion to a call site and a `?`, which is how a rule stops holding.
-///
-/// A gate refusing is different and does propagate: nothing was asked and no check happened.
+/// **Every way this can fail is a verdict of inconclusive, and there is no error to return.** A
+/// timeout, a refusal in transit, a backend that is down: none of them says anything about the
+/// content, and every one of them has to land on the prompt that says the check did not complete.
+/// Handing a caller an error would leave that conversion to a `?`, which is how a rule stops
+/// holding, and there is a prompt waiting for a word either way.
 pub fn run<S: Sink>(
     policy: &mut Policy<'_, S>,
     chat: &mut Chat<'_>,
-    slots: &SlotStore,
     spec: &VettingSpec,
-) -> Result<Checked, Denial> {
+) -> Checked {
     // Assembled inside the kernel, so the bytes are never in a variable this function could
     // examine. What comes back is wrapped and stays wrapped until the line that hands it over.
-    let input = policy.compose_vetting_input(spec, slots)?;
+    let input = policy.compose_vetting_input(spec);
 
     let proof = policy.authorise_vetting_input(spec);
     let messages = vec![
@@ -125,20 +122,20 @@ pub fn run<S: Sink>(
     let completion = match client.complete_streaming(policy, &request, |_| {}) {
         Ok(completion) => completion,
         Err(_) => {
-            return Ok(Checked {
+            return Checked {
                 verdict: Verdict::Inconclusive("the check could not be made"),
                 reason: None,
                 usage: Usage::default(),
-            });
+            };
         }
     };
 
     let (verdict, reason) = policy.vetting_verdict(spec, completion.content);
-    Ok(Checked {
+    Checked {
         verdict,
         reason,
         usage: completion.usage,
-    })
+    }
 }
 
 #[cfg(test)]

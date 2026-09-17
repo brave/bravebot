@@ -1,6 +1,6 @@
 ---
 id: CHECK
-title: Vetting a quarantined slot
+title: Vetting quarantined content
 status: normative
 governs:
   - crates/core/src/vetting.rs
@@ -9,6 +9,7 @@ governs:
 guards:
   - symbol: VettingSpec::new
   - symbol: Policy::before_vetting
+  - symbol: Policy::before_vetting_a_path
   - symbol: Policy::compose_vetting_input
   - symbol: Policy::vetting_verdict
   - symbol: Policy::promote_vetted
@@ -16,24 +17,31 @@ guards:
 
 ## Scope
 
-Reading one quarantined slot with a second model that holds nothing, so that the person deciding
+Reading quarantined content with a second model that holds nothing, so that the person deciding
 whether the planner may have those bytes has a second opinion in front of them. What the check is
-given, what it may say, and what a person's answer to it does.
+given, what it may say, which prompts run one, and what a person's answer to it does.
 
-The tool the planner calls is [tools/vet-content.md](tools/vet-content.md). The prompt the person
-answers is one of the prompts [prompting.md](prompting.md) governs.
+The tool the planner calls to ask for one slot is [tools/vet-content.md](tools/vet-content.md). The
+prompts a check is drawn on are the ones [prompting.md](prompting.md) governs.
 
 ## Why it exists
 
-A quarantined slot has two ways out. What a program printed can be read aloud, where a person
-reads the bytes and says the planner may have them. A file has the trust map, answered by naming
-the path, by opening a directory, or at the startup question. Everything else stays quarantined
-for the life of the session.
+Quarantined content has three ways out, and all three end at a person. What a program printed can
+be read aloud, where a person reads the bytes and says the planner may have them
+([tools/read-output.md](tools/read-output.md)). A file has the trust map, answered by naming the
+path, by opening a directory, or at the startup question ([trust-map.md](trust-map.md)). One slot's
+bytes can be promoted once, on the planner's request, and leave nothing behind
+([tools/vet-content.md](tools/vet-content.md)). Everything else stays quarantined for the life of
+the session.
 
-That is the right default and it is also the whole of the friction. Somebody who wants the agent
-to use a fetched page has two moves: read every byte of it themselves, or vouch for a whole path,
-which is very much larger. This is a third, and the smallest of the three. It covers one slot's
-bytes, once, and leaves nothing behind.
+Each of those is a person being asked to promote bytes they were not expecting and cannot audit at
+speed, and the answer is the whole of the defence. A check is what puts a second opinion beside the
+bytes before they answer, so the question is not the first time anything has looked at what the
+content holds.
+
+The single-use promotion is also there for the friction. Somebody who wants the agent to use a
+fetched page otherwise has two moves: read every byte of it themselves, or vouch for a whole path,
+which is very much larger. That third way covers one slot's bytes, once, and leaves nothing behind.
 
 ## Clauses
 
@@ -45,12 +53,17 @@ bytes, once, and leaves nothing behind.
 | Tools | none, and the request carries no tool list at all |
 | Memory | none: the messages are built from nothing each time |
 | Conversation | one request, one reply, no loop to steer |
-| Reads | exactly one slot, fixed before the call |
+| Reads | one piece of content, carried in the spec and fixed before the call |
 | Writes | **nothing**: no slot, no reference, no destination of any kind |
 
 A processor mints one slot or none. A check mints none, ever, and what it is fixed by holds no
 field that could name a place for a result to go. The only things that come back are a word from
 a fixed set and free text for a person to read.
+
+The content is carried in the spec rather than named there, which is what "fixed before the call"
+means: whatever the check will read is settled when the spec is built, and no store is left for a
+second piece to be reached through. A check asked for by the planner takes it out of the slot it
+names; a check before a vouch prompt takes it from the file, where there is no slot yet.
 
 **Why.** The isolation is expressed as a type that cannot write rather than as a subprocess,
 which is the same reasoning [processors.md](processors.md) gives for a processor: there is no
@@ -66,7 +79,7 @@ nobody else. Where a check cannot tell, it warns.
 `verified-by: bravebot_core::policy::a_check_is_given_the_one_slot_its_spec_names`
 `verified-by: bravebot_agent::vet::a_checker_is_not_told_to_keep_quiet_about_what_it_notices`
 `verified-by: bravebot_agent::vet::a_checker_that_cannot_tell_is_told_to_warn`
-`verified-by: by-construction (what fixes a check names one slot and the planner's sentence, has no output label, no output reference and no destination, and is built only by taking an authority minted inside the policy layer; every field is private and no method takes &mut self)`
+`verified-by: by-construction (what fixes a check holds one piece of content and the planner's sentence, has no output label, no output reference and no destination, and is built only by taking an authority minted inside the policy layer; every field is private and no method takes &mut self)`
 
 <a id="CHECK-2"></a>
 ### CHECK-2: the content is enclosed so that it cannot forge the enclosure
@@ -92,14 +105,21 @@ it says both that the block was data and what an answer looks like.
 `verified-by: bravebot_agent::vet::control_is_re_asserted_after_the_content`
 
 <a id="CHECK-3"></a>
-### CHECK-3: what the planner says it expects is a prompt, and must not be private
+### CHECK-3: what the planner says it expects is a prompt, must not be private, and is often absent
 
 The planner says what it thinks the slot holds, and the check is told. Those are the planner's own
 words on the footing a processor's instruction sits on: not content anybody read, but the sentence
 the driver is about to send. Private is refused, since the user's own data must not become another
 model's prompt.
 
+Only the planner asking for a check carries one. A check run before a prompt the planner did not
+ask for has nowhere to get an expectation from: it asked to read a file, or to be shown what a
+command printed, and said nothing about the contents. There the key is **left out of the metadata
+entirely** rather than written empty, because an empty string would tell the reader the planner
+expected nothing, where the truth is that nothing claimed anything.
+
 `verified-by: bravebot_core::policy::a_private_expectation_cannot_direct_a_check`
+`verified-by: bravebot_core::policy::a_check_before_a_vouch_carries_the_file_and_claims_no_expectation`
 
 <a id="CHECK-4"></a>
 ### CHECK-4: one word out of two, and everything else is a check that did not complete
@@ -140,6 +160,9 @@ The three outcomes are told apart on the screen. "This looks like an attempt to 
 and "nothing looked at this" are different facts about different risks, and one sentence covering
 both would be wrong about one of them.
 
+Every prompt CHECK-10 runs a check for draws it the same way, out of one row builder rather than
+three, so a prompt cannot be added that carries a verdict and forgets to say what it was.
+
 **Why.** This is what keeps the branch narrow. Something is being decided from bytes derived from
 untrusted content, which [labels.md](labels.md) enumerates as a known cost; what bounds it is that
 the decision is which sentence a person reads before answering for themselves.
@@ -149,6 +172,9 @@ the decision is which sentence a person reads before answering for themselves.
 `verified-by: bravebot_tui::confirm::the_vet_prompt_says_which_of_the_two_failures_it_was`
 `verified-by: bravebot_tui::confirm::a_safe_verdict_is_drawn_as_what_the_check_found`
 `verified-by: bravebot_tui::confirm::a_safe_verdict_does_not_change_which_keys_the_vet_prompt_offers`
+`verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`
+`verified-by: bravebot_tui::confirm::the_vouch_prompt_says_what_a_check_found`
+`verified-by: bravebot_tui::confirm::a_vouch_prompt_says_when_no_check_was_made`
 
 <a id="CHECK-6"></a>
 ### CHECK-6: promoting is an assertion about one slot's bytes, and writes no rule
@@ -206,7 +232,39 @@ assume the driver is talking.
 `verified-by: bravebot_core::policy::what_a_check_says_is_as_untrusted_as_what_it_read`
 `verified-by: bravebot_core::policy::the_trail_records_the_verdict_and_never_the_reason`
 `verified-by: bravebot_agent::turn::content_a_person_refuses_after_a_check_stays_out_of_the_planner`
+`verified-by: bravebot_agent::turn::a_vouch_offer_carries_what_a_check_said_about_the_whole_file`
+`verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
 `verified-by: bravebot_tui::confirm::what_the_check_said_is_drawn_inside_the_margin_too`
+
+<a id="CHECK-10"></a>
+### CHECK-10: every prompt that would promote quarantined content runs a check first
+
+All three ways out of quarantine end at a person answering a prompt, and a check runs before the
+prompt is drawn, not after it is answered:
+
+| The prompt | What a yes does | What the check reads |
+|---|---|---|
+| [tools/vet-content.md](tools/vet-content.md) | promotes one slot's bytes once | the slot the planner named |
+| [tools/read-output.md](tools/read-output.md) | releases what a program printed to the planner | the slot the planner named |
+| the vouch offer in [tools/read-file.md](tools/read-file.md) | writes a rule about the path | **the whole file**, not the preview |
+
+**Why the whole file.** A vouch prompt shows the head of the file and a yes grants all of it, so a
+check over the preview would report on the part an injection attempt has the least reason to be in.
+The check reads what the answer covers.
+
+**Why all three.** Otherwise the quickest way past a check is to ask for the prompt that does not
+run one. A person asked to promote content is asked on the strength of what they can see; two of
+these prompts having a second opinion on them and the third not is a gap the planner chooses, and
+the trust map's rule is the largest grant of the three.
+
+The one exemption is [permission-modes.md](permission-modes.md)'s bypassing mode, which draws no
+prompt at all. There a check would be a model call whose word nobody reads. A verdict is still
+filled in and it is `inconclusive`, which claims nothing.
+
+`verified-by: bravebot_agent::turn::a_vouch_offer_carries_what_a_check_said_about_the_whole_file`
+`verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
+`verified-by: bravebot_agent::turn::content_a_person_reads_after_a_check_reaches_the_planner`
+`verified-by: bravebot_core::policy::a_check_before_a_vouch_carries_the_file_and_claims_no_expectation`
 
 ## Known costs
 
@@ -214,6 +272,15 @@ assume the driver is talking.
   asking about a page sends it where the page would only have gone if a processor had been asked
   about it. The destination is the one every other call already goes to, and the reader holds
   nothing, but the call happens whether or not the person then approves.
+
+- **A read of a quarantined file now sends the file, before anybody has agreed to anything.**
+  CHECK-10 puts a check in front of the vouch prompt, and the check is a model call over the whole
+  file. So a planner that reads a path nobody vouched for causes those bytes to reach the backend
+  in the confined conversation even where the person then says no, and the refusal keeps the bytes
+  out of the planner rather than off the wire. That is a real widening of what a `read_file` on a
+  quarantined path does, and it is the price of the person being told something before they answer.
+  It is bounded by the offer being made once per path per turn, by never being made for a picture
+  or a directory, and by the confined conversation holding no tools, no memory and no destination.
 
 - **The check is a model, so it is wrong sometimes, in both directions.** A safe verdict on
   content that is an attack draws the quiet banner under bytes the person still reads; an unsafe

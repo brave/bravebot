@@ -257,6 +257,12 @@ pub struct OutputRequest {
     pub output: String,
     /// The reference the planner named, for the account given afterwards.
     pub reference: String,
+    /// What a check said about the same bytes, or that it did not complete.
+    ///
+    /// Advice beside them, never in place of them, on the footing [`VetRequest::verdict`] states.
+    pub verdict: Verdict,
+    /// The check's own sentence about why, where it wrote one.
+    pub reason: Option<String>,
 }
 
 impl OutputRequest {
@@ -391,6 +397,15 @@ pub struct VouchRequest {
     pub preview: String,
     /// Whether the preview is only part of the file.
     pub truncated: bool,
+    /// What a check said about the whole file, or that it did not complete.
+    ///
+    /// The whole file and not the preview: the person is being asked to trust the path, so a
+    /// verdict about the first few lines would be answering a smaller question than the one on the
+    /// screen. It is advice on the footing [`VetRequest::verdict`] states, and here it is advice
+    /// about a standing rule rather than about one read.
+    pub verdict: Verdict,
+    /// The check's own sentence about why, where it wrote one.
+    pub reason: Option<String>,
 }
 
 /// A frozen plan a manifest run is about to walk.
@@ -521,9 +536,9 @@ pub trait Confirmer {
     /// Ask whether the planner may read a command's output. Implementations must default to
     /// refusal when they cannot ask.
     ///
-    /// The one question in this trait whose answer rests on bytes rather than on a prediction, so
-    /// an implementation that cannot show them must refuse: approving unseen is the one thing this
-    /// question cannot mean.
+    /// The answer rests on bytes rather than on a prediction, so an implementation that cannot show
+    /// them must refuse: approving unseen is the one thing this question cannot mean. The verdict
+    /// does not rescue that, on the footing [`Confirmer::confirm_vetted_read`] states.
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision;
 
     /// Ask whether the planner may read one quarantined slot that a check has looked at.
@@ -575,7 +590,8 @@ pub trait Confirmer {
     /// default to refusal when they cannot ask.
     ///
     /// A yes records a rule in the trust map, so it is a standing decision about the path rather
-    /// than about one read.
+    /// than about one read. That makes it the widest of the three questions a check runs before,
+    /// and the verdict travels with it for the same reason it travels with the other two.
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision;
 
     /// Put a series of questions to the person, one answer per question in the order they were
@@ -1225,6 +1241,8 @@ mod tests {
             command: "git log".to_string(),
             output: "one line\n".to_string(),
             reference: "output_1".to_string(),
+            verdict: Verdict::Safe,
+            reason: None,
         }
     }
 
@@ -1233,6 +1251,8 @@ mod tests {
             path: "vendor/lib.js".to_string(),
             preview: "// a library\n".to_string(),
             truncated: false,
+            verdict: Verdict::Safe,
+            reason: None,
         }
     }
 

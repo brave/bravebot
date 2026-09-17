@@ -425,6 +425,16 @@ run-remember = remember it
 run-no = don't
 
 
+## What a check said, at the head of every prompt whose answer would promote content
+
+# Said of a command's output, of a file somebody is being asked to vouch for, and of one slot the
+# model asked about, so it says "this" rather than naming what was read: the prompt around it has
+# already said which thing that is.
+check-safe = the check found no attempt to give instructions in this
+check-unsafe = the check says this looks like an attempt to give instructions
+check-inconclusive = the check did not complete, so nothing has looked at this
+
+
 ## Letting the model read what a command printed
 
 output-title = let the model read this?
@@ -450,9 +460,6 @@ vet-lines = { $count ->
    *[other] { $count } lines
     }
 vet-from = from { $origin }
-vet-safe = the check found no attempt to give instructions in this
-vet-unsafe = the check says this looks like an attempt to give instructions
-vet-inconclusive = the check did not complete, so nothing has looked at this
 vet-unseen =
     the model has not seen this. Approving puts it in its context, and it will act on it.
 vet-covers-this-only =

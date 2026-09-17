@@ -13,13 +13,13 @@ guards:
       - crates/agent/src/aside.rs: 2
       - crates/agent/src/manifest.rs: 4
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 25
+      - crates/agent/src/tools.rs: 27
       - crates/agent/src/turn.rs: 4
       - crates/agent/src/vet.rs: 1
       - crates/agent/src/workspace.rs: 2
       - crates/agent/tests/workspace.rs: 39
       - crates/aichat/tests/client.rs: 2
-      - crates/core/src/policy.rs: 46
+      - crates/core/src/policy.rs: 47
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 1
       - crates/mcp/tests/stdio.rs: 1
@@ -30,7 +30,7 @@ guards:
       - crates/core/src/value.rs: 4
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 44
+      - crates/core/src/policy.rs: 45
   - symbol: Policy::present
     sites:
       - crates/agent/src/aside.rs: 1
@@ -354,17 +354,21 @@ what catches it.
   it. The clauses above forbid decisions that redirect an effect, and none of these redirect
   anything.
 
-- **The third is reading a verdict out of a check.** A second model is shown one quarantined slot
-  and answers with one word about whether the content looks like an attempt to give instructions.
-  Reading that word is a decision taken from a reply that is a function of untrusted content, so
-  it is untrusted too. [vetting.md](vetting.md) is the whole of what such a check is and may say.
+- **The third is reading a verdict out of a check.** A second model is shown quarantined content (a
+  slot the planner named, or a file somebody is about to be asked to vouch for) and answers with
+  one word about whether the content looks like an attempt to give instructions. Reading that word
+  is a decision taken from a reply that is a function of untrusted content, so it is untrusted too.
+  [vetting.md](vetting.md) is the whole of what such a check is and may say, and
+  [CHECK-10](vetting.md#CHECK-10) is which prompts run one.
 
   Suppose an attacker owns the content, so they steer both the content and, through it, what the
   check replies. Everything that buys them is on this list:
 
   - **Force the word `safe`.** What that reaches is the banner on the prompt. The bytes are drawn
     below it either way, the same keys are offered either way, and nothing is promoted until a
-    person says so, so this buys a quieter sentence above content the reader is still reading.
+    person says so, so this buys a quieter sentence above content the reader is still reading. On
+    the vouch prompt the bytes drawn are the head of the file rather than all of it, so what the
+    quieter sentence sits above is a preview; the answer still writes nothing on its own.
   - **Force the word `unsafe`, or reply with nothing a verdict can be read out of.** That lands on
     the prompt with the warning, which is the direction this is built to fail in.
   - **Put their words in the reason.** It reaches a person's screen and stops there. It is drawn

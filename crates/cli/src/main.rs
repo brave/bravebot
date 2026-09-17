@@ -2642,6 +2642,8 @@ mod tests {
             path: "notes.md".to_string(),
             preview: "text".to_string(),
             truncated: false,
+            verdict: bravebot_core::vetting::Verdict::Safe,
+            reason: None,
         };
 
         assert_eq!(one_shot.confirm_write(&write), Decision::Reject);

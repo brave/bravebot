@@ -402,6 +402,16 @@ run-remember = s'en souvenir
 run-no = ne pas l'exécuter
 
 
+## Ce qu'une vérification a dit, en tête de chaque question dont la réponse sortirait un contenu de quarantaine
+
+# Dit d'une sortie de commande, d'un fichier qu'on vous propose d'approuver et d'un emplacement dont
+# le modèle a demandé la lecture, donc « ceci » plutôt qu'un nom : la question autour a déjà dit de
+# quoi il s'agit.
+check-safe = la vérification n'a trouvé aucune tentative de donner des instructions ici
+check-unsafe = la vérification estime que ceci ressemble à une tentative de donner des instructions
+check-inconclusive = la vérification n'a pas abouti, donc rien n'a examiné ceci
+
+
 ## Laisser le modèle lire ce qu'une commande a affiché
 
 output-title = laisser le modèle lire ceci ?
@@ -427,9 +437,6 @@ vet-lines = { $count ->
    *[other] { $count } lignes
     }
 vet-from = provenance : { $origin }
-vet-safe = la vérification n'a trouvé aucune tentative de donner des instructions ici
-vet-unsafe = la vérification estime que ceci ressemble à une tentative de donner des instructions
-vet-inconclusive = la vérification n'a pas abouti, donc rien n'a examiné ceci
 vet-unseen =
     le modèle n'a pas vu ceci. L'approuver le met dans son contexte, et il agira dessus.
 vet-covers-this-only =

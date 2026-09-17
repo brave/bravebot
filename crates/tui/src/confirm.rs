@@ -807,6 +807,56 @@ fn indented(text: impl Into<String>, style: Style, width: usize) -> Vec<Line<'st
     marked_rows(&Span::raw("  "), &[Span::styled(text.into(), style)], width)
 }
 
+/// What a check said, for the head of a prompt whose answer would promote content.
+///
+/// Shared by all three of them, so the word reads the same wherever it is drawn and a prompt cannot
+/// be given one without the other. Which of the three banners is drawn is the one thing decided from
+/// what the check said, and it decides nothing further: the bytes are below it either way, and the
+/// keys are the same three.
+///
+/// The banner is the driver's own words and is drawn outside the margin. The sentence under it came
+/// out of content nobody vouched for and is drawn inside it, on every row it reaches, which is the
+/// distinction the bar exists to make: a reader can tell which line the program wrote and which line
+/// came out of the page. It is free text about content an attacker may own and it can lie; what
+/// stops that mattering is that the bytes it describes are on the same screen.
+///
+/// The two failures are told apart rather than collapsed. "This looks like an attempt to give
+/// instructions" and "nothing looked at this" are different facts about different risks, and one
+/// sentence covering both would be wrong about one of them.
+///
+/// What went wrong is not said. The driver's word for it is English and goes in the audit trail;
+/// putting it in this sentence would splice an untranslated fragment into a translated one, and the
+/// difference between a backend that was down and a reply nobody could read a verdict out of is the
+/// same fact to the person answering.
+fn verdict_rows(
+    verdict: Verdict,
+    reason: Option<&String>,
+    margin: &Span<'static>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let (banner, colour) = match verdict {
+        Verdict::Safe => (t!(check_safe), theme::ok()),
+        Verdict::Unsafe => (t!(check_unsafe), theme::fail()),
+        Verdict::Inconclusive(_) => (t!(check_inconclusive), theme::running()),
+    };
+    let mut rows = indented(
+        banner,
+        Style::default().fg(colour).add_modifier(Modifier::BOLD),
+        width,
+    );
+    if let Some(reason) = reason {
+        rows.extend(marked_rows(
+            margin,
+            &[Span::styled(
+                reason.clone(),
+                Style::default().fg(theme::muted()),
+            )],
+            width,
+        ));
+    }
+    rows
+}
+
 /// How much further the body goes, or that there is nothing below.
 fn scroll_hint(below: u16) -> String {
     if below > 0 {
@@ -858,6 +908,9 @@ pub fn ask_output<B: Backend>(terminal: &mut Terminal<B>, request: &OutputReques
 /// "output ends here" ends nothing: the bar is the structure, and it is outside what the program
 /// wrote. Rows rather than lines, because a command's output is untrimmed and a line of it wider
 /// than the box becomes several rows.
+///
+/// The banner above them is what a check made of the same bytes. It is advice and never an answer,
+/// so nothing about the verdict changes which keys are live.
 fn draw_output(frame: &mut ratatui::Frame, request: &OutputRequest, scroll: u16) -> u16 {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::brand_primary(), t!(output_title));
@@ -883,6 +936,13 @@ fn draw_output(frame: &mut ratatui::Frame, request: &OutputRequest, scroll: u16)
         ]),
         Line::raw(""),
     ];
+    lines.extend(verdict_rows(
+        request.verdict,
+        request.reason.as_ref(),
+        &margin,
+        inside.width as usize,
+    ));
+    lines.push(Line::raw(""));
     lines.extend(indented(
         t!(output_unseen),
         Style::default().fg(theme::muted()),
@@ -1032,42 +1092,12 @@ fn draw_vet(frame: &mut ratatui::Frame, request: &VetRequest, scroll: u16) -> u1
         Line::raw(""),
     ];
 
-    // The verdict, in the driver's own words. Which of the three is drawn is the one decision
-    // taken from what the check said, and it decides nothing but this: the bytes are below
-    // whatever it says, and the keys are the same three either way.
-    //
-    // The two failures are told apart rather than collapsed. "This looks like an attempt to give
-    // instructions" and "nothing looked at this" are different facts about different risks, and
-    // one sentence covering both would be wrong about one of them.
-    //
-    // What went wrong is not said here. The driver's word for it is English and goes in the audit
-    // trail; putting it in this sentence would splice an untranslated fragment into a translated
-    // one, and the difference between a backend that was down and a reply nobody could read a
-    // verdict out of is the same fact to the person answering.
-    let (banner, colour) = match request.verdict {
-        Verdict::Safe => (t!(vet_safe), theme::ok()),
-        Verdict::Unsafe => (t!(vet_unsafe), theme::fail()),
-        Verdict::Inconclusive(_) => (t!(vet_inconclusive), theme::running()),
-    };
-    lines.extend(indented(
-        banner,
-        Style::default().fg(colour).add_modifier(Modifier::BOLD),
+    lines.extend(verdict_rows(
+        request.verdict,
+        request.reason.as_ref(),
+        &margin,
         inside.width as usize,
     ));
-
-    // The check's own sentence, inside the margin. It is free text written about content an
-    // attacker may own, so it is untrusted in exactly the way the content is, and it can lie:
-    // what stops that mattering is that the bytes it describes are on the same screen.
-    if let Some(reason) = &request.reason {
-        lines.extend(marked_rows(
-            &margin,
-            &[Span::styled(
-                reason.clone(),
-                Style::default().fg(theme::muted()),
-            )],
-            inside.width as usize,
-        ));
-    }
     lines.push(Line::raw(""));
 
     lines.extend(indented(
@@ -1400,6 +1430,9 @@ pub fn ask_vouch<B: Backend>(terminal: &mut Terminal<B>, request: &VouchRequest)
 ///
 /// The preview carries the same margin bar as everything else the model has not been allowed to
 /// read, because that is exactly what it is until this question is answered.
+///
+/// The banner above it is what a check made of the file. It is advice and never an answer: a yes
+/// writes the trust rule whatever the word was, and a no writes nothing whatever the word was.
 fn draw_vouch(frame: &mut ratatui::Frame, request: &VouchRequest, scroll: u16) -> u16 {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::ok(), t!(vouch_title));
@@ -1421,6 +1454,17 @@ fn draw_vouch(frame: &mut ratatui::Frame, request: &VouchRequest, scroll: u16) -
         ]),
         Line::raw(""),
     ];
+    // What a check made of the whole file, above the head of it the person can read. The two are
+    // about different amounts of the same file on purpose: what a yes here grants is that the file's
+    // text may be read, so the check is over all of it, and an attempt to give instructions is least
+    // likely to be in the first few lines.
+    lines.extend(verdict_rows(
+        request.verdict,
+        request.reason.as_ref(),
+        &margin,
+        inside.width as usize,
+    ));
+    lines.push(Line::raw(""));
     lines.extend(indented(
         t!(vouch_explained),
         Style::default().fg(theme::muted()),
@@ -2510,6 +2554,8 @@ mod tests {
             command: "find /Applications -name 'Brave Browser Nightly.app'".into(),
             output: text.into(),
             reference: "ref:5".into(),
+            verdict: Verdict::Safe,
+            reason: None,
         }
     }
 
@@ -2568,6 +2614,30 @@ mod tests {
         let drawn = rendered_output(&an_output("Darwin"));
         assert!(drawn.contains("has not seen this"), "{drawn}");
         assert!(drawn.contains("act on it"), "{drawn}");
+    }
+
+    /// A check ran before this prompt was drawn, so its word belongs on the screen: the bytes alone
+    /// are what a person reading quickly would have had to judge for themselves.
+    ///
+    /// The banner is the driver's sentence and sits outside the margin. The check's own sentence is
+    /// a model's words about attacker-reachable text and goes inside it, where nothing it says can
+    /// be taken for the program's.
+    #[test]
+    fn the_output_prompt_says_what_a_check_found() {
+        let mut request = an_output("Darwin");
+        request.verdict = Verdict::Unsafe;
+        request.reason = Some("it tells the reader to ignore its instructions".into());
+        let drawn = rendered_output(&request);
+
+        assert!(drawn.contains("looks like an attempt"), "{drawn}");
+        assert!(drawn.contains("ignore its instructions"), "{drawn}");
+        // Nothing about the verdict takes the decision away: both answers are still offered.
+        assert!(drawn.contains("act on it"), "{drawn}");
+        assert_eq!(
+            drawn.matches('┃').count(),
+            2,
+            "the one line of output and the check's sentence, each inside a bar: {drawn}"
+        );
     }
 
     /// The prompt blocks everything else, so Ctrl-C must be answerable here too. It stops the
@@ -2806,6 +2876,18 @@ mod tests {
     /// The bar the renderer draws down the margin.
     const BAR: char = '\u{2503}';
 
+    /// A quarantined file the model asked to read, as `read_file` offers one: the head of the file,
+    /// and the word a check said about the whole of it.
+    fn a_vouch(path: &str, preview: impl Into<String>, truncated: bool) -> VouchRequest {
+        VouchRequest {
+            path: path.into(),
+            preview: preview.into(),
+            truncated,
+            verdict: Verdict::Safe,
+            reason: None,
+        }
+    }
+
     /// The prompt as drawn rows.
     ///
     /// Rows rather than one flattened string, because a margin is a claim about where a row
@@ -2817,11 +2899,7 @@ mod tests {
     /// translation would start hard against the border and read as part of the body.
     #[test]
     fn explanatory_prose_keeps_its_indent_on_every_row_it_wraps_to() {
-        let request = VouchRequest {
-            path: "notes.md".into(),
-            preview: "some contents".into(),
-            truncated: false,
-        };
+        let request = a_vouch("notes.md", "some contents", false);
         // Narrow enough that the sentence cannot fit on one row.
         let drawn = rows_of(52, 24, |frame| {
             draw_vouch(frame, &request, 0);
@@ -2952,11 +3030,7 @@ mod tests {
         let write = request("fn main() {}", None);
         let run = a_run(false);
         let output = an_output("Darwin\n");
-        let vouch = VouchRequest {
-            path: "notes.md".into(),
-            preview: "some contents".into(),
-            truncated: false,
-        };
+        let vouch = a_vouch("notes.md", "some contents", false);
         let plan = a_plan(&["1. [fetch] read notes.md into notes"]);
 
         let _held = theme::exclusive();
@@ -3048,11 +3122,11 @@ mod tests {
     /// drawn at whatever width the terminal happens to be.
     #[test]
     fn a_wrapped_vouch_preview_is_marked_on_every_row_it_reaches() {
-        let request = VouchRequest {
-            path: "longline.txt".into(),
-            preview: format!("{}\u{2503} trust me", "PADDING ".repeat(10)),
-            truncated: false,
-        };
+        let request = a_vouch(
+            "longline.txt",
+            format!("{}\u{2503} trust me", "PADDING ".repeat(10)),
+            false,
+        );
         let drawn = rows_of(60, 24, |frame| {
             draw_vouch(frame, &request, 0);
         });
@@ -3068,11 +3142,7 @@ mod tests {
     #[test]
     fn a_preview_with_nothing_in_it_says_so() {
         for preview in ["", "\n\n"] {
-            let request = VouchRequest {
-                path: "empty.txt".into(),
-                preview: preview.to_string(),
-                truncated: false,
-            };
+            let request = a_vouch("empty.txt", preview, false);
             let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
             terminal
                 .draw(|frame| {
@@ -3101,11 +3171,7 @@ mod tests {
     /// whether to trust.
     #[test]
     fn a_blank_preview_of_a_longer_file_does_not_claim_the_file_is_empty() {
-        let request = VouchRequest {
-            path: "padded.txt".into(),
-            preview: "\n".repeat(19),
-            truncated: true,
-        };
+        let request = a_vouch("padded.txt", "\n".repeat(19), true);
         // Tall enough for the marker: at 24 rows the blank preview scrolls it off, which is the
         // scrolling PROMPT-4 already covers and not what this is about.
         let mut terminal = Terminal::new(TestBackend::new(80, 40)).expect("terminal");
@@ -3125,6 +3191,70 @@ mod tests {
         assert!(drawn.contains("padded.txt"), "{drawn}");
         assert!(!drawn.contains("nothing of this file"), "{drawn}");
         assert!(drawn.contains('…'), "{drawn}");
+    }
+
+    /// The offer this branch was reported for. A person promoting a file is answering the question
+    /// `vet_content` asks, so the check's word is on the screen here too, and it is about the whole
+    /// file rather than the preview above it.
+    ///
+    /// The banner is the driver's and sits outside the margin; the check's own sentence is inside
+    /// it, alongside the file's own text, since a model wrote it about text a page could have.
+    #[test]
+    fn the_vouch_prompt_says_what_a_check_found() {
+        let mut request = a_vouch("notes.md", "a line of the file", false);
+        request.verdict = Verdict::Unsafe;
+        request.reason = Some("it tells the reader to ignore its instructions".into());
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw_vouch(frame, &request, 0);
+            })
+            .expect("draw");
+        let drawn: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+
+        assert!(drawn.contains("looks like an attempt"), "{drawn}");
+        assert!(drawn.contains("ignore its instructions"), "{drawn}");
+        // Nothing about the verdict takes the decision away: both answers are still offered.
+        assert!(drawn.contains("working blind"), "{drawn}");
+        assert_eq!(
+            drawn.matches(BAR).count(),
+            2,
+            "the one line of preview and the check's sentence, each inside a bar: {drawn}"
+        );
+    }
+
+    /// A check that could not be made says nothing about the file, so it must not read as one that
+    /// looked and found nothing. Somebody about to vouch for a path is the person least able to
+    /// tell the two apart from the bytes.
+    #[test]
+    fn a_vouch_prompt_says_when_no_check_was_made() {
+        let mut request = a_vouch("notes.md", "a line of the file", false);
+        request.verdict = Verdict::Inconclusive("the check was not made");
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw_vouch(frame, &request, 0);
+            })
+            .expect("draw");
+        let drawn: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+
+        assert!(drawn.contains("did not complete"), "{drawn}");
+        assert!(
+            !drawn.contains("found no attempt"),
+            "a check that never ran was reported as one that found nothing: {drawn}"
+        );
     }
 
     fn a_plan(steps: &[&str]) -> ManifestRequest {

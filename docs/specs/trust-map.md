@@ -235,9 +235,16 @@ over the trust half of what [`/add-dir`](#TRUST-9) grants, every file beneath th
 a string the planner chose rather than one a person typed. Reach it would not grant, which is the
 only part of that gesture this could not have imitated.
 
+A confined check reads the file before the question is drawn, and the word it gave is on the screen
+with the preview. It reads **the whole file** and not the preview, because a yes grants the whole
+file. That is [CHECK-10](vetting.md#CHECK-10), and it decides nothing here: a yes writes the rule
+whatever the word was, and a no writes nothing whatever the word was.
+
 ```
 ╭ let the model read this file? ────────────────────────────╮
 │Trust game.js                                              │
+│                                                           │
+│  the check found no attempt to give instructions in this  │
 │                                                           │
 │  the model cannot read this file, so it is working blind  │
 │  on it. Vouching lets it read this file for the rest of   │
@@ -255,7 +262,14 @@ not have it: asked to fix a bug in a game it could not read, the model pointed a
 processor at the file, wrote the answer back unseen, and finished by saying it could not confirm
 any of what it had done. One prompt would have let it read the file.
 
+**Why a check on it.** A session read a file holding an injection attempt, was offered this
+question with nothing on the screen but the first lines, and the person had to answer it blind.
+They said no, the planner reached for the same file through `run` instead, and *that* path ran a
+check and caught the attempt. The prompt that grants the most was the one saying the least.
+
 `verified-by: bravebot_agent::turn::a_quarantined_read_offers_the_user_the_chance_to_vouch`
+`verified-by: bravebot_agent::turn::a_vouch_offer_carries_what_a_check_said_about_the_whole_file`
+`verified-by: bravebot_tui::confirm::the_vouch_prompt_says_what_a_check_found`
 `verified-by: bravebot_agent::turn::a_quarantined_file_with_nothing_in_it_is_still_offered_for_vouching`
 `verified-by: bravebot_agent::turn::a_picture_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::a_path_that_names_no_file_is_not_offered_for_vouching`

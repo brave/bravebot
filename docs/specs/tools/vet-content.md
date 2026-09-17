@@ -12,6 +12,11 @@ Asking to be shown one quarantined slot after a confined check has read it. The 
 the slot is routing; `expects` is the planner's own sentence and is neither. What the check is,
 what it may say, and what a person's answer does is [vetting.md](../vetting.md).
 
+This is the one of the three checked prompts the planner asks for by name, and so the only one that
+carries an `expects`. The other two come with a read the planner made for its own reasons:
+[read-output.md](read-output.md) and the vouch offer in [trust-map.md](../trust-map.md#TRUST-8).
+[CHECK-10](../vetting.md#CHECK-10) covers all three.
+
 ## Clauses
 
 <a id="VET-1"></a>
