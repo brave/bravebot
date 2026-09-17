@@ -1571,11 +1571,115 @@ fn doctor() -> ExitCode {
         ok = false;
     }
 
+    // Development setup is advisory: released binaries need neither facility.
+    if let Ok(cwd) = std::env::current_dir() {
+        let lines = development(&cwd, std::env::var_os("PATH").as_deref(), cfg!(windows));
+        if !lines.is_empty() {
+            println!();
+        }
+        for line in lines {
+            println!("{line}");
+        }
+    }
+
     if ok {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// Recognise the source tree by its checked-in layout, including from a subdirectory.
+/// No Git command or setup script is run by this read-only check.
+fn development(cwd: &Path, path: Option<&std::ffi::OsStr>, windows: bool) -> Vec<String> {
+    let mut boundary = false;
+    let mut ancestors = cwd.ancestors().take_while(|root| {
+        let include = !boundary;
+        boundary = root.join(".git").exists();
+        include
+    });
+    let Some(root) = ancestors.find(|root| {
+        [
+            "Cargo.toml",
+            "crates/cli/Cargo.toml",
+            "agents/setup.py",
+            "agents/AGENTS.md",
+            "docs/development/agent-configuration.md",
+        ]
+        .iter()
+        .all(|marker| root.join(marker).is_file())
+    }) else {
+        return Vec::new();
+    };
+    vec![
+        t!(doctor_development, path = root.display().to_string()),
+        aligned("AGENTS.md", agent_discovery(root, windows), FACT),
+        aligned(
+            "direnv",
+            if direnv_available(path) {
+                t!(doctor_direnv_ok)
+            } else {
+                t!(doctor_direnv_missing)
+            },
+            FACT,
+        ),
+    ]
+}
+
+fn agent_discovery(root: &Path, windows: bool) -> String {
+    let source = root.join("agents/AGENTS.md");
+    let destination = root.join("AGENTS.md");
+    match std::fs::symlink_metadata(&destination) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            match (destination.canonicalize(), source.canonicalize()) {
+                (Ok(actual), Ok(expected)) if actual == expected => {
+                    t!(doctor_agents_ok).to_string()
+                }
+                (Ok(_), _) => t!(doctor_agents_wrong).to_string(),
+                _ => t!(doctor_agents_broken).to_string(),
+            }
+        }
+        Ok(metadata) if windows && metadata.is_file() => {
+            match (std::fs::read(&destination), std::fs::read(&source)) {
+                (Ok(actual), Ok(expected)) if actual == expected => {
+                    t!(doctor_agents_copy_ok).to_string()
+                }
+                _ => t!(doctor_agents_copy_stale).to_string(),
+            }
+        }
+        Ok(_) => t!(doctor_agents_conflict).to_string(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            t!(doctor_agents_missing).to_string()
+        }
+        Err(_) => t!(doctor_agents_unreadable).to_string(),
+    }
+}
+
+/// Inspect PATH without executing a tool or changing the process environment.
+fn direnv_available(path: Option<&std::ffi::OsStr>) -> bool {
+    path.is_some_and(|path| {
+        std::env::split_paths(path).any(|directory| {
+            let executable = directory.join(if cfg!(windows) {
+                "direnv.exe"
+            } else {
+                "direnv"
+            });
+            std::fs::metadata(executable).is_ok_and(|metadata| {
+                if !metadata.is_file() {
+                    return false;
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    metadata.permissions().mode() & 0o111 != 0
+                }
+                #[cfg(not(unix))]
+                {
+                    true
+                }
+            })
+        })
+    })
 }
 
 /// What `doctor` says about the Bedrock half of the roster.
@@ -2676,6 +2780,154 @@ mod tests {
 
     fn args(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|part| (*part).to_string()).collect()
+    }
+
+    fn development_fixture(name: &str) -> Scratch {
+        let scratch = Scratch::new(name);
+        for marker in [
+            "Cargo.toml",
+            "crates/cli/Cargo.toml",
+            "agents/setup.py",
+            "agents/AGENTS.md",
+            "docs/development/agent-configuration.md",
+        ] {
+            let file = scratch.path.join(marker);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "source instructions").unwrap();
+        }
+        scratch
+    }
+
+    /// A user's workspace needs neither the repository's links nor its build tools.
+    #[test]
+    fn doctor_development_checks_only_apply_to_the_source_tree() {
+        let scratch = Scratch::new("doctor-ordinary-workspace");
+        scratch.directory(".git");
+        std::fs::write(scratch.path.join("AGENTS.md"), "user instructions").unwrap();
+        assert!(development(&scratch.path, None, false).is_empty());
+        std::fs::remove_dir(scratch.path.join(".git")).unwrap();
+        std::fs::write(scratch.path.join(".git"), "gitdir: elsewhere").unwrap();
+        assert!(development(&scratch.path, None, false).is_empty());
+        let source = development_fixture("doctor-source-tree");
+        std::fs::write(source.path.join(".git"), "gitdir: elsewhere").unwrap();
+        for windows in [false, true] {
+            assert!(agent_discovery(&source.path, windows).starts_with("missing;"));
+        }
+        let nested = source.directory("crates/cli/src");
+        let report = development(&nested, None, false).join("\n");
+        assert!(report.contains("development environment"));
+        assert!(report.contains("AGENTS.md"));
+        assert!(report.contains("python3 agents/setup.py link"));
+        assert!(report.contains("direnv"));
+        assert!(report.contains("https://direnv.net/"));
+        assert!(report.contains("brew install direnv"));
+        assert!(!source.path.join("AGENTS.md").exists());
+    }
+
+    /// A hand-written path must survive a diagnostic and must not look healthy.
+    #[test]
+    fn doctor_reports_agent_discovery_conflicts_without_changing_them() {
+        let scratch = development_fixture("doctor-conflicts");
+        let destination = scratch.path.join("AGENTS.md");
+        std::fs::write(&destination, "personal instructions").unwrap();
+        let report = agent_discovery(&scratch.path, false);
+        assert!(report.contains("conflict"));
+        assert!(report.contains("resolve the existing file or directory first"));
+        assert_eq!(
+            std::fs::read_to_string(&destination).unwrap(),
+            "personal instructions"
+        );
+        std::fs::remove_file(&destination).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+        for windows in [false, true] {
+            assert!(agent_discovery(&scratch.path, windows).contains("conflict"));
+            assert!(destination.is_dir());
+        }
+    }
+
+    /// Windows setup copies the source, so a current copy is healthy and a stale one is repairable.
+    #[test]
+    fn doctor_accepts_current_windows_copies_and_reports_stale_ones() {
+        let scratch = development_fixture("doctor-windows-copy");
+        let destination = scratch.path.join("AGENTS.md");
+        std::fs::copy(scratch.path.join("agents/AGENTS.md"), &destination).unwrap();
+        assert_eq!(
+            agent_discovery(&scratch.path, true),
+            "OK (Windows copy of agents/AGENTS.md)"
+        );
+        std::fs::write(&destination, "old instructions").unwrap();
+        let report = agent_discovery(&scratch.path, true);
+        assert!(report.contains("stale"));
+        assert!(report.contains("python3 agents/setup.py link"));
+        assert_eq!(
+            std::fs::read_to_string(destination).unwrap(),
+            "old instructions"
+        );
+    }
+
+    /// Existence alone does not mean an agent will read this repository's instructions.
+    #[cfg(unix)]
+    #[test]
+    fn doctor_checks_resolved_agent_link_targets() {
+        use std::os::unix::fs::symlink;
+        let scratch = development_fixture("doctor-links");
+        let destination = scratch.path.join("AGENTS.md");
+        for target in [
+            std::path::PathBuf::from("agents/AGENTS.md"),
+            std::path::PathBuf::from("agents/../agents/AGENTS.md"),
+            scratch.path.join("agents/AGENTS.md"),
+        ] {
+            symlink(target, &destination).unwrap();
+            assert_eq!(
+                agent_discovery(&scratch.path, false),
+                "OK (link to agents/AGENTS.md)"
+            );
+            std::fs::remove_file(&destination).unwrap();
+        }
+        std::fs::write(scratch.path.join("other.md"), "source instructions").unwrap();
+        symlink("other.md", &destination).unwrap();
+        let report = agent_discovery(&scratch.path, false);
+        assert!(report.contains("wrong target"), "{report}");
+        assert!(report.contains("python3 agents/setup.py link"));
+        assert_eq!(
+            std::fs::read_link(&destination).unwrap(),
+            Path::new("other.md")
+        );
+        std::fs::remove_file(scratch.path.join("other.md")).unwrap();
+        let report = agent_discovery(&scratch.path, false);
+        assert!(report.contains("broken"));
+        assert!(report.contains("python3 agents/setup.py link"));
+        assert!(destination.is_symlink());
+    }
+
+    /// PATH is supplied by the fixture, so an installed host tool cannot hide a missing-tool bug.
+    #[test]
+    fn doctor_finds_direnv_only_when_path_contains_an_executable() {
+        let scratch = development_fixture("doctor-direnv");
+        let bin = scratch.directory("bin");
+        let path = std::env::join_paths([&bin]).unwrap();
+        assert!(!direnv_available(None));
+        assert!(!direnv_available(Some(&path)));
+        let executable = bin.join(if cfg!(windows) {
+            "direnv.exe"
+        } else {
+            "direnv"
+        });
+        std::fs::create_dir(&executable).unwrap();
+        assert!(!direnv_available(Some(&path)));
+        std::fs::remove_dir(&executable).unwrap();
+        std::fs::write(&executable, "not executed").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(!direnv_available(Some(&path)));
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(direnv_available(Some(&path)));
+        let report = development(&scratch.path, Some(&path), false).join("\n");
+        assert!(report.contains("available on PATH"));
+        assert!(!report.contains("brew install"));
     }
 
     /// A scratch directory that removes itself, so tests do not leave state behind.

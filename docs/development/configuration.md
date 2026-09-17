@@ -1,6 +1,7 @@
 # Configuration
 
-Uses [direnv](https://direnv.net/). Copy the template and fill it in:
+Development uses [direnv](https://direnv.net/) (on macOS, `brew install direnv`).
+Copy the template and fill it in:
 
 ```sh
 cp .envrc.example .envrc
@@ -27,3 +28,7 @@ forwards these variables as a BuildKit secret rather than a build argument, whic
 the signing key in the image metadata.
 
 Run `bravebot doctor` to check configuration and confinement without revealing the signing key.
+
+In this source checkout, doctor also reports the agent instructions discovery link and whether
+`direnv` is on PATH. Both checks are read-only development advice; ordinary user workspaces
+need neither. The direnv check does not test shell-hook activation or `.envrc` approval.
