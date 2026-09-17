@@ -27,7 +27,7 @@ use bravebot_sandbox::SandboxError;
 use bravebot_sandbox::policy::Capabilities;
 use bravebot_tui::sessions::Resumable;
 use std::io::{BufRead, IsTerminal, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -53,6 +53,32 @@ fn main() -> ExitCode {
     // questions to the same trait. Reading it per subcommand would be four chances to read it in
     // three of them, and the flag would then be silently ignored wherever it was forgotten.
     let skip_permissions = take_skip_permissions(&mut args);
+
+    // Read off the arguments as typed, before the flag below takes anything out of them: a result
+    // object was asked for by the command line that failed, whichever token the failure consumed.
+    let as_json = wants_json(&args);
+
+    // Taken out before dispatch for the reason the two above are, and acted on here because this is
+    // before the first read of a setting: a layer registered after the interface had loaded the
+    // others would configure half of one process.
+    match take_settings(&mut args) {
+        Ok(None) => {}
+        Ok(Some(path)) if path.is_file() => bravebot_config::name_a_settings_file(path),
+        // Refused rather than ignored, and for the audience CLI-11 refuses a directory for: a run
+        // told to configure itself from a file is a run whose configuration is the file, so falling
+        // back to whatever was found would be the wrong configuration used in silence. A mistyped
+        // path and a variable that expanded to nothing look the same here, and both are common.
+        Ok(Some(path)) => {
+            return stopped_before_the_turn(
+                as_json,
+                Ending::Argument,
+                t!(cli_settings_not_a_file, path = path.display().to_string()),
+            );
+        }
+        Err(complaint) => {
+            return stopped_before_the_turn(as_json, Ending::Argument, complaint);
+        }
+    }
 
     match args.first().map(String::as_str) {
         Some("--version" | "-V") => {
@@ -113,6 +139,45 @@ fn take_skip_permissions(args: &mut Vec<String>) -> bool {
     let asked = args.len();
     args.retain(|arg| arg != "--dangerously-skip-permissions");
     args.len() != asked
+}
+
+/// Take `--settings <path>` out of the arguments, answering with the file it named.
+///
+/// Removed before dispatch for the reason `--incognito` and `--dangerously-skip-permissions` are:
+/// the settings a run reads are a property of the run rather than of a task, so a session, a
+/// resumed session and a one-shot all mean the same thing by it, and a flag read per subcommand
+/// would be a flag silently ignored by whichever of them forgot it.
+///
+/// Given twice the last one is the file, which is how `--mode` and `--model` already resolve a
+/// repeat. Refusing instead would be a rule about typing, and there is nothing to add: a second
+/// file cannot be a fifth layer, since the flag names the layer above every other and two of those
+/// is not an order anybody could read off the command line.
+///
+/// The arguments are rewritten only once the whole scan has succeeded, so a refusal leaves the list
+/// that was typed rather than one this had half consumed.
+fn take_settings(args: &mut Vec<String>) -> Result<Option<PathBuf>, String> {
+    let mut named = None;
+    let mut kept = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] != "--settings" {
+            kept.push(args[index].clone());
+            index += 1;
+            continue;
+        }
+        // A blank path is refused rather than read as no flag, on `--model`'s argument: a script
+        // whose variable expanded to nothing asked for a settings file and would otherwise be run
+        // under whatever the directory happened to carry, without being told.
+        match args.get(index + 1).map(|path| path.trim()) {
+            Some(path) if !path.is_empty() => {
+                named = Some(PathBuf::from(path));
+                index += 2;
+            }
+            _ => return Err(t!(cli_settings_needs_a_path).to_string()),
+        }
+    }
+    *args = kept;
+    Ok(named)
 }
 
 fn print_help() {
@@ -176,6 +241,7 @@ fn print_help() {
     for (flags, description) in [
         ("--file <path>", t!(cli_option_file)),
         ("--add-dir <path>", t!(cli_option_add_dir)),
+        ("--settings <path>", t!(cli_option_settings)),
         ("--mode <mode>", t!(cli_option_mode)),
         ("--model <name>", t!(cli_option_model)),
         ("-p, --print", t!(cli_option_print)),
@@ -3172,6 +3238,115 @@ mod tests {
             let mut arguments = args(typed);
             assert!(take_incognito(&mut arguments), "{typed:?}");
             assert!(take_skip_permissions(&mut arguments), "{typed:?}");
+            assert_eq!(arguments, args(&["-p", "x"]), "left over: {typed:?}");
+        }
+    }
+
+    /// The file is taken out wherever it was typed, with the argument that belongs to it, and what
+    /// is left is the invocation somebody would have typed without it. Left in, the flag would come
+    /// back as an unknown option from whichever parser met it, and its path as a second prompt.
+    #[test]
+    fn the_settings_flag_is_taken_out_with_the_file_it_named() {
+        for typed in [
+            &["--settings", "/etc/ci.json", "-p", "do a thing"][..],
+            &["-p", "--settings", "/etc/ci.json", "do a thing"][..],
+            &["-p", "do a thing", "--settings", "/etc/ci.json"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert_eq!(
+                take_settings(&mut arguments).expect("names a file"),
+                Some(PathBuf::from("/etc/ci.json")),
+                "{typed:?} named no file"
+            );
+            assert_eq!(
+                arguments,
+                args(&["-p", "do a thing"]),
+                "left over: {typed:?}"
+            );
+        }
+    }
+
+    /// It belongs to every way of starting rather than to a one-shot run, so taking it out has to
+    /// leave a resume and a bare interactive invocation recognisable to the dispatch.
+    #[test]
+    fn a_named_settings_file_leaves_every_other_way_of_starting_intact() {
+        let mut arguments = args(&["--resume", "1787860306-65099", "--settings", "/etc/ci.json"]);
+        assert!(take_settings(&mut arguments).is_ok());
+        assert_eq!(arguments, args(&["--resume", "1787860306-65099"]));
+
+        // Nothing but the flag and its file is an interactive session, not an unknown option.
+        let mut alone = args(&["--settings", "/etc/ci.json"]);
+        assert!(take_settings(&mut alone).is_ok());
+        assert!(alone.is_empty());
+    }
+
+    /// A repeat resolves the way `--mode` and `--model` already resolve one, and both are taken
+    /// out: one left behind would reach a parser that has never heard of it.
+    #[test]
+    fn the_last_settings_file_named_is_the_one_read() {
+        let mut arguments = args(&[
+            "--settings",
+            "/etc/first.json",
+            "--settings",
+            "/etc/second.json",
+            "-p",
+            "do a thing",
+        ]);
+        assert_eq!(
+            take_settings(&mut arguments).expect("names a file"),
+            Some(PathBuf::from("/etc/second.json"))
+        );
+        assert_eq!(arguments, args(&["-p", "do a thing"]));
+    }
+
+    /// The flag with nothing after it, and the flag with a path that expanded to nothing, are both
+    /// refused rather than read as no flag at all, and the arguments are left as they were typed
+    /// rather than half consumed.
+    #[test]
+    fn a_settings_flag_with_no_path_is_refused() {
+        for typed in [
+            &["-p", "do a thing", "--settings"][..],
+            &["--settings", "   ", "-p", "do a thing"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert!(
+                take_settings(&mut arguments).is_err(),
+                "{typed:?} was accepted"
+            );
+            assert_eq!(arguments, args(typed), "the arguments changed: {typed:?}");
+        }
+    }
+
+    /// It composes with the other two flags taken out before dispatch, in any order: all three are
+    /// about the whole run rather than about a task, and a job that wants one may well want another.
+    #[test]
+    fn a_named_settings_file_composes_with_the_other_flags_before_dispatch() {
+        for typed in [
+            &[
+                "--incognito",
+                "--settings",
+                "/etc/ci.json",
+                "--dangerously-skip-permissions",
+                "-p",
+                "x",
+            ][..],
+            &[
+                "--settings",
+                "/etc/ci.json",
+                "--dangerously-skip-permissions",
+                "--incognito",
+                "-p",
+                "x",
+            ][..],
+        ] {
+            let mut arguments = args(typed);
+            assert!(take_incognito(&mut arguments), "{typed:?}");
+            assert!(take_skip_permissions(&mut arguments), "{typed:?}");
+            assert_eq!(
+                take_settings(&mut arguments).expect("names a file"),
+                Some(PathBuf::from("/etc/ci.json")),
+                "{typed:?}"
+            );
             assert_eq!(arguments, args(&["-p", "x"]), "left over: {typed:?}");
         }
     }

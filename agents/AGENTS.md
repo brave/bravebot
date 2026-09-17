@@ -61,6 +61,10 @@ alone. If they could not, it does not get built.
 
 ## Working here
 
+Before changing behaviour or adding, removing, or weakening test assertions, use
+[testing-preflight](agents/skills/testing-preflight/SKILL.md). Apply it before choosing the
+test approach, and use its evidence requirements when reporting the result.
+
 [docs/development/](docs/development/README.md) is how this repository is worked on: what to run
 before a commit and before a push, what one commit contains, the specs the code is developed
 against, the security scan, configuration, releasing, and how an issue is labelled.

@@ -10,6 +10,12 @@ Keep them small. If the message needs an "and" to describe what the commit does,
 commits. Every commit must leave the tree building and passing, since that is the whole of what
 makes a history worth bisecting.
 
+For behaviour or test changes, the pull request's testing summary must answer: **Which plausible
+regression do the new or changed tests reject?** Name the relevant tests and distinguish an
+observed failure on broken code from coverage inferred by reading the test. Include checks not
+run and any gaps; a passing test count alone does not answer the question. Follow the
+[testing-preflight skill](../../agents/skills/testing-preflight/SKILL.md) for the evidence needed.
+
 A spec clause ships with the work it describes, in that same commit. [spec-enforced-development.md](spec-enforced-development.md) says what
 that means and what it costs to do otherwise.
 
