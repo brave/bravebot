@@ -6,7 +6,8 @@ Spec changes, additions, and removals are closely reviewed by humans.
 If a mini-spec disagrees, that is a bug in the spec that should be fixed.
 
 Specs have automation attached which verifies that there is coverage of functionality and also
-that functionality matches specs. Bugs are posted for any problems found.
+that functionality matches specs. It drafts a bug for every problem it finds, showing what went
+wrong rather than describing it, and a person reads the drafts and says which get posted.
 
 ## The specs
 
@@ -106,7 +107,7 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
   Within one spec, either every entry pins its sites or none does: an unpinned entry beside pinned
   ones reads as though it were checked too.
 - **`verified-by:`** lines name the tests that pin a clause, as `crate::module::test_name`. The
-  coverage check reads them, fails when a name does not resolve to a test that exists, and posts a
+  coverage check reads them, fails when a name does not resolve to a test that exists, and drafts a
   bug for any clause whose value is `none`. `by-construction` is for a clause nothing can execute,
   such as a crate having no dependencies, and says in brackets what makes it hold.
 

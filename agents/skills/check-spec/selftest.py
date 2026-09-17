@@ -30,6 +30,12 @@ spec = importlib.util.spec_from_file_location(
 check = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(check)
 
+_drafts = importlib.util.spec_from_file_location(
+    "draft_issues", Path(__file__).resolve().parent / "draft-issues.py"
+)
+draft = importlib.util.module_from_spec(_drafts)
+_drafts.loader.exec_module(draft)
+
 
 CLEAN_SPEC = """\
 ---
@@ -388,6 +394,113 @@ UNVERIFIED_CASES = [
     ("a withdrawn clause is not listed", withdraw_the_second_clause, []),
 ]
 
+VIOLATION = {
+    "spec": "docs/specs/demo.md",
+    "clause": "DEMO-1",
+    "severity": "error",
+    "kind": "violation",
+    "summary": "the gate opens twice",
+    "evidence": ["crates/demo/src/lib.rs:4 nothing records that it was opened"],
+    "failure": "call open twice and the second call is accepted",
+    "fix": "refuse the second call",
+    "screen": "open the gate, then open it again, and look at what is drawn",
+    "source": "review",
+}
+UNCOVERED = {
+    "spec": "docs/specs/demo.md",
+    "clause": "DEMO-1",
+    "severity": "warning",
+    "kind": "clause-uncovered",
+    "summary": "`DEMO-1` is `verified-by: none`, so nothing pins it",
+    "evidence": "docs/specs/demo.md:9",
+    "source": "mechanical",
+}
+# A run that did not finish, and a review that could not tell. Neither names anything to go and fix.
+UNFINISHED = dict(VIOLATION, kind="review-incomplete", clause="DEMO-2")
+UNDECIDED = dict(VIOLATION, kind="unclear", severity="warning", clause="DEMO-2")
+# A mechanical error fails `make check-spec`, so it is red on the branch that caused it.
+RED_IN_CI = dict(UNCOVERED, kind="clause-numbering", severity="error", clause="DEMO-2")
+
+A_SCREEN = "the gate is open\nand a ``` fence, which must not close the block\n"
+
+
+def draft_checks():
+    """What one body says, against a finding whose every field is known.
+
+    A body nobody can act on is the state this replaces rather than an improvement on it, so each
+    claim here is one thing the reader of an issue needs and would have to go and find out without.
+    """
+    draft._LOADED.clear()  # The fixture is a different spec tree from the last case's.
+    out = Path("issues")
+    findings = [VIOLATION, UNCOVERED, UNFINISHED, UNDECIDED, RED_IN_CI]
+    drafts = draft.draft(draft.draftable(findings, errors_only=False), out)
+    by_kind = {entry["kind"]: entry for entry in drafts}
+    body = Path(by_kind["violation"]["body_file"]).read_text(encoding="utf-8")
+
+    checks = [
+        (
+            "only the findings a green CI run leaves unsaid are drafted",
+            sorted(by_kind) == ["clause-uncovered", "violation"],
+        ),
+        (
+            "two findings on one clause get a body each",
+            by_kind["violation"]["body_file"] != by_kind["clause-uncovered"]["body_file"],
+        ),
+        ("the title leads with the clause", by_kind["violation"]["title"].startswith("DEMO-1: ")),
+        ("a violation is labelled a mismatch", by_kind["violation"]["label"] == "spec-mismatch"),
+        (
+            "a clause nothing pins is labelled coverage",
+            by_kind["clause-uncovered"]["label"] == "spec-coverage",
+        ),
+        (
+            "the body quotes the clause that was broken",
+            "> ### DEMO-1: the gate opens only once" in body,
+        ),
+        ("the body says where the clause is", "`docs/specs/demo.md#DEMO-1`" in body),
+        # Every field the review produced, since the fixer starts from these and nothing else.
+        ("the body keeps the failure", VIOLATION["failure"] in body),
+        ("the body keeps the evidence", "`crates/demo/src/lib.rs:4`" in body),
+        ("the body keeps the fix", VIOLATION["fix"] in body),
+        ("the body names what the spec governs", "`crates/demo/src/lib.rs`" in body),
+        (
+            "the body says a check drafted it rather than a person",
+            "rather than written by a person" in body,
+        ),
+        # Shown, not described: with no screen yet, the code at the evidence line is the artifact.
+        ("the body shows the code at the evidence line", "pub fn open(&self) {}" in body),
+        (
+            "a screen is asked for where the reviewer said one could be seen",
+            by_kind["violation"]["screen_wanted"] == VIOLATION["screen"]
+            and not by_kind["violation"]["has_screen"],
+        ),
+        (
+            "a clause nothing pins asks for no screen",
+            not by_kind["clause-uncovered"]["screen_wanted"],
+        ),
+    ]
+
+    Path(by_kind["violation"]["screen_file"]).write_text(A_SCREEN, encoding="utf-8")
+    drafts = draft.draft(draft.draftable(findings, errors_only=False), out)
+    by_kind = {entry["kind"]: entry for entry in drafts}
+    shown = Path(by_kind["violation"]["body_file"]).read_text(encoding="utf-8")
+    checks += [
+        ("a captured screen is read back into the body", "the gate is open" in shown),
+        (
+            "the screen replaces the code it was captured instead of",
+            "pub fn open(&self) {}" not in shown,
+        ),
+        # The screen is whatever the interface drew, backticks included.
+        ("a fence inside a screen does not close the block early", "````text" in shown),
+        ("the draft stops asking for a screen it has", by_kind["violation"]["has_screen"]),
+    ]
+
+    errors = draft.draft(draft.draftable(findings, errors_only=True), out)
+    checks.append(
+        ("--errors leaves the warnings out", [e["kind"] for e in errors] == ["violation"])
+    )
+    return checks
+
+
 # Which runs may write the file. A run given a filter read part of the tree, and the list is
 # about all of it.
 SELECTIONS = [
@@ -442,7 +555,11 @@ def main():
         answer = check.partial_selection(selectors, changed_base)
         note(name, answer == refused, f"answered {answer}, wanted {refused}")
 
-    total = len(CASES) + len(UNVERIFIED_CASES) + len(SELECTIONS)
+    drafted = in_fixture(None, draft_checks)
+    for name, held in drafted:
+        note(name, held, "the body does not say it")
+
+    total = len(CASES) + len(UNVERIFIED_CASES) + len(SELECTIONS) + len(drafted)
     print()
     if failures:
         for failure in failures:
