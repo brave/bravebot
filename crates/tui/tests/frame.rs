@@ -308,6 +308,33 @@ fn an_export_attaches_each_reason_to_the_turn_that_had_it() {
     );
 }
 
+/// The other ending an export has to hold. A turn stopped once it had said something keeps both
+/// the prompt and the stop, and an export that dropped the stop is a prompt with no answer and
+/// nothing saying why.
+#[test]
+fn an_export_of_a_cancelled_turn_says_it_was_cancelled() {
+    let mut session = Session::new("none");
+    session.paste("check the tests pass");
+    let prompt = session.submit().expect("the line was taken");
+    session.narrate("reading the tests first");
+    session.stopped(Some(2));
+    session.restore(&prompt);
+
+    let markdown = render::as_markdown(&session, "a session");
+    assert!(
+        markdown.contains("Cancelled"),
+        "the export does not say the turn was stopped:\n{markdown}"
+    );
+    assert!(
+        !markdown.contains("Failed"),
+        "a turn somebody stopped was exported as a failure:\n{markdown}"
+    );
+    assert!(
+        markdown.contains("check the tests pass"),
+        "the prompt that was stopped was not in the export:\n{markdown}"
+    );
+}
+
 #[test]
 fn cancellation_has_its_own_status_even_when_the_prompt_returns() {
     for attempts in [None, Some(0), Some(1)] {

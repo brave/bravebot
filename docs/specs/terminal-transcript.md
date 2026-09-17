@@ -517,11 +517,13 @@ The live session's export includes its failure and cancellation entries.
 `verified-by: bravebot_tui::frame::a_long_failure_reason_is_not_lost`
 `verified-by: bravebot_tui::frame::a_failure_reason_carrying_terminal_controls_is_drawn_inert`
 `verified-by: bravebot_tui::frame::a_failure_reason_survives_a_resize`
+`verified-by: bravebot_tui::frame::reading_older_scrollback_is_not_interrupted_by_a_failure`
 `verified-by: bravebot_tui::frame::a_failed_turn_is_called_failed_rather_than_stopped`
 `verified-by: bravebot_tui::frame::a_turn_that_succeeds_after_a_failure_says_so`
 `verified-by: bravebot_tui::frame::an_export_of_a_failed_turn_says_why_it_failed`
+`verified-by: bravebot_tui::frame::an_export_attaches_each_reason_to_the_turn_that_had_it`
+`verified-by: bravebot_tui::frame::an_export_of_a_cancelled_turn_says_it_was_cancelled`
 `verified-by: bravebot_tui::failure_history::turn_endings_keep_the_visible_history_anchor`
 `verified-by: bravebot_tui::outcome_colours::regression_success_cost_uses_neutral_colour`
 `verified-by: bravebot_tui::outcome_colours::failure_label_uses_failure_colour`
-
 `verified-by: bravebot_tui::frame::cancellation_has_its_own_status_even_when_the_prompt_returns`
