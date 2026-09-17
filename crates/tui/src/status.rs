@@ -336,8 +336,8 @@ pub fn report(facts: &Facts<'_>) -> Report {
     ));
 
     // Under the turn and token counts, because it is the same question about the same session:
-    // what did this cost. Drawn only once a turn has run, since every figure would be zero before
-    // that and a panel of zeroes reads as a broken feature rather than as an idle session.
+    // what did this cost. A session with no turn yet has as much to say here as any other, since an
+    // aside asked before the first prompt waits on the model for however long it waits.
     //
     // The threshold is a whole second rather than any time at all, because the figures are rendered
     // by the same formatter the indicator uses and it floors to seconds: a part of 400ms would be
@@ -1357,8 +1357,8 @@ mod tests {
         );
     }
 
-    /// Before a turn has run every figure is zero, and a panel of zeroes reads as a broken feature
-    /// rather than as a session that has not started.
+    /// A session that has measured nothing has nothing to say about where its time went, and a
+    /// panel of zeroes reads as a broken feature rather than as a session that has not started.
     #[test]
     fn a_session_with_no_turn_yet_reports_no_time() {
         let config = config_for("http://127.0.0.1:1", None);
