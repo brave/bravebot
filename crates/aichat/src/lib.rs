@@ -80,7 +80,7 @@ impl fmt::Display for ChatError {
             Self::Subscription(detail) => write!(
                 f,
                 "the Leo subscription could not be used: {detail}. Run `bravebot import-leo-creds` to \
-                 refresh it, or unset the premium endpoint to use the free tier"
+                 refresh it, or unset the premium endpoint to send requests without one"
             ),
         }
     }
@@ -126,7 +126,7 @@ pub struct Completion {
 pub trait Subscription {
     /// The cookie value presenting the next credential.
     ///
-    /// An error here fails the request. It deliberately does not fall back to the free tier: a
+    /// An error here fails the request. It deliberately does not fall back to sending none: a
     /// configured subscription that silently stops being used looks like the model got worse for
     /// no reason, and the one thing worse than an error is an unexplained downgrade.
     fn next_credential(&mut self) -> Result<SubscriptionCredential, String>;
@@ -256,17 +256,17 @@ impl<'a> AichatClient<'a> {
     /// Where this request goes, and any credential to attach.
     ///
     /// The premium host and the credential travel together: a credential belongs to the premium
-    /// deployment, so a build with no premium host stays on the free tier rather than sending the
-    /// credential somewhere it does not belong.
+    /// deployment, so a build with no premium host sends no credential rather than sending one
+    /// somewhere it does not belong.
     ///
     /// With both a premium host and a subscription, this is premium or nothing. A credential that
-    /// cannot be produced fails the request rather than quietly reverting to the free tier, because
-    /// a downgrade nobody was told about is indistinguishable from the service getting worse.
+    /// cannot be produced fails the request rather than quietly sending none, because a downgrade
+    /// nobody was told about is indistinguishable from the service getting worse.
     fn route(&mut self) -> Result<(String, Option<SubscriptionCredential>), ChatError> {
-        let free = self.config.chat_completions_url();
+        let base = self.config.chat_completions_url();
 
         let Some(premium_url) = self.config.premium_chat_completions_url() else {
-            return Ok((free, None));
+            return Ok((base, None));
         };
 
         match self.subscription.as_mut() {
@@ -274,9 +274,9 @@ impl<'a> AichatClient<'a> {
                 Ok(credential) => Ok((premium_url, Some(credential))),
                 Err(detail) => Err(ChatError::Subscription(detail)),
             },
-            // Premium is configured but nothing has been imported, which is not an error: the free
-            // tier is what an unsubscribed caller gets.
-            None => Ok((free, None)),
+            // Premium is configured but nothing has been imported, which is not an error: a caller
+            // who has imported nothing sends no credential.
+            None => Ok((base, None)),
         }
     }
 
@@ -857,7 +857,7 @@ fn learned() -> &'static std::sync::Mutex<std::collections::HashMap<String, Refu
 ///
 /// The service as well as the model, because a model id is only unique within one of them. Two
 /// gateways can serve the same id, and one gateway refusing would otherwise stop the asking
-/// everywhere, Brave's endpoint included. Both of Brave's tiers answer to the free host here,
+/// everywhere, Brave's endpoint included. Both of Brave's hosts answer to the base host here,
 /// being one deployment rather than two services.
 fn learned_key(service: &str, model: &str) -> String {
     format!("{service}\n{model}")

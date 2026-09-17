@@ -155,7 +155,8 @@ over one set of failures is one of them going out of date.
 
 It prints every backend this build can reach and what identifies it, which names the settings set,
 which settings files are in force and which of them won a name more than one set, which names a
-machine-level file pinned and where that file is, the model in force
+machine-level file pinned and where that file is, how to configure a service where nothing
+configured will serve a turn, the model in force
 and whether it was chosen or defaulted, where the state directory is or that there is none, what a
 TLS handshake is validated against and what a request is routed through, the
 confinement available on this platform, and the state of any imported subscription. The signing key
@@ -247,11 +248,18 @@ because which variables a machine states them in is not something the reader is 
 The proxy is named without the credential it carries, and the hosts it is not used for are named
 beside it, since those decide whether it applies to the host that is failing.
 
-Three of the things it can say are configuration errors rather than findings, and make the command
-fail: a named path that yielded no certificate, a set of roots that leaves nothing trusted, and a
-proxy named in a protocol this build cannot connect through. Each is a statement about the machine
-that the program is not honouring, which is the case a report passing with a warning would leave
-somebody to discover at the next request.
+Four of the things it can say are configuration errors rather than findings, and make the command
+fail: a named path that yielded no certificate, a set of roots that leaves nothing trusted, a
+proxy named in a protocol this build cannot connect through, and a configuration naming nothing
+that will serve a turn. Each is a statement about the machine that the program is not honouring,
+which is the case a report passing with a warning would leave somebody to discover at the next
+request.
+
+The last of the four is where the report and the session have to agree. A configuration naming only
+no model service is one a session refuses to open on ([BACKEND-39](backends.md#BACKEND-39)), and
+the three ways to configure one are what the report says, in the same words. A report calling that machine
+healthy would be read before anything else by the one person certain to run this command, which is
+whoever was just refused.
 
 The development section asks the same question one step in rather than one step out: not what this
 machine will use, but whether this checkout is set up to be worked on. The links `agents/setup.py`
@@ -378,9 +386,9 @@ name that asks for whichever model the server picks rather than for a particular
 that does not report the name it was asked for.
 
 **Why.** A model a run cannot be served is substituted rather than refused. One that needs a
-subscription is answered by whatever the free tier serves, with an ordinary reply and nothing to
-distinguish it, so the name the server reports is the only trace there is. Reporting it is about
-the model in force rather than the flag alone, because every route to a model is somebody naming
+subscription is answered by a weaker model, with an ordinary reply and nothing to distinguish it, so
+the name the server reports is the only trace there is. Reporting it is about the model in force
+rather than the flag alone, because every route to a model is somebody naming
 one they expect to be answered by: the settings file's key is what a repository commits beside its
 scripts, and a remembered choice is what a person picked and is being shown.
 

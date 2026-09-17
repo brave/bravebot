@@ -34,5 +34,5 @@ from.
 
 State what is true about the code, in the present tense, as though saying it for the first time.
 Where a correction matters, the corrected fact is the whole of it: write "an absent store reports
-nothing and the turn runs on the free tier", not "I said it warns, but it does not". This applies
+nothing and the turn spends no subscription", not "I said it warns, but it does not". This applies
 most where it is most tempting, which is immediately after getting something wrong.

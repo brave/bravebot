@@ -30,7 +30,7 @@
 //!
 //! What it did cost was availability. The keychain crate builds one Linux backend, the D-Bus
 //! Secret Service, so a machine reached over SSH with no desktop session had no store to open at
-//! all and every such user was silently on the free tier.
+//! all and every such user was silently spending no subscription.
 //!
 //! # Why the whole batch is stored, not one cookie
 //!
@@ -980,7 +980,7 @@ mod tests {
 
     /// PREM-7: stock Windows sets no `HOME`, so the batch imported there belongs under the profile
     /// directory the platform does name. Nowhere to keep it means an import that cannot be kept, and
-    /// a machine paying for a subscription running every turn on the free tier.
+    /// a machine paying for a subscription spending it on nothing.
     #[test]
     fn the_profile_directory_answers_where_no_home_is_named() {
         let expected = PathBuf::from("C:\\Users\\someone")
@@ -1012,7 +1012,7 @@ mod tests {
     }
 
     /// A file holding something another version wrote must be reported, not read as absent: the
-    /// remedy is re-importing, and treating it as absent would drop the user to the free tier
+    /// remedy is re-importing, and treating it as absent would stop the subscription being spent
     /// without a word.
     #[test]
     fn a_file_that_is_not_json_is_reported_when_loaded() {

@@ -1222,9 +1222,9 @@ impl Session {
             // the only thing that can: the flag is the record that somebody accepted the cost.
             permission_mode: bravebot_agent::PermissionMode::default(),
             bypass_available: false,
-            // The free tier until a caller says otherwise, which is what a build with no premium
+            // No subscription until a caller says otherwise, which is what a build with no premium
             // host has and what a test that does not care about tiers should see.
-            tier: t!(status_free_tier).to_string(),
+            tier: t!(status_no_subscription).to_string(),
             turns: 0,
             tokens: 0,
             spend: std::collections::BTreeMap::new(),
