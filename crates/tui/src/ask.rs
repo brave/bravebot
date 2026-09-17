@@ -21,6 +21,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
+use crate::input;
 use crate::theme;
 
 /// Longest answer the user can type.
@@ -104,7 +105,7 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, asking: &Asking) -> Vec<Answe
             return Vec::new();
         }
 
-        let key = match event::read() {
+        let key = match input::read() {
             // Presses only. The interface asks the terminal for disambiguated keys, which reports
             // releases too, and a release taken for a press answers the next question with the key
             // that answered this one.

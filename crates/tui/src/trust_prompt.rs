@@ -30,6 +30,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use std::path::Path;
 
+use crate::input;
 use crate::theme;
 
 /// What the user decided about the working directory.
@@ -149,7 +150,7 @@ fn trusting_the_workspace(directory: &Path) -> TrustStore {
 /// Block until the user answers.
 fn read_answer() -> Answer {
     loop {
-        match event::read() {
+        match input::read() {
             // Presses only: the interface asks for disambiguated keys, so a release arrives too,
             // and answering a question twice grants standing permission on one keystroke.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
@@ -330,6 +331,27 @@ mod tests {
     /// The working directory these answers are about.
     fn here() -> &'static Path {
         Path::new("/work")
+    }
+
+    /// The reported bug, at the question it reached first. An editor that activates a virtualenv
+    /// by typing `source .../.venv/bin/activate` into the terminal it opened spells an `n` on the
+    /// way past, and a reader taking those keys one at a time answers this question with it: the
+    /// directory is settled by a program, and the rest of the path becomes a prompt.
+    ///
+    /// Asserted against every event the run resolves to, rather than against the paste it should
+    /// be, so the test still rejects the fault if the classification changes shape.
+    #[test]
+    fn a_command_line_another_program_typed_in_answers_nothing() {
+        let run = crate::input::run_spelling("source /tmp/x/.venv/bin/activate\r");
+        for event in crate::input::resolve(run) {
+            if let TermEvent::Key(key) = event {
+                assert_eq!(
+                    answer_for(key),
+                    None,
+                    "a key out of a burst answered the trust question"
+                );
+            }
+        }
     }
 
     /// The characters one question puts on a terminal, in reading order.

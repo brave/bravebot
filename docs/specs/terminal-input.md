@@ -4,6 +4,7 @@ title: The input box
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/input.rs
   - crates/tui/src/state.rs
   - crates/tui/src/wrap.rs
   - crates/tui/src/editor.rs
@@ -1482,7 +1483,8 @@ found, and the same set is taken again on the way back.
 the transcript only while the mouse is reported, and all-motion reporting is narrowed away because
 a pointer merely crossing the window is an event and a redraw per pixel of travel, for a gesture
 nothing here reads. Bracketed paste is what stops a pasted prompt sending itself, since without it
-the newline most clipboards carry arrives as Enter. Focus reporting is what makes the clipboard
+the newline most clipboards carry arrives as Enter; where a paste arrives without those markers,
+INPUT-34 is what recognises it. Focus reporting is what makes the clipboard
 worth a look at the one moment a picture appears on it, rather than polled for ever. Disambiguated
 keys are what make Shift-Enter arrive at all, a terminal otherwise sending the same byte however
 Enter was pressed.
@@ -1498,3 +1500,60 @@ person than whatever error put it there.
 `verified-by: bravebot_tui::app::every_mode_a_session_asks_for_is_given_back`
 `verified-by: bravebot_tui::app::a_pushed_keyboard_mode_is_popped_and_an_unpushed_one_is_not`
 `verified-by: bravebot_tui::app::the_session_reads_a_drag_and_not_every_pointer_movement`
+
+<a id="INPUT-34"></a>
+### INPUT-34: keys that were all waiting together are a paste, and a paste never answers
+
+A terminal delivers one byte stream and says nothing about who wrote it, so a person at a keyboard
+and another program holding the other end of the pty arrive identically. **A run of keys that were
+all waiting together is read as a paste rather than as typing.** The test is two or more characters
+available in the same read: one character is a keystroke however it got there, and two asks for a
+keyboard that filled the buffer between one read and the next.
+
+What such a run becomes is the text it spells, which lands in the box exactly as a paste does and
+therefore does not send, per [PASTE-1](pasting.md#PASTE-1). Enter inside the run is a newline and
+Tab a tab, since a command line written into a terminal carries both. Everything else in it is
+dropped: a chord, an Escape, an interrupt. The run is text, and an instruction inside text is one
+nobody gave.
+
+**A paste is not an answer to anything.** Every question this program puts up, the one at startup
+about the working directory and every prompt in [prompting.md](prompting.md), is answered by a key
+and discards everything else, so a run cannot press `y` at a trust question or `a` at a run prompt.
+Nothing is said when one is discarded: a question that has not been answered is a question still on
+the screen, which is what the person sees.
+
+Two runs that are not pastes, whatever their length. A run carrying no characters at all, which is
+what key autorepeat looks like behind a slow redraw, is delivered key by key; reading it as a paste
+of nothing would eat the scrolling. And a press with its release is one character rather than two,
+since disambiguated keys report both (INPUT-33) and a repeat is one press the terminal is repeating.
+
+**Why.** Answering a question grants something: trust in a directory's contents, or a command that
+runs again unasked with its output read as trusted. A keystroke is the whole of the evidence that a
+person granted it, so a program able to write bytes at the terminal could otherwise grant it
+instead, and the thing that can write them is not exotic. An editor that activates a virtualenv by
+typing the command into the terminal it opened is doing it for good reasons and with no idea what is
+running there.
+
+**Why the sending half matters as much.** Without this, the Enter at the end of an injected command
+line is Enter: the words before it go to the planner as a prompt, and a turn starts that nobody
+asked for. The behaviour already existed for a paste the terminal marked, which is the whole of the
+reason bracketed paste is asked for, and an unmarked burst is the same thing with the markers
+missing.
+
+**What this does not buy, said plainly.** Timing is evidence and not proof. A writer that sends one
+key every few hundred milliseconds is a person as far as any test of this kind can tell, and this
+clause does not stop it: it raises the cost of the channel from one write to a paced conversation.
+What it does stop is every writer that types a line the way a program types, which is all of them
+today. The guarantee this repository exists for does not rest on this clause, since the terminal is
+a person's own channel and not a route untrusted content travels.
+
+`verified-by: bravebot_tui::input::a_line_that_arrived_all_at_once_is_a_paste`
+`verified-by: bravebot_tui::input::a_run_carrying_two_characters_reaches_nothing_that_reads_keys`
+`verified-by: bravebot_tui::input::one_character_on_its_own_stays_a_key`
+`verified-by: bravebot_tui::input::a_run_of_keys_carrying_no_text_is_still_keys`
+`verified-by: bravebot_tui::input::a_chord_inside_a_burst_is_dropped_rather_than_obeyed`
+`verified-by: bravebot_tui::input::a_press_and_its_release_are_one_character_and_not_a_burst`
+`verified-by: bravebot_tui::input::a_repeat_does_not_make_a_press_into_a_burst`
+`verified-by: bravebot_tui::input::a_burst_keeps_the_newlines_and_tabs_it_carried`
+`verified-by: bravebot_tui::trust_prompt::a_command_line_another_program_typed_in_answers_nothing`
+`verified-by: bravebot_tui::confirm::a_line_another_program_typed_in_endorses_nothing`

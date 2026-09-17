@@ -27,6 +27,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
+use crate::input;
 use crate::theme;
 use crate::vim::Editing;
 
@@ -161,7 +162,7 @@ pub fn choose<B: Backend>(
             return None;
         }
 
-        let Ok(event) = event::read() else {
+        let Ok(event) = input::read() else {
             return None;
         };
         let TermEvent::Key(key) = event else {

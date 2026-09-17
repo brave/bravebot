@@ -24,6 +24,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
+use crate::input;
 use crate::render::{marked_rows, quarantined_rows};
 use crate::theme;
 
@@ -145,7 +146,7 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> An
             return Answer::Reject;
         }
 
-        match event::read() {
+        match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
@@ -542,7 +543,7 @@ pub fn ask_run<B: Backend>(terminal: &mut Terminal<B>, request: &RunRequest) -> 
             return RunAnswer::Reject;
         }
 
-        match event::read() {
+        match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
@@ -1000,7 +1001,7 @@ pub fn ask_output<B: Backend>(terminal: &mut Terminal<B>, request: &OutputReques
             return VetAnswer::Reject;
         }
 
-        match event::read() {
+        match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
@@ -1289,7 +1290,7 @@ pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> 
             return VetAnswer::Reject;
         }
 
-        match event::read() {
+        match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
@@ -1478,7 +1479,7 @@ pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest)
             return Answer::Reject;
         }
 
-        match event::read() {
+        match input::read() {
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
             Ok(TermEvent::Key(key)) => match answer_for(key) {
                 Some(Response::Answer(answer)) => return answer,
@@ -1503,7 +1504,7 @@ pub fn ask_server<B: Backend>(terminal: &mut Terminal<B>, request: &ServerReques
             return Answer::Reject;
         }
 
-        match event::read() {
+        match input::read() {
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
             Ok(TermEvent::Key(key)) => match answer_for(key) {
                 Some(Response::Answer(answer)) => return answer,
@@ -1683,7 +1684,7 @@ pub fn ask_vouch<B: Backend>(terminal: &mut Terminal<B>, request: &VouchRequest)
             return Answer::Reject;
         }
 
-        match event::read() {
+        match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
@@ -1857,7 +1858,7 @@ pub fn ask_manifest<B: Backend>(terminal: &mut Terminal<B>, request: &ManifestRe
             return Answer::Reject;
         }
 
-        match event::read() {
+        match input::read() {
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
             Ok(TermEvent::Key(key)) => match answer_for(key) {
                 Some(Response::Answer(answer)) => return answer,
@@ -2113,6 +2114,23 @@ mod tests {
                 reads: Vec::new(),
                 stdin: None,
             },
+        }
+    }
+
+    /// The expensive half of the reported bug. This prompt's keys are bare letters, and `a` on it
+    /// vouches for the command for the rest of the session: it runs again unasked and its output
+    /// comes back trusted. Any program that can write at the terminal spells an `a` sooner or
+    /// later, `deactivate` among them, so no key out of a burst may reach this.
+    #[test]
+    fn a_line_another_program_typed_in_endorses_nothing() {
+        let request = a_run(false);
+        for event in crate::input::resolve(crate::input::run_spelling("deactivate\r")) {
+            if let TermEvent::Key(key) = event {
+                assert!(
+                    run_answer_for(key, &request).is_none(),
+                    "a key out of a burst answered the run prompt"
+                );
+            }
         }
     }
 

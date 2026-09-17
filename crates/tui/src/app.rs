@@ -24,7 +24,7 @@ use bravebot_net::Egress;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
     EnableFocusChange, EnableMouseCapture, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -39,6 +39,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::input;
 use crate::render;
 use crate::select;
 use crate::state::{Session, Status};
@@ -2458,7 +2459,7 @@ fn event_loop(
         // Waiting for the burst to end, but not indefinitely: a drag that never pauses would
         // otherwise show nothing until it stopped.
         let waited_long_enough = drawn_at.elapsed() >= FRAME;
-        if needs_draw && (waited_long_enough || !event::poll(Duration::ZERO)?) {
+        if needs_draw && (waited_long_enough || !input::poll(Duration::ZERO)?) {
             redraw(terminal, &mut session)?;
             needs_draw = false;
             drawn_at = Instant::now();
@@ -2488,10 +2489,10 @@ fn event_loop(
                 None => match queued_next(&mut session) {
                     Some(action) => action,
                     None => {
-                        if !event::poll(POLL)? {
+                        if !input::poll(POLL)? {
                             continue;
                         }
-                        match event::read()? {
+                        match input::read()? {
                             // Presses only. Asking for disambiguated keys asks for releases as well, and a
                             // release handled as a press types every character twice.
                             TermEvent::Key(key) if key.kind == KeyEventKind::Release => {
@@ -3858,8 +3859,8 @@ fn run_command(
     while !worker.is_finished() {
         redraw(terminal, session)?;
 
-        while event::poll(Duration::ZERO)? {
-            match event::read()? {
+        while input::poll(Duration::ZERO)? {
+            match input::read()? {
                 TermEvent::Key(key) if key.kind == KeyEventKind::Release => {}
                 // A running command is something to stop, so Ctrl-C stops it and stays, for the
                 // reason it stops a turn: the way out is the press after that, at the box.
@@ -4014,9 +4015,9 @@ fn compact_animated(
         // Input is still read, so a long summary does not leave the interface deaf, and the
         // frame's waiting is done here for the reason the turn loop does it here: a key press
         // has to wake the loop rather than queue behind it.
-        if event::poll(FRAME)? {
-            while event::poll(Duration::ZERO)? {
-                match event::read()? {
+        if input::poll(FRAME)? {
+            while input::poll(Duration::ZERO)? {
+                match input::read()? {
                     // The one place Ctrl-C still leaves with something in flight, and what a mode
                     // standing over the session takes ahead of it, are both that function's.
                     TermEvent::Key(key) => {
@@ -4163,9 +4164,9 @@ fn aside_animated(
         // Input is still read for the reason a summary reads it: a long answer must not leave the
         // interface deaf, and the frame's waiting is done here so a key press wakes the loop
         // rather than queueing behind the worker.
-        if event::poll(FRAME)? {
-            while event::poll(Duration::ZERO)? {
-                match event::read()? {
+        if input::poll(FRAME)? {
+            while input::poll(Duration::ZERO)? {
+                match input::read()? {
                     // The same shape as a summary's keys, and the same function reads them.
                     TermEvent::Key(key) => {
                         one_request_key(session, key, t!(btw_uninterruptible));
@@ -4365,9 +4366,9 @@ fn manifest_animated(
         // Read here rather than in the outer loop, which is blocked for the duration, and for the
         // reason a turn reads it here: a run that walks for ten minutes must not leave the
         // interface deaf, and the frame's waiting is done here so a key press wakes the loop.
-        if event::poll(FRAME)? {
-            while event::poll(Duration::ZERO)? {
-                match event::read()? {
+        if input::poll(FRAME)? {
+            while input::poll(Duration::ZERO)? {
+                match input::read()? {
                     TermEvent::Key(key) if key.kind == KeyEventKind::Release => {}
                     // Both keys stop the run and neither leaves, exactly as in a turn. A person
                     // watching a plan go wrong is asking for the plan to stop; the next press, at
@@ -4675,9 +4676,9 @@ fn goal_check_animated(
         // Input is still read for the reason an aside reads it: a slow answer must not leave the
         // interface deaf, and the frame's waiting is done here so a key press wakes the loop
         // rather than queueing behind the worker.
-        if event::poll(FRAME)? {
-            while event::poll(Duration::ZERO)? {
-                match event::read()? {
+        if input::poll(FRAME)? {
+            while input::poll(Duration::ZERO)? {
+                match input::read()? {
                     // Which of the goal, a mode over the session, and the session itself a stop
                     // key is asking about is that function's to say.
                     TermEvent::Key(key) => goal_check_key(session, key),
@@ -4983,9 +4984,9 @@ fn run_turn_animated(
         //
         // Everything waiting, not one event per pass: a drag read one event at a time would take
         // seconds to catch up with the pointer.
-        if event::poll(FRAME)? {
-            while event::poll(Duration::ZERO)? {
-                match event::read()? {
+        if input::poll(FRAME)? {
+            while input::poll(Duration::ZERO)? {
+                match input::read()? {
                     // Presses only, for the reason the outer loop ignores releases: a release taken
                     // for a press would type every character twice, and cancel the turn on the way up
                     // from the Escape that already cancelled it.

@@ -7,6 +7,7 @@
 //! middle of it rather than as the way it starts. Escape leaves without resuming anything, which
 //! starts an ordinary session: nothing here can strand a user who opened it by mistake.
 
+use crate::input;
 use crate::theme;
 use bravebot_i18n::t;
 use bravebot_session::sessions::{self, Summary};
@@ -185,7 +186,7 @@ pub fn choose<B: Backend>(terminal: &mut Terminal<B>, project: &Path) -> Choice 
             return Choice::Fresh;
         }
 
-        let Ok(event) = event::read() else {
+        let Ok(event) = input::read() else {
             return Choice::Fresh;
         };
         let TermEvent::Key(key) = event else {
