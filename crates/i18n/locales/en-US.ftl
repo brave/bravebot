@@ -1124,3 +1124,16 @@ reach-no-model = in no model's context: nothing can be sent to read this
 
 # How many calls a delegate has made, where its block shows only the last few.
 delegate-more-calls = { $count } calls so far
+
+# Advisory checks shown only in a Bravebot source checkout.
+doctor-development = development environment { $path }
+doctor-agents-ok = OK (link to agents/AGENTS.md)
+doctor-agents-copy-ok = OK (Windows copy of agents/AGENTS.md)
+doctor-agents-missing = 🔴 missing; run `python3 agents/setup.py link` from the checkout root
+doctor-agents-broken = 🔴 broken or unreadable link; run `python3 agents/setup.py link` from the checkout root
+doctor-agents-wrong = 🔴 link points to the wrong target; run `python3 agents/setup.py link` from the checkout root
+doctor-agents-copy-stale = 🔴 stale or unreadable Windows copy; run `python3 agents/setup.py link` from the checkout root
+doctor-agents-conflict = 🔴 conflict: resolve the existing file or directory first, then run `python3 agents/setup.py link` from the checkout root
+doctor-agents-unreadable = 🔴 cannot inspect this path; resolve its access permissions first
+doctor-direnv-ok = available on PATH
+doctor-direnv-missing = 🔴 not found on PATH; see https://direnv.net/ or run `brew install direnv`

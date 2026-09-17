@@ -169,6 +169,23 @@ looked at, points the remedy at those same variables, names what is not kept wit
 that a checkout's own settings, skills and instructions are read regardless. It is reported rather than failed on, and sits outside the
 configuration section, which a configuration error stops early.
 
+In a Bravebot source checkout (including its subdirectories), it also reports whether root
+`AGENTS.md` resolves to `agents/AGENTS.md` and whether `direnv` is executable on PATH. These
+are development advice and do not change the exit status. Ordinary workspaces show neither
+check. Discovery stops at the nearest Git checkout boundary. The source checkout is recognised by its root and CLI Cargo manifests,
+`agents/setup.py`, `agents/AGENTS.md`, and `docs/development/agent-configuration.md`.
+Missing, broken, or wrongly targeted links recommend `python3 agents/setup.py link` at the
+checkout root. Real files and directories are conflicts to resolve first; on Windows a matching
+copy is healthy and a stale copy recommends setup again. No path is changed. Missing direnv
+points to https://direnv.net/ and `brew install direnv`; shell hooks and `.envrc` approval are
+outside this check.
+
+`verified-by: bravebot_cli::main::doctor_development_checks_only_apply_to_the_source_tree`
+`verified-by: bravebot_cli::main::doctor_reports_agent_discovery_conflicts_without_changing_them`
+`verified-by: bravebot_cli::main::doctor_accepts_current_windows_copies_and_reports_stale_ones`
+`verified-by: bravebot_cli::main::doctor_checks_resolved_agent_link_targets`
+`verified-by: bravebot_cli::main::doctor_finds_direnv_only_when_path_contains_an_executable`
+
 **Why.** It exists to answer "what will this actually use", so reporting a default when a choice
 is in force would explain the wrong thing, and naming one backend where two are reachable would
 explain only the half somebody happened to ask about. Naming the files is the same argument: settings
