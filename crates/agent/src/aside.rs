@@ -163,9 +163,12 @@ impl From<ChatError> for AsideError {
 
 /// Ask one question beside the work, and hand back what came of it.
 ///
-/// `watching` is given the answer as it arrives, so a person waiting on one sees it being
-/// written. It is handed released text, because whether there is anything worth drawing is a
-/// question about the words and the interface is the side allowed to ask that one.
+/// `watching` is given the answer as it arrives, for a caller with somewhere to draw it. It is
+/// handed released text, because whether there is anything worth drawing is a question about the
+/// words and the interface is the side allowed to ask that one. The terminal draws nothing as it
+/// arrives: watching.md WATCH-18 keeps both halves of an aside out of the turn's own lines, and
+/// the one place a reply takes shape there is the tail the planner's own half-written reply
+/// fills.
 pub fn ask<S: Sink>(
     policy: &mut Policy<'_, S>,
     chat: &mut Chat<'_>,

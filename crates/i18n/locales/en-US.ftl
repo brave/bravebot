@@ -1135,7 +1135,6 @@ turn-ended-unexpectedly = the turn ended unexpectedly
 btw-needs-a-question = /btw takes the question to ask, which the conversation will not read
 btw-uninterruptible = the question cannot be interrupted; it takes one request
 btw-ended-unexpectedly = the question ended unexpectedly
-btw-answered = asked beside the work, and answered there; { $chord } opens it again
 btw-failed = the question could not be answered: { $problem }
 
 # What the session says about a manifest run started from it. The plan, each step and the reply are

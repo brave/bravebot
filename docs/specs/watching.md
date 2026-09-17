@@ -446,6 +446,8 @@ them.
 `verified-by: bravebot_tui::state::an_aside_keeps_its_place_when_a_delegate_is_spawned_after_it`
 `verified-by: bravebot_tui::state::neither_half_of_an_aside_reaches_the_transcript`
 `verified-by: bravebot_tui::state::opening_an_aside_does_not_draw_a_delegates_lines`
+`verified-by: bravebot_tui::app::answering_a_question_beside_the_work_leaves_the_transcript_alone`
+`verified-by: bravebot_tui::app::an_answer_being_written_beside_the_work_is_not_drawn_over_the_turn`
 `verified-by: bravebot_tui::render::the_list_names_an_aside_row_as_an_aside`
 `verified-by: bravebot_tui::render::an_asides_view_draws_the_question_and_the_answer`
 `verified-by: bravebot_agent::turn::asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone`
