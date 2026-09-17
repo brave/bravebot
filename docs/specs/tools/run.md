@@ -247,15 +247,16 @@ meaning is not in its argv, not the setting of a variable.
 ### RUN-9: the vouched list belongs to the session
 
 Empty at the start of every session, written into the session record, restored by `--resume`,
-never inherited by a fresh session in the same directory. `/status` lists what was granted. A line
-somebody asked to be remembered past the session is a separate record holding less, which
-[RUN-19](#RUN-19) governs, and it puts no entry in this list.
+never inherited by a fresh session in the same directory. `/status` lists every entry it holds
+rather than a count of them. A line somebody asked to be remembered past the session is a separate
+record holding less, which [RUN-19](#RUN-19) governs, and it puts no entry in this list.
 
 **Why.** The same reason the trust map belongs to a session. Its effect is invisible until a prompt
 does not appear, so it has to be readable back.
 
 `verified-by: bravebot_core::policy::a_fresh_policy_vouches_for_no_command`
 `verified-by: bravebot_core::policy::a_line_remembered_past_the_session_vouches_for_nothing`
+`verified-by: bravebot_tui::status::every_vouched_command_is_listed_however_many_there_are`
 
 <a id="RUN-10"></a>
 ### RUN-10: the vouched-for list is not an allowlist and must never become one

@@ -651,7 +651,6 @@ status-nothing-vouched-this-session =
     rien n'a été approuvé pour cette session ; les lignes ci-dessous s'exécutent sans rien demander
 status-trusted-commands = Commandes fiables
 status-trusted-commands-note = exécutées sans rien demander, et leur sortie est fiable
-status-and-more = … et { $count } de plus
 status-remembered = Lignes mémorisées
 status-remembered-note =
     exécutées sans rien demander dans ce répertoire, et leur sortie reste en quarantaine
