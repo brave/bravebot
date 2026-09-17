@@ -1229,12 +1229,12 @@ names map to incomplete. Retry eligibility is unchanged.
 `verified-by: bravebot_aichat::client::a_stop_between_attempts_at_a_whole_reply_does_not_wait_out_the_pause`
 `verified-by: bravebot_bedrock::lib::a_stop_between_attempts_at_a_whole_reply_does_not_wait_out_the_pause`
 `verified-by: bravebot_bedrock::lib::framed_service_exceptions_keep_their_kind_and_request_count`
-`verified-by: bravebot_agent::review_categories::service_exception_keeps_its_actionable_category`
+`verified-by: bravebot_agent::failure_categories::service_exception_keeps_its_actionable_category`
 `verified-by: bravebot_agent::turn::compaction_failure_narration_keeps_credentials_out`
-`verified-by: bravebot_agent::turn::regression_delegate_failure_diagnostics_stay_out_of_planner`
-`verified-by: bravebot_agent::turn::regression_processor_failure_keeps_endpoint_credentials_out_of_context`
-`verified-by: bravebot_agent::turn::regression_cancelled_request_keeps_attempt_count`
-`verified-by: bravebot_agent::turn::review_processor_stop_keeps_sent_count`
+`verified-by: bravebot_agent::turn::what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpoint`
+`verified-by: bravebot_agent::turn::a_failed_processor_reports_a_category_and_nothing_the_service_or_the_setting_said`
+`verified-by: bravebot_agent::turn::a_stop_counts_the_requests_that_were_sent_and_no_others`
+`verified-by: bravebot_agent::turn::a_stop_while_a_processor_runs_is_reported_as_a_stop_with_what_it_sent`
 
 ## Known costs
 

@@ -16012,8 +16012,10 @@ fn a_stop_between_attempts_is_a_stop_rather_than_a_failure() {
     );
 }
 
+/// A credential is ordinarily in the URL a person configured, so a trail that kept the URL kept
+/// their token in a file they wrote deliberately to share.
 #[test]
-fn regression_audit_does_not_keep_url_credential() {
+fn nothing_recorded_about_a_request_carries_the_credential_in_its_url() {
     let scratch = Scratch::new("review-audit-secret");
     let workspace = Workspace::new(&scratch.path).unwrap();
     let (url, _) = serve_script(vec![Served::Status(401)]);
@@ -16030,8 +16032,10 @@ fn regression_audit_does_not_keep_url_credential() {
     assert!(!format!("{sink:?}").contains("REVIEW_SECRET"), "{sink:?}");
 }
 
+/// A delegate's failure is written into the parent's conversation, which is the planner's context:
+/// the endpoint that failed is the one thing about it the planner may not be told.
 #[test]
-fn regression_delegate_failure_diagnostics_stay_out_of_planner() {
+fn what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpoint() {
     let scratch = Scratch::new("review-delegate-leak");
     let workspace = Workspace::new(&scratch.path).unwrap();
     let (url, _) = serve_by_marker(vec![(
@@ -16127,8 +16131,10 @@ fn gateway_failure_keeps_status_and_real_request_count() {
     }
 }
 
+/// A processor's failure is a tool result, and a tool result is context. The category is enough to
+/// act on; the body, the headers, and the URL are the service talking into the planner.
 #[test]
-fn regression_processor_failure_keeps_endpoint_credentials_out_of_context() {
+fn a_failed_processor_reports_a_category_and_nothing_the_service_or_the_setting_said() {
     let scratch = Scratch::new("review-processor-error");
     std::fs::write(scratch.path.join("input.txt"), "private input").unwrap();
     let workspace = Workspace::new(&scratch.path).unwrap();
@@ -16187,8 +16193,10 @@ fn regression_processor_failure_keeps_endpoint_credentials_out_of_context() {
     }
 }
 
+/// What a stop cost is the requests that went, so a count taken from the retry ordinal reports one
+/// a person paid for and a stop before anything was sent reports none.
 #[test]
-fn regression_cancelled_request_keeps_attempt_count() {
+fn a_stop_counts_the_requests_that_were_sent_and_no_others() {
     let scratch = Scratch::new("review-cancel-attempts");
     let workspace = Workspace::new(&scratch.path).unwrap();
     let (endpoint, received) = serve_script(vec![Served::Status(503)]);
@@ -16249,8 +16257,10 @@ fn regression_cancelled_request_keeps_attempt_count() {
     );
 }
 
+/// A processor carries its stop separately from its text, so the turn that spawned it reports a stop
+/// rather than reading a failure out of a tool result.
 #[test]
-fn review_processor_stop_keeps_sent_count() {
+fn a_stop_while_a_processor_runs_is_reported_as_a_stop_with_what_it_sent() {
     let scratch = Scratch::new("processor-stop-count");
     std::fs::write(scratch.path.join("input.txt"), "private input").unwrap();
     let workspace = Workspace::new(&scratch.path).unwrap();

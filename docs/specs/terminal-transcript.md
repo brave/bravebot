@@ -524,6 +524,6 @@ The live session's export includes its failure and cancellation entries.
 `verified-by: bravebot_tui::frame::an_export_attaches_each_reason_to_the_turn_that_had_it`
 `verified-by: bravebot_tui::frame::an_export_of_a_cancelled_turn_says_it_was_cancelled`
 `verified-by: bravebot_tui::failure_history::turn_endings_keep_the_visible_history_anchor`
-`verified-by: bravebot_tui::outcome_colours::regression_success_cost_uses_neutral_colour`
+`verified-by: bravebot_tui::outcome_colours::what_a_successful_turn_cost_is_not_drawn_in_the_failure_colour`
 `verified-by: bravebot_tui::outcome_colours::failure_label_uses_failure_colour`
 `verified-by: bravebot_tui::frame::cancellation_has_its_own_status_even_when_the_prompt_returns`

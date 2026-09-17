@@ -1,8 +1,10 @@
 use bravebot_tui::{render, state::Session, theme};
 use ratatui::{Terminal, backend::TestBackend};
 
+/// The cost is drawn beside the outcome and belongs to neither, so a palette that reached it would
+/// have every finished turn reading as a failed one.
 #[test]
-fn regression_success_cost_uses_neutral_colour() {
+fn what_a_successful_turn_cost_is_not_drawn_in_the_failure_colour() {
     let mut session = Session::new("test");
     session.paste("work");
     session.submit().unwrap();

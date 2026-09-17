@@ -42,7 +42,7 @@ Network decisions omit URL userinfo, paths, queries and fragments. That is why i
 on a screen and written to a file without any release, and it is what makes the record safe to keep
 for a workspace nobody vouched for.
 
-`verified-by: bravebot_agent::turn::regression_audit_does_not_keep_url_credential`
+`verified-by: bravebot_agent::turn::nothing_recorded_about_a_request_carries_the_credential_in_its_url`
 
 <a id="TRACE-3"></a>
 ### TRACE-3: an assertion a person made is recorded as one
