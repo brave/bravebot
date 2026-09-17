@@ -1550,6 +1550,55 @@ mod tests {
         ));
         assert_eq!(client.attempts(), 0, "a new call resets the previous count");
     }
+
+    /// The same pause runs before a whole reply is asked for again, and that path has no progress
+    /// callback to press a key against, so the stop arrives from elsewhere. It is pressed once the
+    /// refusal has been served, so the stop lands in the pause and not before anything was sent.
+    #[test]
+    fn a_stop_between_attempts_at_a_whole_reply_does_not_wait_out_the_pause() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let config = config();
+        let egress = Egress::new();
+        let (http, received) = refused_requests(vec![503]);
+        let cancel = Cancel::new();
+        let mut client = BedrockClient::new(&config, &egress).with_cancel(cancel.clone());
+        client.test_request = Some(http);
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            {
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "test");
+                routing
+            },
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .unwrap();
+
+        let stopper = std::thread::spawn(move || {
+            received.recv_timeout(Duration::from_secs(2)).unwrap();
+            cancel.cancel();
+        });
+
+        let started = std::time::Instant::now();
+        let request = ChatRequest::new("opus-arn", vec![]);
+        let result = client.complete(&mut policy, &request);
+        stopper.join().unwrap();
+
+        assert!(matches!(result, Err(BedrockError::Cancelled)));
+        assert_eq!(client.attempts(), 1);
+        assert!(
+            started.elapsed() < BACKOFF / 2,
+            "it waited out the pause: {:?}",
+            started.elapsed()
+        );
+    }
+
     /// Real exception frames follow the existing retry policy and keep the final protocol kind.
     #[test]
     fn framed_service_exceptions_keep_their_kind_and_request_count() {

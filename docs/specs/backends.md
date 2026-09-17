@@ -1226,6 +1226,8 @@ names map to incomplete. Retry eligibility is unchanged.
 `verified-by: bravebot_bedrock::lib::request_counts_include_capability_probes`
 `verified-by: bravebot_bedrock::lib::cancellation_in_backoff_counts_only_sent_requests`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_between_attempts`
+`verified-by: bravebot_aichat::client::a_stop_between_attempts_at_a_whole_reply_does_not_wait_out_the_pause`
+`verified-by: bravebot_bedrock::lib::a_stop_between_attempts_at_a_whole_reply_does_not_wait_out_the_pause`
 `verified-by: bravebot_bedrock::lib::framed_service_exceptions_keep_their_kind_and_request_count`
 `verified-by: bravebot_agent::review_categories::service_exception_keeps_its_actionable_category`
 `verified-by: bravebot_agent::turn::compaction_failure_narration_keeps_credentials_out`
