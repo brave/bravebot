@@ -102,32 +102,32 @@ impl FrameDecoder {
     ///
     /// An incomplete frame stays buffered for the next call.
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<Event>, FrameError> {
-        self.buffered.extend_from_slice(bytes);
-
-        let mut events = Vec::new();
-        loop {
-            match self.take_frame()? {
-                // A frame whose headers name neither is skipped rather than failing the stream: the
-                // framing was sound, so the position in the stream is still known, and the API sends
-                // frames this does not need.
-                Some(frame) => {
-                    if let Some(event) = event_of(&frame) {
-                        events.push(event);
-                    }
-                }
-                None => return Ok(events),
-            }
-        }
+        self.events(bytes).collect()
     }
 
-    /// Iterate decoded events through the existing batch decoder.
-    pub fn events(&mut self, bytes: &[u8]) -> impl Iterator<Item = Result<Event, FrameError>> {
-        self.push(bytes)
-            .map_or_else(
-                |error| vec![Err(error)],
-                |events| events.into_iter().map(Ok).collect(),
-            )
-            .into_iter()
+    /// Decode events in order, preserving earlier events if a later frame is corrupt.
+    ///
+    /// Stop at the first framing error because the next frame's position is unknown.
+    pub fn events(&mut self, bytes: &[u8]) -> impl Iterator<Item = Result<Event, FrameError>> + '_ {
+        self.buffered.extend_from_slice(bytes);
+        let mut stopped = false;
+        std::iter::from_fn(move || {
+            while !stopped {
+                match self.take_frame() {
+                    Ok(Some(frame)) => {
+                        if let Some(event) = event_of(&frame) {
+                            return Some(Ok(event));
+                        }
+                    }
+                    Ok(None) => stopped = true,
+                    Err(error) => {
+                        stopped = true;
+                        return Some(Err(error));
+                    }
+                }
+            }
+            None
+        })
     }
 
     /// Whether bytes are held that did not form a whole frame.

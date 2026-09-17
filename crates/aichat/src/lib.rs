@@ -114,7 +114,9 @@ pub struct Completion {
     /// The arguments are model output and therefore untrusted; a caller must gate them
     /// before letting any of it direct an operation.
     pub calls: Vec<protocol::ToolCall>,
-    /// What this round cost, as the server counted it.
+    /// Prompt size of the final reply, excluding costs retained from earlier attempts.
+    pub context_tokens: u64,
+    /// What this call cost, including reported usage from completed retry attempts.
     pub usage: protocol::Usage,
 }
 
@@ -150,6 +152,8 @@ impl fmt::Debug for SubscriptionCredential {
 
 pub struct AichatClient<'a> {
     attempts: u32,
+    completed_usage: Option<protocol::Usage>,
+    retried_usage: Option<protocol::Usage>,
     config: &'a Config,
     egress: &'a Egress,
     subscription: Option<&'a mut dyn Subscription>,
@@ -196,14 +200,28 @@ impl<'a> AichatClient<'a> {
         self.attempts
     }
 
-    /// Usage reported by a completed reply, even when its content was unusable.
+    /// Total reported usage of completed attempts in the last call, including retries.
+    /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<protocol::Usage> {
-        None
+        match (self.retried_usage, self.completed_usage) {
+            (Some(mut earlier), Some(current)) => {
+                earlier.add(current);
+                Some(earlier)
+            }
+            (earlier, current) => earlier.or(current),
+        }
+    }
+
+    /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
+    pub fn last_request_tokens(&self) -> Option<u64> {
+        self.completed_usage.map(|usage| usage.prompt_tokens)
     }
 
     pub fn new(config: &'a Config, egress: &'a Egress) -> Self {
         Self {
             attempts: 0,
+            completed_usage: None,
+            retried_usage: None,
             config,
             egress,
             subscription: None,
@@ -442,6 +460,8 @@ impl<'a> AichatClient<'a> {
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
         self.attempts = 0;
+        self.completed_usage = None;
+        self.retried_usage = None;
         let refusal_key = self.refusal_key(request);
         self.recall(&refusal_key);
         let mut probed = false;
@@ -467,7 +487,12 @@ impl<'a> AichatClient<'a> {
                 }
                 result => {
                     self.probe_settled(&refusal_key, probed, result.is_err());
-                    return result;
+                    return result.map(|mut completion| {
+                        if let Some(usage) = self.retried_usage {
+                            completion.usage.add(usage);
+                        }
+                        completion
+                    });
                 }
             }
         }
@@ -479,6 +504,9 @@ impl<'a> AichatClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
+        // Move the last completed bill into the call total before clearing attempt state.
+        self.retried_usage = self.completed_usage();
+        self.completed_usage = None;
         if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
             return Err(ChatError::Cancelled);
         }
@@ -494,6 +522,12 @@ impl<'a> AichatClient<'a> {
         let label = response.body.label();
         let (bytes, label) = policy.decode_transport("chat", label).decode(response.body);
 
+        let envelope: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| ChatError::Decode {
+                detail: format!("{e} (received {} bytes)", bytes.len()),
+            })?;
+        // Usage belongs to the completed transport response, even if its tool calls are invalid.
+        self.completed_usage = reported_usage(&envelope);
         let parsed: ChatResponse =
             serde_json::from_slice(&bytes).map_err(|e| ChatError::Decode {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
@@ -514,6 +548,7 @@ impl<'a> AichatClient<'a> {
             content: Labelled::new(content, label),
             model: parsed.model.unwrap_or_else(|| "unreported".to_string()),
             calls,
+            context_tokens: usage.prompt_tokens,
             usage,
         })
     }
@@ -535,6 +570,8 @@ impl<'a> AichatClient<'a> {
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
         self.attempts = 0;
+        self.completed_usage = None;
+        self.retried_usage = None;
         let request = request.clone().streamed();
         let refusal_key = self.refusal_key(&request);
         self.recall(&refusal_key);
@@ -556,8 +593,8 @@ impl<'a> AichatClient<'a> {
                 Err(error) if worth_another_attempt(attempt, &error) => {
                     attempt += 1;
                     // Announced before the wait rather than after it, so the pause is explained
-                    // while it is happening. Nothing of the abandoned attempt survives: the reply
-                    // starts again from nothing, and the count says so.
+                    // while it is happening. Reply content and progress start again from nothing;
+                    // completed costs remain in the call total.
                     progress(Progress {
                         written: Labelled::new("", Label::untrusted_public()),
                         output_tokens: 0,
@@ -570,7 +607,12 @@ impl<'a> AichatClient<'a> {
                 }
                 result => {
                     self.probe_settled(&refusal_key, probed, result.is_err());
-                    return result;
+                    return result.map(|mut completion| {
+                        if let Some(usage) = self.retried_usage {
+                            completion.usage.add(usage);
+                        }
+                        completion
+                    });
                 }
             }
         }
@@ -611,6 +653,9 @@ impl<'a> AichatClient<'a> {
         attempt: u32,
         progress: &mut impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
+        // Move the last completed bill into the call total before clearing attempt state.
+        self.retried_usage = self.completed_usage();
+        self.completed_usage = None;
         // Before the request is built, let alone sent. A stop that landed while the last attempt
         // was failing is a stop, and spending a credential on a reply nobody wants is worse than
         // slow.
@@ -662,6 +707,8 @@ impl<'a> AichatClient<'a> {
 
         let mut decoder = SseDecoder::new();
         let mut accumulated = StreamAccumulator::new();
+        let mut reported = None;
+        let mut malformed = false;
         // One envelope, arriving in frames, so it is authorised once rather than once a frame.
         let decoding = policy.decode_transport("chat stream", Label::untrusted_public());
 
@@ -703,19 +750,48 @@ impl<'a> AichatClient<'a> {
                     accumulated.mark_ended();
                     continue;
                 }
-                // A chunk that will not parse is skipped rather than failing the turn: servers
-                // send keepalives and comments, and one unreadable frame should not discard a
-                // reply that is otherwise arriving fine.
+                // Ignore non-JSON keepalives. Decode protocol metadata separately so a malformed
+                // tool call cannot discard usage or a completion marker in the same frame.
+                let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&payload) else {
+                    if payload.trim_start().starts_with(['{', '[']) {
+                        malformed = true;
+                    }
+                    continue;
+                };
+                reported = reported_usage(&envelope).or(reported);
+                let ended = envelope
+                    .get("choices")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|choices| {
+                        choices.iter().any(|choice| {
+                            choice
+                                .get("finish_reason")
+                                .and_then(serde_json::Value::as_str)
+                                .is_some()
+                        })
+                    });
                 let Ok(chunk) = serde_json::from_str::<ChatChunk>(&payload) else {
+                    malformed = true;
+                    if ended {
+                        accumulated.mark_ended();
+                    }
                     continue;
                 };
                 accumulated.push(chunk);
             }
 
+            // Protocol completion establishes usage even if the server keeps the socket open.
+            if accumulated.ended() {
+                self.completed_usage = reported;
+            }
+
             progress(Progress {
                 written: Labelled::new(&accumulated.content()[written_before..], label),
-                output_tokens: accumulated.output_tokens(),
-                counted_by_server: accumulated.usage_is_reported(),
+                output_tokens: reported.map_or_else(
+                    || accumulated.output_tokens(),
+                    |usage| usage.completion_tokens,
+                ),
+                counted_by_server: reported.is_some(),
                 attempt,
             });
         }
@@ -730,6 +806,13 @@ impl<'a> AichatClient<'a> {
         }
 
         let (content, model, calls, usage) = accumulated.finish();
+        let usage = reported.unwrap_or(usage);
+        self.completed_usage = reported;
+        if malformed {
+            return Err(ChatError::Decode {
+                detail: "the completed stream contained a malformed response frame".to_string(),
+            });
+        }
 
         if content.is_empty() && calls.is_empty() {
             return Err(ChatError::NoContent);
@@ -739,9 +822,18 @@ impl<'a> AichatClient<'a> {
             content: Labelled::new(content, label),
             model: model.unwrap_or_else(|| "unreported".to_string()),
             calls,
+            context_tokens: usage.prompt_tokens,
             usage,
         })
     }
+}
+
+/// Validate usage without decoding assistant content or tool calls.
+fn reported_usage(envelope: &serde_json::Value) -> Option<protocol::Usage> {
+    let value = envelope.get("usage")?;
+    value.get("prompt_tokens")?.as_u64()?;
+    value.get("completion_tokens")?.as_u64()?;
+    serde_json::from_value(value.clone()).ok()
 }
 
 /// How far a streamed reply has got.

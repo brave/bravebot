@@ -102,6 +102,14 @@ pub enum CompactError {
 }
 
 impl CompactError {
+    /// Reported cost of a completed reply rejected by the backend.
+    pub fn completed_usage(&self) -> Option<Usage> {
+        match self {
+            Self::Chat(error) => error.completed_usage(),
+            Self::Denied(_) => None,
+        }
+    }
+
     /// A safe category for the caller's failure message.
     pub fn category(&self) -> crate::outcome::Category {
         match self {

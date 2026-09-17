@@ -10,7 +10,7 @@
 //! reach it.
 
 use crate::outcome::{Category, Diagnosis};
-use bravebot_aichat::protocol::ChatRequest;
+use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{AichatClient, ChatError, Completion, Progress, Subscription};
 use bravebot_bedrock::{BedrockClient, BedrockError};
 use bravebot_config::Config;
@@ -44,6 +44,8 @@ pub enum BackendError {
     /// Zero means preparation failed before egress; a policy refusal still counts as an attempt.
     Attempted {
         attempts: u32,
+        usage: Option<Usage>,
+        context_tokens: Option<u64>,
         cause: Box<BackendError>,
     },
 }
@@ -91,18 +93,43 @@ impl BackendError {
         }
     }
 
-    /// Preserve the client count even if preparing a later attempt fails.
-    pub(crate) fn counted(self, attempts: u32) -> Self {
+    /// Preserve the request count and any known usage when a request fails.
+    pub(crate) fn counted(
+        self,
+        attempts: u32,
+        usage: Option<Usage>,
+        context_tokens: Option<u64>,
+    ) -> Self {
         Self::Attempted {
             attempts,
+            usage,
+            context_tokens,
             cause: Box::new(self),
+        }
+    }
+
+    /// Prompt size reported by the final attempt, if that attempt completed with known usage.
+    pub fn context_tokens(&self) -> Option<u64> {
+        match self {
+            Self::Attempted { context_tokens, .. } => *context_tokens,
+            _ => None,
+        }
+    }
+
+    /// Known usage across completed attempts, even when no reply could be used.
+    pub fn completed_usage(&self) -> Option<Usage> {
+        match self {
+            Self::Attempted { usage, .. } => *usage,
+            _ => None,
         }
     }
 
     /// Classify the error without copying response text, headers, or endpoint URLs.
     pub fn diagnosis(&self) -> Diagnosis {
         let category = match self {
-            Self::Attempted { attempts, cause } => return cause.diagnosis().after(*attempts),
+            Self::Attempted {
+                attempts, cause, ..
+            } => return cause.diagnosis().after(*attempts),
             Self::NoGatewayToken { .. } => return Diagnosis::of(Category::Unconfigured).after(0),
             Self::Aichat(error) => match error {
                 // Callers handle cancellation separately; its fallback diagnosis stays internal.
@@ -456,9 +483,13 @@ impl<'a> Backend<'a> {
                 if let Some(subscription) = subscription.as_mut() {
                     client = client.with_subscription(*subscription);
                 }
-                client
-                    .complete(policy, request)
-                    .map_err(|error| BackendError::from(error).counted(client.attempts()))
+                client.complete(policy, request).map_err(|error| {
+                    BackendError::from(error).counted(
+                        client.attempts(),
+                        client.completed_usage(),
+                        client.last_request_tokens(),
+                    )
+                })
             }
             Self::Bedrock {
                 config,
@@ -469,9 +500,13 @@ impl<'a> Backend<'a> {
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
-                client
-                    .complete(policy, request)
-                    .map_err(|error| BackendError::from(error).counted(client.attempts()))
+                client.complete(policy, request).map_err(|error| {
+                    BackendError::from(error).counted(
+                        client.attempts(),
+                        client.completed_usage(),
+                        client.last_request_tokens(),
+                    )
+                })
             }
             Self::Gateway {
                 config,
@@ -484,9 +519,13 @@ impl<'a> Backend<'a> {
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
-                client
-                    .complete(policy, request)
-                    .map_err(|error| BackendError::from(error).counted(client.attempts()))
+                client.complete(policy, request).map_err(|error| {
+                    BackendError::from(error).counted(
+                        client.attempts(),
+                        client.completed_usage(),
+                        client.last_request_tokens(),
+                    )
+                })
             }
         }
     }
@@ -514,7 +553,13 @@ impl<'a> Backend<'a> {
                 }
                 client
                     .complete_streaming(policy, request, progress)
-                    .map_err(|error| BackendError::from(error).counted(client.attempts()))
+                    .map_err(|error| {
+                        BackendError::from(error).counted(
+                            client.attempts(),
+                            client.completed_usage(),
+                            client.last_request_tokens(),
+                        )
+                    })
             }
             Self::Bedrock {
                 config,
@@ -527,7 +572,13 @@ impl<'a> Backend<'a> {
                 }
                 client
                     .complete_streaming(policy, request, progress)
-                    .map_err(|error| BackendError::from(error).counted(client.attempts()))
+                    .map_err(|error| {
+                        BackendError::from(error).counted(
+                            client.attempts(),
+                            client.completed_usage(),
+                            client.last_request_tokens(),
+                        )
+                    })
             }
             Self::Gateway {
                 config,
@@ -542,7 +593,13 @@ impl<'a> Backend<'a> {
                 }
                 client
                     .complete_streaming(policy, request, progress)
-                    .map_err(|error| BackendError::from(error).counted(client.attempts()))
+                    .map_err(|error| {
+                        BackendError::from(error).counted(
+                            client.attempts(),
+                            client.completed_usage(),
+                            client.last_request_tokens(),
+                        )
+                    })
             }
         }
     }
@@ -1050,7 +1107,7 @@ mod tests {
         };
         assert!(
             BackendError::from(ChatError::Egress(retried))
-                .counted(3)
+                .counted(3, None, None)
                 .is_unreachable()
         );
 
@@ -1175,7 +1232,7 @@ mod tests {
             detail: format!("connection reset while sending {SECRET}"),
             transient: true,
         }))
-        .counted(3);
+        .counted(3, None, None);
 
         let kept = format!("{:?}", failure.diagnosis());
         assert!(

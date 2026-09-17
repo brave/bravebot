@@ -190,7 +190,7 @@ mod tests {
                 crate::backend::BackendError::from(bravebot_aichat::ChatError::Cancelled),
                 crate::backend::BackendError::from(bravebot_bedrock::BedrockError::Cancelled),
             ] {
-                let error = crate::turn::TurnError::from(cause.counted(attempts));
+                let error = crate::turn::TurnError::from(cause.counted(attempts, None, None));
                 assert_eq!(
                     error.ending(),
                     Ending::Stopped {

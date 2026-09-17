@@ -242,6 +242,8 @@ impl From<credentials::CredentialError> for BedrockError {
 
 pub struct BedrockClient<'a> {
     attempts: u32,
+    completed_usage: Option<Usage>,
+    retried_usage: Option<Usage>,
     // Tests replace signing and credentials while exercising the real HTTP and retry paths.
     #[cfg(test)]
     test_request: Option<Request>,
@@ -269,19 +271,28 @@ impl<'a> BedrockClient<'a> {
         self.attempts
     }
 
-    /// Usage reported by a completed reply, even when its content was unusable.
+    /// Total reported usage of completed attempts in the last call, including retries.
+    /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {
-        None
+        match (self.retried_usage, self.completed_usage) {
+            (Some(mut earlier), Some(current)) => {
+                earlier.add(current);
+                Some(earlier)
+            }
+            (earlier, current) => earlier.or(current),
+        }
     }
 
-    /// The final attempt's measured prompt size, if known.
+    /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        None
+        self.completed_usage.map(|usage| usage.prompt_tokens)
     }
 
     pub fn new(config: &'a Bedrock, egress: &'a Egress) -> Self {
         Self {
             attempts: 0,
+            completed_usage: None,
+            retried_usage: None,
             #[cfg(test)]
             test_request: None,
             config,
@@ -306,6 +317,8 @@ impl<'a> BedrockClient<'a> {
         request: &ChatRequest,
     ) -> Result<Completion, BedrockError> {
         self.attempts = 0;
+        self.completed_usage = None;
+        self.retried_usage = None;
         self.recall(&self.model_for(request)?);
         let mut attempt = 1;
         let mut probed = false;
@@ -329,7 +342,12 @@ impl<'a> BedrockClient<'a> {
                 }
                 result => {
                     self.probe_settled(probed, result.is_err());
-                    return result;
+                    return result.map(|mut completion| {
+                        if let Some(usage) = self.retried_usage {
+                            completion.usage.add(usage);
+                        }
+                        completion
+                    });
                 }
             }
         }
@@ -391,6 +409,9 @@ impl<'a> BedrockClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, BedrockError> {
+        // Move the last completed bill into the call total before clearing attempt state.
+        self.retried_usage = self.completed_usage();
+        self.completed_usage = None;
         if self.cancelled() {
             return Err(BedrockError::Cancelled);
         }
@@ -406,6 +427,13 @@ impl<'a> BedrockClient<'a> {
             .decode_transport("converse", label)
             .decode(response.body);
 
+        // Decode the bill independently of the assistant's content.
+        let envelope: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| BedrockError::Decode {
+                detail: format!("{e} (received {} bytes)", bytes.len()),
+            })?;
+        self.completed_usage = reported_usage(&envelope).map(Usage::from);
+
         let parsed: protocol::ConverseResponse =
             serde_json::from_slice(&bytes).map_err(|e| BedrockError::Decode {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
@@ -420,9 +448,12 @@ impl<'a> BedrockClient<'a> {
             .and_then(|output| output.message)
             .map(|message| message.content)
             .unwrap_or_default();
-        if blocks.iter().any(protocol::ReplyBlock::is_unreadable_call) {
+        if blocks.iter().any(|block| {
+            block.is_unreadable_call()
+                || matches!(block, protocol::ReplyBlock::Other(value) if value.get("text").is_some())
+        }) {
             return Err(BedrockError::Decode {
-                detail: "the reply named a tool call in a shape this does not read".to_string(),
+                detail: "the reply contained content in a shape this does not read".to_string(),
             });
         }
 
@@ -431,13 +462,15 @@ impl<'a> BedrockClient<'a> {
             return Err(BedrockError::NoContent);
         }
 
+        let usage = parsed.usage.map(Usage::from).unwrap_or_default();
         Ok(Completion {
             content: Labelled::new(content, label),
             // This API does not name the model back, so the one the request asked for is the one
             // that answered.
             model,
             calls,
-            usage: parsed.usage.map(Usage::from).unwrap_or_default(),
+            context_tokens: usage.prompt_tokens,
+            usage,
         })
     }
 
@@ -452,6 +485,8 @@ impl<'a> BedrockClient<'a> {
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, BedrockError> {
         self.attempts = 0;
+        self.completed_usage = None;
+        self.retried_usage = None;
         self.recall(&self.model_for(request)?);
         let mut attempt = 1;
         let mut probed = false;
@@ -468,7 +503,7 @@ impl<'a> BedrockClient<'a> {
                 Err(error) if worth_another_attempt(attempt, &error) => {
                     attempt += 1;
                     // Announced before the wait rather than after it, so the pause is explained
-                    // while it is happening. Nothing of the abandoned attempt survives.
+                    // while it is happening. Reply progress resets; completed costs remain charged.
                     progress(Progress {
                         written: Labelled::new("", Label::untrusted_public()),
                         output_tokens: 0,
@@ -481,7 +516,12 @@ impl<'a> BedrockClient<'a> {
                 }
                 result => {
                     self.probe_settled(probed, result.is_err());
-                    return result;
+                    return result.map(|mut completion| {
+                        if let Some(usage) = self.retried_usage {
+                            completion.usage.add(usage);
+                        }
+                        completion
+                    });
                 }
             }
         }
@@ -494,6 +534,9 @@ impl<'a> BedrockClient<'a> {
         attempt: u32,
         progress: &mut impl FnMut(Progress),
     ) -> Result<Completion, BedrockError> {
+        // Move the last completed bill into the call total before clearing attempt state.
+        self.retried_usage = self.completed_usage();
+        self.completed_usage = None;
         // Before the request is built, let alone sent. A stop that landed while the last attempt was
         // failing is still a stop.
         if self.cancelled() {
@@ -562,14 +605,21 @@ impl<'a> BedrockClient<'a> {
             let (bytes, _) = decoding.decode(piece);
             let written_before = reply.text.len();
 
-            for event in decoder.push(&bytes)? {
-                match event {
-                    // An event this does not model, or one whose body will not parse, is skipped
-                    // rather than failing the turn: the framing was sound, so the position in the
-                    // stream is known, and the API sends events that say nothing this needs.
+            for event in decoder.events(&bytes) {
+                match event? {
+                    // Keep reading malformed known content so later completion and usage frames
+                    // can establish its cost. Unknown protocol extensions remain ignorable.
                     eventstream::Event::Named { name, payload } => {
-                        if let Some(event) = protocol::stream_event(&name, &payload) {
+                        if name == "metadata" {
+                            let usage = serde_json::from_slice(&payload)
+                                .ok()
+                                .and_then(|envelope| reported_usage(&envelope));
+                            reply.absorb(StreamEvent::Metadata { usage });
+                        } else if let Some(event) = protocol::stream_event(&name, &payload) {
                             reply.absorb(event);
+                        } else if matches!(name.as_str(), "contentBlockStart" | "contentBlockDelta")
+                        {
+                            reply.unreadable_content = true;
                         }
                     }
                     // Reported rather than read past. A reply the service abandoned ends the same
@@ -578,6 +628,9 @@ impl<'a> BedrockClient<'a> {
                     eventstream::Event::Failed { kind } => {
                         return Err(BedrockError::Reported { kind });
                     }
+                }
+                if reply.ended && reply.counted {
+                    self.completed_usage = Some(reply.usage);
                 }
             }
 
@@ -597,9 +650,9 @@ impl<'a> BedrockClient<'a> {
             return Err(BedrockError::Incomplete);
         }
 
-        if reply.unreadable_call {
+        if reply.unreadable_content {
             return Err(BedrockError::Decode {
-                detail: "the reply named a tool call in a shape this does not read".to_string(),
+                detail: "the reply contained content in a shape this does not read".to_string(),
             });
         }
 
@@ -618,6 +671,7 @@ impl<'a> BedrockClient<'a> {
             // that answered.
             model,
             calls,
+            context_tokens: reply.usage.prompt_tokens,
             usage: reply.usage,
         })
     }
@@ -738,11 +792,11 @@ struct Reply {
     counted: bool,
     ended: bool,
     stop_reason: Option<String>,
-    /// Whether a block opened as a tool call this could not read.
+    /// Whether a known content frame or block could not be decoded.
     ///
     /// Kept rather than failed on the spot so the stream is still drained: the reply is refused
     /// once it has ended, in the same place a reply that arrived whole is.
-    unreadable_call: bool,
+    unreadable_content: bool,
 }
 
 impl Reply {
@@ -760,7 +814,9 @@ impl Reply {
                             String::new(),
                         ));
                     }
-                    protocol::BlockStart::UnreadableToolUse { .. } => self.unreadable_call = true,
+                    protocol::BlockStart::UnreadableToolUse { .. } => {
+                        self.unreadable_content = true
+                    }
                     protocol::BlockStart::Other(_) => {}
                 }
             }
@@ -778,7 +834,14 @@ impl Reply {
                         call.3.push_str(&tool_use.input);
                     }
                 }
-                protocol::Delta::Other(_) => {}
+                protocol::Delta::Other(value) => {
+                    if !value.is_object()
+                        || value.get("text").is_some()
+                        || value.get("toolUse").is_some()
+                    {
+                        self.unreadable_content = true;
+                    }
+                }
             },
             StreamEvent::MessageStop { stop_reason } => {
                 self.ended = true;
@@ -887,6 +950,14 @@ fn worth_another_attempt(attempt: u32, error: &BedrockError) -> bool {
 
 fn backoff(failures: u32) -> Duration {
     BACKOFF * 2u32.pow(failures - 1)
+}
+
+/// Validate reported counts independently of assistant content.
+fn reported_usage(envelope: &serde_json::Value) -> Option<protocol::BedrockUsage> {
+    let value = envelope.get("usage")?;
+    value.get("inputTokens")?.as_u64()?;
+    value.get("outputTokens")?.as_u64()?;
+    serde_json::from_value(value.clone()).ok()
 }
 
 #[cfg(test)]

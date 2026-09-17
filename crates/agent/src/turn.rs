@@ -2336,6 +2336,20 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     let summary =
                         crate::compact::compact(&mut policy, &mut chat, conversation, steps);
                     spent.inference += summarising.elapsed();
+                    if let Err(error) = &summary
+                        && let Some(usage) = error.completed_usage()
+                    {
+                        tokens += usage.total();
+                        output_tokens += usage.completion_tokens;
+                        cached.add(usage.cached);
+                        reporter.spent(crate::outcome::Spent {
+                            tokens,
+                            output_tokens,
+                            context_tokens,
+                            cached,
+                            timing: spent.finish(),
+                        });
+                    }
                     match summary {
                         Ok(Some(done)) => {
                             tokens += done.usage.total();
@@ -2442,11 +2456,22 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 // that long. The count is what the turn spent, not what the endpoint would have taken had
                 // the connection held.
                 spent.inference += asked_at.elapsed();
+                if let Err(error) = &completion
+                    && let Some(usage) = error.completed_usage()
+                {
+                    tokens += usage.total();
+                    output_tokens += usage.completion_tokens;
+                    cached.add(usage.cached);
+                    if let Some(measured) = error.context_tokens() {
+                        context_tokens = measured;
+                        conversation.measured(context_tokens);
+                    }
+                }
                 let completion = completion?;
                 tokens += completion.usage.total();
                 output_tokens += completion.usage.completion_tokens;
                 cached.add(completion.usage.cached);
-                context_tokens = completion.usage.prompt_tokens;
+                context_tokens = completion.context_tokens;
                 conversation.measured(context_tokens);
                 reporter.spent(crate::outcome::Spent {
                     tokens,
