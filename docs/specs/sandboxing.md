@@ -21,6 +21,13 @@ Confinement is an operating-system boundary. Everywhere else in these specs the 
 capability set and the label on a value, which is a different mechanism answering a different
 question.
 
+On Linux the boundary needs the kernel right that governs moving a file, which arrived in
+Landlock's second version rather than its first, so a kernel carrying Landlock without that right
+is one where confinement is unavailable and a process is refused rather than run under a policy
+that cannot be applied in full ([SANDBOX-7](#SANDBOX-7)). What that costs is the kernels between
+5.13 and 5.19, which a long-term distribution release still ships, and on which nothing runs
+confined at all.
+
 ## Clauses
 
 <a id="SANDBOX-1"></a>
@@ -120,6 +127,25 @@ not.
 `verified-by: bravebot_sandbox::linux::a_path_that_cannot_be_opened_is_refused_rather_than_dropped`
 `verified-by: bravebot_sandbox::linux::a_ruleset_is_not_built_with_a_path_missing_from_it`
 `verified-by: bravebot_sandbox::macos::a_path_that_is_not_there_yet_is_granted_as_named`
+
+<a id="SANDBOX-7"></a>
+### SANDBOX-7: a write grant covers moving a file within it
+
+A grant to write a path covers moving a file from anywhere under it to anywhere else under it, not
+only creating and removing one. Where the kernel has no right governing that move, confinement is
+unavailable there and names the kernel that carries it, rather than applying a policy without it.
+
+**Why.** Writing a temporary file and renaming it into place is how a compiler, a package manager
+and an editor write anything, so a confinement denying the move holds a program to less than the
+paths its policy granted while the record says the policy was applied, which is the degradation
+[SANDBOX-1](#SANDBOX-1) forbids in an operation rather than in a path. It is also the shape of that
+degradation hardest to see from outside: the tool that moves a file for a living answers a refused
+move by copying the file and unlinking the original, so the work appears to succeed and has quietly
+stopped being atomic.
+
+`verified-by: bravebot_sandbox::linux::a_confined_process_can_rename_a_file_between_two_granted_directories`
+`verified-by: bravebot_sandbox::linux::a_kernel_that_cannot_govern_a_move_is_refused_rather_than_confining_without_it`
+`verified-by: bravebot_sandbox::macos::a_confined_process_can_rename_a_file_between_two_granted_directories`
 
 ## Programs a person asked for
 
@@ -341,12 +367,6 @@ output trusted.
   backend that leaves the rest of that environment alone. The ssh half of the remote scope depends
   on this one: a program that cannot see `$SSH_AUTH_SOCK` cannot use the socket, whatever a profile
   allows.
-- The Linux backend targets the first Landlock ABI, which carries no right for renaming or linking a
-  file into another directory, and a ruleset that does not handle that right denies the operation
-  outright. Writing a temporary file and renaming it into place is what a compiler and a package
-  manager do. The ABI carrying the right raises the oldest kernel this backend runs on from 5.13 to
-  5.19, and asking for it best-effort on an older one drops it again silently, so which kernels are
-  covered is part of this rather than a detail of it.
 - Windows has published binaries and no backend, and [SANDBOX-1](#SANDBOX-1) refuses to run a
   process it cannot confine, so confinement there refuses every program until that platform has one
   (issue #88). Running unconfined where no backend exists is the degradation that clause forbids.
