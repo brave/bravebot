@@ -5278,6 +5278,9 @@ impl Session {
         entry.stalled_ms += timing.stalled_ms;
     }
 
+    /// Cumulative usage from the worker, retained until this turn ends.
+    pub fn progressed(&mut self, _spent: bravebot_agent::Spent) {}
+
     /// Mark a deliberate stop before returning its prompt to the editor.
     pub fn stopped(&mut self, attempts: Option<u32>) {
         self.finished = Some(Finished {
@@ -12279,5 +12282,41 @@ mod tests {
             s.pasted_named(&s.input).is_empty(),
             "the picture is still named by a line that has no marker"
         );
+    }
+    /// A stopped turn still occupies wall time when no request has completed.
+    #[test]
+    fn unanswered_turns_keep_the_session_clock_and_the_completed_breakdown() {
+        for stopped in [false, true] {
+            let mut session = Session::new("none");
+            session.type_char('x');
+            session.submit().unwrap();
+            session.started = Some(Instant::now() - Duration::from_secs(2));
+            session.progressed(bravebot_agent::Spent {
+                timing: bravebot_agent::timing::Timing {
+                    wall_ms: 999_999,
+                    inference_ms: 31,
+                    tools_ms: 13,
+                    stalled_ms: 7,
+                },
+                ..Default::default()
+            });
+            if stopped {
+                session.stopped(None);
+            } else {
+                session.fail(
+                    "failed",
+                    bravebot_agent::Ending::Failed(bravebot_agent::Diagnosis::of(
+                        bravebot_agent::Category::Transport,
+                    )),
+                );
+            }
+            let timing = session.timing_total();
+            assert!(timing.wall_ms >= 2_000);
+            assert_ne!(timing.wall_ms, 999_999);
+            assert_eq!(
+                (timing.inference_ms, timing.tools_ms, timing.stalled_ms),
+                (31, 13, 7)
+            );
+        }
     }
 }

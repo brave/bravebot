@@ -450,6 +450,9 @@ pub struct Delegation {
 }
 
 pub trait Reporter {
+    /// Cumulative usage from completed requests. Each report replaces the previous total.
+    fn spent(&mut self, _spent: crate::outcome::Spent) {}
+
     /// The task list changed. Rows are already shaped for display and released.
     fn todos(&mut self, rows: Vec<Row>);
 
@@ -591,6 +594,7 @@ pub struct RecordingReporter {
     pub updates: Vec<Vec<Row>>,
     /// Every output-token count reported, in order.
     pub written: Vec<u64>,
+    pub spent: Vec<crate::outcome::Spent>,
     /// Every tool call announced as starting, in order.
     pub started: Vec<Activity>,
     /// Every tool call announced as finished, in order.
@@ -622,6 +626,10 @@ pub struct RecordingReporter {
 }
 
 impl Reporter for RecordingReporter {
+    fn spent(&mut self, spent: crate::outcome::Spent) {
+        self.spent.push(spent);
+    }
+
     fn todos(&mut self, rows: Vec<Row>) {
         self.updates.push(rows);
     }

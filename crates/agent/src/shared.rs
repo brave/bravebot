@@ -218,3 +218,37 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         self.lent.try_hold()?.interjection()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::outcome::Spent;
+    use crate::report::RecordingReporter;
+
+    fn a_total(tokens: u64) -> Spent {
+        Spent {
+            tokens,
+            ..Default::default()
+        }
+    }
+
+    /// A delegate must not overwrite parent progress while cancellation is still possible.
+    #[test]
+    fn what_a_delegate_has_spent_is_not_reported_as_what_the_turn_has() {
+        let mut recording = RecordingReporter::default();
+        {
+            let lent = Lent::new(&mut recording);
+            let mut turn = lent.turn();
+            let mut delegate = lent.delegate(DelegateId::nth(1));
+            turn.spent(a_total(1_000));
+            delegate.spent(a_total(5));
+            delegate.spent(a_total(10));
+            turn.spent(a_total(1_200));
+        }
+        assert_eq!(
+            recording.spent,
+            vec![a_total(1_000), a_total(1_200)],
+            "a delegate's own total was reported as the turn's"
+        );
+    }
+}
