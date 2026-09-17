@@ -941,32 +941,33 @@ fn scroll_hint(below: u16) -> String {
 /// The one prompt whose body is the thing being decided about rather than a description of it. It
 /// reuses the write prompt's keys and scrolling, because the answer is the same shape: yes, no, or
 /// stop.
-pub fn ask_output<B: Backend>(terminal: &mut Terminal<B>, request: &OutputRequest) -> Answer {
+pub fn ask_output<B: Backend>(terminal: &mut Terminal<B>, request: &OutputRequest) -> VetAnswer {
     let mut scroll = 0u16;
     loop {
         let mut most = 0u16;
         // A terminal that cannot be drawn to cannot show the output, and approving output nobody
-        // was shown is the one thing this question cannot mean.
+        // was shown is the one thing this question cannot mean. The verdict does not rescue it: a
+        // word from a model is not a person having read something.
         if terminal
             .draw(|frame| most = draw_output(frame, request, scroll))
             .is_err()
         {
-            return Answer::Reject;
+            return VetAnswer::Reject;
         }
 
         match event::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
-                Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => {
+            Ok(TermEvent::Key(key)) => match output_answer_for(key, request) {
+                Some(VetResponse::Answer(answer)) => return answer,
+                Some(VetResponse::Scroll(by)) => {
                     scroll = scroll.saturating_add_signed(by).min(most);
                 }
                 None => continue,
             },
             Ok(_) => continue,
-            Err(_) => return Answer::Reject,
+            Err(_) => return VetAnswer::Reject,
         }
     }
 }
@@ -980,7 +981,9 @@ pub fn ask_output<B: Backend>(terminal: &mut Terminal<B>, request: &OutputReques
 /// than the box becomes several rows.
 ///
 /// The banner above them is what a check made of the same bytes. It is advice and never an answer,
-/// so nothing about the verdict changes which keys are live.
+/// so the three answers to the question are live whatever the verdict was. The fourth key does not
+/// answer the question: it turns off the asking, and it is offered only where the check completed
+/// and found nothing, exactly as at the `vet_content` prompt.
 fn draw_output(frame: &mut ratatui::Frame, request: &OutputRequest, scroll: u16) -> u16 {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::brand_primary(), t!(output_title));
@@ -1018,6 +1021,15 @@ fn draw_output(frame: &mut ratatui::Frame, request: &OutputRequest, scroll: u16)
         Style::default().fg(theme::muted()),
         inside.width as usize,
     ));
+    // What the standing key turns on, said where it is offered and nowhere else. Coloured rather
+    // than muted, because it is the one thing on this screen whose effect outlives the prompt.
+    if request.verdict.is_safe() {
+        lines.extend(indented(
+            t!(vet_always_covers),
+            Style::default().fg(theme::running()),
+            inside.width as usize,
+        ));
+    }
     lines.push(Line::raw(""));
 
     // An empty result is a fact worth stating. Drawing nothing would read as a prompt that failed
@@ -1040,7 +1052,7 @@ fn draw_output(frame: &mut ratatui::Frame, request: &OutputRequest, scroll: u16)
         ));
     }
 
-    let keys = Line::from(vec![
+    let mut key_spans = vec![
         Span::styled(
             "  y",
             Style::default()
@@ -1048,6 +1060,22 @@ fn draw_output(frame: &mut ratatui::Frame, request: &OutputRequest, scroll: u16)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(" {}    ", t!(output_yes))),
+    ];
+    // Offered only where the check completed and found nothing. It is not an answer to the
+    // question on the screen: it turns off the asking, so the moment the check reported an
+    // injection attempt, or could not be made at all, is the worst moment to draw it.
+    // [`vetting_answer_for`] asks the same question again rather than being told the answer,
+    // because a grant must not rest on a drawing.
+    if request.verdict.is_safe() {
+        key_spans.push(Span::styled(
+            "a",
+            Style::default()
+                .fg(theme::running())
+                .add_modifier(Modifier::BOLD),
+        ));
+        key_spans.push(Span::raw(format!(" {}    ", t!(vet_always))));
+    }
+    key_spans.extend([
         Span::styled(
             "n",
             Style::default()
@@ -1066,6 +1094,7 @@ fn draw_output(frame: &mut ratatui::Frame, request: &OutputRequest, scroll: u16)
             Style::default().fg(theme::muted()),
         ),
     ]);
+    let keys = Line::from(key_spans);
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -1091,13 +1120,117 @@ fn draw_output(frame: &mut ratatui::Frame, request: &OutputRequest, scroll: u16)
     furthest
 }
 
+/// What the user decided about being shown one quarantined slot.
+///
+/// Four answers rather than three, because "yes" and "yes, and stop asking me about a check that
+/// finds nothing" are different things and the second is the one that changes what happens next
+/// time. It is not a standing answer about these bytes or about this path: there is no such thing
+/// here, since a promotion covers one slot once and writes no rule. What it turns on is
+/// auto-vetting, which is the mode [CHECK-11] governs.
+///
+/// [CHECK-11]: ../../../docs/specs/vetting.md
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VetAnswer {
+    Approve,
+    /// Read this one, and let a check that finds nothing answer from here on.
+    ApproveAlways,
+    Reject,
+    /// Refuse the read and stop the turn that asked for it.
+    Interrupt,
+}
+
+impl VetAnswer {
+    /// What to tell the waiting turn. The two approvals are the same answer to it: what the second
+    /// one also does is configuration the interface holds, and the turn in flight keeps the mode
+    /// it began with either way.
+    pub fn decision(self) -> Decision {
+        match self {
+            VetAnswer::Approve | VetAnswer::ApproveAlways => Decision::Approve,
+            VetAnswer::Reject | VetAnswer::Interrupt => Decision::Reject,
+        }
+    }
+
+    /// Whether the person asked to stop being asked about a check that finds nothing.
+    ///
+    /// Never true of a refusal or of an interrupt: nothing about saying no is a reason to turn a
+    /// mode on, and a turn being stopped is not consent to anything it was stopped at.
+    pub fn turns_vetting_on(self) -> bool {
+        matches!(self, VetAnswer::ApproveAlways)
+    }
+
+    /// Whether the turn that asked stops as well as being refused. As [`Answer::stops_the_turn`].
+    pub fn stops_the_turn(self) -> bool {
+        matches!(self, VetAnswer::Interrupt)
+    }
+}
+
+/// What a key press did at a vetting prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VetResponse {
+    Answer(VetAnswer),
+    Scroll(i16),
+}
+
+/// Interpret one key press at the `vet_content` prompt, or `None` for a key that answers nothing.
+fn vet_answer_for(key: KeyEvent, request: &VetRequest) -> Option<VetResponse> {
+    vetting_answer_for(key, request.verdict)
+}
+
+/// Interpret one key press at the `read_output` prompt, or `None` for a key that answers nothing.
+fn output_answer_for(key: KeyEvent, request: &OutputRequest) -> Option<VetResponse> {
+    vetting_answer_for(key, request.verdict)
+}
+
+/// Interpret one key press at either prompt a check runs for and a promotion follows, or `None`
+/// for a key that answers nothing.
+///
+/// Separated from the loop so it can be tested without a terminal.
+///
+/// Takes the verdict and not only the key, for the reason [`run_answer_for`] takes the request:
+/// `a` is bound only where the check completed and found nothing, and the answer has to agree with
+/// the drawing. The moment a check reported an injection attempt, or could not be made at all, is
+/// the worst moment to turn off the asking, and a key that granted something the same screen does
+/// not offer is worse than an unbound one.
+///
+/// One function for both prompts because they ask the same question of the same person about the
+/// same kind of grant, and the standing answer is the same answer. Two copies of this would be two
+/// places for the set of bound keys to drift apart.
+fn vetting_answer_for(key: KeyEvent, verdict: Verdict) -> Option<VetResponse> {
+    // The prompt blocks the whole interface, so without this Ctrl-C would do nothing at the one
+    // moment a user is most likely to press it.
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Char('c') => Some(VetResponse::Answer(VetAnswer::Interrupt)),
+            _ => None,
+        };
+    }
+
+    match key.code {
+        KeyCode::Char('y' | 'Y') => Some(VetResponse::Answer(VetAnswer::Approve)),
+        KeyCode::Char('a' | 'A') if verdict.is_safe() => {
+            Some(VetResponse::Answer(VetAnswer::ApproveAlways))
+        }
+        KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(VetResponse::Answer(VetAnswer::Reject)),
+        KeyCode::Up => Some(VetResponse::Scroll(-1)),
+        KeyCode::Down => Some(VetResponse::Scroll(1)),
+        KeyCode::PageUp => Some(VetResponse::Scroll(-10)),
+        KeyCode::PageDown => Some(VetResponse::Scroll(10)),
+        KeyCode::Home => Some(VetResponse::Scroll(i16::MIN)),
+        KeyCode::End => Some(VetResponse::Scroll(i16::MAX)),
+        // Enter is deliberately not an approval: it is the key most likely to be pressed out of
+        // habit, and this prompt puts bytes nobody vouched for into the planner's context.
+        _ => None,
+    }
+}
+
 /// Draw the prompt for a slot a check has looked at, and wait for an answer.
 ///
 /// The bytes are the body, as they are at the output prompt: the person deciding is the person
 /// reading. What is new is the banner above them, which says what a second model made of the same
-/// bytes. It is advice and never an answer, so the keys are the write prompt's three and nothing
-/// about the verdict changes which of them are live.
-pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> Answer {
+/// bytes. It is advice and never an answer, so the three answers to the question are live whatever
+/// the verdict was. The fourth key does not answer the question: it turns off the asking, and it
+/// is offered only where the check completed and found nothing.
+pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> VetAnswer {
     let mut scroll = 0u16;
     loop {
         let mut most = 0u16;
@@ -1108,22 +1241,22 @@ pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> 
             .draw(|frame| most = draw_vet(frame, request, scroll))
             .is_err()
         {
-            return Answer::Reject;
+            return VetAnswer::Reject;
         }
 
         match event::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
-                Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => {
+            Ok(TermEvent::Key(key)) => match vet_answer_for(key, request) {
+                Some(VetResponse::Answer(answer)) => return answer,
+                Some(VetResponse::Scroll(by)) => {
                     scroll = scroll.saturating_add_signed(by).min(most);
                 }
                 None => continue,
             },
             Ok(_) => continue,
-            Err(_) => return Answer::Reject,
+            Err(_) => return VetAnswer::Reject,
         }
     }
 }
@@ -1182,6 +1315,15 @@ fn draw_vet(frame: &mut ratatui::Frame, request: &VetRequest, scroll: u16) -> u1
         Style::default().fg(theme::muted()),
         inside.width as usize,
     ));
+    // What the standing key turns on, said where it is offered and nowhere else. Coloured rather
+    // than muted, because it is the one thing on this screen whose effect outlives the prompt.
+    if request.verdict.is_safe() {
+        lines.extend(indented(
+            t!(vet_always_covers),
+            Style::default().fg(theme::running()),
+            inside.width as usize,
+        ));
+    }
     lines.push(Line::raw(""));
 
     // Why the planner wanted it, in the planner's own words. It is not what the answer binds to:
@@ -1215,7 +1357,7 @@ fn draw_vet(frame: &mut ratatui::Frame, request: &VetRequest, scroll: u16) -> u1
         ));
     }
 
-    let keys = Line::from(vec![
+    let mut key_spans = vec![
         Span::styled(
             "  y",
             Style::default()
@@ -1223,6 +1365,22 @@ fn draw_vet(frame: &mut ratatui::Frame, request: &VetRequest, scroll: u16) -> u1
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(" {}    ", t!(vet_yes))),
+    ];
+    // Offered only where the check completed and found nothing. It is not an answer to the
+    // question on the screen: it turns off the asking, so the moment the check reported an
+    // injection attempt, or could not be made at all, is the worst moment to draw it.
+    // [`vet_answer_for`] asks the same question again rather than being told the answer, because
+    // a grant must not rest on a drawing.
+    if request.verdict.is_safe() {
+        key_spans.push(Span::styled(
+            "a",
+            Style::default()
+                .fg(theme::running())
+                .add_modifier(Modifier::BOLD),
+        ));
+        key_spans.push(Span::raw(format!(" {}    ", t!(vet_always))));
+    }
+    key_spans.extend([
         Span::styled(
             "n",
             Style::default()
@@ -1241,6 +1399,7 @@ fn draw_vet(frame: &mut ratatui::Frame, request: &VetRequest, scroll: u16) -> u1
             Style::default().fg(theme::muted()),
         ),
     ]);
+    let keys = Line::from(key_spans);
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -2599,9 +2758,10 @@ mod tests {
         assert!(drawn.contains("No path is vouched for"), "{drawn}");
     }
 
-    /// Nothing about the verdict changes which keys are live. A safe verdict is advice, so a
-    /// prompt that stopped offering the refusal would be collecting a keypress rather than a
-    /// decision.
+    /// Nothing about the verdict changes which keys answer the question. A safe verdict is advice,
+    /// so a prompt that stopped offering the refusal would be collecting a keypress rather than a
+    /// decision, and one that stopped offering the approval on a warning would be deciding for the
+    /// person. Both are live whatever the check said, and both mean the same thing.
     #[test]
     fn a_safe_verdict_does_not_change_which_keys_the_vet_prompt_offers() {
         for verdict in [
@@ -2609,18 +2769,111 @@ mod tests {
             Verdict::Unsafe,
             Verdict::Inconclusive("the check could not be made"),
         ] {
-            let drawn = rendered_vet(&a_vetting(verdict, None, "a page"));
+            let request = a_vetting(verdict, None, "a page");
+            let drawn = rendered_vet(&request);
             assert!(drawn.contains("let it read this"), "{verdict}: {drawn}");
             assert!(drawn.contains("keep it back"), "{verdict}: {drawn}");
+            assert_eq!(
+                vet_answer_for(
+                    KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+                    &request
+                ),
+                Some(VetResponse::Answer(VetAnswer::Approve)),
+                "{verdict}"
+            );
+            assert_eq!(
+                vet_answer_for(
+                    KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+                    &request
+                ),
+                Some(VetResponse::Answer(VetAnswer::Reject)),
+                "{verdict}"
+            );
         }
     }
 
+    /// The fourth key is not an answer to the question: it turns the asking off. So it is offered
+    /// only where the check completed and found nothing. The moment a check reported an injection
+    /// attempt, or could not be made at all, is the worst moment to grant it.
+    #[test]
+    fn only_a_safe_verdict_offers_to_stop_asking() {
+        let safe = rendered_vet(&a_vetting(Verdict::Safe, None, "a page"));
+        assert!(safe.contains("don't ask when safe"), "{safe}");
+        assert!(
+            safe.contains("in this session and the next"),
+            "the key was offered without saying what it turns on: {safe}"
+        );
+        for verdict in [
+            Verdict::Unsafe,
+            Verdict::Inconclusive("the check could not be made"),
+        ] {
+            let drawn = rendered_vet(&a_vetting(verdict, None, "a page"));
+            assert!(
+                !drawn.contains("don't ask when safe"),
+                "{verdict} offered to stop asking: {drawn}"
+            );
+        }
+    }
+
+    /// The key agrees with the drawing. A key that granted a standing thing the same screen does
+    /// not offer is worse than an unbound one, and this key's grant outlives the prompt.
+    #[test]
+    fn pressing_always_at_a_not_safe_vet_prompt_grants_nothing() {
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        for verdict in [
+            Verdict::Unsafe,
+            Verdict::Inconclusive("the check could not be made"),
+        ] {
+            assert_eq!(
+                vet_answer_for(key, &a_vetting(verdict, None, "a page")),
+                None,
+                "{verdict} bound the key that turns the asking off"
+            );
+        }
+        assert_eq!(
+            vet_answer_for(key, &a_vetting(Verdict::Safe, None, "a page")),
+            Some(VetResponse::Answer(VetAnswer::ApproveAlways)),
+            "the key was not bound where the prompt draws it"
+        );
+    }
+
+    /// Refusing turns nothing on, and neither does the interrupt. Nothing about saying no is a
+    /// reason to stop being asked, and a turn being stopped is not consent to anything.
+    #[test]
+    fn refusing_a_vetted_read_turns_nothing_on() {
+        assert!(!VetAnswer::Reject.turns_vetting_on());
+        assert!(!VetAnswer::Interrupt.turns_vetting_on());
+        assert!(!VetAnswer::Approve.turns_vetting_on());
+        assert!(VetAnswer::ApproveAlways.turns_vetting_on());
+    }
+
+    /// The turn is told the same thing by both approvals. What the second one also does is
+    /// configuration the interface holds, and a turn that saw a different answer would be a second
+    /// place the mode was decided.
+    #[test]
+    fn the_standing_answer_tells_the_turn_what_a_plain_yes_tells_it() {
+        assert_eq!(VetAnswer::ApproveAlways.decision(), Decision::Approve);
+        assert_eq!(VetAnswer::Approve.decision(), Decision::Approve);
+        assert_eq!(VetAnswer::Reject.decision(), Decision::Reject);
+        assert_eq!(VetAnswer::Interrupt.decision(), Decision::Reject);
+    }
+
     /// Enter is the key most likely to be pressed out of habit, and this prompt puts bytes
-    /// nobody vouched for into the planner's context.
+    /// nobody vouched for into the planner's context. It reaches neither approval.
     #[test]
     fn enter_does_not_approve_a_vetted_read() {
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(answer_for(key), None);
+        for verdict in [
+            Verdict::Safe,
+            Verdict::Unsafe,
+            Verdict::Inconclusive("the check could not be made"),
+        ] {
+            assert_eq!(
+                vet_answer_for(key, &a_vetting(verdict, None, "a page")),
+                None,
+                "{verdict}"
+            );
+        }
     }
 
     /// Content with nothing in it is a fact worth stating. An empty box reads as a prompt that
@@ -2732,6 +2985,89 @@ mod tests {
             2,
             "the one line of output and the check's sentence, each inside a bar: {drawn}"
         );
+    }
+
+    /// The fourth key is not an answer to the question: it turns the asking off. So it is offered
+    /// here on the same footing as at the other vetting prompt, and only where the check completed
+    /// and found nothing. A prompt carrying a warning is the worst moment to stop asking.
+    #[test]
+    fn only_a_safe_verdict_offers_to_stop_asking_about_output() {
+        let safe = rendered_output(&an_output("Darwin"));
+        assert!(safe.contains("don't ask when safe"), "{safe}");
+        assert!(safe.contains("wherever a check finds nothing"), "{safe}");
+
+        for verdict in [
+            Verdict::Unsafe,
+            Verdict::Inconclusive("the check could not be made"),
+        ] {
+            let mut request = an_output("Darwin");
+            request.verdict = verdict;
+            let drawn = rendered_output(&request);
+            assert!(
+                !drawn.contains("don't ask when safe"),
+                "{verdict} offered the standing key: {drawn}"
+            );
+            assert!(
+                !drawn.contains("wherever a check finds nothing"),
+                "{verdict} explained a key it does not offer: {drawn}"
+            );
+        }
+    }
+
+    /// A key that granted something the screen does not offer is worse than an unbound one, so the
+    /// binding asks the verdict again rather than trusting the drawing to have matched.
+    #[test]
+    fn the_standing_key_is_bound_at_the_output_prompt_only_where_it_is_drawn() {
+        let pressed = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+
+        assert_eq!(
+            output_answer_for(pressed, &an_output("Darwin")),
+            Some(VetResponse::Answer(VetAnswer::ApproveAlways)),
+            "a safe verdict did not bind the standing key"
+        );
+
+        for verdict in [
+            Verdict::Unsafe,
+            Verdict::Inconclusive("the check could not be made"),
+        ] {
+            let mut request = an_output("Darwin");
+            request.verdict = verdict;
+            assert_eq!(
+                output_answer_for(pressed, &request),
+                None,
+                "{verdict} bound a key the prompt does not draw"
+            );
+        }
+    }
+
+    /// The three answers to the question are live whatever the check said, on this route as on the
+    /// other: a verdict is advice and never the answer.
+    #[test]
+    fn every_verdict_still_offers_both_answers_about_output() {
+        for verdict in [
+            Verdict::Safe,
+            Verdict::Unsafe,
+            Verdict::Inconclusive("the check could not be made"),
+        ] {
+            let mut request = an_output("Darwin");
+            request.verdict = verdict;
+            assert_eq!(
+                output_answer_for(
+                    KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+                    &request
+                ),
+                Some(VetResponse::Answer(VetAnswer::Approve)),
+                "{verdict}"
+            );
+            assert_eq!(
+                output_answer_for(
+                    KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+                    &request
+                ),
+                Some(VetResponse::Answer(VetAnswer::Reject)),
+                "{verdict}"
+            );
+        }
     }
 
     /// The prompt blocks everything else, so Ctrl-C must be answerable here too. It stops the

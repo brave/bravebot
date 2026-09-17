@@ -648,6 +648,17 @@ pub struct Task {
     /// holds it. A delegate carries none: it has a job of its own, given to it by the turn that
     /// spawned it.
     pub working_towards: Option<String>,
+    /// Whether a check that finds nothing may promote a slot without anybody being asked.
+    ///
+    /// `false` by default, which is every caller that says nothing: what this turns off is a person
+    /// being asked before content nobody vouched for reaches the planner, so a default that had it
+    /// on would be a different product.
+    ///
+    /// Supplied per turn for the reason `home` and `permissions` are, and resolved by the caller
+    /// rather than here: the three routes into it are a flag, a file in the person's own directory
+    /// and a settings key, and which of them won is the caller's business.
+    /// `bravebot_core::vetting::auto` is the rule they resolve it with.
+    pub auto_vetting: bool,
     /// What this turn is a delegate of, where it is one rather than a person's.
     ///
     /// `None` for every turn somebody typed the prompt for. Where it is set, four things come
@@ -712,6 +723,8 @@ impl Task {
             permissions: Permissions::new(),
             // Asking, which is what a turn has always done.
             permission_mode: crate::PermissionMode::default(),
+            // Asking too: nobody has said a check's word may stand in for an answer.
+            auto_vetting: false,
             delegate: None,
         }
     }
@@ -838,6 +851,16 @@ impl Task {
     /// only decides what the planner is told.
     pub fn with_permission_mode(mut self, mode: crate::PermissionMode) -> Self {
         self.permission_mode = mode;
+        self
+    }
+
+    /// Say whether a check that finds nothing may promote a slot without anybody being asked.
+    ///
+    /// The caller has already resolved the three routes into one answer with
+    /// `bravebot_core::vetting::auto`. Nothing here reads a file, a flag or a setting, for the
+    /// reason nothing here reads `$HOME`.
+    pub fn with_auto_vetting(mut self, auto: bool) -> Self {
+        self.auto_vetting = auto;
         self
     }
 }
@@ -2636,6 +2659,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             spawned: &mut spawned,
                             jobs: &mut jobs,
                             permission_mode: task.permission_mode,
+                            auto_vetting: task.auto_vetting,
                             run_directory: &mut run_directory,
                         },
                         &mut asking,

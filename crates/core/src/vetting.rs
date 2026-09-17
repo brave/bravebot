@@ -92,6 +92,84 @@ impl std::fmt::Display for Verdict {
     }
 }
 
+/// Who said the planner may have one slot's bytes.
+///
+/// Two ways in, and they are told apart so the audit trail says which happened rather than
+/// claiming a person read something nobody was shown. Both mint the same single-use endorsement
+/// and both produce the same label; what differs is who answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Endorsed {
+    /// A person was shown the bytes and said the planner may read them.
+    ByAPerson,
+    /// Auto-vetting was on, the check completed and found nothing, and nobody was asked.
+    ///
+    /// Reachable only where somebody turned the mode on, one of the three ways
+    /// [`auto`] takes.
+    ByASafeVerdict,
+}
+
+impl Endorsed {
+    /// What the trail says about how the promotion came to be authorised.
+    ///
+    /// The driver's own words either way. Nothing the check wrote reaches this.
+    pub fn describe(&self) -> &'static str {
+        match self {
+            Self::ByAPerson => "the user read it and vouched for it",
+            Self::ByASafeVerdict => {
+                "auto-vetting is on and the check found nothing, so nobody was asked"
+            }
+        }
+    }
+}
+
+/// Whether this process was asked, on the command line, to let a safe verdict promote.
+///
+/// Process-wide for the reason [`crate::incognito`] is: `--vet` is a property of the run rather
+/// than of any one caller, and every way of starting puts the same question to the same code.
+/// Threading it instead would be the same value passed through six entry points that have nothing
+/// to say about it, and the one that was missed would run under a different answer from the rest
+/// of the process.
+///
+/// Read once per session, where the three routes are resolved into one answer. [`auto`] takes it
+/// as an argument so that the rule itself is decided by nothing ambient.
+static ASKED_FOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Ask, for the rest of this process, that a safe verdict promote without a prompt.
+///
+/// Called once from the entry point, before a session is assembled. One way, like
+/// [`crate::incognito::engage`]: a switch that could be cleared would mean every reader had to
+/// reason about when it was cleared and by what.
+pub fn ask_for_it() {
+    // Release, paired with the acquire below, for the reason `incognito` pairs them: a thread that
+    // observes the switch must also observe everything the entry point did beforehand.
+    ASKED_FOR.store(true, std::sync::atomic::Ordering::Release);
+}
+
+/// Whether the command line asked for it.
+pub fn asked_for() -> bool {
+    ASKED_FOR.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Whether a safe verdict may promote one slot's bytes without anybody being asked.
+///
+/// The whole of the rule, as a function of its three inputs and nothing else, so that what decides
+/// it can be read in one place and tested without a home directory, a settings file or a
+/// process-wide switch in force:
+///
+/// - `asked` is `--vet`, which lasts for this run.
+/// - `chosen` is what the person recorded in `~/.bravebot/vetting`, which lasts until they change
+///   it. `None` where they never have, and where this is a session that records nothing.
+/// - `configured` is the `vetting.auto` key from the **home** settings layer only. `None` where no
+///   file said anything.
+///
+/// Off unless one of the three says otherwise, because what it turns off is a person being asked
+/// before content nobody vouched for reaches the planner. A choice the person made outranks a
+/// file, which is the precedence the editing style already uses, and the flag outranks both
+/// because it is the narrowest in time.
+pub fn auto(asked: bool, chosen: Option<bool>, configured: Option<bool>) -> bool {
+    asked || chosen.or(configured).unwrap_or(false)
+}
+
 /// What the driver fixed about one check before it ran.
 ///
 /// Built only by the `before_vetting` family on [`crate::policy::Policy`], which takes a
@@ -130,6 +208,15 @@ impl VettingSpec {
     /// The one piece of content the check may read, still labelled.
     pub(crate) fn reads(&self) -> Labelled<String> {
         self.reads.clone()
+    }
+
+    /// How many lines the content holds, measured without being read.
+    ///
+    /// The same measurement the trusted metadata block carries, answered here as well so that a
+    /// caller with no prompt to build can still say how much was read. Nothing branches on it: a
+    /// count is what a result line states, not a decision.
+    pub fn lines(&self) -> usize {
+        crate::slot::Measured::of(&self.reads).lines
     }
 
     /// What the audit trail calls what is being checked: a reference's name, or a path.
@@ -531,5 +618,71 @@ mod tests {
             read(r#"{"verdict": "unsafe", "reason": "  "}"#).reason,
             None
         );
+    }
+
+    /// Off is the answer when nobody has said anything. A mode that promoted content without
+    /// asking by default would make every existing install a different product, and the thing it
+    /// switches off is a person being asked.
+    #[test]
+    fn nothing_is_auto_vetted_until_somebody_asks_for_it() {
+        assert!(!auto(false, None, None));
+    }
+
+    /// Each of the three routes is enough on its own. They differ in how long they last and not in
+    /// what they say, so a rule that needed two of them would make the other two decorative.
+    #[test]
+    fn each_of_the_three_routes_turns_it_on_by_itself() {
+        assert!(auto(true, None, None), "the flag did not turn it on");
+        assert!(
+            auto(false, Some(true), None),
+            "the choice did not turn it on"
+        );
+        assert!(
+            auto(false, None, Some(true)),
+            "the settings key did not turn it on"
+        );
+    }
+
+    /// A choice the person recorded outranks a settings file, which is the precedence the editing
+    /// style already uses. Somebody who turned it off has made a decision that has to outlast the
+    /// session, and a file that turned it back on for them tomorrow would undo it silently.
+    #[test]
+    fn a_recorded_choice_outranks_the_settings_key() {
+        assert!(
+            !auto(false, Some(false), Some(true)),
+            "a settings file overrode a person who turned it off"
+        );
+        assert!(
+            auto(false, Some(true), Some(false)),
+            "a settings file overrode a person who turned it on"
+        );
+    }
+
+    /// The flag is for this run, so it is the narrowest in time and outranks both of the standing
+    /// answers. Somebody typing it has said what they want of the run in front of them.
+    #[test]
+    fn the_flag_outranks_a_recorded_choice() {
+        assert!(auto(true, Some(false), Some(false)));
+    }
+
+    /// Asking twice is asking once, and there is no way back. A switch that could be cleared would
+    /// mean every reader had to reason about when it was cleared and by what.
+    #[test]
+    fn asking_on_the_command_line_is_one_way_and_idempotent() {
+        ask_for_it();
+        assert!(asked_for());
+        ask_for_it();
+        assert!(asked_for());
+    }
+
+    /// A promotion nobody was asked about is described as such, so the trail does not credit a
+    /// person who was never shown the bytes.
+    #[test]
+    fn the_two_endorsements_are_described_differently() {
+        assert_ne!(
+            Endorsed::ByAPerson.describe(),
+            Endorsed::ByASafeVerdict.describe()
+        );
+        assert!(Endorsed::ByASafeVerdict.describe().contains("nobody"));
     }
 }

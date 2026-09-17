@@ -91,6 +91,12 @@ pub struct Facts<'a> {
     pub confinement: &'a str,
     /// How much the session is asking before it acts, as the mode key last left it.
     pub permission_mode: bravebot_agent::PermissionMode,
+    /// Whether a check that finds nothing promotes a slot without the person being asked.
+    ///
+    /// Reported for the reason the permission mode is: it is a standing answer that stops a prompt
+    /// appearing, and a note at startup scrolls away. Only where it is on, since a line saying the
+    /// ordinary thing on every session is a line people learn to skim.
+    pub auto_vetting: bool,
     pub turns: usize,
     pub tokens: u64,
     /// Where the session's wall clock went, every turn added together.
@@ -270,6 +276,16 @@ pub fn report(facts: &Facts<'_>) -> Report {
     if let Some(named) = named_mode(facts.permission_mode) {
         lines
             .push(Line::new(t!(status_permissions), named).with_note(t!(status_permissions_cycle)));
+    }
+
+    // Beside it for the same reason, and only where it is on: this is the other standing answer
+    // that stops a prompt appearing, and the only record of it otherwise is a note at the top of
+    // the session that has scrolled away by the time somebody wonders.
+    if facts.auto_vetting {
+        lines.push(
+            Line::new(t!(status_vetting), t!(status_vetting_auto))
+                .with_note(t!(status_vetting_where)),
+        );
     }
 
     // What is going to happen without anybody typing anything, which is the one thing about a
@@ -636,6 +652,7 @@ mod tests {
             // Asking, which is what every session does unless somebody changed it. The tests about
             // the line set this themselves.
             permission_mode: bravebot_agent::PermissionMode::Ask,
+            auto_vetting: false,
             turns: 4,
             tokens: 12_400,
             // Nothing measured, which is what a session looks like before its first turn. Tests
@@ -1097,6 +1114,33 @@ mod tests {
             // get out of.
             assert!(shown.contains("shift-tab"), "{mode:?}: {shown}");
         }
+    }
+
+    /// A standing answer that stops a prompt appearing has to be readable for the rest of the
+    /// session. The note at the top of the transcript has scrolled away by the time somebody
+    /// wonders why they are not being asked, and the file it is kept in is where they undo it.
+    #[test]
+    fn a_session_that_stopped_asking_about_a_check_says_so() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut facts = facts(&config, &trust);
+        facts.auto_vetting = true;
+        let shown = rendered(&report(&facts));
+        assert!(shown.contains("vetting"), "{shown}");
+        assert!(
+            shown.contains("~/.bravebot/vetting"),
+            "the report did not say where the answer is kept: {shown}"
+        );
+    }
+
+    /// Nothing is said where the session asks, which is every session nobody turned the mode on
+    /// for. A line reporting the ordinary state would be one more line to skim past.
+    #[test]
+    fn an_ordinary_session_says_nothing_about_a_check() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let shown = rendered(&report(&facts(&config, &trust)));
+        assert!(!shown.contains("~/.bravebot/vetting"), "{shown}");
     }
 
     /// Nothing is said where the session is asking. A line reporting the ordinary state on every

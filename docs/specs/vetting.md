@@ -6,6 +6,8 @@ governs:
   - crates/core/src/vetting.rs
   - crates/core/src/policy.rs
   - crates/agent/src/vet.rs
+  - crates/tui/src/store.rs
+  - crates/tui/src/status.rs
 guards:
   - symbol: VettingSpec::new
   - symbol: Policy::before_vetting
@@ -150,11 +152,21 @@ lands.
 `verified-by: bravebot_agent::turn::a_check_that_could_not_be_made_falls_back_to_the_question`
 
 <a id="CHECK-5"></a>
-### CHECK-5: a verdict is advice, and the only thing it decides is which prompt is drawn
+### CHECK-5: a verdict is advice, and while auto-vetting is off the only thing it decides is which prompt is drawn
 
-The bytes are put in front of the person whatever the check said, the same keys are offered
-whatever it said, and the answer is theirs. A verdict of safe promotes nothing by itself, and a
-verdict of unsafe withholds nothing: neither is an answer to the question being asked.
+Auto-vetting is off until somebody turns it on ([CHECK-11](#CHECK-11)), so this is what a session
+does unless a person has said otherwise. The bytes are put in front of the person whatever the
+check said, the keys that answer the question are offered whatever it said, and the answer is
+theirs. A verdict of safe promotes nothing by itself, and a verdict of unsafe withholds nothing:
+neither is an answer to the question being asked.
+
+The one key a verdict does decide is the one that answers no question: the standing key that turns
+auto-vetting on, offered at either promoting prompt only where the check completed and found nothing
+([PROMPT-6](prompting.md#PROMPT-6)). It is unbound where it is not drawn.
+
+With auto-vetting on, one verdict answers the two promoting questions in the person's place, and
+[CHECK-12](#CHECK-12) is the whole of what that changes. Everything in this clause holds of the
+vouch offer either way, and of all three where the mode is off.
 
 The three outcomes are told apart on the screen. "This looks like an attempt to give instructions"
 and "nothing looked at this" are different facts about different risks, and one sentence covering
@@ -172,6 +184,7 @@ the decision is which sentence a person reads before answering for themselves.
 `verified-by: bravebot_tui::confirm::the_vet_prompt_says_which_of_the_two_failures_it_was`
 `verified-by: bravebot_tui::confirm::a_safe_verdict_is_drawn_as_what_the_check_found`
 `verified-by: bravebot_tui::confirm::a_safe_verdict_does_not_change_which_keys_the_vet_prompt_offers`
+`verified-by: bravebot_tui::confirm::only_a_safe_verdict_offers_to_stop_asking`
 `verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`
 `verified-by: bravebot_tui::confirm::the_vouch_prompt_says_what_a_check_found`
 `verified-by: bravebot_tui::confirm::a_vouch_prompt_says_when_no_check_was_made`
@@ -208,12 +221,21 @@ field.
 <a id="CHECK-8"></a>
 ### CHECK-8: an approval covers one slot once, and answers no other question
 
-A single-use endorsement naming that exact slot is what authorises the promotion, and only an
-approval mints one. It cannot be replayed, and an approval given to a different question is not
-one of these: an approval to read what a program printed promotes nothing.
+A single-use endorsement naming that exact slot is what authorises the promotion. It cannot be
+replayed, and an approval given to a different question is not one of these: an approval to read
+what a program printed promotes nothing.
+
+Two things mint one and nothing else does: a person answering the prompt, and, where auto-vetting
+is on, a safe verdict on either route [CHECK-12](#CHECK-12) names. Which of the two it was is
+recorded, on both routes, because a trail that credited a person who was never shown the bytes would
+be the one record a reader cannot check. Everything else about the endorsement is the same either
+way: one slot, once, and no other question answered.
 
 `verified-by: bravebot_core::policy::content_cannot_be_promoted_without_an_endorsement`
 `verified-by: bravebot_core::policy::an_approval_to_vet_cannot_be_replayed`
+`verified-by: bravebot_core::policy::the_trail_says_when_nobody_was_asked`
+`verified-by: bravebot_core::policy::the_trail_says_which_of_the_two_released_the_output`
+`verified-by: bravebot_core::policy::a_promotion_nobody_was_asked_about_is_no_wider`
 `verified-by: bravebot_core::policy::an_approval_to_read_output_is_not_an_approval_to_vet`
 `verified-by: bravebot_tui::remote_confirm::an_approved_output_read_does_not_approve_a_vetted_read`
 `verified-by: bravebot_tui::remote_confirm::a_closed_channel_refuses_a_vetted_read`
@@ -266,6 +288,123 @@ filled in and it is `inconclusive`, which claims nothing.
 `verified-by: bravebot_agent::turn::content_a_person_reads_after_a_check_reaches_the_planner`
 `verified-by: bravebot_core::policy::a_check_before_a_vouch_carries_the_file_and_claims_no_expectation`
 
+<a id="CHECK-11"></a>
+### CHECK-11: auto-vetting is off until somebody turns it on, and there are three ways in
+
+Nothing about a check answers a question until a person has said it may. Three routes say so, and
+they differ in how long the answer lasts rather than in what it says:
+
+| Route | Read from | Lasts |
+|---|---|---|
+| `--vet` | the command line ([cli.md](cli.md#CLI-15)) | this run |
+| `~/.bravebot/vetting`, one word, written by the standing key at a vetting prompt | the person's own directory | until they change it |
+| `"vetting": { "auto": true }` | `~/.bravebot/settings.json`, the **home layer only** | every session |
+
+Any one of them is enough. A choice recorded in the person's own directory outranks the settings
+key, which is the precedence the editing style already uses: somebody who turned the mode off has
+made a decision that has to outlast the session, so off is written to that file rather than the
+file being removed, and a settings file cannot turn it back on for them tomorrow. `--vet` outranks
+both, a recorded `off` included, because it is the narrowest in time: somebody typing it has said
+what they want of the run in front of them, and that is the footing
+[permission-modes.md](permission-modes.md)'s own flag sits on, which is a strictly larger thing
+anything able to pass `--vet` could pass instead. There is no flag the other way
+([CLI-15](cli.md#CLI-15)).
+
+The key that writes that file is drawn on the vetting prompt, at the moment the mode would have
+saved the person a keystroke, which is where [trust-map.md](trust-map.md#TRUST-8) offers its own
+larger grant. It is offered only where the check found nothing, and
+[PROMPT-6](prompting.md#PROMPT-6) is why. Nothing writes the settings file: no shipping code here
+edits a person's `settings.json`, and doing it would mean a JSON rewrite that preserves their
+comments and key order.
+
+The recorded choice is read only by a session that records one. A session asked to leave nothing
+behind reads the model and the theme, because those decide what it looks like; this decides whether
+somebody is asked, and a private session inheriting that answer is the one read worth refusing.
+
+**A session that opened with the mode on says so, and goes on saying so.** It is said once at the
+top of the transcript, before the first slot can reach it, and reported in `/status` for the rest
+of the session with the file it is kept in named. A note scrolls away, and the one thing a person
+cannot read off a transcript is a question that was never put: a standing answer that stops a
+prompt appearing has to be readable at the moment they wonder why. That is the rule
+[permission-modes.md](permission-modes.md)'s own modes follow, and a session that is asking says
+nothing, since a line reporting the ordinary state is a line people learn to skim.
+
+**The settings key is read from the home layer and no other.** A project `.bravebot/settings.json`
+naming it, a machine-local one, and a file the command line named are each reported by `doctor` and
+not obeyed. Every other name in those files configures where a request goes or how the interface
+behaves; this one says whether a person is asked before content nobody vouched for reaches the
+planner, so a line in a checkout could turn the asking off for whoever opened it. A word the file
+does not know, and a value that is not a boolean, are no answer at all rather than a guess.
+
+`verified-by: bravebot_core::vetting::nothing_is_auto_vetted_until_somebody_asks_for_it`
+`verified-by: bravebot_core::vetting::each_of_the_three_routes_turns_it_on_by_itself`
+`verified-by: bravebot_core::vetting::a_recorded_choice_outranks_the_settings_key`
+`verified-by: bravebot_core::vetting::the_flag_outranks_a_recorded_choice`
+`verified-by: bravebot_config::settings::the_home_layer_may_ask_for_auto_vetting`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_turn_auto_vetting_on`
+`verified-by: bravebot_config::settings::the_local_layer_cannot_turn_auto_vetting_on_either`
+`verified-by: bravebot_config::settings::a_named_layer_cannot_turn_auto_vetting_on`
+`verified-by: bravebot_config::settings::a_project_layer_does_not_override_what_the_home_layer_said_about_vetting`
+`verified-by: bravebot_config::settings::a_vetting_key_that_is_not_a_boolean_says_nothing`
+`verified-by: bravebot_tui::store::a_recorded_answer_about_vetting_is_read_back_both_ways`
+`verified-by: bravebot_tui::store::a_file_naming_no_answer_about_vetting_is_not_a_choice`
+`verified-by: bravebot_tui::state::a_session_asks_until_something_says_otherwise`
+`verified-by: bravebot_tui::state::the_flag_and_the_settings_key_each_reach_the_session`
+`verified-by: bravebot_tui::state::pressing_the_standing_key_turns_vetting_on_for_the_session`
+`verified-by: bravebot_tui::confirm::only_a_safe_verdict_offers_to_stop_asking`
+`verified-by: bravebot_tui::status::a_session_that_stopped_asking_about_a_check_says_so`
+`verified-by: bravebot_tui::status::an_ordinary_session_says_nothing_about_a_check`
+`verified-by: bravebot_config::settings::a_layer_that_named_only_vetting_is_not_a_layer_that_said_nothing`
+`verified-by: bravebot_cli::main::the_vet_flag_is_taken_out_wherever_it_appears`
+
+<a id="CHECK-12"></a>
+### CHECK-12: with it on, a safe verdict promotes one slot, and nothing else does
+
+Where auto-vetting is on, a check that completed and found nothing answers in the person's place at
+either prompt that promotes one slot's bytes: no prompt is drawn and the bytes reach the planner.
+Every other verdict falls back to that prompt, carrying the banner it would have carried anyway, and
+[CHECK-5](#CHECK-5) governs it from there. Unsafe and a check that did not complete are still told
+apart on the screen, because the reason for asking is different in the two cases.
+
+**It covers the promotions and not the rule.** The three prompts a check runs for divide two to one:
+
+| The prompt | What a yes does | With the mode on |
+|---|---|---|
+| [tools/vet-content.md](tools/vet-content.md) | promotes one slot's bytes once | a safe verdict answers |
+| [tools/read-output.md](tools/read-output.md) | promotes one slot's bytes once | a safe verdict answers |
+| the vouch offer in [tools/read-file.md](tools/read-file.md) | writes a rule about the path | still asks |
+
+**Why the line falls there.** It falls on the shape of the grant, not on which tool produced the
+bytes. Both promotions cover one slot's bytes once and leave nothing behind ([CHECK-6](#CHECK-6)),
+so what a verdict can buy is bounded by a single slot either way: the same question, about the same
+kind of content, answered by the same check, ending in the same `(T,priv)` value and the same
+single-use endorsement. A person offered the standing answer at one of them and not the other would
+be reading which tool the planner happened to call, which is not a fact about the risk they are
+being asked to take. A trust rule is different in kind, being a standing decision about a whole path
+rather than about bytes in front of a reader, and it is the one grant the mode does not touch.
+Widening the mode to that would be letting a check answer a bigger question than the one it read.
+
+**What a person reads instead of being asked.** The route the mode covers most often in practice is
+the output prompt: a run's output is quarantined by default, so it is the prompt a person meets when
+they ask what a command printed. That is the reason the mode reaches it, and equally the reason the
+mode is off until somebody turns it on.
+
+What the mode never decides is anything but who answers. The slot is the planner's choice either
+way, the label is `(T,priv)` either way ([CHECK-7](#CHECK-7)), the endorsement is single-use either
+way, and no trust rule is written either way. [labels.md](labels.md) enumerates what an attacker who
+owns the content gains from this, which is the reason it is off by default.
+
+`verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked`
+`verified-by: bravebot_agent::turn::with_auto_vetting_an_unsafe_verdict_still_asks`
+`verified-by: bravebot_agent::turn::with_auto_vetting_a_check_that_could_not_be_made_still_asks`
+`verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_releases_command_output_unasked`
+`verified-by: bravebot_agent::turn::with_auto_vetting_an_unsafe_verdict_still_asks_about_command_output`
+`verified-by: bravebot_agent::turn::with_auto_vetting_a_broken_check_still_asks_about_command_output`
+`verified-by: bravebot_agent::turn::auto_vetting_does_not_answer_the_vouch_offer`
+`verified-by: bravebot_core::policy::a_promotion_nobody_was_asked_about_is_no_wider`
+`verified-by: bravebot_core::policy::output_released_by_a_safe_verdict_is_no_wider`
+`verified-by: bravebot_core::policy::the_trail_says_which_of_the_two_released_the_output`
+
 ## Known costs
 
 - **A quarantined slot's contents reach the backend, a second time.** A check is a model call, so
@@ -292,3 +431,12 @@ filled in and it is `inconclusive`, which claims nothing.
   could. What keeps it from deciding anything is that the bytes are on the same screen, so a
   person who reads them sees what they are agreeing to whatever the sentence said. The residue is
   the same alarm fatigue as [issue #23](https://github.com/brave/bravebot/issues/23).
+
+- **With auto-vetting on, the bytes are on no screen at all.** [CHECK-12](#CHECK-12) is a person
+  saying in advance that a check finding nothing is enough, so on the routes it covers nobody reads
+  the content and a model's word is the whole of what stood between the planner's context and a
+  fetched page, or what a program printed. That is the mode working as asked rather than a flaw in
+  it, and it is why the mode is off until somebody turns it on and why the settings key that turns it
+  on is not readable from a checkout. What bounds it is everything the verdict does not decide: one
+  slot, once, `(T,priv)`, no trust rule, and no other prompt. [labels.md](labels.md) writes out what
+  an attacker who owns the content gains.

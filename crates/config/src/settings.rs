@@ -33,6 +33,8 @@
 //! - `attribution`, Claude Code's name for what a commit message or a pull request may carry, so
 //!   that a checkout asking for none of it says so once in a file rather than in prose an agent
 //!   has to be reading at the moment it writes one.
+//! - `vetting`, this program's own, since nothing else has the idea. It is the one block read from
+//!   the **home layer alone**: see [`Settings::auto_vetting`].
 //!
 //! They are independent. A file configuring one has nothing to say about the others, and reading any
 //! of them does not depend on another being present.
@@ -45,9 +47,15 @@
 //! would be. Nothing a turn produces can write one, and no model output reaches one.
 //!
 //! A project file is a file in a checkout, which is a weaker claim than a file in a home directory:
-//! whoever wrote the checkout wrote it. Nothing here distinguishes them, because the resolution this
-//! copies does not. What that costs is written down under Known costs in
+//! whoever wrote the checkout wrote it. Nothing here distinguishes them for the blocks above,
+//! because the resolution this copies does not. What that costs is written down under Known costs in
 //! `docs/specs/backends.md` rather than mitigated here.
+//!
+//! `vetting` is the exception, and it is the exception because of what it decides. Every other name
+//! here configures where a request goes or how the interface behaves; that one says whether a person
+//! is asked before content nobody vouched for reaches the planner, so a line in a checkout's file
+//! could turn the asking off for whoever opened the checkout. It is read from the home layer alone,
+//! and a project file naming it is reported rather than obeyed.
 //!
 //! They do not become the process environment. Values are consulted where a variable would be
 //! consulted, and handed to a subprocess only where that subprocess is the thing they configure.
@@ -70,6 +78,12 @@ const LOCAL_SETTINGS_FILE: &str = "settings.local.json";
 
 /// The directory a checkout keeps its own settings in.
 const PROJECT_DIR: &str = ".bravebot";
+
+/// The block that says whether a check's safe verdict may promote content without a prompt.
+///
+/// Named as a constant because two places read it: the per-layer look that decides whether the
+/// file saying it was entitled to, and the parse of one root.
+const VETTING_BLOCK: &str = "vetting";
 
 /// The most of it worth reading.
 ///
@@ -123,6 +137,20 @@ pub struct Settings {
     /// not recognise has to reach the interface to be reported there rather than be dropped here as
     /// though the file had said nothing.
     editor_mode: Option<String>,
+    /// What `vetting.auto` said, where the layer that said it was entitled to.
+    ///
+    /// Read from the **home** layer and no other, which is why [`Settings::layered`] settles this
+    /// rather than [`Settings::from_map`] being trusted with it: what the key turns off is a person
+    /// being asked before content nobody vouched for reaches the planner, and a checkout is a
+    /// weaker claim than a home directory (see this module's own note on what these files are
+    /// trusted for). A project file naming it is reported by `doctor` and not obeyed.
+    vetting: Option<bool>,
+    /// The layers that named `vetting.auto` and were not obeyed, weakest first, for `doctor`.
+    ///
+    /// Kept rather than dropped because a setting that looks like configuration and does nothing is
+    /// the one worth saying out loud. Somebody who wrote it into a checkout has to be told it was
+    /// ignored, not left to wonder why the prompt still appears.
+    vetting_ignored: Vec<PathBuf>,
     keybindings: BTreeMap<String, String>,
     attribution: Attribution,
     search: SearchCaps,
@@ -239,8 +267,9 @@ impl Settings {
     /// process-wide switch in force under every other test in this binary.
     pub fn layered(home: Option<PathBuf>, cwd: Option<&Path>, named: Option<&Path>) -> Self {
         let project = cwd.map(|cwd| cwd.join(PROJECT_DIR));
+        let home_layer = home.map(|home| home.join(SETTINGS_FILE));
         let paths = [
-            home.map(|home| home.join(SETTINGS_FILE)),
+            home_layer.clone(),
             project.as_ref().map(|dir| dir.join(SETTINGS_FILE)),
             project.as_ref().map(|dir| dir.join(LOCAL_SETTINGS_FILE)),
             named.map(Path::to_path_buf),
@@ -250,6 +279,10 @@ impl Settings {
         let mut found = Vec::new();
         let mut winner = BTreeMap::new();
         let mut contested = BTreeMap::new();
+        // Settled per layer rather than off the merged root, because the merge cannot say which
+        // file a name came from and this is the one name where that decides whether it is obeyed.
+        let mut vetting = None;
+        let mut vetting_ignored = Vec::new();
         for path in paths.into_iter().flatten() {
             // A file already read as a layer above is not read again. Naming one of the three
             // explicitly is an ordinary thing to do, and reading it twice would report every name
@@ -259,6 +292,12 @@ impl Settings {
                 continue;
             }
             let Some(root) = read(&path) else { continue };
+            if root.contains_key(VETTING_BLOCK) {
+                match Some(&path) == home_layer.as_ref() {
+                    true => vetting = auto_vetting(&root),
+                    false => vetting_ignored.push(path.clone()),
+                }
+            }
             for name in env_names(&root) {
                 // Whoever set it before lost it here, which is the only thing worth telling somebody:
                 // a name one file sets needs no explanation of where it came from.
@@ -273,6 +312,11 @@ impl Settings {
         let mut settings = Self::from_map(&merged);
         settings.layers = found;
         settings.contested = contested;
+        // Overwritten rather than merged in, so that the only value here is the home layer's own.
+        // A project file that set it has already been recorded as ignored above, and what it said
+        // cannot reach this even where the home layer said nothing.
+        settings.vetting = vetting;
+        settings.vetting_ignored = vetting_ignored;
         settings
     }
 
@@ -320,6 +364,11 @@ impl Settings {
             permissions: permission_lists(root),
             model: word(root, "model"),
             editor_mode: word(root, "editorMode"),
+            // Read here so one file's worth can be parsed on its own, and overwritten by
+            // [`Settings::layered`], which is the only caller that knows which layer this came
+            // from and so the only one entitled to answer.
+            vetting: auto_vetting(root),
+            vetting_ignored: Vec::new(),
             keybindings: keybindings_block(root),
             attribution: attribution_block(root),
             search: search_caps(root),
@@ -358,6 +407,23 @@ impl Settings {
         self.editor_mode.as_deref()
     }
 
+    /// What `vetting.auto` said in the home layer, if it said anything.
+    ///
+    /// `None` where no file named it, and `None` too where the only file that named it was a
+    /// checkout's: the value a project file carried is not an answer this can give, and
+    /// [`Settings::vetting_ignored`] is where such a file is reported instead.
+    ///
+    /// A default rather than the answer in force. What a person recorded for themselves outranks
+    /// it and a flag outranks both; `bravebot_core::vetting::auto` is the whole of that rule.
+    pub fn auto_vetting(&self) -> Option<bool> {
+        self.vetting
+    }
+
+    /// The files that named `vetting.auto` and were not obeyed, weakest first, for `doctor`.
+    pub fn vetting_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.vetting_ignored.iter().map(PathBuf::as_path)
+    }
+
     /// What the settings in force say a commit message and a pull request may carry.
     ///
     /// A name the block set is an answer even when it is empty, empty being how a file says to
@@ -382,10 +448,15 @@ impl Settings {
             && self.permissions.is_empty()
             && self.model.is_none()
             && self.editor_mode.is_none()
+            && self.vetting.is_none()
             && self.keybindings.is_empty()
             && self.attribution.is_empty()
             && self.search.is_empty()
             && self.providers.is_empty()
+            // A file that named `vetting.auto` and was not obeyed still said something, and
+            // `doctor` reports both facts about it. Reading it as absence would print "no
+            // settings.json" one line above the path of the file that holds it.
+            && self.vetting_ignored.is_empty()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -437,6 +508,7 @@ impl Settings {
             .then_some("model")
             .into_iter()
             .chain(self.editor_mode.is_some().then_some("editorMode"))
+            .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain((!self.keybindings.is_empty()).then_some("keybindings"))
             .chain(
                 self.attribution
@@ -480,6 +552,23 @@ fn word(root: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<
         Some(serde_json::Value::String(word)) => Some(word.trim())
             .filter(|word| !word.is_empty())
             .map(str::to_string),
+        _ => None,
+    }
+}
+
+/// The `vetting` block's `auto` key, as a boolean and nothing else.
+///
+/// A boolean rather than a word, because this is the one value here that is not a name being passed
+/// on to something: it says whether a person is asked. `"true"` as a string, a number, and anything
+/// else are absence, which leaves the layers under it in force. That is stricter than the reading
+/// the `env` block gets, and deliberately: a file that meant to turn this on and mistyped the value
+/// leaves the prompt appearing, which is the direction to be wrong in.
+fn auto_vetting(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
+    match root.get(VETTING_BLOCK) {
+        Some(serde_json::Value::Object(block)) => match block.get("auto") {
+            Some(serde_json::Value::Bool(auto)) => Some(*auto),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -1616,6 +1705,126 @@ mod tests {
             None
         );
         assert!(Settings::parse(r#"{"editorMode": ""}"#).is_empty());
+    }
+
+    /// The home layer may turn auto-vetting on, which is the whole point of the key: somebody who
+    /// has decided they want it says so once for every session they open.
+    #[test]
+    fn the_home_layer_may_ask_for_auto_vetting() {
+        let settings = Layers::new("vetting-home")
+            .global(r#"{"vetting": {"auto": true}}"#)
+            .read();
+        assert_eq!(settings.auto_vetting(), Some(true));
+        assert_eq!(settings.vetting_ignored().count(), 0);
+    }
+
+    /// A checkout must not be able to stop the asking for whoever opened it. The value is not
+    /// obeyed however it is spelled, and the file is named so the person who wrote it is told.
+    #[test]
+    fn a_project_layer_cannot_turn_auto_vetting_on() {
+        let settings = Layers::new("vetting-project")
+            .project(r#"{"vetting": {"auto": true}}"#)
+            .read();
+        assert_eq!(
+            settings.auto_vetting(),
+            None,
+            "a checkout turned off a person being asked"
+        );
+        assert_eq!(settings.vetting_ignored().count(), 1);
+    }
+
+    /// The machine-local layer is a checkout's file under another name, so it is not the home
+    /// layer either. Reading it would make the rule above depend on which of the two somebody
+    /// picked.
+    #[test]
+    fn the_local_layer_cannot_turn_auto_vetting_on_either() {
+        let settings = Layers::new("vetting-local")
+            .local(r#"{"vetting": {"auto": true}}"#)
+            .read();
+        assert_eq!(settings.auto_vetting(), None);
+        assert_eq!(settings.vetting_ignored().count(), 1);
+    }
+
+    /// A file the command line named is a property of one invocation rather than of the person, so
+    /// it is not the home layer. `--vet` is how a command line asks for this, and it is a flag
+    /// somebody typed rather than a file a job wrote.
+    #[test]
+    fn a_named_layer_cannot_turn_auto_vetting_on() {
+        let settings = Layers::new("vetting-named")
+            .named(r#"{"vetting": {"auto": true}}"#)
+            .read();
+        assert_eq!(settings.auto_vetting(), None);
+        assert_eq!(settings.vetting_ignored().count(), 1);
+    }
+
+    /// The merge cannot decide this one: a project file that restated the key would otherwise beat
+    /// the home file by being read later, which is exactly the override the rule forbids.
+    #[test]
+    fn a_project_layer_does_not_override_what_the_home_layer_said_about_vetting() {
+        let settings = Layers::new("vetting-contest")
+            .global(r#"{"vetting": {"auto": true}}"#)
+            .project(r#"{"vetting": {"auto": false}}"#)
+            .read();
+        assert_eq!(
+            settings.auto_vetting(),
+            Some(true),
+            "a checkout overrode the home layer's answer"
+        );
+        assert_eq!(settings.vetting_ignored().count(), 1);
+    }
+
+    /// Off is a value and not absence, so a home file may turn it off and keep it off against a
+    /// checkout that asks for it.
+    #[test]
+    fn the_home_layer_may_say_no_to_auto_vetting() {
+        assert_eq!(
+            Settings::parse(r#"{"vetting": {"auto": false}}"#).auto_vetting(),
+            Some(false)
+        );
+    }
+
+    /// A value that is not a boolean is absence. A file that meant to turn this on and mistyped it
+    /// leaves the prompt appearing, which is the direction to be wrong in.
+    #[test]
+    fn a_vetting_key_that_is_not_a_boolean_says_nothing() {
+        for text in [
+            r#"{"vetting": {"auto": "true"}}"#,
+            r#"{"vetting": {"auto": 1}}"#,
+            r#"{"vetting": {"auto": null}}"#,
+            r#"{"vetting": {}}"#,
+            r#"{"vetting": true}"#,
+        ] {
+            assert_eq!(
+                Settings::parse(text).auto_vetting(),
+                None,
+                "{text} was read as an answer"
+            );
+        }
+    }
+
+    /// A file whose only name was the one that is not obeyed still said something, and `doctor`
+    /// reports both facts about it. Read as absence it would print "no settings.json" one line
+    /// above the path of the file that holds it, which is the report contradicting itself.
+    #[test]
+    fn a_layer_that_named_only_vetting_is_not_a_layer_that_said_nothing() {
+        let settings = Layers::new("vetting-only")
+            .project(r#"{"vetting": {"auto": true}}"#)
+            .read();
+        assert_eq!(settings.auto_vetting(), None);
+        assert!(
+            !settings.is_empty(),
+            "a file that named the key was reported as having set nothing"
+        );
+    }
+
+    /// A file that sets only this is not a file that set nothing, for the reason the editing style
+    /// is reported: somebody wondering why they are not being asked has to find it in `doctor`.
+    #[test]
+    fn auto_vetting_is_among_the_names_reported() {
+        let settings = Settings::parse(r#"{"vetting": {"auto": true}}"#);
+        let reported: Vec<&str> = settings.names().collect();
+        assert_eq!(reported, ["vetting.auto"]);
+        assert!(!settings.is_empty());
     }
 
     /// A file that sets only this is not a file that set nothing: `doctor` reports which names a layer
