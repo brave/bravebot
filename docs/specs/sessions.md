@@ -232,6 +232,11 @@ for before the first turn, an aside or a run as the first thing a session does, 
 leading entry ahead of that turn rather than to no turn at all, so the breakdown still adds up to
 the total there as well.
 
+Failed and stopped turns charge their latest cumulative progress, including completed delegate
+work. Repeated reports replace the previous total. Successful turns charge the outcome alone,
+without adding progress again. Progress resets for each turn, so a turn with no completed requests
+cannot inherit the previous turn's usage. These totals use the existing session storage.
+
 The name recorded is the one that answered, not the one asked for: an endpoint may serve something
 other than the name it was given, and the record is an account of what happened. A record written
 before either was kept reads as no model and an empty breakdown, which is not the same as a
@@ -249,6 +254,11 @@ than the one in force at the time.
 `verified-by: bravebot_tui::state::an_aside_before_the_first_turn_is_charged_to_a_leading_entry`
 `verified-by: bravebot_tui::state::a_run_before_the_first_turn_is_charged_to_a_leading_entry`
 `verified-by: bravebot_tui::state::clearing_forgets_what_each_turn_cost`
+`verified-by: bravebot_tui::sessions::completed_failed_and_stopped_usage_survives_session_storage`
+`verified-by: bravebot_tui::app::a_failed_outcome_charges_only_the_latest_progress`
+`verified-by: bravebot_tui::app::the_cancellation_path_charges_progress_before_restoring_or_quitting`
+`verified-by: bravebot_tui::app::successful_outcomes_replace_progress_and_empty_following_turns_cost_nothing`
+`verified-by: bravebot_tui::remote_confirm::cumulative_usage_reaches_the_main_thread_unchanged`
 
 <a id="SESSION-12"></a>
 ### SESSION-12: the record says where each turn's time went, not only how long it took
@@ -259,12 +269,12 @@ over. The four are a partition rather than four independent measures, so the par
 whole and the remainder is meaningful. An approval prompt is drawn from inside a tool call, so what
 was spent waiting for a person is taken off the tool figure rather than counted in both.
 
-A turn that failed is recorded on the same footing as one that succeeded, and a `/compact` asked for
-mid-turn is charged to the turn it interrupted, as its tokens are; one asked for before the first
-turn is charged to the leading entry its tokens go to. `/status` reports the session total and each
-part that actually happened; a part that did not happen is left out rather than shown as zero. A
-record written before this was kept reads as an empty breakdown, which is not the same as a session
-that took no time.
+A turn that failed or stopped records its elapsed wall time and the timing breakdown retained from
+its progress on the same footing as one that succeeded. A `/compact` asked for mid-turn is charged
+to the turn it interrupted, as its tokens are; one asked for before the first turn is charged to
+the leading entry its tokens go to. `/status` reports the session total and each part that actually
+happened; a part that did not happen is left out rather than shown as zero. A record written before
+this was kept reads as an empty breakdown, which is not the same as a session that took no time.
 
 **Why.** A duration alone is unactionable, and the three things it conflates want three different
 fixes. A turn that took four minutes on the model, one that took four minutes running a test suite,
@@ -277,6 +287,7 @@ harness's own overhead.
 `verified-by: bravebot_tui::state::an_aside_charges_its_wait_to_the_turn_it_interrupted`
 `verified-by: bravebot_tui::state::an_aside_before_the_first_turn_records_its_wait_ahead_of_that_turn`
 `verified-by: bravebot_tui::state::a_failed_turn_still_accounts_for_its_wall_clock`
+`verified-by: bravebot_tui::state::unanswered_turns_keep_the_session_clock_and_the_completed_breakdown`
 `verified-by: bravebot_tui::state::a_resumed_session_carries_on_from_the_time_it_had_spent`
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
 `verified-by: bravebot_tui::sessions::a_record_written_before_timing_was_kept_still_loads`

@@ -1022,6 +1022,8 @@ pub struct Session {
     /// Reset when a turn starts, since it measures the reply being written now. The session total
     /// lives in `tokens` and accumulates instead.
     pub written: u64,
+    /// Latest cumulative usage, charged when this turn ends.
+    progress: bravebot_agent::Spent,
     /// The task list for the turn in flight, as the model last reported it.
     ///
     /// Already shaped and released: these rows came out of the kernel's render gate, so drawing
@@ -1262,6 +1264,7 @@ impl Session {
             cleared_by_interrupt: false,
             image_on_clipboard: false,
             written: 0,
+            progress: Default::default(),
             todos: Vec::new(),
             phase: None,
             running: None,
@@ -1673,6 +1676,7 @@ impl Session {
         self.cached = None;
         self.occupancy = Occupancy::Unmeasured;
         self.written = 0;
+        self.progress = Default::default();
         self.todos.clear();
         self.phase = None;
         self.running = None;
@@ -5209,6 +5213,7 @@ impl Session {
         // though the new turn had it outstanding.
         self.todos.clear();
         self.written = 0;
+        self.progress = Default::default();
         self.phase = None;
         self.running = None;
         self.started = Some(Instant::now());
@@ -5218,6 +5223,23 @@ impl Session {
     /// Where the turn in flight began, for the snapshot `/undo` rewinds to.
     pub fn turn_start(&self) -> TurnStart {
         self.turn_start
+    }
+
+    /// Use the session's clock, which starts when Enter is pressed, even without an outcome.
+    fn finish_turn(&mut self, tokens: u64, ending: bravebot_agent::Ending) {
+        let took = self.elapsed();
+        self.finished = Some(Finished {
+            turn: self.turns,
+            tokens,
+            took,
+            ending,
+        });
+        self.timing.entry(self.turns).or_default().wall_ms +=
+            u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
+        self.started = None;
+        self.phase = None;
+        self.running = None;
+        self.streaming.clear();
     }
 
     /// Record a completed turn, and what it cost.
@@ -5234,33 +5256,13 @@ impl Session {
         self.transcript
             .push(Entry::assistant(crate::reasoning::spoken(&reply), trail).with_todos(todos));
         self.status = Status::Idle;
-        self.finished = Some(Finished {
-            turn: self.turns,
-            tokens,
-            took: self.elapsed(),
-            ending: bravebot_agent::Ending::Done,
-        });
-        self.started = None;
-        self.phase = None;
-        self.running = None;
-        self.streaming.clear();
+        self.finish_turn(tokens, bravebot_agent::Ending::Done);
         // Accumulated across the session: the figure answers "what has this cost me", which is
         // about the session rather than the last turn.
         self.tokens += tokens;
         // Added to rather than set, since a turn that compacted part way through has already put
         // that cost here under the same number.
         *self.spend.entry(self.turns).or_insert(0) += tokens;
-        // The wall clock is taken here because this is the last moment it can be: the timer is
-        // cleared two lines up. It is also the better of the two available figures. The turn loop
-        // measures its own span, but a turn runs on a worker and the person was waiting from the
-        // moment they pressed Enter, which is what this clock started on.
-        //
-        // Recorded whether or not the breakdown ever arrives, so a turn always accounts for its own
-        // wall clock and a missing breakdown reads as time nothing has claimed rather than as a turn
-        // that never happened. See [`Session::spent_time`].
-        self.timing.entry(self.turns).or_default().wall_ms += self
-            .finished
-            .map_or(0, |f| u64::try_from(f.took.as_millis()).unwrap_or(u64::MAX));
     }
 
     /// Record how the turn just finished divided its time up.
@@ -5279,16 +5281,23 @@ impl Session {
     }
 
     /// Cumulative usage from the worker, retained until this turn ends.
-    pub fn progressed(&mut self, _spent: bravebot_agent::Spent) {}
+    pub fn progressed(&mut self, spent: bravebot_agent::Spent) {
+        self.progress = spent;
+    }
+
+    fn charge_progress(&mut self) -> u64 {
+        let spent = std::mem::take(&mut self.progress);
+        self.tokens += spent.tokens;
+        *self.spend.entry(self.turns).or_default() += spent.tokens;
+        self.spent_time(spent.timing);
+        self.served_from_cache(spent.cached);
+        spent.tokens
+    }
 
     /// Mark a deliberate stop before returning its prompt to the editor.
     pub fn stopped(&mut self, attempts: Option<u32>) {
-        self.finished = Some(Finished {
-            turn: self.turns,
-            tokens: 0,
-            took: self.elapsed(),
-            ending: bravebot_agent::Ending::Stopped { attempts },
-        });
+        let tokens = self.charge_progress();
+        self.finish_turn(tokens, bravebot_agent::Ending::Stopped { attempts });
         if self.is_quitting() {
             let todos = std::mem::take(&mut self.todos);
             self.transcript
@@ -5296,10 +5305,6 @@ impl Session {
         } else {
             self.status = Status::Idle;
         }
-        self.started = None;
-        self.phase = None;
-        self.running = None;
-        self.streaming.clear();
     }
 
     /// Record a failure. The turn is over either way, so the session returns to idle.
@@ -5307,28 +5312,14 @@ impl Session {
     /// The list is kept on the entry as it stood, unfinished. A failed turn that had got three of
     /// five tasks done is more useful shown that way than blank.
     pub fn fail(&mut self, message: impl Into<String>, ending: bravebot_agent::Ending) {
+        let tokens = self.charge_progress();
         let todos = std::mem::take(&mut self.todos);
         self.transcript
             .push(Entry::failure(message).with_todos(todos));
         self.status = Status::Idle;
         // Reported as a failure rather than left to the success line, which would put a tick
         // beside a turn that did not finish.
-        self.finished = Some(Finished {
-            turn: self.turns,
-            tokens: 0,
-            took: self.elapsed(),
-            ending,
-        });
-        // A turn that failed after ten minutes still spent them, and it is the turn most worth
-        // reading afterwards. Recorded on the same footing as a turn that succeeded, so a session
-        // whose figures are being added up does not quietly omit the expensive failures.
-        self.timing.entry(self.turns).or_default().wall_ms += self
-            .finished
-            .map_or(0, |f| u64::try_from(f.took.as_millis()).unwrap_or(u64::MAX));
-        self.started = None;
-        self.phase = None;
-        self.running = None;
-        self.streaming.clear();
+        self.finish_turn(tokens, ending);
     }
 
     /// Record how full the context is, against the budget it is compacted at.
@@ -5395,8 +5386,7 @@ impl Session {
     /// Put back what an earlier turn read, or forget the figure with `None`.
     ///
     /// The figure is the last turn's, so anything that changes which turn that is has to say so:
-    /// undoing a turn puts back the one before it, and a turn that failed leaves no measurement to
-    /// report at all.
+    /// undoing a turn puts back the one before it.
     pub fn restore_cache(&mut self, cached: Option<bravebot_aichat::protocol::Cached>) {
         self.cached = cached;
     }

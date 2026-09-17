@@ -284,6 +284,10 @@ impl RemoteReporter {
 }
 
 impl Reporter for RemoteReporter {
+    fn spent(&mut self, spent: bravebot_agent::Spent) {
+        let _ = self.outbound.send(ToMain::Spent(spent));
+    }
+
     fn todos(&mut self, rows: Vec<Row>) {
         // Deliberately ignored. Unlike a write, there is no decision resting on this arriving,
         // so a closed channel means the display is gone, not that the turn should stop.

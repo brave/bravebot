@@ -4946,7 +4946,7 @@ fn run_turn_animated(
             // No reply: each of these is recorded and the next redraw, one iteration away,
             // shows it. That is what makes a long turn legible while it runs.
             crate::remote_confirm::ToMain::Todos(rows) => session.set_todos(rows),
-            crate::remote_confirm::ToMain::Spent(_) => {}
+            crate::remote_confirm::ToMain::Spent(spent) => session.progressed(spent),
             crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
             crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
             crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
@@ -5338,10 +5338,6 @@ fn fold_outcome(
                 bravebot_agent::Ending::Stopped { attempts } => session.stopped(attempts),
                 bravebot_agent::Ending::Done => {}
             }
-            // The panel reports the last turn's cache split, and this turn is now the last one. It
-            // measured nothing, so leaving the turn before it on the panel would report a figure
-            // against an exchange that never finished.
-            session.restore_cache(None);
             if let Some(last) = session.transcript.last_mut() {
                 last.trail = trail;
             }
