@@ -16355,9 +16355,19 @@ fn serve_script(script: Vec<Served>) -> (String, mpsc::Receiver<String>) {
             }
             let mut body = vec![0u8; content_length];
             let _ = reader.read_exact(&mut body);
-            let _ = sender.send(String::from_utf8_lossy(&body).to_string());
+            let body = String::from_utf8_lossy(&body).to_string();
+            let _ = sender.send(body.clone());
 
-            let answer = match script.next() {
+            // A check owes nothing to the script: it is a conversation of its own, and every
+            // prompt that would promote quarantined content runs one first. A script that spent
+            // an entry on it would answer the turn's next round with a verdict.
+            let scripted = if body.contains(A_CHECK_ASKING) {
+                Some(Served::Reply(a_check_finding_nothing()))
+            } else {
+                script.next()
+            };
+
+            let answer = match scripted {
                 Some(Served::Reply(reply)) => {
                     let frames = as_sse(&reply);
                     format!(
@@ -16777,7 +16787,7 @@ fn a_failed_processor_reports_a_category_and_nothing_the_service_or_the_setting_
     let requests: Vec<_> = received.try_iter().collect();
     assert_eq!(
         requests.len(),
-        4,
+        5,
         "the processor request must actually fail"
     );
     let next_request = requests.last().unwrap();
