@@ -129,6 +129,14 @@ fn a_refused_argument_exits_non_zero() {
             &["import-leo-creds", "--not-an-option"][..],
             "--not-an-option",
         ),
+        (&["--settings"][..], "--settings"),
+        // A run told to configure itself from a file that is not there is refused rather than run
+        // under whatever the directory carried. The path is what it says, since a mistyped one is
+        // the mistake and the flag's own name would not point at it.
+        (
+            &["--settings", "/no/such/settings.json", "doctor"][..],
+            "/no/such/settings.json",
+        ),
     ] {
         let output = bravebot(&scratch.path, &[], arguments);
 
@@ -297,6 +305,84 @@ fn a_run_asked_for_a_result_object_puts_one_on_stdout() {
         stderr.contains("ai-chat.example.invalid"),
         "the explanation went nowhere: {stderr}"
     );
+}
+
+/// The flag reaches the layer a process reads, which is the half of it no in-process test can
+/// answer: `Settings::load` is called from the interface, from a one-shot run and from the list a
+/// subprocess is built with, and what carries the named file to all three is process-wide state the
+/// entry point sets. `doctor` reports the layers that were read, so running the binary says whether
+/// the file the command line named was one of them and whether it is the file that won a name.
+///
+/// The file is written outside the home this run is given and outside the directory it starts in,
+/// so neither of the layers that are found could have supplied it.
+#[test]
+fn a_settings_file_named_on_the_command_line_is_read_above_the_ones_found() {
+    let scratch = Scratch::new("cli-running-named-settings");
+    let mine = scratch.path.join(".bravebot");
+    std::fs::create_dir_all(&mine).expect("create the state directory");
+    std::fs::write(
+        mine.join("settings.json"),
+        r#"{"env": {"AWS_PROFILE": "personal", "AWS_REGION": "us-west-2"}}"#,
+    )
+    .expect("write the home layer");
+    let named = scratch.path.join("ci.json");
+    std::fs::write(&named, r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#)
+        .expect("write the named layer");
+
+    let output = bravebot(
+        &scratch.path,
+        // A configuration with nothing wrong with it, so `doctor` reports the layers rather than
+        // stopping at the configuration. Set rather than left out because CI builds with no
+        // credentials baked in, where a run that read them off the build would find none.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["--settings", &named.display().to_string(), "doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+    assert!(
+        stdout.contains(&named.display().to_string()),
+        "the file the command line named was not read: {stdout}"
+    );
+    // The name it won, against the file that won it. Values are never reported, so this is the
+    // whole of what says the named file outranked the one in the home directory.
+    assert!(
+        stdout.contains(&format!("AWS_PROFILE from {}", named.display())),
+        "the named file did not outrank the layer that was found: {stdout}"
+    );
+    assert!(
+        stdout.contains("AWS_PROFILE, AWS_REGION"),
+        "a fourth layer replaced the one below it instead of overriding a name: {stdout}"
+    );
+}
+
+/// A failure before the turn is a result object too, and this one happens before the arguments have
+/// been parsed as an invocation. Whether one was asked for is therefore read off the command line as
+/// typed: the flag takes the token after it as its path, whatever that token is, so a caller who
+/// forgot the path would have had the refusal on stderr and an empty stdout.
+#[test]
+fn a_refused_settings_file_still_answers_with_a_result_object() {
+    let scratch = Scratch::new("cli-running-named-settings-json");
+    let output = bravebot(
+        &scratch.path,
+        &[],
+        &["--settings", "--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert_eq!(
+        stdout.lines().count(),
+        1,
+        "the result is not one object on one line: {stdout}"
+    );
+    for field in [r#""ok":false"#, r#""status":2"#, r#""reason":"argument""#] {
+        assert!(stdout.contains(field), "{field} is missing from {stdout}");
+    }
 }
 
 /// An import is a write by definition, so an incognito session refuses it rather than doing it

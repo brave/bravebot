@@ -665,12 +665,16 @@ nothing or somebody told their configuration is broken when their session merely
 
 
 <a id="BACKEND-24"></a>
-### BACKEND-24: three settings layers resolve a name at a time, closest first
+### BACKEND-24: settings layers resolve a name at a time, closest first
 
 Settings are read from three files: `settings.json` in the user's own directory, then
 `settings.json` in a `.bravebot` directory beside the work, then `settings.local.json` beside that
 one. A later file overrides an earlier one per name rather than wholesale, so a file setting one thing
 leaves everything else in force.
+
+A file the command line named is read after all three, by these same rules, so what it sets beats
+every file that was found. The flag that names one, and the path it refuses, are in
+[cli.md](cli.md).
 
 | What | How layers combine |
 |---|---|
@@ -714,6 +718,12 @@ skipped rather than parsed, and 64 KB is far above anything a person writes by h
 The order and the merge rules are Claude Code's, down to the name `settings.local.json`, so that
 knowing where to put a value for one tool is knowing it for the other.
 
+The file a command line named is a fourth scope rather than a fourth place to look: it is a property
+of the invocation, which none of the three is, and it is above them because naming a file explicitly
+is a stronger statement than finding one where it was looked for. It fails independently as they do,
+so a named file that has gone missing under a running process does not take a person's own profile
+with it.
+
 `verified-by: bravebot_config::settings::a_project_layer_overrides_a_name_the_global_one_set`
 `verified-by: bravebot_config::settings::a_name_only_the_global_layer_set_survives_a_project_layer`
 `verified-by: bravebot_config::settings::the_local_layer_beats_the_one_a_checkout_carries`
@@ -729,6 +739,10 @@ knowing where to put a value for one tool is knowing it for the other.
 `verified-by: bravebot_config::settings::an_unparseable_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::an_oversized_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::a_directory_with_no_project_layer_reads_the_global_one_alone`
+`verified-by: bravebot_config::settings::a_command_line_file_adds_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::a_command_line_file_is_reported_as_the_layer_that_won_a_name`
+`verified-by: bravebot_config::settings::a_command_line_file_that_is_not_there_leaves_the_found_layers_in_force`
+`verified-by: bravebot_config::settings::a_command_line_file_that_is_already_a_layer_is_read_once`
 `verified-by: bravebot_config::settings::the_layers_that_were_read_are_reported_weakest_first`
 `verified-by: bravebot_config::settings::a_name_more_than_one_layer_set_reports_the_file_that_won`
 `verified-by: bravebot_config::settings::an_override_reports_the_name_and_the_file_and_never_the_value`
