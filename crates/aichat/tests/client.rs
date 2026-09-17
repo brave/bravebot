@@ -1056,7 +1056,7 @@ fn premium_config(endpoint: &str, premium: &str) -> Config {
 #[test]
 fn a_subscribed_request_goes_to_the_premium_host_with_the_credential() {
     let (premium_endpoint, received) = serve(REPLY);
-    // The free host is a port nothing is listening on, so reaching it would fail rather than
+    // The base host is a port nothing is listening on, so reaching it would fail rather than
     // quietly pass.
     let config = premium_config("http://127.0.0.1:1", &premium_endpoint);
     let egress = Egress::new();
@@ -1083,14 +1083,14 @@ fn a_subscribed_request_goes_to_the_premium_host_with_the_credential() {
     );
 }
 
-/// Once the batch is spent the request must fail rather than quietly going out on the free tier.
+/// Once the batch is spent the request must fail rather than quietly going out with no credential.
 /// A downgrade nobody was told about is indistinguishable from the service getting worse, and it
 /// would also spend a premium-tier allowance the user thought they had paid past.
 #[test]
 fn an_exhausted_subscription_fails_rather_than_downgrading() {
     // Both hosts point at a listener, so a fallback would succeed and this would pass wrongly.
-    let (free_endpoint, _received) = serve(REPLY);
-    let config = premium_config(&free_endpoint, &free_endpoint);
+    let (base_endpoint, _received) = serve(REPLY);
+    let config = premium_config(&base_endpoint, &base_endpoint);
     let egress = Egress::new();
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -1116,12 +1116,12 @@ fn an_exhausted_subscription_fails_rather_than_downgrading() {
     );
 }
 
-/// A build with no premium host must stay on the free tier even when credentials exist, rather
-/// than attaching one to a request bound for the free endpoint.
+/// A build with no premium host must attach no credential even when credentials exist, rather
+/// than sending one to an endpoint that did not issue it.
 #[test]
 fn without_a_premium_host_no_credential_is_attached() {
-    let (free_endpoint, received) = serve(REPLY);
-    let config = config_for(&free_endpoint);
+    let (base_endpoint, received) = serve(REPLY);
+    let config = config_for(&base_endpoint);
     let egress = Egress::new();
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -1837,7 +1837,7 @@ fn a_retry_goes_through_the_gate_again() {
     assert_eq!(checks, 2, "each attempt must be checked on its own");
 }
 
-/// The listing is a plain GET on the free host. It carries no signature and no credential: the
+/// The listing is a plain GET on the base host. It carries no signature and no credential: the
 /// endpoint requires neither, and spending a subscription credential to read a public list would
 /// be spending one for nothing.
 #[test]

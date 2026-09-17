@@ -80,11 +80,12 @@ name, and the POSIX `C` locale asks for no catalog at all.
 `verified-by: bravebot_i18n::lib::the_posix_locale_asks_for_no_catalog`
 
 <a id="LOCALE-5"></a>
-### LOCALE-5: a plural is formed by the rules of the language it is read in
+### LOCALE-5: a plural is formed by the rules of the language it is written in
 
 A message that counts states its own forms, and which one is used is decided by the rules of the
-language the catalog is written in. A language whose rules are not written down cannot ship a
-message that counts.
+language the catalog those forms came from is written in, which for a message a translation leaves
+out is the reference. A language whose rules are not written down cannot ship a message that
+counts.
 
 **Why.** Borrowing English's rule is how a translation comes out reading correctly for one and
 wrongly for everything else, which is a defect only a speaker of that language can see and which
@@ -92,6 +93,8 @@ no review in English will catch.
 
 `verified-by: bravebot_i18n::lib::a_plural_select_picks_the_variant_the_language_calls_for`
 `verified-by: bravebot_i18n::lib::a_language_with_a_plural_rule_is_the_only_kind_a_select_may_ship_in`
+`verified-by: bravebot_i18n::generate::a_message_a_translation_omits_is_pluralised_by_the_language_it_is_written_in`
+`verified-by: bravebot_i18n::generate::a_message_a_translation_has_is_pluralised_by_that_translation_s_rules`
 
 <a id="LOCALE-6"></a>
 ### LOCALE-6: no catalog is read while the agent is running
@@ -142,6 +145,6 @@ sees is worth nothing if two people running it see different things.
   [trace.md](trace.md).
 
 - **A missing translation is invisible from the English side.** A catalog with fewer messages than
-  the reference builds, and the messages it does not have are shown in English. The build says how
-  many are missing and nothing fails, because a translation that had to be finished before it
-  could be used would never be started.
+  the reference builds, and the messages it does not have are shown in English, pluralised by
+  English's rules. The build says how many are missing and nothing fails, because a translation
+  that had to be finished before it could be used would never be started.

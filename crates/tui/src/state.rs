@@ -566,10 +566,14 @@ pub struct Laid {
     /// Empty unless the scroller is open, since working it out costs a wrap of every line and
     /// nothing at rest asks the question.
     pub prompts: Vec<u16>,
-    /// The rows holding a search match, top to bottom.
+    /// The row each search match is reached at, top to bottom.
     ///
-    /// One entry per row rather than per match: the view moves to a row, and two hits on one row
-    /// are one place to go.
+    /// One entry per match rather than per row, so two hits on one row are two entries holding
+    /// that row. The view has one place to go for both of them, but they are two matches: the
+    /// footer counts them and `n` steps through each one.
+    ///
+    /// A match is reached at the row the line holding it begins at, as a prompt is: a line the
+    /// width wraps is several rows of the screen and one entry here.
     pub matches: Vec<u16>,
 }
 
@@ -1218,9 +1222,9 @@ impl Session {
             // the only thing that can: the flag is the record that somebody accepted the cost.
             permission_mode: bravebot_agent::PermissionMode::default(),
             bypass_available: false,
-            // The free tier until a caller says otherwise, which is what a build with no premium
+            // No subscription until a caller says otherwise, which is what a build with no premium
             // host has and what a test that does not care about tiers should see.
-            tier: t!(status_free_tier).to_string(),
+            tier: t!(status_no_subscription).to_string(),
             turns: 0,
             tokens: 0,
             spend: std::collections::BTreeMap::new(),
@@ -5896,18 +5900,41 @@ impl Session {
     }
 
     /// Walk to the next match or the previous one, wrapping at either end.
+    ///
+    /// `rows` holds the row each match was drawn on, one entry per match, so two matches on one
+    /// row are two presses: the view stays where it is for the second and the footer says which
+    /// of the two it is on. That is what makes the count reachable, since a step that moved the
+    /// view would have nowhere to go.
+    ///
+    /// Counting from the match the view last landed on where it is still there, and from the view
+    /// otherwise: somebody who has scrolled away means the next match from what they are looking
+    /// at rather than from where the key last took them.
     pub fn to_a_match(&mut self, rows: &[u16], forwards: bool) {
         let top = self.top_row();
-        let landing = if forwards {
-            rows.iter()
+        let landing = match self.on_a_match(rows) {
+            Some(at) if forwards => Some((at + 1) % rows.len()),
+            Some(at) => Some(at.checked_sub(1).unwrap_or(rows.len() - 1)),
+            None if forwards => rows
+                .iter()
                 .position(|row| *row > top)
-                .or(if rows.is_empty() { None } else { Some(0) })
-        } else {
-            rows.iter()
+                .or(if rows.is_empty() { None } else { Some(0) }),
+            None => rows
+                .iter()
                 .rposition(|row| *row < top)
-                .or(rows.len().checked_sub(1))
+                .or(rows.len().checked_sub(1)),
         };
         self.land_at(rows, landing);
+    }
+
+    /// Which match the view is on, where it is still on the one it last landed on.
+    ///
+    /// Landing on a row nearer the end than a screen leaves the view a screen short of it, so
+    /// what the view is on is the row landing there would have reached rather than the row
+    /// itself.
+    fn on_a_match(&self, rows: &[u16]) -> Option<usize> {
+        let at = self.scroller.as_ref()?.at;
+        let row = *rows.get(at)?;
+        (row.min(self.furthest()) == self.top_row()).then_some(at)
     }
 
     fn land_at(&mut self, rows: &[u16], landing: Option<usize>) {
@@ -6814,6 +6841,51 @@ mod tests {
         assert_eq!(session.top_row(), 80, "walking back did not wrap round");
         session.to_a_match(&rows, false);
         assert_eq!(session.top_row(), 50);
+    }
+
+    /// The footer counts matches, so the walk has to have that many places to stop. A row holding
+    /// two of them is two presses: the second leaves the view where it is and moves which match
+    /// the footer says the view is on. A walk that stepped by row would leave the second match
+    /// unreachable and the count a number nothing answers.
+    #[test]
+    fn two_matches_on_one_row_are_two_steps_of_the_walk() {
+        let mut session = Session::new("kernel-enforced");
+        session.open_scroller();
+        session.note_layout(Laid {
+            width: 80,
+            height: 10,
+            rows: 100,
+            ..Laid::default()
+        });
+        // Two matches drawn on row 20, one on row 50.
+        let rows = [20u16, 20, 50];
+        let walked = |session: &Session| {
+            (
+                session.top_row(),
+                session.scroller().expect("the scroller is open").at,
+            )
+        };
+
+        session.scroller_to_first_row();
+        session.to_a_match(&rows, true);
+        assert_eq!(walked(&session), (20, 0));
+        session.to_a_match(&rows, true);
+        assert_eq!(
+            walked(&session),
+            (20, 1),
+            "the second match on the row was stepped over"
+        );
+        session.to_a_match(&rows, true);
+        assert_eq!(walked(&session), (50, 2));
+        session.to_a_match(&rows, true);
+        assert_eq!(walked(&session), (20, 0), "the walk did not wrap round");
+
+        session.to_a_match(&rows, false);
+        assert_eq!(walked(&session), (50, 2), "walking back did not wrap round");
+        session.to_a_match(&rows, false);
+        assert_eq!(walked(&session), (20, 1));
+        session.to_a_match(&rows, false);
+        assert_eq!(walked(&session), (20, 0));
     }
 
     /// A search run while a match is already at the top of the view has found that one, and

@@ -56,6 +56,7 @@ mode-bypass = ⏵⏵ bypass permissions on
 cli-options-heading = Options:
 cli-option-file = Include a workspace file as context (repeatable)
 cli-option-add-dir = Reach into a directory outside the working one (repeatable)
+cli-option-settings = Read this settings file for this run, above the ones found on disk
 cli-option-mode = turn (default) decides step by step; manifest plans the whole run first
 cli-option-model = The model this run asks for, in place of the remembered or configured one
 cli-option-print = Non-interactive. Reads piped stdin as quarantined context
@@ -73,6 +74,8 @@ cli-option-version = Show the version
 cli-unknown-option = unknown option: { $flag }
 cli-file-needs-a-path = --file requires a path
 cli-add-dir-needs-a-path = --add-dir requires an absolute path to a directory
+cli-settings-needs-a-path = --settings requires a path to a settings file
+cli-settings-not-a-file = --settings names no file: { $path }
 cli-mode-needs-a-name = --mode requires one of { $names }
 cli-model-needs-a-name = --model requires the name of a model
 cli-unexpected-argument = unexpected argument: { $argument }
@@ -88,6 +91,35 @@ cli-fork-needs-a-name = --fork requires a session id
 cli-piped-input-unreadable = warning: could not read piped input: { $problem }
 cli-piped-input-too-large =
     piped input is larger than { $limit } MiB. Write it to a file and name that instead
+
+
+## What a run says when no model service is configured
+
+# Said instead of starting work at all. A session opened with nothing configured reads as the agent
+# being poor rather than as nothing having been set up yet, so the first run says what to configure
+# instead of starting work that has no service to do it.
+onboarding-no-model = no model service is configured yet
+# Said beside it where a subscription is stored and could not be read, because somebody in that
+# case is one import away rather than a whole configuration away.
+onboarding-subscription-unusable = the subscription that is stored could not be used: { $problem }
+# Said instead, where a service is configured and only the model in force is Brave's own. A
+# settings block copied out of another tool names its models and names no default, so this is
+# where somebody following that route lands, and what they have to do is name one of their own.
+onboarding-name-a-configured-model =
+    A service is configured, but the model in force is one of Brave's: name one of your own with the `model` key in ~/.bravebot/settings.json, or with --model on a one-shot run. `bravebot doctor` lists what each configured service offers.
+onboarding-pick-one = Configure one of these, then run bravebot again:
+onboarding-bedrock =
+    AWS Bedrock, through your own account: put a `provider` block named `amazon-bedrock` in ~/.bravebot/settings.json, with its region and the models to offer.
+onboarding-openrouter =
+    OpenRouter, or any other OpenAI-compatible gateway: put a `provider` block named for it in ~/.bravebot/settings.json, with the variable that holds its API key and the models to offer.
+# Last of the three, and said to be last, because these models are reached through Brave's AI
+# gateway, which has open problems of its own. It is still the shortest route for somebody who
+# already subscribes, so it is offered rather than left out.
+onboarding-leo =
+    Brave Leo Premium, if you already subscribe: run `bravebot import-leo-creds` on a machine where Brave is signed in to that subscription. It reaches models through Brave's AI gateway, which has open issues being worked on, so prefer one of the two above for now.
+# Said after either, so it reads after the three routes and after the one line alike.
+onboarding-where-to-read =
+    There are worked examples in https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 
 
 ## What a finished one-shot run says beside the reply
@@ -230,10 +262,10 @@ leo-browser-untouched =
     premium requests will now use them; the browser's own credentials were untouched
 
 # Said when a subscription is stored but could not be read. Worth a line because the request
-# then goes out on the free tier, where a premium model name is answered by a weaker model
+# then goes out with no subscription, where a premium model name is answered by a weaker model
 # rather than by an error, so the only symptom is a worse answer.
 subscription-unusable =
-    the imported subscription could not be used ({ $problem }), so this turn runs on the free tier
+    the imported subscription could not be used ({ $problem }), so this turn spends none
 
 # Said when a background job exits. The line drawn when it started said only that something had
 # been started, and nothing else in the transcript ever says it is over, so a build that failed
@@ -607,8 +639,8 @@ status-endpoint = Endpoint
 # Which tier the last turn actually ran on, not what this build was compiled knowing about.
 status-premium-available = premium available, nothing sent yet
 status-premium-in-use = premium, a credential was spent
-status-premium-not-spent = free tier: no subscription was used
-status-free-tier = free tier only
+status-premium-not-spent = no subscription was spent
+status-no-subscription = no subscription configured
 status-confinement = Confinement
 status-loop = Loop
 status-loop-every = every { $every }

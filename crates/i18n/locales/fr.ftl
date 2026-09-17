@@ -61,6 +61,7 @@ mode-bypass = ⏵⏵ permissions contournées
 cli-options-heading = Options :
 cli-option-file = Inclure un fichier de l'espace de travail comme contexte (répétable)
 cli-option-add-dir = Accéder à un répertoire hors de celui de travail (répétable)
+cli-option-settings = Lire ce fichier de réglages pour cette exécution, au-dessus de ceux trouvés sur le disque
 cli-option-mode = turn (par défaut) décide étape par étape ; manifest planifie tout le déroulement d'abord
 cli-option-model = Le modèle demandé par cette exécution, à la place de celui mémorisé ou configuré
 cli-option-print = Non interactif. Lit l'entrée redirigée comme contexte en quarantaine
@@ -79,6 +80,8 @@ cli-option-version = Afficher la version
 cli-unknown-option = option inconnue : { $flag }
 cli-file-needs-a-path = --file demande un chemin
 cli-add-dir-needs-a-path = --add-dir demande le chemin absolu d'un répertoire
+cli-settings-needs-a-path = --settings demande le chemin d'un fichier de réglages
+cli-settings-not-a-file = --settings ne nomme aucun fichier : { $path }
 cli-mode-needs-a-name = --mode demande l'un de : { $names }
 cli-model-needs-a-name = --model demande le nom d'un modèle
 cli-unexpected-argument = argument inattendu : { $argument }
@@ -95,6 +98,23 @@ cli-piped-input-unreadable = avertissement : impossible de lire l'entrée rediri
 cli-piped-input-too-large =
     l'entrée redirigée dépasse { $limit } Mio. Écrivez-la dans un fichier et nommez celui-ci
     à la place
+
+
+## Ce qu'une exécution dit quand aucun service de modèle n'est configuré
+
+onboarding-no-model = aucun service de modèle n'est encore configuré
+onboarding-subscription-unusable = l'abonnement enregistré n'a pas pu être utilisé : { $problem }
+onboarding-name-a-configured-model =
+    Un service est configuré, mais le modèle en vigueur est l'un de ceux de Brave : indiquez l'un des vôtres avec la clé `model` dans ~/.bravebot/settings.json, ou avec --model pour une exécution unique. `bravebot doctor` indique ce que propose chaque service configuré.
+onboarding-pick-one = Configurez l'une de ces options, puis relancez bravebot :
+onboarding-bedrock =
+    AWS Bedrock, via votre propre compte : ajoutez un bloc `provider` nommé `amazon-bedrock` dans ~/.bravebot/settings.json, avec sa région et les modèles à proposer.
+onboarding-openrouter =
+    OpenRouter, ou toute autre passerelle compatible OpenAI : ajoutez un bloc `provider` à son nom dans ~/.bravebot/settings.json, avec la variable qui contient sa clé d'API et les modèles à proposer.
+onboarding-leo =
+    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot import-leo-creds` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des deux options ci-dessus.
+onboarding-where-to-read =
+    Des exemples concrets se trouvent dans https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 
 
 ## Ce qu'une exécution unique dit à côté de la réponse
@@ -216,8 +236,8 @@ leo-browser-untouched =
     pas été touchés
 
 subscription-unusable =
-    l'abonnement importé n'a pas pu être utilisé ({ $problem }) ; ce tour utilise donc
-    l'offre gratuite
+    l'abonnement importé n'a pas pu être utilisé ({ $problem }) ; ce tour n'en utilise
+    donc aucun
 
 background-job-finished = `{ $command }` s'est terminé en arrière-plan : { $outcome }
 
@@ -573,8 +593,8 @@ status-served-instead = servi à la place du modèle demandé
 status-endpoint = Adresse
 status-premium-available = premium disponible, rien encore envoyé
 status-premium-in-use = premium, un jeton a été dépensé
-status-premium-not-spent = offre gratuite : aucun abonnement utilisé
-status-free-tier = offre gratuite seulement
+status-premium-not-spent = aucun abonnement utilisé
+status-no-subscription = aucun abonnement configuré
 status-confinement = Confinement
 status-loop = Boucle
 status-loop-every = toutes les { $every }
