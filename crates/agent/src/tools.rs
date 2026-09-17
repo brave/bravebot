@@ -23,7 +23,7 @@
 //! `write_file`'s `contents_ref` is what puts it in a file. Between them, the planner can
 //! change a file it never saw and the driver can write bytes it never opened.
 
-use crate::confirm::{Confirmer, Decision, Intent, WriteRequest};
+use crate::confirm::{Confirmer, Decision, Intent, Remark, WriteRequest};
 use crate::diff::Diff;
 use crate::processor::{self, Chat};
 use crate::report::{Activity, Reporter};
@@ -2706,6 +2706,23 @@ fn list_files<S: Sink>(
     }
 }
 
+/// How many lines of a processor's remark are drawn beside the diff it describes.
+///
+/// Fewer than the transcript keeps, because this is the box a decision is read in: a processor
+/// that answers with a screenful of prose would otherwise push the lines an approval is given
+/// from out of view, which is the thing showing the remark here is meant to prevent. The fuller
+/// preview is in the transcript above, and the block says how many lines it is not showing.
+pub(crate) const REMARK_LINES: usize = 4;
+
+/// The width a line of it is trimmed to.
+///
+/// Far narrower than the transcript's cap, because the box is narrower and a line wider than the
+/// box is several rows rather than one: four lines of the transcript's hundred and sixty
+/// characters is a dozen rows in a prompt, which is the diff below the fold. A remark is two or
+/// three sentences of prose rather than a minified file, so a sentence's width loses nothing that
+/// the transcript above is not still holding in full.
+pub(crate) const REMARK_WIDTH: usize = 72;
+
 /// Resolve a reference into the bytes a write will carry.
 ///
 /// Three steps, each one a gate. The name is accepted as a reference rather than read as
@@ -2718,7 +2735,7 @@ fn quarantined_body<S: Sink>(
     slots: &mut SlotStore,
     named: &Labelled<String>,
     path: &str,
-) -> Result<(Labelled<String>, bool), String> {
+) -> Result<(Labelled<String>, bool, Option<Remark>), String> {
     let slot = policy
         .accept_reference("write_file", "contents_ref", named)
         .map_err(|denial| format!("refused: {denial}"))?;
@@ -2745,9 +2762,21 @@ fn quarantined_body<S: Sink>(
         .resolve("write_file", &slot, slots)
         .map_err(|denial| format!("refused: {denial}"))?;
 
+    // What the processor that produced these bytes said about them, for the question that is
+    // about to be asked about the bytes. Asked of the slot, so it is the claim made about this
+    // document and not whatever was said last.
+    let remark = policy
+        .remark_for_review(&slot, slots, REMARK_LINES, REMARK_WIDTH)
+        .map(|(preview, lines, label)| Remark {
+            preview,
+            lines,
+            label: label.to_string(),
+        });
+
     Ok((
         policy.declassify_into_workspace(&slot, path, content),
         changes,
+        remark,
     ))
 }
 
@@ -2788,6 +2817,10 @@ fn write_file<S: Sink, C: Confirmer>(
     // is. Set below, from the slot's provenance, never from comparing what it holds.
     let mut changes_anything = true;
 
+    // What a processor said about the body, where a processor produced it. Drawn beside the diff
+    // in the question below, and nothing else reads it.
+    let mut remark = None;
+
     // What the planner called the body, for the account it is given afterwards. Its own words
     // either way: the reference it named, or its own text.
     let body_from = match &named {
@@ -2818,8 +2851,9 @@ fn write_file<S: Sink, C: Confirmer>(
         // having read a byte of it. The user still sees it, which is what an approval is.
         (None, Some(reference)) => {
             match quarantined_body(policy, workspace, tools.slots, &reference, &proposed_path) {
-                Ok((body, would_change)) => {
+                Ok((body, would_change, said)) => {
                     changes_anything = would_change;
+                    remark = said;
                     body
                 }
                 Err(refusal) => return problem(refusal),
@@ -2866,6 +2900,7 @@ fn write_file<S: Sink, C: Confirmer>(
             contents: shown.clone(),
             // The reviewer is the only one who will read this. Say what they are reading.
             untrusted: !body_label.is_trusted(),
+            remark,
         };
 
         if confirmer.confirm_write(&request) == Decision::Reject {
@@ -3020,6 +3055,9 @@ fn edit_file<S: Sink, C: Confirmer>(
             existing: Some(current.clone()),
             intent: Intent::Edit,
             untrusted: !body_label.is_trusted(),
+            // An edit is the planner's own words over a file it read. No processor was involved,
+            // so there is nothing anybody said about it.
+            remark: None,
         };
 
         if confirmer.confirm_write(&request) == Decision::Reject {

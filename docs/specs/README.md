@@ -16,7 +16,7 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [routing.md](routing.md) | `ROUTE` | 8 | where an effect may land and what may decide it |
 | [trust-map.md](trust-map.md) | `TRUST` | 18 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
 | [permissions.md](permissions.md) | `PERM` | 13 | rules written in advance about what to ask about and what to refuse |
-| [processors.md](processors.md) | `PROC` | 10 | the one component that reads untrusted content, and what it may do with it |
+| [processors.md](processors.md) | `PROC` | 12 | the one component that reads untrusted content, and what it may do with it |
 | [vetting.md](vetting.md) | `CHECK` | 10 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
 | [delegation.md](delegation.md) | `DELEGATE` | 17 | a second planner, narrower than the first, and what crosses back from one |
 | [turns.md](turns.md) | `TURN` | 4 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing or checks nothing |
@@ -38,6 +38,7 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | importing a Leo Premium subscription and spending its credentials |
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 7 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 8 | tools that come from outside this repository, and what they are allowed to do |
+| [hooks.md](hooks.md) | `HOOK` | 7 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 8 | every request that leaves this process, and what comes back |
 | [backends.md](backends.md) | `BACKEND` | 37 | which service answers a request, and what a person may choose between |
 | [compaction.md](compaction.md) | `COMPACT` | 12 | shortening a long conversation into a summary of itself, in the request only |

@@ -414,12 +414,27 @@ fn activity_lines(
 fn quarantined_lines(shown: &Shown, width: usize) -> Vec<Line<'static>> {
     let marked = Style::default().fg(theme::running());
     let margin = Span::styled(format!("  {QUARANTINE_BAR} "), marked);
+    quarantined_rows(shown, &margin, width)
+}
+
+/// The same block against a margin the caller owns.
+///
+/// The transcript indents its blocks under the line they belong to and a prompt draws its own
+/// from the edge of the box, and a screen with two margin columns on it is a screen where the
+/// column stops meaning anything. Everything that makes the block a block is here, so a caller
+/// choosing where the margin sits cannot choose anything else about it.
+pub(crate) fn quarantined_rows(
+    shown: &Shown,
+    margin: &Span<'static>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let marked = Style::default().fg(theme::running());
 
     // The heading goes through [`marked_rows`] like the content does, because the origin is not
     // the renderer's text: it can be a filename read out of a quarantined listing. So it is
     // neutralised, and a long one continues on another marked row rather than outside the block.
     let mut lines = marked_rows(
-        &margin,
+        margin,
         &[
             Span::styled(
                 t!(
@@ -436,7 +451,7 @@ fn quarantined_lines(shown: &Shown, width: usize) -> Vec<Line<'static>> {
 
     for line in &shown.preview {
         lines.extend(marked_rows(
-            &margin,
+            margin,
             &[Span::styled(line.clone(), dim())],
             width,
         ));
@@ -445,7 +460,7 @@ fn quarantined_lines(shown: &Shown, width: usize) -> Vec<Line<'static>> {
     // Said rather than silently dropped, for the same reason a truncated diff says so.
     if shown.lines > shown.preview.len() {
         lines.extend(marked_rows(
-            &margin,
+            margin,
             &[Span::styled(
                 t!(
                     transcript_more_lines,

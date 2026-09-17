@@ -50,6 +50,7 @@ rules here.
 | when a person is asked, and what an answer grants | [prompting.md](docs/specs/prompting.md) |
 | answering those prompts in advance: accepting edits, planning, bypassing | [permission-modes.md](docs/specs/permission-modes.md) |
 | `AGENTS.md` and skills | [skills.md](docs/specs/skills.md) |
+| running a command of a person's own when something happens | [hooks.md](docs/specs/hooks.md) |
 | which crate may do what | [layering.md](docs/specs/layering.md) |
 | shortening a long conversation | [compaction.md](docs/specs/compaction.md) |
 | what is recorded about every decision | [trace.md](docs/specs/trace.md) |

@@ -91,7 +91,10 @@ and command output is drawn inside the margin. So is the content a vetting promp
 the sentence the check wrote about it, on whichever of the three prompts it was written for: that
 sentence is free text about bytes an attacker may own, and it is the one line on such a screen a
 reader might otherwise take for the program's. The verdict word is the driver's and sits outside the
-margin; the sentence is not, and sits inside it.
+margin; the sentence is not, and sits inside it. A processor's remark
+([PROC-12](processors.md#PROC-12)) is drawn in the transcript's own quarantine block against the
+prompt's margin, rather than against the transcript's: one screen with two margin columns on it is a
+screen where the column stops meaning anything.
 
 A manifest plan's steps are the one body here drawn without a bar, and the reason for the rule is
 what says so: they are the driver's own rendering of a plan that came from a context holding the task
@@ -114,6 +117,8 @@ than dropped, as it is for any long body.
 `verified-by: bravebot_tui::confirm::a_wrapped_untrusted_hunk_is_marked_on_every_row_it_reaches`
 `verified-by: bravebot_tui::confirm::a_wrapped_vouch_preview_is_marked_on_every_row_it_reaches`
 `verified-by: bravebot_tui::confirm::a_wrapped_vetted_line_is_marked_on_every_row_it_reaches`
+`verified-by: bravebot_tui::confirm::a_remark_cannot_paint_a_margin_in_the_box_it_is_drawn_in`
+`verified-by: bravebot_tui::confirm::a_control_character_in_a_remark_is_replaced`
 
 <a id="PROMPT-4"></a>
 ### PROMPT-4: a review stays legible, or says it could not
@@ -122,6 +127,8 @@ A long body keeps the question on screen and offers the rest, which can be scrol
 edit in a large file shows only the change. An empty output says so, and so does a slot with nothing in it
 and a file with nothing to preview. A diff that cannot be computed says so rather than showing nothing. A plan longer
 than the box is scrolled to rather than cut short, and the question stays on screen while it is.
+A processor's remark is bounded in **drawn rows**, so a claim cannot push the bytes it is a claim
+about below the fold, and the block says how many lines it is not showing.
 
 **Why.** Reviewing a whole file body on a terminal is not review, which is why `edit_file` exists
 on a passage rather than a whole body. A prompt that scrolled the question away would be collecting a keypress, not a decision.
@@ -134,6 +141,7 @@ on a passage rather than a whole body. A prompt that scrolled the question away 
 `verified-by: bravebot_tui::confirm::a_preview_with_nothing_in_it_says_so`
 `verified-by: bravebot_tui::confirm::an_uncomputable_diff_says_so`
 `verified-by: bravebot_tui::confirm::a_long_plan_keeps_the_question_on_screen_and_offers_the_rest`
+`verified-by: bravebot_tui::confirm::a_long_remark_does_not_push_the_diff_off_the_screen`
 
 ## What an answer means
 
