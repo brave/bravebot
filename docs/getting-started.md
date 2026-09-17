@@ -141,7 +141,7 @@ There is one thing to set up before the first session, and it is which service a
 binary arrives with none configured, so rather than open a session with nothing set up to answer it,
 a first run says what to configure and stops.
 
-Configure one of these three. `bravebot doctor` reports what it will use once you have.
+Configure one of these four. `bravebot doctor` reports what it will use once you have.
 
 Each block below sets a top-level `model` key as well. A block on its own leaves the model in force
 the one the build came with, which is Brave's own, so the first run says the same thing again and
@@ -196,6 +196,26 @@ and the models to offer:
 in `options.baseURL`, and a gateway naming no models at all is asked what it serves. The block is
 read in the shape another tool already reads, so one copied out of that tool's configuration works
 here unedited.
+
+### A local Ollama, or another gateway that wants no key
+
+Ollama wants no API key, so its block names none. Leaving out both `env` and `options.apiKey` is how
+you say none is needed, and the request then carries no `authorization` header:
+
+```json
+{
+  "provider": {
+    "ollama": {
+      "name": "Ollama (local)",
+      "options": { "baseURL": "http://localhost:11434/v1" }
+    }
+  },
+  "model": "ollama/qwen3-coder:30b"
+}
+```
+
+No `models` key, so Ollama is asked what it has pulled, and `/model` lists what came back.
+`bravebot doctor` says a credential is not needed rather than missing.
 
 ### Brave Leo Premium, if you already subscribe
 
