@@ -85,19 +85,24 @@ impl Ending {
         ExitCode::from(self.status())
     }
 
-    /// Write the failure out, identifier first, and return what to exit with.
+    /// The failure as a person reads it: the identifier, then the message.
     ///
     /// The identifier leads rather than follows, so it is still there when the message is long
     /// enough to be wrapped or cut off, which a backend's own account of a failure often is.
-    pub fn say(self, to: &mut impl Write, message: impl Display) -> ExitCode {
+    ///
+    /// Apart from [`Ending::say`] because not every failure ends the process: a turn that could not
+    /// run inside a session is said and the session goes on, and it has to say the same identifier
+    /// as the one that exits.
+    pub fn told(self, message: impl Display) -> String {
         match self.identifier() {
-            Some(identifier) => {
-                let _ = writeln!(to, "{identifier}: {message}");
-            }
-            None => {
-                let _ = writeln!(to, "{message}");
-            }
+            Some(identifier) => format!("{identifier}: {message}"),
+            None => message.to_string(),
         }
+    }
+
+    /// Write the failure out, identifier first, and return what to exit with.
+    pub fn say(self, to: &mut impl Write, message: impl Display) -> ExitCode {
+        let _ = writeln!(to, "{}", self.told(message));
         self.code()
     }
 }
