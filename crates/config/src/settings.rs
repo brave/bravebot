@@ -258,7 +258,7 @@ impl Settings {
     /// root that already holds what won. Reading each layer separately and combining the results
     /// afterwards would need this logic twice, once per block, and the second copy is where the two
     /// would drift.
-    fn from_map(root: &serde_json::Map<String, serde_json::Value>) -> Self {
+    pub(crate) fn from_map(root: &serde_json::Map<String, serde_json::Value>) -> Self {
         let env = match root.get("env") {
             Some(serde_json::Value::Object(block)) => block
                 .iter()
@@ -412,7 +412,7 @@ impl Settings {
 /// oversized one, a syntax error, or a root that is not an object. A half-typed project file leaves
 /// the layers under it in force, because the alternative is a mistake in a checkout deciding that a
 /// person's own profile no longer applies.
-fn read(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
+pub(crate) fn read(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
     match std::fs::metadata(path) {
         Ok(found) if found.len() > MAX_BYTES => return None,
         Ok(_) => {}

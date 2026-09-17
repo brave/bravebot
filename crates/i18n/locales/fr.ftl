@@ -152,6 +152,9 @@ doctor-settings-no-variables = settings.json, ne nommant aucune variable
 doctor-settings-layer = couche
 doctor-settings-override = remplacement
 doctor-settings-overridden = { $name } depuis { $path }
+doctor-managed = géré
+doctor-managed-pinned = { $names } depuis { $path }
+doctor-managed-nothing = { $path }, n'épinglant rien
 doctor-leo = leo
 doctor-subscription =
     abonnement { $environment } importé, { $unspent } identifiants sur { $total } non dépensés

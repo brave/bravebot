@@ -13,7 +13,7 @@ use bravebot_agent::confirm::{
 };
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{Mode, Workspace};
-use bravebot_config::Config;
+use bravebot_config::{Config, Managed};
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::{Event, RecordingSink, Role};
@@ -1424,13 +1424,14 @@ fn doctor() -> ExitCode {
     // Read before the configuration so the file can be reported even when it is what made the
     // configuration wrong.
     let settings = bravebot_config::Settings::load();
+    let managed = Managed::load();
 
     // Resolved once for the two sections that need it, since two answers to where the state
     // directory is would be two answers to which rules a run reads.
     let resolved = bravebot_agent::home::resolved();
     let home = resolved.as_ref().map(|(_, path)| path.as_path());
 
-    match Config::from_env_and_settings(&settings) {
+    match Config::from_env_and_settings(&settings, &managed) {
         Ok(config) => {
             println!("{}", t!(doctor_configuration_ok));
 
@@ -1465,6 +1466,12 @@ fn doctor() -> ExitCode {
                         path = path.display().to_string()
                     ),
                 );
+            }
+
+            // After the layers a person owns, because it is what answers for a name none of them
+            // explains: a value they set and cannot see taking effect is pinned above all of them.
+            for line in managed_layer(&managed) {
+                println!("{line}");
             }
 
             // Counted rather than listed: a rule is the user's own text and printing it back says
@@ -1516,6 +1523,12 @@ fn doctor() -> ExitCode {
         Err(err) => {
             eprintln!("{}", t!(cli_configuration_problem, problem = err));
             ok = false;
+            // The one line from the section above that still has to be printed. A pin is the case
+            // where the person reading this can do nothing about the error, so the file that holds
+            // it is the only actionable thing in the report.
+            for line in managed_layer(&managed) {
+                println!("{line}");
+            }
         }
     }
 
@@ -1782,6 +1795,36 @@ fn aligned(name: impl AsRef<str>, value: impl AsRef<str>, column: usize) -> Stri
 
 fn fact(name: impl AsRef<str>, value: impl AsRef<str>) {
     println!("{}", aligned(name, value, FACT));
+}
+
+/// What `doctor` says about the machine-level layer, which is nothing where there is no such file.
+///
+/// The names it pinned rather than the values, on the same footing as the settings above: a value
+/// here is a host. Naming them is the whole point of the line, since a name in this list is the
+/// answer to why a variable somebody exported is changing nothing.
+///
+/// A file that was read is named even where nothing in it could be pinned, because the alternative
+/// leaves whoever wrote it with no way to tell a file this program never found from one holding
+/// names it may not honour.
+fn managed_layer(managed: &Managed) -> Vec<String> {
+    let Some(path) = managed.path() else {
+        return Vec::new();
+    };
+    let path = path.display().to_string();
+    let pinned: Vec<&str> = managed.pinned().collect();
+    vec![aligned(
+        t!(doctor_managed),
+        match pinned.is_empty() {
+            true => t!(doctor_managed_nothing, path = &path).to_string(),
+            false => t!(
+                doctor_managed_pinned,
+                names = pinned.join(", "),
+                path = &path
+            )
+            .to_string(),
+        },
+        FACT,
+    )]
 }
 
 /// Report the imported subscription, and how much of it is left.
@@ -2290,6 +2333,65 @@ mod tests {
                 .iter()
                 .any(|line| line.contains(&missing().to_string())),
             "the refusal does not say what was missing: {lines:?}"
+        );
+    }
+
+    /// A managed layer somebody cannot change has to say so somewhere, or "why is the variable I
+    /// exported doing nothing" has no answer anywhere on the machine. The names and the file, since
+    /// the file is what whoever can lift the pin has to be pointed at.
+    #[test]
+    fn doctor_names_what_the_managed_layer_pinned_and_the_file_it_came_from() {
+        let scratch = Scratch::new("doctor-managed-pinned");
+        let path = scratch.path.join("managed.json");
+        std::fs::write(
+            &path,
+            r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://approved.example"}}"#,
+        )
+        .expect("a managed file");
+
+        let lines = managed_layer(&Managed::at(&path));
+
+        assert_eq!(lines.len(), 1, "one line, or the report grew: {lines:?}");
+        assert!(
+            lines[0].contains("BRAVE_AI_CHAT_ENDPOINT"),
+            "the pinned name is not reported: {lines:?}"
+        );
+        assert!(
+            lines[0].contains(&path.display().to_string()),
+            "the file that pinned it is not named: {lines:?}"
+        );
+        assert!(
+            !lines[0].contains("https://approved.example"),
+            "the value is printed, and on some machines that is a credential: {lines:?}"
+        );
+    }
+
+    /// The case every machine without an administrator is in. A report listing every place a file
+    /// could have been is a report where the lines that matter are the hard ones to find.
+    #[test]
+    fn doctor_says_nothing_about_a_managed_layer_that_is_not_there() {
+        let scratch = Scratch::new("doctor-managed-absent");
+        let absent = scratch.path.join("managed.json");
+        assert!(managed_layer(&Managed::at(&absent)).is_empty());
+    }
+
+    /// A file holding only names this layer may not pin did nothing, and saying nothing about it
+    /// would leave whoever wrote it unable to tell that from a file this program never found.
+    #[test]
+    fn doctor_names_a_managed_file_that_pinned_nothing() {
+        let scratch = Scratch::new("doctor-managed-nothing");
+        let path = scratch.path.join("managed.json");
+        std::fs::write(&path, r#"{"env": {"BRAVEBOT_CONTEXT_BUDGET": "4096"}}"#)
+            .expect("a managed file");
+
+        let lines = managed_layer(&Managed::at(&path));
+
+        assert_eq!(lines.len(), 1, "the file is not reported: {lines:?}");
+        assert!(
+            lines[0].contains(
+                &t!(doctor_managed_nothing, path = path.display().to_string()).to_string()
+            ),
+            "the line does not say the file pinned nothing: {lines:?}"
         );
     }
 

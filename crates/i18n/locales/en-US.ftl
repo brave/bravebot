@@ -148,6 +148,14 @@ doctor-settings-override = override
 # Which file a name finally came from, where more than one set it. Somebody looking at a value they
 # did not expect has three files to open otherwise.
 doctor-settings-overridden = { $name } from { $path }
+# The machine-level layer, above everything a person can set. The names rather than the values, for
+# the reason the settings lines give, and the path because a pin somebody wants lifted is lifted by
+# whoever can write that file.
+doctor-managed = managed
+doctor-managed-pinned = { $names } from { $path }
+# A file somebody wrote that holds nothing this layer may pin. Reported, because the alternative
+# leaves them unable to tell it from a file that was never found.
+doctor-managed-nothing = { $path }, pinning nothing
 doctor-leo = leo
 doctor-subscription =
     { $environment } subscription imported, { $unspent } of { $total } credentials unspent
