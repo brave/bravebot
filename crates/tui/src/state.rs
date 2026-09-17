@@ -171,9 +171,22 @@ impl Delegate {
         self.note.is_none()
     }
 
-    /// The last few of its lines, which is what the block where it started draws.
-    pub fn latest(&self) -> &[Entry] {
-        &self.lines[self.lines.len().saturating_sub(DELEGATE_SHOWN)..]
+    /// The last few of its calls, which is what the block where it started draws.
+    ///
+    /// Its calls rather than the last of its lines, because the two are not the same sequence: a
+    /// preview released for the person to read is held among them and carries no call, so the
+    /// last three lines of a delegate that has made three calls can hold one of them. The rows
+    /// the block draws are calls, and so is the number it counts them against.
+    pub fn latest(&self) -> Vec<&Entry> {
+        let mut latest: Vec<&Entry> = self
+            .lines
+            .iter()
+            .rev()
+            .filter(|entry| entry.activity.is_some())
+            .take(DELEGATE_SHOWN)
+            .collect();
+        latest.reverse();
+        latest
     }
 
     /// Keep one more of its lines, dropping the oldest where there are already enough.
@@ -6664,6 +6677,54 @@ mod tests {
                 "step 7",
                 "the block drew the oldest lines rather than the newest"
             );
+        }
+
+        /// Content released for the person to read is held among the delegate's lines and is not
+        /// a call. A block drawing the last three lines therefore drew one call row for a
+        /// delegate that had made three calls, and read as a delegate doing nearly nothing.
+        #[test]
+        fn a_preview_does_not_take_a_calls_place_in_the_block() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "worker", "summarise the notes");
+            for round in 0..4 {
+                let call = Activity::running("Isolated processor", format!("notes{round}.md"));
+                session.start_activity(call.clone());
+                session.finish_activity(call.done("wrote 1 line"));
+                // What the processor said about the file, and then the file it wrote: two
+                // released previews for the one call, as a spawn_processor result reports.
+                session.show(quarantined("what the isolated processor said"));
+                session.show(quarantined(&format!("notes{round}.md")));
+            }
+
+            let held = session.delegates();
+            assert_eq!(held[0].calls, 4, "the delegate forgot the calls it made");
+            let latest = held[0].latest();
+            assert_eq!(
+                latest.len(),
+                DELEGATE_SHOWN,
+                "a preview took the row one of the delegate's calls is drawn on"
+            );
+            assert!(
+                latest.iter().all(|entry| entry.activity.is_some()),
+                "the block was given a row that is not a call to draw"
+            );
+            assert_eq!(
+                latest.last().unwrap().activity.as_ref().unwrap().target,
+                "notes3.md",
+                "the block drew the oldest of its calls rather than the newest"
+            );
+        }
+
+        /// Quarantined content as the driver reports it, for the tests about where a preview of
+        /// it lands.
+        fn quarantined(origin: &str) -> Shown {
+            Shown {
+                origin: origin.to_string(),
+                reach: bravebot_agent::report::Reach::NoModel,
+                label: "(U,priv)".to_string(),
+                preview: vec!["a line nobody vouched for".to_string()],
+                lines: 1,
+            }
         }
 
         /// What the block draws is a window on what is kept. Keeping only the three drawn is what

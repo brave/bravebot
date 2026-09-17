@@ -277,7 +277,7 @@ fn delegate_lines(delegate: &Delegate, width: usize) -> Vec<Line<'static>> {
         // says which of them a row belongs to.
         None => {
             let latest = delegate.latest();
-            for entry in latest {
+            for entry in &latest {
                 if let Some(activity) = &entry.activity {
                     for line in activity_lines(activity, entry.landing, width.saturating_sub(2)) {
                         lines.push(indented(line));
@@ -285,7 +285,9 @@ fn delegate_lines(delegate: &Delegate, width: usize) -> Vec<Line<'static>> {
                 }
             }
             // Said only where there were more than are drawn, since "3 calls" over three rows is
-            // a row spent saying what the reader can already see.
+            // a row spent saying what the reader can already see. Against the calls drawn rather
+            // than the lines held, so a delegate whose lines also hold a preview still says how
+            // many calls the block left out.
             if delegate.calls > latest.len() {
                 lines.push(Line::from(Span::styled(
                     format!(
@@ -3869,6 +3871,49 @@ mod tests {
             assert!(
                 screen.contains("9 calls"),
                 "the block did not say how much it had done: {screen}"
+            );
+        }
+
+        /// A delegate reading untrusted files has a preview of each held among its lines, and a
+        /// preview is not a call. Counting lines rather than calls drew one row for a delegate
+        /// that had made four, and left the count off too, since the count is said only where
+        /// there are more calls than rows drawn.
+        #[test]
+        fn a_delegates_previews_do_not_cost_its_block_the_rows_and_the_count() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "worker", "summarise the notes");
+            for round in 0..4 {
+                let call = Activity::running("Isolated processor", format!("notes{round}.md"));
+                session.start_activity(call.clone());
+                session.finish_activity(call.done("wrote 1 line"));
+                // The two previews one spawn_processor result releases: what the processor said
+                // about the file, and the file it wrote.
+                session.show(Shown {
+                    origin: "what the isolated processor said".to_string(),
+                    reach: bravebot_agent::report::Reach::NoModel,
+                    label: "(U,priv)".to_string(),
+                    preview: vec!["a line nobody vouched for".to_string()],
+                    lines: 1,
+                });
+                session.show(Shown {
+                    origin: format!("notes{round}.md"),
+                    reach: bravebot_agent::report::Reach::NoModel,
+                    label: "(U,priv)".to_string(),
+                    preview: vec!["a line nobody vouched for".to_string()],
+                    lines: 1,
+                });
+            }
+
+            let screen = rendered(&session);
+            for drawn in ["notes1.md", "notes2.md", "notes3.md"] {
+                assert!(
+                    screen.contains(drawn),
+                    "the block left out the call on {drawn}: {screen}"
+                );
+            }
+            assert!(
+                screen.contains("4 calls"),
+                "the block did not say how many calls it had made: {screen}"
             );
         }
     }

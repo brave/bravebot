@@ -88,6 +88,8 @@ doing very little, which is what the count answers.
 
 `verified-by: bravebot_tui::state::a_delegates_block_draws_the_last_of_its_work_and_counts_the_rest`
 `verified-by: bravebot_tui::render::a_delegate_that_has_done_more_than_is_drawn_says_so`
+`verified-by: bravebot_tui::state::a_preview_does_not_take_a_calls_place_in_the_block`
+`verified-by: bravebot_tui::render::a_delegates_previews_do_not_cost_its_block_the_rows_and_the_count`
 
 <a id="WATCH-4"></a>
 ### WATCH-4: what the block has no room for is kept, up to a bound
