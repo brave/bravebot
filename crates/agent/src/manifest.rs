@@ -617,7 +617,7 @@ fn stopped(attempt: Attempt, error: TurnError) -> TurnError {
         TurnError::Cancelled { attempts } => TurnError::Cancelled { attempts },
         other => TurnError::Manifest {
             attempt: Box::new(attempt),
-            detail: other.to_string(),
+            cause: Box::new(other),
         },
     }
 }
@@ -1043,7 +1043,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 step.tool()
             )));
         };
-        let activity = Activity::running(entry.capability, step.describe());
+        let activity = Activity::running(entry.capability, step.describe()).of_tool(step.tool());
         reporter.tool_started(activity.clone());
 
         // Wrapped per step for the same reason the turn loop wraps per call: the borrow has to go

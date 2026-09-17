@@ -1809,8 +1809,12 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         Err(e) => {
             let produced = problem(format!("error: the arguments were not valid JSON: {e}"));
             // Announced and closed in one breath, because there was never a call to watch.
-            reporter.tool_started(Activity::running(verb, ""));
-            reporter.tool_finished(Activity::running(verb, "").failed(produced.note.clone()));
+            reporter.tool_started(Activity::running(verb, "").of_tool(&name));
+            reporter.tool_finished(
+                Activity::running(verb, "")
+                    .of_tool(&name)
+                    .failed(produced.note.clone()),
+            );
             return Output {
                 cancelled: produced.cancelled,
                 call_id: call.id.clone(),
@@ -1840,7 +1844,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
     // Announced before the call runs, so a slow one is visible while it is slow. This is the
     // difference between a turn that looks stuck and one that is plainly working.
     let target = target_of(policy, &name, tools.slots, &arguments);
-    reporter.tool_started(Activity::running(verb, target.clone()));
+    reporter.tool_started(Activity::running(verb, target.clone()).of_tool(&name));
 
     let produced = match name.as_str() {
         // A mode that refuses writes refuses them whether or not anybody would have been asked,
@@ -1900,6 +1904,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
     };
 
     let finished = Activity::running(verb, target)
+        .of_tool(&name)
         .with_changes(produced.changes)
         .marked_untrusted(produced.untrusted);
     reporter.tool_finished(if produced.failed {

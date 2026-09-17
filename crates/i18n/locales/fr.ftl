@@ -65,6 +65,7 @@ cli-option-mode = turn (par défaut) décide étape par étape ; manifest planif
 cli-option-model = Le modèle demandé par cette exécution, à la place de celui mémorisé ou configuré
 cli-option-print = Non interactif. Lit l'entrée redirigée comme contexte en quarantaine
 cli-option-trace = Afficher le journal d'audit
+cli-option-json = Afficher un objet de résultat sur stdout au lieu de la réponse
 cli-option-incognito = Ne rien écrire dans ~/.bravebot : ni historique, ni session, ni préférence
 cli-option-dangerously-skip-permissions =
     Contourner toutes les vérifications de permission. Recommandé uniquement pour des bacs à sable

@@ -340,6 +340,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 gate: "precommit",
                 detail: String::new(),
                 reason: message.clone(),
+                principle: Principle::IntegrityGate,
             });
             return Err(Denial {
                 principle: Principle::IntegrityGate,
@@ -385,6 +386,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             gate,
             detail: String::new(),
             reason: message.clone(),
+            principle,
         });
         Denial { principle, message }
     }

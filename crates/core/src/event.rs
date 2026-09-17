@@ -27,6 +27,22 @@ pub enum Principle {
     ConfinementUnavailable,
 }
 
+impl Principle {
+    /// The name a program reads this by.
+    ///
+    /// Deliberately not the localised sentence a refusal is explained in. A caller deciding what
+    /// to do about a refusal matches on this, and a name that changed with the reader's language
+    /// would make that impossible.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::IntegrityGate => "integrity-gate",
+            Self::Confinement => "confinement",
+            Self::Capability => "capability",
+            Self::ConfinementUnavailable => "confinement-unavailable",
+        }
+    }
+}
+
 /// The role a field plays in an action.
 ///
 /// The asymmetry between these two is the anti-injection mechanism: routing decides
@@ -58,6 +74,12 @@ pub enum Event {
         gate: &'static str,
         detail: String,
         reason: String,
+        /// Which principle the refusal upholds.
+        ///
+        /// Carried on the event rather than left to whoever explains it, because the gate that
+        /// refused is the only thing that knows, and a reader working it back out of the reason
+        /// would be matching on a sentence.
+        principle: Principle,
     },
     /// A slot was written.
     SlotWritten { slot: SlotId, label: Label },
@@ -244,6 +266,7 @@ mod tests {
             gate: "action",
             detail: "field=path".into(),
             reason: "untrusted routing".into(),
+            principle: Principle::IntegrityGate,
         });
         assert!(!sink.clean());
         assert_eq!(sink.blocked().count(), 1);

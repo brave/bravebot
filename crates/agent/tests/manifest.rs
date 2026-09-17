@@ -375,7 +375,7 @@ fn a_plan_nobody_approved_runs_nothing() {
     );
 
     // What it stopped at comes back, so somebody can read the plan that was declined.
-    let bravebot_agent::TurnError::Manifest { attempt, detail } = failure else {
+    let bravebot_agent::TurnError::Manifest { attempt, cause } = failure else {
         panic!("a stopped run must come back with its attempt");
     };
     assert!(
@@ -383,6 +383,7 @@ fn a_plan_nobody_approved_runs_nothing() {
         "the plan it asked about was dropped"
     );
     assert!(attempt.steps.is_empty(), "a step ran anyway");
+    let detail = cause.to_string();
     assert!(
         detail.contains("not approved"),
         "the reason should say the plan was not approved, got: {detail}"

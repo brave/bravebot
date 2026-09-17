@@ -60,6 +60,7 @@ cli-option-mode = turn (default) decides step by step; manifest plans the whole 
 cli-option-model = The model this run asks for, in place of the remembered or configured one
 cli-option-print = Non-interactive. Reads piped stdin as quarantined context
 cli-option-trace = Print the audit trail
+cli-option-json = Print one result object on stdout instead of the reply
 cli-option-incognito = Write nothing to ~/.bravebot: no history, no session record, no preference
 cli-option-dangerously-skip-permissions =
     Bypass all permission checks. Recommended only for sandboxes with no internet access
