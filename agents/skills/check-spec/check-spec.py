@@ -732,6 +732,11 @@ For each clause in your scope:
 3. Every `violation` needs a concrete failure: the input or state, the path through the
    code, and the outcome the clause forbids. `file:line` for each step. A finding you
    cannot walk somebody through is a finding you have not verified, and it does not go in.
+4. Where the wrong behaviour is something a person could look at, a screen drawn wrongly
+   or a prompt that says the wrong thing, put in `screen` how to reach it: what to type,
+   in order, from a fresh session. Leave the field out otherwise, and never guess at one.
+   You do not run anything; that field is a script for whoever files this, so that the
+   bug report can show the screen instead of describing it.
 
 Check the whole clause, including the parts stated in the "Why" paragraph where the clause
 has one, and any table a clause carries: a table row is part of that clause.
@@ -757,7 +762,8 @@ Write JSON to `{results_file}` and nothing else to stdout:
       "severity": "error | warning",
       "evidence": ["crates/.../file.rs:123 what is there"],
       "failure": "input or state, path through the code, outcome the clause forbids",
-      "fix": "what the implementation should do instead, in a sentence"
+      "fix": "what the implementation should do instead, in a sentence",
+      "screen": "how to reach the screen this shows up on, only where a person could look at it"
     }}
   ]
 }}

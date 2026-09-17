@@ -3,9 +3,10 @@ name: check-spec
 description:
   'Check that the implementation matches docs/specs, clause by clause. Runs the
   mechanical pass (clause numbering, verified-by resolution, governs, guards, the
-  README table) and then a conformance review of the governed code. Triggers on:
-  check spec, /check-spec, make check-spec, does the code match the spec, spec
-  conformance, spec drift.'
+  README table) and then a conformance review of the governed code, then drafts one
+  issue per finding for a person to confirm before any of them is posted. Triggers
+  on: check spec, /check-spec, make check-spec, does the code match the spec, spec
+  conformance, spec drift, file issues for spec gaps.'
 argument-hint: '[spec-name|spec-id ...] [changed] [strict]'
 allowed-tools: Bash(python3 agents/skills/check-spec/*), Bash(make check-spec*)
 ---
@@ -35,9 +36,14 @@ This skill NEVER edits a spec, adds a clause, softens a clause, or reports "the 
 unrealistic" as a finding. Specs are closely reviewed by humans and change through a
 separate, deliberate process. A run that ends by rewording a clause has verified nothing.
 
-This skill also never fixes the code. It reports. Fixing is a separate task the user asks
-for after reading the findings, and mixing the two means the report is written by the same
-pass that decided what to change.
+This skill also never fixes the code. It reports, and it drafts one issue per finding so
+that a run outlives the session it happened in. Fixing is a separate task the user asks for
+after reading the findings, and mixing the two means the report is written by the same pass
+that decided what to change.
+
+**Nothing is posted until the user names which drafts to post.** Thirty findings are thirty
+claims nobody has read yet, and a run that files them itself has taken a judgement that is
+not its to take. Drafting is free and reversible; an issue is neither.
 
 ---
 
@@ -51,8 +57,11 @@ The heavy data goes through files, never through the main session's context:
    themselves, and write verdicts to a JSON file.
 3. **collect-findings.py** (zero model tokens) merges the mechanical findings with the
    reviewers' verdicts, renders the report, and sets the exit code.
+4. **draft-issues.py** (zero model tokens) writes one issue body per finding into the same
+   work directory, and names the drafts that are still waiting for a screen.
 
-The main session orchestrates. It never reads a spec, a source file, or a verdict.
+The main session orchestrates. It never reads a spec, a source file, a verdict, or an issue
+body. Every one of those is a file path passed between the steps.
 
 ---
 
@@ -109,8 +118,72 @@ python3 agents/skills/check-spec/collect-findings.py --work-dir "$WORK_DIR" [--s
 
 Print its output. Exit code 1 means something at severity `error` survived.
 
-Then say, in two or three lines: how many clauses were checked, what failed, and which
-finding to look at first. Nothing else. The report is the deliverable.
+### Step 5: draft an issue per finding (zero model tokens)
+
+```bash
+python3 agents/skills/check-spec/draft-issues.py --work-dir "$WORK_DIR" [--errors]
+```
+
+Print its output. One body per finding is now on disk, shaped like a pull request: what is
+wrong first, shown rather than described, then the clause it breaks quoted in full, then the
+failure walk, the `file:line` evidence, and the fix the reviewer proposed. Read none of them.
+
+A finding `make check-spec` already fails on gets no draft, because it is red on the branch
+that caused it and will be fixed there. So the drafts are the review findings and the clauses
+nothing pins, which is what a green CI run leaves unsaid.
+
+### Step 6: capture the screens that were asked for
+
+The table names any draft whose reviewer said the wrong behaviour is something a person can
+look at. A bug report that shows the screen is one somebody can act on without reproducing it
+first, so fill those in before proposing anything.
+
+This runs the real interface, which needs a build and a backend and writes real sessions. Where
+there is no backend to run one against, skip this step and say so: a draft with no screen is
+worth more than a draft with an invented one.
+
+Launch one subagent (subagent_type: `general-purpose`) per draft, all in a single message, with
+`{...}` filled in from the draft's line in the table and `{repo}` the absolute path of this
+checkout:
+
+```
+A spec check found a bug that shows up on a screen. Capture what the interface draws, and change nothing.
+
+How to reach it: {screen_wanted}
+
+1. `cargo build` in {repo}.
+2. Write a drive_tui script to {session_file}: one step per line, `timeout keys`. `contrib/README.md` says how, and the steps have to answer the trust prompt first.
+3. From a disposable directory: `{repo}/contrib/drive_tui.py {session_file} --raw {capture_file} -- {repo}/target/debug/bravebot`
+4. `python3 {repo}/contrib/terminal-screenshot.py {capture_file} --strict > {screen_file}`
+5. Read {screen_file}. If it does not show the behaviour described above, fix the script and go round again. If you cannot reach it in three tries, delete {screen_file} and report that you could not.
+
+Write only those three files, all of them in the work directory. Do not edit the tree, do not fix the bug, and never write a screen you did not capture.
+```
+
+Then run step 5 again. The bodies pick up any screen and session file that now exists, so a
+draft that got one shows it and a draft that did not is unchanged.
+
+### Step 7: the user decides what gets posted
+
+The table from step 5 is what the user chooses from. Ask which drafts to post, post those and no
+others, and never post one whose clause already has an open issue:
+
+```bash
+gh issue list --repo OWNER/REPO --state open --search "CLAUSE-N in:title"
+gh issue create --repo OWNER/REPO --title "TITLE" --label LABEL --body-file BODY_FILE
+```
+
+The label is the kind label from the draft, and the only one to apply. `importance`, `urgency`
+and `size` are the [triage-issues skill](../triage-issues/SKILL.md)'s to judge, and guessing at
+them here would put a finding nobody has read into somebody's queue.
+
+`gh` is deliberately not in this skill's `allowed-tools`, so every one of those calls asks
+first. That is the gate, not a nuisance to work around.
+
+### Step 8: say what happened
+
+In two or three lines: how many clauses were checked, what failed, which finding to look at
+first, and how many drafts are waiting. Nothing else. The report is the deliverable.
 
 ---
 
