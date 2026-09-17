@@ -1651,21 +1651,21 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
         timing.stalled_ms >= 120,
         "the wait for an approval was not counted: {timing:?}"
     );
-    // The write itself is a few bytes to a temporary directory. Anything near the wait means the
-    // stall was charged here as well as to the person.
+    // The write itself is a few bytes to a temporary directory, so it cannot have taken as long as
+    // the wait drawn from inside it unless the wait was charged here too. Measured against the wait
+    // rather than against a fixed number of milliseconds: a busy machine stretches every figure
+    // here at once, and a budget in milliseconds then fails on how loaded the runner was rather
+    // than on where the seconds were charged.
     assert!(
-        timing.tools_ms < 100,
+        timing.tools_ms < timing.stalled_ms,
         "the approval wait was charged to the tool as well: {timing:?}"
     );
-    // Two rounds went to a local server, so this is small but real, and it must not have swallowed
-    // the wait either.
+    // The parts are parts of the whole, which is what makes the remainder meaningful, and it is
+    // also what a second charge for the wait breaks wherever it lands: counted twice, the parts
+    // come to more than the turn took. Exact rather than approximate, because each part is measured
+    // inside the wall clock and rounded down, so the three can only ever come to less.
     assert!(
-        timing.inference_ms < 120,
-        "the approval wait was charged to the model: {timing:?}"
-    );
-    // The parts are parts of the whole, which is what makes the remainder meaningful.
-    assert!(
-        timing.wall_ms >= timing.stalled_ms,
+        timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
         "the parts came to more than the whole: {timing:?}"
     );
 }
