@@ -461,8 +461,11 @@ all: what is drawn is a mode somebody chose, named in [permission-modes.md](perm
 marker standing there on every session is one people stop reading, and being read is the whole of
 what this one is for.
 
-**What does not fit is dropped whole, at a separator.** The parts are given up in order (the way to
-the bindings, then the trail key, then the figures), and the mode is the last to go. Left to the
+**What does not fit is dropped whole, at a separator.** The parts are given up in order (a reading
+with no figure in it, then the way to the bindings, then the trail key, then the figures), and the
+mode is the last to go. A note about what a press just did, drawn at the right of the same row,
+takes its room ahead of all of them: the parts are fitted against the width it leaves, since a part
+fitted against the whole width is one the note writes over the middle of. Left to the
 terminal, the line is cut wherever the final column falls, which puts half a word under the box:
 that reads as a rendering fault, where a part that is simply absent reads as a line with no room,
 which is the truth.
@@ -504,6 +507,8 @@ prevent, and a mode read off `/status` after the write is a mode read too late.
 `verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_the_ordinary_mode`
 `verified-by: bravebot_tui::render::a_narrow_terminal_gives_up_the_bindings_rather_than_the_mode`
 `verified-by: bravebot_tui::render::what_does_not_fit_is_dropped_whole_rather_than_cut_mid_word`
+`verified-by: bravebot_tui::render::a_reading_with_no_figure_in_it_is_given_up_before_a_binding`
+`verified-by: bravebot_tui::render::a_note_at_the_right_takes_its_room_from_the_parts_rather_than_over_them`
 `verified-by: bravebot_tui::shell_mode::the_shortcuts_offer_shell_mode`
 
 <a id="INPUT-14"></a>
@@ -846,7 +851,14 @@ reaches for it before reading anything.
 A session that has measured a request states how full the context is, as a percentage of the budget
 the conversation is compacted at, capped at a hundred. A conversation shortened underneath that
 figure says it was compacted rather than a percentage, because the number it held describes an
-exchange that is not the one on screen. A session that has measured nothing says nothing.
+exchange that is not the one on screen. A session that has measured nothing says that it has not
+measured anything.
+
+**No state of the session is drawn as a blank.** A count that arrived with no budget to divide it
+by states no percentage, and the session then knows no more about how full the context is than one
+that has measured nothing, so it reads the same. A reading absent from the line is the width rule
+of INPUT-13 dropping it whole, or the line belonging to the shell (INPUT-2), and neither is
+something the session knows about the context.
 
 **A percentage against a budget nobody advertised is marked as approximate.** The budget is a
 window the endpoint reported for the model in force, a figure somebody set by hand, or a default
@@ -860,9 +872,10 @@ where it was, which for a session that has sent nothing at all is absent.
 
 **Why.** This reading is what a person uses to decide whether to compact, and it is the only
 account of the size of a conversation that exists here: the server reports what a request cost and
-never what it had room for, and there is no tokeniser to count with. Three states drawn as one
-blank line make the figure look intermittent, and a figure that comes and goes is one people stop
-reading.
+never what it had room for, and there is no tokeniser to count with. A state drawn as a blank is
+indistinguishable from the other state drawn as a blank, from a line too narrow to hold the figure,
+and from a reading that has stopped working, so it makes the figure look intermittent, and a figure
+that comes and goes is one people stop reading.
 
 The mark on a guessed budget is the difference between two readings of a hundred per cent that ask
 for opposite things. Against a window the endpoint stated, it means shorten the conversation.
@@ -879,7 +892,8 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_tui::render::the_hint_line_says_how_full_the_context_is`
 `verified-by: bravebot_tui::render::the_hint_line_marks_a_guessed_budget`
 `verified-by: bravebot_tui::render::the_hint_line_reports_a_compacted_context`
-`verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_an_unmeasured_context`
+`verified-by: bravebot_tui::render::the_hint_line_says_an_unmeasured_context_has_not_been_measured`
+`verified-by: bravebot_tui::render::a_measurement_with_no_budget_to_state_it_against_reads_as_unmeasured`
 `verified-by: bravebot_tui::app::a_failed_turn_measures_context_if_requests_were_sent`
 `verified-by: bravebot_tui::app::a_failed_turn_with_no_requests_sent_remains_unmeasured`
 `verified-by: bravebot_agent::conversation::a_restored_conversation_remembers_what_its_last_request_came_to`
