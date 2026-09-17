@@ -595,6 +595,7 @@ tokens-thousands = { $thousands } k
 tokens-millions = { $millions } M
 turn-done = tour { $turn } terminé
 turn-failed = tour { $turn } en échec
+turn-cancelled = tour { $turn } annulé
 
 
 ## Reprendre une session qui tournait ailleurs, ou sur autre chose
@@ -1027,6 +1028,3 @@ watching-calls = { $count ->
 # au tour qui l'a dessinee. Le compte y est car une touche sans rien derriere ne vaut pas la
 # peine. Delegues et commandes sont comptes ensemble, une seule touche ouvrant la liste des deux.
 watching-hint = { $chord } { $count } a ouvrir
-
-# A turn deliberately stopped by the user.
-turn-cancelled = tour { $turn } annulé

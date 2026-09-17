@@ -638,6 +638,8 @@ tokens-millions = { $millions }M
 # disappearing, and an announcement made by something vanishing is one nobody reads.
 turn-done = turn { $turn } done
 turn-failed = turn { $turn } failed
+# Said of a turn the person stopped themselves, which is neither of the above.
+turn-cancelled = turn { $turn } cancelled
 
 
 ## Picking up a session that ran somewhere, or on something, else
@@ -1090,6 +1092,3 @@ reach-no-model = in no model's context: nothing can be sent to read this
 
 # How many calls a delegate has made, where its block shows only the last few.
 delegate-more-calls = { $count } calls so far
-
-# A turn deliberately stopped by the user.
-turn-cancelled = turn { $turn } cancelled
