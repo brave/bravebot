@@ -4,6 +4,7 @@
 
 mod exit;
 mod json;
+mod plain;
 mod progress;
 
 use crate::exit::{Ending, fail};
@@ -106,6 +107,18 @@ fn main() -> ExitCode {
             Some(id) => fork_named(id, skip_permissions),
             None => fail(Ending::Argument, t!(cli_fork_needs_a_name)),
         },
+        // A session in lines, which takes nothing from the terminal (CLI-14). On its own, because
+        // it starts a session rather than describing one: the flags that compose with every way of
+        // starting are the three taken out above, and everything else on this list is another way of
+        // starting.
+        Some("--plain") => match args.len() {
+            1 => plain::session(skip_permissions),
+            _ => {
+                let refused = fail(Ending::Argument, t!(cli_plain_takes_nothing_else));
+                print_help();
+                refused
+            }
+        },
         // The task flags may lead: `bravebot -p "task"` and `bravebot --mode manifest "task"`
         // would otherwise be caught below as unknown options.
         Some(
@@ -195,6 +208,7 @@ fn print_help() {
     println!("{}", t!(cli_usage_heading));
     for (form, description) in [
         ("bravebot", t!(cli_usage_interactive)),
+        ("bravebot --plain", t!(cli_usage_plain)),
         ("bravebot \"<task>\" [--file <path>]...", t!(cli_usage_task)),
         ("cat file | bravebot -p \"<task>\"", t!(cli_usage_piped)),
         ("bravebot --resume [id]", t!(cli_usage_resume)),
@@ -1092,7 +1106,7 @@ impl<R: Read, W: Write> OneShot<R, W> {
         // something else did not type that.
         let mut answer = String::new();
         self.input.read_line(&mut answer)?;
-        Ok(match answer.trim().to_lowercase() == t!(plan_answer_yes) {
+        Ok(match answer.trim().to_lowercase() == t!(line_answer_yes) {
             true => Decision::Approve,
             false => Decision::Reject,
         })
@@ -3444,25 +3458,43 @@ mod tests {
 
     /// It composes with the other two flags taken out before dispatch, in any order: all three are
     /// about the whole run rather than about a task, and a job that wants one may well want another.
+    /// What is left is the way of starting, whichever one it is, so a mode that refuses every
+    /// argument beside itself still reaches dispatch alone.
     #[test]
     fn a_named_settings_file_composes_with_the_other_flags_before_dispatch() {
-        for typed in [
-            &[
-                "--incognito",
-                "--settings",
-                "/etc/ci.json",
-                "--dangerously-skip-permissions",
-                "-p",
-                "x",
-            ][..],
-            &[
-                "--settings",
-                "/etc/ci.json",
-                "--dangerously-skip-permissions",
-                "--incognito",
-                "-p",
-                "x",
-            ][..],
+        for (typed, left) in [
+            (
+                &[
+                    "--incognito",
+                    "--settings",
+                    "/etc/ci.json",
+                    "--dangerously-skip-permissions",
+                    "-p",
+                    "x",
+                ][..],
+                &["-p", "x"][..],
+            ),
+            (
+                &[
+                    "--settings",
+                    "/etc/ci.json",
+                    "--dangerously-skip-permissions",
+                    "--incognito",
+                    "-p",
+                    "x",
+                ][..],
+                &["-p", "x"][..],
+            ),
+            (
+                &[
+                    "--settings",
+                    "/etc/ci.json",
+                    "--incognito",
+                    "--dangerously-skip-permissions",
+                    "--plain",
+                ][..],
+                &["--plain"][..],
+            ),
         ] {
             let mut arguments = args(typed);
             assert!(take_incognito(&mut arguments), "{typed:?}");
@@ -3472,7 +3504,7 @@ mod tests {
                 Some(PathBuf::from("/etc/ci.json")),
                 "{typed:?}"
             );
-            assert_eq!(arguments, args(&["-p", "x"]), "left over: {typed:?}");
+            assert_eq!(arguments, args(left), "left over: {typed:?}");
         }
     }
 
