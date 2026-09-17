@@ -620,6 +620,51 @@ fn a_refused_settings_file_still_answers_with_a_result_object() {
     }
 }
 
+/// A session in lines reads what the person types, so its input has to be a terminal: the lines it
+/// reads are prompts, which are the one trusted input there is, and a pipe carries bytes nothing
+/// vouched for (CLI-3). A session that took its prompts from one would take instruction from
+/// whatever fed it and answer its own approval questions out of the same bytes, so it is refused
+/// before anything starts, and the refusal names the invocation that does read a pipe.
+///
+/// A property of the process rather than of a function: whether stdin is a terminal is a fact
+/// about how the program was started, and nothing inside it can arrange to be started the other
+/// way.
+#[test]
+fn a_session_in_lines_is_refused_where_its_input_is_not_a_terminal() {
+    let scratch = Scratch::new("cli-running-plain-not-a-terminal");
+    let output = bravebot(
+        &scratch.path,
+        // Complete and usable, so the refusal below is this one rather than the configuration's.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["--plain"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a refused argument did not exit as one: {stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "the reply stream carried the explanation instead: {stdout}"
+    );
+    assert!(
+        stderr.contains("-p"),
+        "the refusal does not name what does read a pipe: {stderr}"
+    );
+    // Nothing was taken from the terminal on the way to refusing, which is the whole claim of the
+    // mode: the alternate screen, mouse reporting and bracketed paste are each a `\x1b[?` away.
+    assert!(
+        !stderr.contains('\x1b') && !stdout.contains('\x1b'),
+        "something was asked of the terminal: {stderr:?}"
+    );
+}
+
 /// An import is a write by definition, so an incognito session refuses it rather than doing it
 /// and discarding the result: that would mint a batch on Brave's service that nothing could ever
 /// spend. Refused before the device is registered, which is what the empty reply stream says:

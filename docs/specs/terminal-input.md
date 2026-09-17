@@ -711,12 +711,15 @@ flight, which is aimed at something else entirely and costs the answer being wri
   hook is not the answer on its own: a turn runs off the main thread, and a panic there is a turn
   that failed rather than a session that ended, so a hook that handed the terminal back would do it
   underneath an interface still drawing on it.
-- **A session owns the whole terminal while it runs.** The transcript is a viewport repainted in
-  place on a screen of its own rather than lines added to the terminal's scrollback (INPUT-33), so
-  what leaves the top of it is reachable through this program's own scroller and through nothing
-  else, and a screen repainted in place is not a document a screen reader can follow. There is no
-  line-oriented mode to fall back to, which is what makes this a cost rather than a preference: the
-  alternative to the viewport is not using the interactive interface at all.
+- **This interface owns the whole terminal while it runs.** The transcript is a viewport repainted
+  in place on a screen of its own rather than lines added to the terminal's scrollback (INPUT-33),
+  so what leaves the top of it is reachable through this program's own scroller and through nothing
+  else, and a screen repainted in place is not a document a screen reader can follow. What that
+  costs is a mode rather than the program: `--plain` is the same session in lines
+  ([cli.md](cli.md)), and what it gives up is everything this interface draws, the scroller and its
+  search, the key list, the slash commands, `@` naming a file, a picture on the clipboard, and a
+  session record to pick up again. So the cost is having to choose, and neither half is the whole
+  program.
 - **Vi's editing is what this box does with the keys, not what vi does with a file.** There is one
   register rather than named ones, undo is a single step (INPUT-28), counts do not prefix a command,
   and there is no `:` line. Each of those is machinery for a file being edited over an afternoon,
@@ -1415,8 +1418,10 @@ is worse than either, because the words around it are the reason somebody believ
 <a id="INPUT-33"></a>
 ### INPUT-33: a session takes the terminal for its length, and gives every part of it back
 
-Starting a session puts the terminal in raw mode and moves it to a screen of its own, so what was
-in the terminal beforehand is untouched and is back on the screen afterwards. With that screen the
+Starting a session in the interface that draws puts the terminal in raw mode and moves it to a
+screen of its own, so what was in the terminal beforehand is untouched and is back on the screen
+afterwards. A session in lines ([cli.md](cli.md)) takes none of what follows, and this
+clause is about the one that draws. With that screen the
 session asks for mouse reporting, narrowed to the buttons, the wheel and motion while a button is
 held; bracketed paste; focus reporting; and, only where the terminal says it understands the
 request, disambiguated keys.
