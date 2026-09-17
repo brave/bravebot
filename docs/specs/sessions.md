@@ -53,11 +53,20 @@ so what lands on disk is what the planner was allowed to hold: no untrusted byte
 rather than by filtering. Quarantined content is not written at all, and the trail is labels and
 gate names with no content in it.
 
+A rewind point is the one part of a record built from bytes no message carried: it keeps what the
+files a turn wrote over held, read off the disk rather than out of the conversation, so a later
+session can put them back. Those bytes are written down only where the map that stood before the
+turn vouched for the path, which is the map that labelled them. What a file nobody vouched for held
+is written down as contents this session did not keep, and a resumed session says that path did not
+go back rather than putting it back.
+
 **Why.** A record is read back into a later turn's context. Anything written that the planner could
 not have held would enter that context on the next resume, which is the laundering route the whole
 design exists to close.
 
-`verified-by: none`
+`verified-by: bravebot_tui::sessions::what_a_file_nobody_vouched_for_held_is_not_written_down`
+`verified-by: bravebot_tui::sessions::an_answer_the_planner_could_not_have_held_is_not_written_down`
+`verified-by: bravebot_agent::turn::the_trail_records_the_slot_and_the_path_rather_than_the_content`
 
 <a id="SESSION-3"></a>
 ### SESSION-3: the record carries what a resume needs and nothing more
@@ -545,8 +554,10 @@ that stood before its turn, what that turn was asked, and what its writes overwr
 `/rewind` after a resume reach the same turns they reached before the program was closed.
 
 What a path held is written base64 in the record, so the record carries the rewind budget as well
-as the conversation. Paths inside the project are recorded relative to it and come back under the
-directory the resumed session works in, as trust rules do.
+as the conversation. Only for a path the map that stood before the turn vouched for: SESSION-2 is
+why one it did not vouch for is written down as a path whose contents this session did not keep,
+which the session itself still holds and can still put back. Paths inside the project are recorded
+relative to it and come back under the directory the resumed session works in, as trust rules do.
 
 Only the points a rewind can still reach are written. A record holds what the session holds, so a
 point that ages out of the session's depth or budget, and every point given up when something
@@ -600,20 +611,20 @@ names it on the line that reports the rewind.
   storing diffs between consecutive points rather than copies would, at the cost of a mechanism
   that has to be right about every write a turn makes.
 
-- **A record holds what the last few turns overwrote, whoever wrote it.** A turn that replaces a
-  file puts that file's previous contents in the record, and those contents were not necessarily
-  ever shown to the planner: overwriting a file of credentials copies them out of the project and
-  into the state directory. They leave the record once the point ages out, and 0600 covers them
-  while they are there, but a session that ends on such a turn leaves them in its record until the
-  record is deleted. Nothing here distinguishes a file worth keeping from one that is not, because
-  nothing here reads the bytes.
+- **A record holds what the last few turns overwrote inside a directory somebody vouched for.** A
+  turn that replaces such a file puts that file's previous contents in the record, and vouching for
+  a directory is not saying that every file in it is worth copying anywhere: overwriting a file of
+  credentials inside a project the user trusts copies them out of it and into the state directory.
+  They leave the record once the point ages out, and 0600 covers them while they are there, but a
+  session that ends on such a turn leaves them in its record until the record is deleted. Nothing
+  here distinguishes a file worth keeping from one that is not, because nothing here reads the
+  bytes.
 
-- **A record grows with what its turns wrote over.** Every rewind point carries a copy of the
-  conversation and the bytes the turn overwrote, and the whole record is rewritten after every
-  turn. A session whose turns rewrite large files therefore writes a large record repeatedly,
-  whether or not anything is ever rewound. The memory budget bounds it and nothing smaller does;
-  storing the difference between consecutive points rather than copies would, at the cost of a
-  mechanism that has to be right about every write a turn makes.
+- **A resumed session cannot rewind a file nobody vouched for.** What such a file held is kept in
+  memory for the session that took the backup and left out of the record, so after a resume that
+  path is reported as one that did not go back, beside the paths whose contents were past the
+  budget. The turn is still undone in every other respect and the file is left alone rather than
+  deleted. The alternative is those bytes on disk, which is what SESSION-2 refuses.
 
 - **A rewind sees file-tool writes and nothing else.** The backups are taken inside the workspace,
   so a turn that changed a file by running a program instead (`run`, per [run.md](tools/run.md))
