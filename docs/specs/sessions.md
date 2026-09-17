@@ -626,13 +626,6 @@ names it on the line that reports the rewind.
   budget. The turn is still undone in every other respect and the file is left alone rather than
   deleted. The alternative is those bytes on disk, which is what SESSION-2 refuses.
 
-- **A record grows with what its turns wrote over.** Every rewind point carries a copy of the
-  conversation and the bytes the turn overwrote, and the whole record is rewritten after every
-  turn. A session whose turns rewrite large files therefore writes a large record repeatedly,
-  whether or not anything is ever rewound. The memory budget bounds it and nothing smaller does;
-  storing the difference between consecutive points rather than copies would, at the cost of a
-  mechanism that has to be right about every write a turn makes.
-
 - **A rewind sees file-tool writes and nothing else.** The backups are taken inside the workspace,
   so a turn that changed a file by running a program instead (`run`, per [run.md](tools/run.md))
   leaves nothing to put back. `/undo` still reports one turn rewound, and the conversation is,
