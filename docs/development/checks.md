@@ -1,5 +1,16 @@
 # Checks
 
+## Choosing checks
+
+Before changing behaviour or test assertions, use the repository's
+[testing-preflight skill](../../agents/skills/testing-preflight/SKILL.md). Identify which plausible
+mistake each changed test must catch, then choose checks from this page and the affected CI jobs.
+Passing a large test suite does not show that a test can detect the regression it claims to cover.
+
+Run `make check-spec` before committing changes to spec clauses, their referenced tests, guarded
+symbols or call sites, or `unverified-clauses.txt`. This catches stale verification metadata while
+the change is still local. The broader before-push requirements below still apply.
+
 ## Before a commit
 
 **fmt and clippy.** Both take seconds and have no exemption for a change that only touched a

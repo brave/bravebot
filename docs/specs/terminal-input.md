@@ -551,6 +551,7 @@ unchanged with nothing anywhere saying why, which is neither a failure nor an ed
 `verified-by: bravebot_tui::editor::visual_answers_before_editor`
 `verified-by: bravebot_tui::editor::an_empty_variable_is_not_a_configured_editor`
 `verified-by: bravebot_tui::editor::a_full_editor_is_preferred_to_the_last_resort`
+`verified-by: bravebot_tui::editor::the_fallback_list_is_the_same_on_every_platform`
 `verified-by: bravebot_tui::editor::a_configured_editor_that_will_not_start_ends_the_search`
 `verified-by: bravebot_tui::editor::a_gui_editor_is_told_to_wait`
 `verified-by: bravebot_tui::editor::the_flag_follows_the_program_through_a_path`
@@ -577,6 +578,8 @@ started rather than approved, and for it the name is part of what the user asked
 `verified-by: bravebot_tui::editor::the_name_is_looked_for_on_the_path_not_beside_the_resolved_file`
 `verified-by: bravebot_tui::editor::an_empty_path_entry_is_not_searched`
 `verified-by: bravebot_tui::editor::a_name_that_is_no_longer_the_same_program_falls_back_to_the_resolved_path`
+`verified-by: bravebot_tui::editor::a_name_the_path_holds_under_another_spelling_still_starts_the_program`
+`verified-by: bravebot_tui::editor::a_name_is_looked_for_under_every_spelling_it_may_be_filed_under`
 
 <a id="INPUT-17"></a>
 ### INPUT-17: Ctrl-S puts the line away, and puts it back
