@@ -689,4 +689,36 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// What a program may be trusted with in the environment is the caller's decision and
+    /// not a backend's: a credential lives in a variable rather than in a file, so no
+    /// grant over paths either withholds one or hands one over, and the agent socket a
+    /// push signs through is named by a variable as well. A backend that emptied it would
+    /// take that decision away from the caller here and leave it with the caller on the
+    /// other platform, which is one policy meaning two things.
+    ///
+    /// `CARGO_MANIFEST_DIR` is the variable read back because cargo sets it in the
+    /// environment of a test process, so it is one this process holds and nothing else
+    /// invents.
+    #[test]
+    fn the_environment_a_confined_process_receives_is_the_callers() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let held = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets this for a test");
+
+        let printed = sandbox
+            .command("/usr/bin/env", &[], &loadable_policy())
+            .expect("command builds")
+            .output()
+            .expect("the confined process runs");
+
+        let environment = String::from_utf8_lossy(&printed.stdout);
+        assert!(
+            environment
+                .lines()
+                .any(|line| line == format!("CARGO_MANIFEST_DIR={held}")),
+            "a variable this process holds did not reach the confined process: {environment}"
+        );
+    }
 }

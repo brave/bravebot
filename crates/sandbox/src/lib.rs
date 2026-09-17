@@ -82,6 +82,11 @@ pub trait Sandbox {
     /// must, to wrap it in `sandbox-exec`, would silently discard any pipes the caller
     /// had set up. Handing the command back lets the caller configure stdio on the
     /// thing that will actually run.
+    ///
+    /// The environment of the returned command is this process's own, and confining a
+    /// process is not a decision about it: a variable holds what no path grant can
+    /// withhold or hand over, so which of them a program is trusted with is the caller's
+    /// to settle, and a caller that means a program to see none empties it here.
     fn command(
         &self,
         program: &str,

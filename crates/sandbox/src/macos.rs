@@ -114,11 +114,6 @@ impl Sandbox for SeatbeltSandbox {
         wrapped.arg(program);
         wrapped.args(args);
 
-        // The caller's environment is deliberately not inherited: credentials must never
-        // reach a confined process. A caller that needs a variable sets it on the
-        // returned command explicitly.
-        wrapped.env_clear();
-
         Ok(wrapped)
     }
 }
@@ -348,12 +343,21 @@ mod tests {
         let permitted = denied.clone().allow_network_egress();
 
         // An address, so no resolver is involved, and stdout is discarded, so curl needs no file
-        // to write the body to.
+        // to write the body to. The proxy is refused in the argument vector because the
+        // environment here is this process's own: a machine whose shell exports `http_proxy`
+        // would otherwise have both halves of this test measure a connection to somewhere else.
         let curl = |policy: &SandboxPolicy| {
-            let args: Vec<String> = ["-s", "-m", "5", &format!("http://127.0.0.1:{port}/")]
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+            let args: Vec<String> = [
+                "-s",
+                "--noproxy",
+                "*",
+                "-m",
+                "5",
+                &format!("http://127.0.0.1:{port}/"),
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
             sandbox
                 .command("/usr/bin/curl", &args, policy)
                 .expect("command builds")
@@ -437,5 +441,38 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What a program may be trusted with in the environment is the caller's decision and
+    /// not a backend's: a credential lives in a variable rather than in a file, so no
+    /// grant over paths either withholds one or hands one over, and the agent socket a
+    /// push signs through is named by a variable as well. A backend that emptied it would
+    /// take that decision away from the caller here and leave it with the caller on the
+    /// other platform, which is one policy meaning two things.
+    ///
+    /// `CARGO_MANIFEST_DIR` is the variable read back because cargo sets it in the
+    /// environment of a test process, so it is one this process holds and nothing else
+    /// invents.
+    #[test]
+    fn the_environment_a_confined_process_receives_is_the_callers() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let held = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets this for a test");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin");
+
+        let printed = sandbox
+            .command("/usr/bin/env", &[], &policy)
+            .expect("command builds")
+            .output()
+            .expect("the confined process runs");
+
+        let environment = String::from_utf8_lossy(&printed.stdout);
+        assert!(
+            environment
+                .lines()
+                .any(|line| line == format!("CARGO_MANIFEST_DIR={held}")),
+            "a variable this process holds did not reach the confined process: {environment}"
+        );
     }
 }
