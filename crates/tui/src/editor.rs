@@ -29,11 +29,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 ///
 /// Only reached when the user has said nothing. A configured editor that will not start is an
 /// answer, not a reason to run something they did not choose.
-#[cfg(not(windows))]
+///
+/// The same list everywhere the binary ships. A list of its own for Windows puts `notepad` in
+/// front of the `vim` that Git for Windows installs, and `notepad` is neither a full editor nor
+/// one that opens in the terminal the key was pressed in.
 const FALLBACKS: &[&str] = &["vim", "vi", "emacs", "nano"];
-
-#[cfg(windows)]
-const FALLBACKS: &[&str] = &["notepad"];
 
 /// Editors that return before the file has been edited, and the flag that makes them wait.
 ///
@@ -596,6 +596,14 @@ mod tests {
         let found = lookup(real.to_str().unwrap(), &scratch.path).expect("the editor is found");
 
         assert_eq!(found.canonicalize().unwrap(), real.canonicalize().unwrap());
+    }
+
+    /// The four the clause names, wherever the binary ships. A platform that has a list of its
+    /// own tries none of them, however many of them are installed there, and this is the only
+    /// statement a test can make about a constant the compiler chooses.
+    #[test]
+    fn the_fallback_list_is_the_same_on_every_platform() {
+        assert_eq!(FALLBACKS, ["vim", "vi", "emacs", "nano"]);
     }
 
     /// Someone with `vim` or `emacs` installed chose to install it, and opening `nano` at them
