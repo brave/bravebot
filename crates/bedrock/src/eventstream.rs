@@ -102,22 +102,32 @@ impl FrameDecoder {
     ///
     /// An incomplete frame stays buffered for the next call.
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<Event>, FrameError> {
-        self.buffered.extend_from_slice(bytes);
+        self.events(bytes).collect()
+    }
 
-        let mut events = Vec::new();
-        loop {
-            match self.take_frame()? {
-                // A frame whose headers name neither is skipped rather than failing the stream: the
-                // framing was sound, so the position in the stream is still known, and the API sends
-                // frames this does not need.
-                Some(frame) => {
-                    if let Some(event) = event_of(&frame) {
-                        events.push(event);
+    /// Decode events in order, preserving earlier events if a later frame is corrupt.
+    ///
+    /// Stop at the first framing error because the next frame's position is unknown.
+    pub fn events(&mut self, bytes: &[u8]) -> impl Iterator<Item = Result<Event, FrameError>> + '_ {
+        self.buffered.extend_from_slice(bytes);
+        let mut stopped = false;
+        std::iter::from_fn(move || {
+            while !stopped {
+                match self.take_frame() {
+                    Ok(Some(frame)) => {
+                        if let Some(event) = event_of(&frame) {
+                            return Some(Ok(event));
+                        }
+                    }
+                    Ok(None) => stopped = true,
+                    Err(error) => {
+                        stopped = true;
+                        return Some(Err(error));
                     }
                 }
-                None => return Ok(events),
             }
-        }
+            None
+        })
     }
 
     /// Whether bytes are held that did not form a whole frame.
@@ -514,6 +524,28 @@ pub(crate) mod tests {
             decoder.push(&bytes),
             Err(FrameError::Corrupt { .. })
         ));
+    }
+
+    /// Read boundaries must not decide whether valid events before corruption reach the caller.
+    #[test]
+    fn events_before_corruption_survive_any_read_boundary() {
+        let mut bytes = frame("messageStop", br#"{"stopReason":"end_turn"}"#);
+        bytes.extend(frame(
+            "metadata",
+            br#"{"usage":{"inputTokens":100,"outputTokens":7}}"#,
+        ));
+        let mut corrupt = frame("metadata", b"{}");
+        *corrupt.last_mut().unwrap() ^= 1;
+        bytes.extend(corrupt);
+        for split in 0..=bytes.len() {
+            let mut decoder = FrameDecoder::new();
+            let mut events: Vec<_> = decoder.events(&bytes[..split]).collect();
+            events.extend(decoder.events(&bytes[split..]));
+            assert_eq!(events.len(), 3, "split at {split}");
+            assert!(matches!(&events[0], Ok(Event::Named { name, .. }) if name == "messageStop"));
+            assert!(matches!(&events[1], Ok(Event::Named { name, .. }) if name == "metadata"));
+            assert!(matches!(&events[2], Err(FrameError::Corrupt { .. })));
+        }
     }
 
     /// The framing was sound, so the position in the stream is still known. A frame whose headers

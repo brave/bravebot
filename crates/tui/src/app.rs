@@ -12395,6 +12395,8 @@ mod tests {
         type_line(&mut session, "read a file");
         session.submit().unwrap();
         let error = bravebot_agent::backend::BackendError::Attempted {
+            usage: None,
+            context_tokens: None,
             attempts: 3,
             cause: Box::new(bravebot_agent::backend::BackendError::from(
                 bravebot_aichat::ChatError::Egress(bravebot_net::EgressError::Status {

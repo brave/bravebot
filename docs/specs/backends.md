@@ -15,6 +15,7 @@ governs:
   - crates/config/src/env_var.rs
   - crates/config/src/lib.rs
   - crates/config/src/managed.rs
+  - crates/bedrock/src/lib.rs
   - crates/aichat/src/lib.rs
   - crates/aichat/src/models.rs
   - crates/config/src/provider.rs
@@ -1415,6 +1416,50 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::running::a_configured_gateway_is_not_refused`
 `verified-by: bravebot_cli::running::a_service_configured_with_no_model_of_its_own_named_says_to_name_one`
 `verified-by: bravebot_cli::running::a_model_named_on_the_command_line_is_not_refused`
+
+<a id="BACKEND-40"></a>
+### BACKEND-40: completed replies keep reported usage even when their content is unusable
+
+Clients decode and validate usage separately from assistant content. A completed reply with empty
+content, malformed content or tool calls, or an output-limit error retains valid reported usage.
+Earlier valid text does not make a malformed reply usable, including when a later JSON frame is
+damaged. The error keeps its original category, request count and safe reporting path.
+
+For a whole reply, the response body must have arrived. For a stream, the protocol must say the
+reply ended: an aichat finish reason or `[DONE]`, or a Bedrock message stop. Transport EOF is not
+that signal. Cancellation after protocol completion retains reported usage even while the socket
+is open, and still returns cancellation. Usage metadata on its own does not complete a reply.
+A later stream exception or framing error does not erase usage already reported for a completed
+reply, even when it arrives in the same read as the completion and usage frames. If it
+causes a retry, the completed attempt's cost remains charged exactly once whether the later
+attempt succeeds, fails, or is cancelled during backoff. Reply content and progress restart on
+retry. Each attempt starts with unknown usage; completed costs from earlier attempts remain
+separate and are added to the call total. Unfinished attempts contribute no estimate. A total
+containing a measured zero remains known; a call with no completed reported usage remains unknown.
+The final attempt's prompt measurement is separate from these cumulative costs.
+
+Retained usage resets at the start of each call, including a call cancelled before sending.
+Unknown usage remains distinct from a measured zero. Both input and output token counts must be
+present as unsigned integers; missing counts do not mean zero.
+Invalid or absent usage, and usage from an unfinished reply, contributes no estimate to a failed
+or cancelled request. Backend errors carry
+known usage to callers without exposing response content or changing the failure diagnosis.
+
+**Why.** A service can finish and charge for a reply that the caller cannot use. Losing its bill
+would understate the cost; charging an unfinished reply would claim a cost not yet known.
+
+`verified-by: bravebot_aichat::client::completed_retry_usage_survives_success_failure_and_backoff_cancellation`
+`verified-by: bravebot_bedrock::lib::completed_retry_usage_survives_success_failure_and_backoff_cancellation`
+`verified-by: bravebot_aichat::client::malformed_whole_reply_keeps_known_usage`
+`verified-by: bravebot_aichat::client::malformed_streamed_reply_keeps_known_usage`
+`verified-by: bravebot_bedrock::lib::malformed_replies_keep_only_valid_reported_usage`
+`verified-by: bravebot_bedrock::lib::output_limit_keeps_completed_usage`
+`verified-by: bravebot_bedrock::lib::completed_usage_survives_later_exception`
+`verified-by: bravebot_bedrock::lib::completed_usage_survives_later_corrupt_frame`
+`verified-by: bravebot_bedrock::eventstream::events_before_corruption_survive_any_read_boundary`
+`verified-by: bravebot_aichat::client::malformed_json_stream_keeps_usage_without_accepting_earlier_text`
+`verified-by: bravebot_bedrock::lib::cancellation_before_eof_keeps_only_protocol_completed_usage`
+`verified-by: bravebot_agent::turn::completed_stream_keeps_usage_when_cancelled_before_socket_closes`
 
 ## Known costs
 

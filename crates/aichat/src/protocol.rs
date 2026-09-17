@@ -619,6 +619,13 @@ where
 }
 
 impl Usage {
+    /// Add another request's cost without treating the sum as a prompt measurement.
+    pub fn add(&mut self, other: Self) {
+        self.prompt_tokens += other.prompt_tokens;
+        self.completion_tokens += other.completion_tokens;
+        self.cached.add(other.cached);
+    }
+
     /// Everything this request cost, in and out.
     pub fn total(&self) -> u64 {
         self.prompt_tokens + self.completion_tokens

@@ -106,9 +106,18 @@ progress until collection, so it cannot overwrite the parent's total. Collection
 successful outcome or its retained progress on failure, once. A failed or stopped parent collects
 outstanding delegates before returning and reports the resulting total and elapsed timing.
 
-Only requests that returned a usable completion contribute usage here. Recovering usage from an
-unusable reply, or a request cancelled after protocol completion, is outside this clause. Timing
-keeps the existing measurements; this does not measure the union of overlapping delegate requests.
+A completed reply also contributes valid reported usage when its content is rejected by the
+backend, or when cancellation arrives after protocol completion but before transport EOF.
+Planner, processor and compaction errors carry that usage into the cumulative total exactly once.
+Known usage from the final planner attempt also updates the last measured prompt size, even when
+its reply is rejected. Costs retained from earlier completed retry attempts enter the cumulative
+total once, but do not replace the final prompt size or supply a measurement for an unfinished
+attempt.
+Unknown usage adds nothing; no estimate is made for a failed or unfinished request. A later call
+cannot inherit a previous call's retained usage. These totals use the existing session storage
+and resume path.
+
+Timing keeps the existing measurements; this does not measure the union of overlapping delegate requests.
 Raw backend errors remain outside planner context and user-facing history.
 
 **Why.** A later error or stop does not undo the cost of requests that already finished.
@@ -122,3 +131,11 @@ Raw backend errors remain outside planner context and user-facing history.
 `verified-by: bravebot_agent::turn::stopped_parents_collect_outstanding_delegate_usage_once`
 `verified-by: bravebot_agent::turn::the_last_request_keeps_elapsed_time_on_failure_and_cancellation`
 `verified-by: bravebot_agent::shared::what_a_delegate_has_spent_is_not_reported_as_what_the_turn_has`
+
+`verified-by: bravebot_agent::turn::planner_retry_costs_do_not_replace_the_last_prompt_measurement`
+`verified-by: bravebot_agent::turn::completed_empty_reply_keeps_reported_usage_on_failure`
+`verified-by: bravebot_agent::turn::rejected_subrequests_are_counted_once_when_the_parent_succeeds`
+`verified-by: bravebot_agent::turn::rejected_processor_keeps_completed_usage_when_the_parent_fails`
+`verified-by: bravebot_agent::turn::rejected_compaction_keeps_completed_usage_when_the_parent_fails`
+`verified-by: bravebot_agent::turn::completed_stream_keeps_usage_when_cancelled_before_socket_closes`
+`verified-by: bravebot_tui::sessions::malformed_completed_usage_survives_turn_storage_and_resume`

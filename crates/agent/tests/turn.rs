@@ -17266,6 +17266,8 @@ fn a_second_spelling_of_the_vouched_tree_is_the_same_entry() {
 enum Served {
     /// A complete reply, streamed the way a real one arrives.
     Reply(String),
+    /// A completed protocol reply whose HTTP body ends before its last chunk.
+    BrokenReply(String),
     /// A status and a short body, which is how a service refuses.
     Status(u16),
     DiagnosticStatus(u16),
@@ -17315,6 +17317,14 @@ fn serve_script(script: Vec<Served>) -> (String, mpsc::Receiver<String>) {
             };
 
             let answer = match scripted {
+                Some(Served::BrokenReply(reply)) => {
+                    let frames = as_sse(&reply);
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{}\r\n",
+                        frames.len(),
+                        frames
+                    )
+                }
                 Some(Served::Reply(reply)) => {
                     let frames = as_sse(&reply);
                     format!(
@@ -18536,5 +18546,352 @@ mod usage {
             );
             assert_eq!(run.progress().tokens, 12);
         }
+    }
+}
+
+/// Completed requests remain charged once when their reply cannot be used.
+#[test]
+fn completed_empty_reply_keeps_reported_usage_on_failure() {
+    let scratch = Scratch::new("completed-empty-usage");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (url, received) = serve_script(vec![Served::Reply(reply_with_usage("", 100, 7))]);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let error = take_a_turn_reporting(
+        &config_for(&url),
+        &workspace,
+        &mut conversation,
+        Task::new("work"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        why_it_failed(&error).category,
+        bravebot_agent::Category::Undecodable
+    );
+    assert_eq!(received.try_iter().count(), 1);
+    assert_eq!(reporter.spent.last().unwrap().tokens, 107);
+    assert_eq!(
+        conversation.last_request_tokens(),
+        100,
+        "completed prompt measurement"
+    );
+}
+
+/// Completed requests remain charged once when their reply cannot be used.
+#[test]
+fn rejected_compaction_keeps_completed_usage_when_the_parent_fails() {
+    let scratch = Scratch::new("empty-compaction-usage");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (url, received) = serve_script(vec![
+        Served::Reply(reply_with_usage("", 100, 7)),
+        Served::Status(401),
+    ]);
+    let mut conversation = a_long_conversation();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    take_a_turn_reporting(
+        &config_with_budget(&url, 1000),
+        &workspace,
+        &mut conversation,
+        Task::new("finish"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .unwrap_err();
+    assert_eq!(received.try_iter().count(), 2);
+    let spent = reporter.spent.last().unwrap();
+    assert_eq!(spent.tokens, 107);
+    assert_eq!(spent.output_tokens, 7);
+    assert!(spent.timing.inference_ms > 0);
+}
+
+/// Completed requests remain charged once when their reply cannot be used.
+#[test]
+fn rejected_processor_keeps_completed_usage_when_the_parent_fails() {
+    let scratch = Scratch::new("empty-processor-usage");
+    std::fs::write(scratch.path.join("input.txt"), "private input").unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (url, received) = serve_script(vec![
+        Served::Reply(tool_request_with_usage(
+            "read_file",
+            r#"{"path":"input.txt"}"#,
+            20,
+            2,
+        )),
+        Served::Reply(tool_request_with_usage(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"summarise this"}"#,
+            30,
+            3,
+        )),
+        Served::Reply(reply_with_usage("", 100, 7)),
+        Served::Status(401),
+    ]);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turn::resume(
+        &config_for(&url),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("inspect input.txt"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .unwrap_err();
+    let requests: Vec<_> = received.try_iter().collect();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|body| body.contains(A_CHECK_ASKING))
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|body| !body.contains(A_CHECK_ASKING))
+            .count(),
+        4
+    );
+    let spent = reporter.spent.last().unwrap();
+    assert_eq!(spent.tokens, 162);
+    assert_eq!(spent.output_tokens, 12);
+}
+
+fn completed_reply_http_body(stream: &mut std::net::TcpStream) -> String {
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut length = 0;
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        if line == "\r\n" {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            length = value.trim().parse().unwrap();
+        }
+    }
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body).unwrap();
+    String::from_utf8(body).unwrap()
+}
+
+/// Completed requests remain charged once when their reply cannot be used.
+#[test]
+fn completed_stream_keeps_usage_when_cancelled_before_socket_closes() {
+    for ended in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (release, released) = mpsc::channel::<()>();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            completed_reply_http_body(&mut stream);
+            let body = if ended {
+                as_sse(&reply_with_usage("finished", 100, 7))
+            } else {
+                format!(
+                    "data: {}\n\n",
+                    json!({"choices":[{"delta":{"content":"unfinished"}}],"usage":{"prompt_tokens":100,"completion_tokens":7}})
+                )
+            };
+            write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}"
+        )
+        .unwrap();
+            stream.flush().unwrap();
+            let _ = released.recv_timeout(std::time::Duration::from_secs(5));
+        });
+        let scratch = Scratch::new("completed-stream-stop");
+        let workspace = Workspace::new(&scratch.path).unwrap();
+        let cancel = bravebot_core::cancel::Cancel::new();
+        struct WatchedStop {
+            cancel: bravebot_core::cancel::Cancel,
+            last: bravebot_agent::Spent,
+        }
+        impl bravebot_agent::report::Reporter for WatchedStop {
+            fn todos(&mut self, _: Vec<bravebot_core::todo::Row>) {}
+            fn output_tokens(&mut self, count: u64) {
+                if count == 7 {
+                    self.cancel.cancel();
+                }
+            }
+            fn spent(&mut self, spent: bravebot_agent::Spent) {
+                self.last = spent;
+            }
+        }
+        let mut reporter = WatchedStop {
+            cancel: cancel.clone(),
+            last: Default::default(),
+        };
+        let result = turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("work"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &cancel,
+        );
+        drop(release);
+        server.join().unwrap();
+        assert!(matches!(
+            result.unwrap_err(),
+            turn::TurnError::Cancelled { attempts: Some(1) }
+        ));
+        assert_eq!(
+            reporter.last.tokens,
+            if ended { 107 } else { 0 },
+            "completed protocol reply lost its reported usage"
+        );
+    }
+}
+
+/// A later successful planner reply must include each rejected subrequest exactly once.
+#[test]
+fn rejected_subrequests_are_counted_once_when_the_parent_succeeds() {
+    for (processor, retry) in [(false, false), (true, false), (false, true), (true, true)] {
+        let scratch = Scratch::new(if processor {
+            "rejected-processor-parent-success"
+        } else {
+            "rejected-compaction-parent-success"
+        });
+        std::fs::write(scratch.path.join("input.txt"), "private input").unwrap();
+        let workspace = Workspace::new(&scratch.path).unwrap();
+        let mut replies = Vec::new();
+        if processor {
+            replies.push(Served::Reply(tool_request_with_usage(
+                "read_file",
+                r#"{"path":"input.txt"}"#,
+                20,
+                2,
+            )));
+            replies.push(Served::Reply(tool_request_with_usage(
+                "spawn_processor",
+                r#"{"reads":["ref:1"],"instruction":"summarise this"}"#,
+                30,
+                3,
+            )));
+        }
+        if retry {
+            replies.push(Served::BrokenReply(reply_with_usage("discarded", 40, 5)));
+        }
+        replies.push(Served::Reply(reply_with_usage("", 100, 7)));
+        replies.push(Served::Reply(reply_with_usage("finished", 10, 1)));
+        let (url, received) = serve_script(replies);
+        let mut conversation = if processor {
+            bravebot_agent::Conversation::new()
+        } else {
+            a_long_conversation()
+        };
+        let config = if processor {
+            config_for(&url)
+        } else {
+            config_with_budget(&url, 1000)
+        };
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let outcome = turn::resume(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("finish"),
+            &mut conversation,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new(workspace.root()),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .unwrap();
+        let expected = (if processor { 173 } else { 118 }) + if retry { 45 } else { 0 };
+        assert_eq!(outcome.tokens, expected);
+        assert_eq!(reporter.spent.last().unwrap().tokens, expected);
+        let requests = received.try_iter().collect::<Vec<_>>();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|body| body.contains(A_CHECK_ASKING))
+                .count(),
+            usize::from(processor)
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|body| !body.contains(A_CHECK_ASKING))
+                .count(),
+            (if processor { 4 } else { 2 }) + usize::from(retry)
+        );
+    }
+}
+
+/// Retry costs are cumulative, while the measured prompt belongs only to the final attempt.
+#[test]
+fn planner_retry_costs_do_not_replace_the_last_prompt_measurement() {
+    for ending in ["success", "empty", "incomplete"] {
+        let scratch = Scratch::new("planner-retry-usage");
+        let workspace = Workspace::new(&scratch.path).unwrap();
+        let last = match ending {
+            "success" => Served::Reply(reply_with_usage("finished", 10, 1)),
+            "empty" => Served::Reply(reply_with_usage("", 10, 1)),
+            _ => Served::Unfinished,
+        };
+        let (url, received) = serve_script(vec![
+            Served::BrokenReply(reply_with_usage("first", 100, 7)),
+            Served::BrokenReply(reply_with_usage("second", 23, 3)),
+            last,
+        ]);
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.measured(55);
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let result = take_a_turn_reporting(
+            &config_for(&url),
+            &workspace,
+            &mut conversation,
+            Task::new("work"),
+            &mut reporter,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        let expected = if ending == "incomplete" { 133 } else { 144 };
+        match ending {
+            "success" => assert_eq!(result.unwrap().tokens, expected),
+            _ => {
+                let error = result.unwrap_err();
+                let diagnosis = why_it_failed(&error);
+                assert_eq!(
+                    diagnosis.category,
+                    if ending == "empty" {
+                        bravebot_agent::Category::Undecodable
+                    } else {
+                        bravebot_agent::Category::Incomplete
+                    }
+                );
+                assert_eq!(diagnosis.attempts, Some(3));
+            }
+        }
+        assert_eq!(received.try_iter().count(), 3);
+        assert_eq!(reporter.spent.last().unwrap().tokens, expected);
+        assert_eq!(
+            reporter.spent.last().unwrap().output_tokens,
+            if ending == "incomplete" { 10 } else { 11 }
+        );
+        assert_eq!(
+            conversation.last_request_tokens(),
+            if ending == "incomplete" { 55 } else { 10 }
+        );
     }
 }

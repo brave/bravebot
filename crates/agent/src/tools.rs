@@ -4496,8 +4496,9 @@ fn spawn_processor<S: Sink>(
             } else {
                 diagnosis.category.name()
             };
-            let mut produced =
-                problem(format!("error: processor request {reason}")).waiting(waited);
+            let mut produced = problem(format!("error: processor request {reason}"))
+                .costing(error.completed_usage().unwrap_or_default())
+                .waiting(waited);
             if cancelled {
                 produced.cancelled = Some(crate::outcome::Cancellation {
                     attempts: diagnosis.attempts,
