@@ -241,6 +241,8 @@ enum Attempt {
     Status(u16),
     /// Answer properly, with these SSE frames.
     Frames(Vec<String>),
+    /// Complete SSE frames followed by an unfinished HTTP chunked body.
+    BrokenFrames(Vec<String>),
 }
 
 /// Serve one behaviour per connection, in order, recording what each request carried.
@@ -301,6 +303,12 @@ fn serve_attempts(attempts: Vec<Attempt>) -> (String, mpsc::Receiver<Captured>) 
                             .as_bytes(),
                     );
                     let _ = stream.flush();
+                }
+                Attempt::BrokenFrames(frames) => {
+                    let body = frames.concat();
+                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{}\r\n", body.len(), body).unwrap();
+                    stream.flush().unwrap();
+                    // No terminating HTTP chunk: the protocol can finish before transport fails.
                 }
                 Attempt::Frames(frames) => {
                     let _ = stream.write_all(
@@ -1994,4 +2002,238 @@ fn a_gateway_with_a_credential_is_asked_what_that_account_may_reach() {
     let captured = received.recv().expect("request captured");
     assert_eq!(captured.request_line, "GET /v1/models/user HTTP/1.1");
     assert_eq!(captured.header("authorization"), Some("Bearer a-token"));
+}
+
+/// A malformed tool call must not hide a valid bill.
+#[test]
+fn malformed_whole_reply_keeps_known_usage() {
+    check_malformed_completed_reply(false);
+}
+
+/// Earlier valid text cannot make a malformed completed stream usable.
+#[test]
+fn malformed_streamed_reply_keeps_known_usage() {
+    check_malformed_completed_reply(true);
+}
+
+fn check_malformed_completed_reply(streaming: bool) {
+    let endings = if streaming {
+        vec![(true, true), (true, false), (false, true), (false, false)]
+    } else {
+        vec![(true, true)]
+    };
+    for (done, finish) in endings {
+        for (usage, expected) in [
+            (
+                serde_json::json!({"prompt_tokens":100,"completion_tokens":7}),
+                Some(107),
+            ),
+            (
+                serde_json::json!({"prompt_tokens":0,"completion_tokens":0}),
+                Some(0),
+            ),
+            (
+                serde_json::json!({"prompt_tokens":"100","completion_tokens":7}),
+                None,
+            ),
+            (
+                serde_json::json!({"prompt_tokens":-1,"completion_tokens":7}),
+                None,
+            ),
+            (serde_json::Value::Null, None),
+            (serde_json::json!({}), None),
+            (serde_json::json!([]), None),
+            (serde_json::json!({"completion_tokens":7}), None),
+            (serde_json::json!({"prompt_tokens":100}), None),
+        ] {
+            let mut choice = if streaming {
+                serde_json::json!({"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":7,"arguments":"{}"}}]}})
+            } else {
+                serde_json::json!({"message":{"role":"assistant","content":"partial text","tool_calls":[{"id":"c","type":"function","function":{"name":7,"arguments":"{}"}}]}})
+            };
+            if finish {
+                choice["finish_reason"] = serde_json::json!("tool_calls");
+            }
+            let malformed = serde_json::json!({"choices":[choice],"usage":usage}).to_string();
+            let (endpoint, _received) = if streaming {
+                let mut frames = vec![
+                    frame(r#"{"choices":[{"delta":{"content":"partial text"}}]}"#),
+                    frame(&malformed),
+                ];
+                if done {
+                    frames.push(frame("[DONE]"));
+                }
+                serve_stream(frames)
+            } else {
+                serve(&malformed)
+            };
+            let config = config_for(&endpoint);
+            let egress = Egress::new();
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let cancel = Cancel::new();
+            let mut client = AichatClient::new(&config, &egress).with_cancel(cancel.clone());
+            let request = ChatRequest::new("test-model", vec![Message::user("work")]);
+            let result = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {
+                    if !done && !finish {
+                        cancel.cancel();
+                    }
+                })
+            } else {
+                client.complete(&mut policy, &request)
+            };
+            assert!(
+                result.is_err(),
+                "malformed reply should be rejected even after valid text"
+            );
+            assert_eq!(client.attempts(), 1);
+            assert_eq!(
+                client.completed_usage().map(|usage| usage.total()),
+                if done || finish { expected } else { None },
+                "streaming={streaming}, done={done}, finish={finish}: {result:?}"
+            );
+            cancel.cancel();
+            let stopped = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            };
+            assert!(matches!(stopped, Err(ChatError::Cancelled)));
+            assert_eq!(client.attempts(), 0);
+            assert_eq!(
+                client.completed_usage(),
+                None,
+                "the next call inherited usage"
+            );
+        }
+    }
+}
+
+/// A damaged JSON frame is not a keepalive, even if other frames carry valid text and usage.
+#[test]
+fn malformed_json_stream_keeps_usage_without_accepting_earlier_text() {
+    let (endpoint, _) = serve_stream(vec![
+        frame(r#"{"choices":[{"delta":{"content":"earlier text"}}]}"#),
+        frame(r#"{"choices":[{"delta":{"content": broken}}]}"#),
+        frame(r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":7}}"#),
+        frame("[DONE]"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .unwrap();
+    let mut client = AichatClient::new(&config, &egress);
+    let result = client.complete_streaming(
+        &mut policy,
+        &ChatRequest::new("test-model", vec![Message::user("work")]),
+        |_| {},
+    );
+    assert!(
+        matches!(result, Err(ChatError::Decode { .. })),
+        "{result:?}"
+    );
+    assert_eq!(client.completed_usage().unwrap().total(), 107);
+    assert_eq!(client.attempts(), 1);
+}
+
+/// Retry accounting keeps each completed bill, but excludes metadata from unfinished replies.
+#[test]
+fn completed_retry_usage_survives_success_failure_and_backoff_cancellation() {
+    for (first_completed, second_completed, zero) in [
+        (false, false, false),
+        (false, true, false),
+        (true, true, false),
+        (true, true, true),
+    ] {
+        for ending in ["success", "failure", "cancel"] {
+            let frames = |prompt, output, cached, ended| {
+                let mut frames = vec![frame(
+                    &serde_json::json!({
+                        "choices":[{"delta":{"content":"reply"}}],
+                        "usage":{"prompt_tokens":prompt,"completion_tokens":output,
+                            "prompt_tokens_details":{"cached_tokens":cached}}
+                    })
+                    .to_string(),
+                )];
+                if ended {
+                    frames.push(frame("[DONE]"));
+                }
+                frames
+            };
+            let billed = |n| if zero { 0 } else { n };
+            let mut attempts = vec![
+                Attempt::BrokenFrames(frames(billed(100), billed(7), billed(20), first_completed)),
+                Attempt::BrokenFrames(frames(billed(23), billed(3), billed(4), second_completed)),
+            ];
+            if ending != "cancel" {
+                attempts.push(Attempt::Frames(if ending == "success" {
+                    frames(10, 1, 3, true)
+                } else {
+                    frames(900, 99, 80, false)
+                }));
+            }
+            let (endpoint, received) = serve_attempts(attempts);
+            let config = config_for(&endpoint);
+            let egress = Egress::new();
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let cancel = bravebot_core::cancel::Cancel::new();
+            let mut client = AichatClient::new(&config, &egress).with_cancel(cancel.clone());
+            let request = ChatRequest::new("test-model", vec![Message::user("work")]);
+            let result = client.complete_streaming(&mut policy, &request, |progress| {
+                if ending == "cancel" && progress.attempt == 3 {
+                    cancel.cancel();
+                }
+            });
+            let expected = (if first_completed { billed(107) } else { 0 })
+                + if second_completed { billed(26) } else { 0 }
+                + if ending == "success" { 11 } else { 0 };
+            match ending {
+                "success" => assert_eq!(result.unwrap().usage.total(), expected),
+                "failure" => assert!(matches!(result, Err(ChatError::Incomplete))),
+                _ => assert!(matches!(result, Err(ChatError::Cancelled))),
+            }
+            let known = first_completed || second_completed || ending == "success";
+            assert_eq!(
+                client.completed_usage().map(|usage| usage.total()),
+                known.then_some(expected)
+            );
+            if let Some(usage) = client.completed_usage() {
+                assert_eq!(
+                    usage.cached.read_tokens,
+                    (if first_completed { billed(20) } else { 0 })
+                        + if second_completed { billed(4) } else { 0 }
+                        + if ending == "success" { 3 } else { 0 }
+                );
+            }
+            assert_eq!(client.attempts(), if ending == "cancel" { 2 } else { 3 });
+            assert_eq!(received.try_iter().count(), client.attempts() as usize);
+            cancel.cancel();
+            assert!(matches!(
+                client.complete_streaming(&mut policy, &request, |_| {}),
+                Err(ChatError::Cancelled)
+            ));
+            assert_eq!(client.completed_usage(), None);
+            assert_eq!(client.attempts(), 0);
+        }
+    }
 }

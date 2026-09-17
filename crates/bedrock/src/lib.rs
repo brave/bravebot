@@ -269,6 +269,16 @@ impl<'a> BedrockClient<'a> {
         self.attempts
     }
 
+    /// Usage reported by a completed reply, even when its content was unusable.
+    pub fn completed_usage(&self) -> Option<Usage> {
+        None
+    }
+
+    /// The final attempt's measured prompt size, if known.
+    pub fn last_request_tokens(&self) -> Option<u64> {
+        None
+    }
+
     pub fn new(config: &'a Bedrock, egress: &'a Egress) -> Self {
         Self {
             attempts: 0,
@@ -1641,6 +1651,563 @@ mod tests {
             assert_eq!(client.attempts(), attempts as u32);
             for _ in 0..attempts {
                 received.recv_timeout(Duration::from_secs(2)).unwrap();
+            }
+        }
+    }
+    /// Completed output-limit replies keep their bill for both transport modes.
+    #[test]
+    fn output_limit_keeps_completed_usage() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        for streaming in [false, true] {
+            let body = if streaming {
+                let mut body =
+                    eventstream::tests::frame("messageStop", br#"{"stopReason":"max_tokens"}"#);
+                body.extend(eventstream::tests::frame(
+                    "metadata",
+                    br#"{"usage":{"inputTokens":100,"outputTokens":7}}"#,
+                ));
+                body
+            } else {
+                br#"{"stopReason":"max_tokens","usage":{"inputTokens":100,"outputTokens":7}}"#
+                    .to_vec()
+            };
+            let mut response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            response.extend(body);
+            let (http, received) = scripted_responses(vec![response]);
+            let config = config();
+            let egress = Egress::new();
+            let mut client = BedrockClient::new(&config, &egress);
+            client.test_request = Some(http);
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let request = ChatRequest::new("opus-arn", vec![]);
+            let error = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            }
+            .unwrap_err();
+            assert!(matches!(error, BedrockError::TooLong));
+            assert_eq!(client.completed_usage().unwrap().total(), 107);
+            assert_eq!(client.attempts(), 1);
+            received.recv_timeout(Duration::from_secs(2)).unwrap();
+            let cancel = Cancel::new();
+            cancel.cancel();
+            client = client.with_cancel(cancel);
+            let stopped = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            };
+            assert!(matches!(stopped, Err(BedrockError::Cancelled)));
+            assert_eq!(client.attempts(), 0);
+            assert!(client.completed_usage().is_none());
+        }
+    }
+    /// A bill becomes final at message stop, even while the socket stays open.
+    #[test]
+    fn cancellation_before_eof_keeps_only_protocol_completed_usage() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        use std::io::{BufRead, Read, Write};
+        for ended in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let (release, released) = std::sync::mpsc::channel::<()>();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = std::io::BufReader::new(&mut stream);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+                reader.read_exact(&mut vec![0; length]).unwrap();
+                let mut body = Vec::new();
+                if ended {
+                    body.extend(eventstream::tests::frame(
+                        "messageStop",
+                        br#"{"stopReason":"end_turn"}"#,
+                    ));
+                }
+                body.extend(eventstream::tests::frame(
+                    "metadata",
+                    br#"{"usage":{"inputTokens":100,"outputTokens":7}}"#,
+                ));
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+                    .unwrap();
+                stream.write_all(&body).unwrap();
+                stream.flush().unwrap();
+                let _ = released.recv_timeout(Duration::from_secs(5));
+            });
+            let config = config();
+            let egress = Egress::new();
+            let cancel = Cancel::new();
+            let mut client = BedrockClient::new(&config, &egress).with_cancel(cancel.clone());
+            client.test_request = Some(Request::post(
+                format!("http://{address}/converse"),
+                b"{}".to_vec(),
+            ));
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let error = client
+                .complete_streaming(
+                    &mut policy,
+                    &ChatRequest::new("opus-arn", vec![]),
+                    |progress| {
+                        if progress.counted_by_server {
+                            cancel.cancel();
+                        }
+                    },
+                )
+                .unwrap_err();
+            drop(release);
+            server.join().unwrap();
+            assert!(matches!(error, BedrockError::Cancelled));
+            assert_eq!(client.attempts(), 1);
+            assert_eq!(
+                client.completed_usage().map(|usage| usage.total()),
+                ended.then_some(107)
+            );
+        }
+    }
+    /// Usage is decoded even when assistant content cannot be decoded, and never guessed.
+    #[test]
+    fn malformed_replies_keep_only_valid_reported_usage() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        for streaming in [false, true] {
+            for malformed in [0, 1, 2, 3, 4] {
+                for (usage, expected) in [
+                    (
+                        serde_json::json!({"inputTokens":100,"outputTokens":7,"cacheReadInputTokens":20,"cacheWriteInputTokens":10}),
+                        Some(137),
+                    ),
+                    (
+                        serde_json::json!({"inputTokens":0,"outputTokens":0}),
+                        Some(0),
+                    ),
+                    (serde_json::json!({"inputTokens":-1,"outputTokens":7}), None),
+                    (
+                        serde_json::json!({"inputTokens":"100","outputTokens":7}),
+                        None,
+                    ),
+                    (serde_json::Value::Null, None),
+                    (serde_json::json!({}), None),
+                    (serde_json::json!([]), None),
+                    (serde_json::json!({"inputTokens":100}), None),
+                    (serde_json::json!({"outputTokens":7}), None),
+                ] {
+                    // Invalid usage is covered with malformed content above. Empty replies
+                    // here distinguish a valid zero bill from a reply with charged cache work.
+                    if malformed == 4 && expected.is_none() {
+                        continue;
+                    }
+                    let body = if streaming {
+                        let mut body = Vec::new();
+                        if malformed != 4 {
+                            body.extend(eventstream::tests::frame(
+                                "contentBlockDelta",
+                                br#"{"delta":{"text":"partial"}}"#,
+                            ));
+                            let (event, payload): (&str, &[u8]) = match malformed {
+                                0 => (
+                                    "contentBlockStart",
+                                    br#"{"start":{"toolUse":{"toolUseId":"c","name":7}}}"#,
+                                ),
+                                1 => ("contentBlockDelta", br#"{"delta":{"text":7}}"#),
+                                3 => ("contentBlockDelta", br#"{"delta":null}"#),
+                                _ => (
+                                    "contentBlockDelta",
+                                    br#"{"contentBlockIndex":"bad","delta":{"text":"unreadable"}}"#,
+                                ),
+                            };
+                            body.extend(eventstream::tests::frame(event, payload));
+                        }
+                        body.extend(eventstream::tests::frame(
+                            "messageStop",
+                            br#"{"stopReason":"end_turn"}"#,
+                        ));
+                        body.extend(eventstream::tests::frame(
+                            "metadata",
+                            serde_json::json!({"usage":usage}).to_string().as_bytes(),
+                        ));
+                        body
+                    } else {
+                        let content = match malformed {
+                            4 => serde_json::json!([]),
+                            0 => serde_json::json!(7),
+                            1 => serde_json::json!([{"text":"partial"},{"text":7}]),
+                            _ => {
+                                serde_json::json!([{"text":"partial"},{"toolUse":{"toolUseId":"c","name":7}}])
+                            }
+                        };
+                        serde_json::json!({"output":{"message":{"content":content}}, "usage":usage})
+                            .to_string()
+                            .into_bytes()
+                    };
+                    let mut response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .into_bytes();
+                    response.extend(body);
+                    let (http, received) = scripted_responses(vec![response]);
+                    let config = config();
+                    let egress = Egress::new();
+                    let mut client = BedrockClient::new(&config, &egress);
+                    client.test_request = Some(http);
+                    let mut sink = RecordingSink::new();
+                    let mut routing = Routing::new();
+                    routing.insert_trusted("task", "test");
+                    let mut policy = Policy::begin(
+                        routing,
+                        ReleasePlan::new(),
+                        CapabilitySet::from_iter([Capability::WebFetch]),
+                        &mut sink,
+                    )
+                    .unwrap();
+                    let request = ChatRequest::new("opus-arn", vec![]);
+                    let error = if streaming {
+                        client.complete_streaming(&mut policy, &request, |_| {})
+                    } else {
+                        client.complete(&mut policy, &request)
+                    }
+                    .unwrap_err();
+                    if malformed == 4 {
+                        assert!(matches!(error, BedrockError::NoContent));
+                    } else {
+                        assert!(matches!(error, BedrockError::Decode { .. }));
+                    }
+                    assert_eq!(
+                        client.completed_usage().map(|usage| usage.total()),
+                        expected
+                    );
+                    if let Some(usage) = client.completed_usage() {
+                        assert_eq!(
+                            usage.cached.read_tokens,
+                            if expected == Some(137) { 20 } else { 0 }
+                        );
+                        assert_eq!(
+                            usage.cached.written_tokens,
+                            if expected == Some(137) { 10 } else { 0 }
+                        );
+                    }
+                    assert_eq!(client.attempts(), 1);
+                    received.recv_timeout(Duration::from_secs(2)).unwrap();
+                    let cancel = Cancel::new();
+                    cancel.cancel();
+                    client = client.with_cancel(cancel);
+                    let stopped = if streaming {
+                        client.complete_streaming(&mut policy, &request, |_| {})
+                    } else {
+                        client.complete(&mut policy, &request)
+                    };
+                    assert!(matches!(stopped, Err(BedrockError::Cancelled)));
+                    assert_eq!(client.attempts(), 0);
+                    assert!(client.completed_usage().is_none());
+                }
+            }
+        }
+    }
+    /// A later exception must not erase usage already completed in the same event batch.
+    #[test]
+    fn completed_usage_survives_later_exception() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let mut body = eventstream::tests::frame("messageStop", br#"{"stopReason":"end_turn"}"#);
+        body.extend(eventstream::tests::frame(
+            "metadata",
+            br#"{"usage":{"inputTokens":100,"outputTokens":7}}"#,
+        ));
+        body.extend(eventstream::tests::failure("validationException"));
+        let mut response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        response.extend(body);
+        let (http, received) = scripted_responses(vec![response]);
+        let config = config();
+        let egress = Egress::new();
+        let mut client = BedrockClient::new(&config, &egress);
+        client.test_request = Some(http);
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .unwrap();
+        let request = ChatRequest::new("opus-arn", vec![]);
+        let error = client
+            .complete_streaming(&mut policy, &request, |_| {})
+            .unwrap_err();
+        assert!(
+            matches!(error, BedrockError::Reported { ref kind } if kind == "validationException")
+        );
+        assert_eq!(client.completed_usage().unwrap().total(), 107);
+        assert_eq!(client.attempts(), 1);
+        received.recv_timeout(Duration::from_secs(2)).unwrap();
+        let cancel = Cancel::new();
+        cancel.cancel();
+        client = client.with_cancel(cancel);
+        let stopped = client.complete_streaming(&mut policy, &request, |_| {});
+        assert!(matches!(stopped, Err(BedrockError::Cancelled)));
+        assert_eq!(client.attempts(), 0);
+        assert!(client.completed_usage().is_none());
+    }
+    /// A corrupt trailing frame must not erase a completed bill or invent one before completion.
+    #[test]
+    fn completed_usage_survives_later_corrupt_frame() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        for ended in [false, true] {
+            let mut body = Vec::new();
+            if ended {
+                body.extend(eventstream::tests::frame(
+                    "messageStop",
+                    br#"{"stopReason":"end_turn"}"#,
+                ));
+            }
+            body.extend(eventstream::tests::frame(
+                "metadata",
+                br#"{"usage":{"inputTokens":100,"outputTokens":7,"cacheReadInputTokens":20,"cacheWriteInputTokens":10}}"#,
+            ));
+            let mut corrupt = eventstream::tests::frame("metadata", b"{}");
+            *corrupt.last_mut().unwrap() ^= 1;
+            body.extend(corrupt);
+            let mut response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            response.extend(body);
+            let (http, received) = scripted_responses(vec![response; 3]);
+            let config = config();
+            let egress = Egress::new();
+            let mut client = BedrockClient::new(&config, &egress);
+            client.test_request = Some(http);
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let request = ChatRequest::new("opus-arn", vec![]);
+            let error = client
+                .complete_streaming(&mut policy, &request, |_| {})
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                BedrockError::Frame(eventstream::FrameError::Corrupt { .. })
+            ));
+            assert_eq!(
+                client.completed_usage().map(|usage| usage.total()),
+                ended.then_some(411)
+            );
+            assert_eq!(client.last_request_tokens(), ended.then_some(130));
+            if let Some(usage) = client.completed_usage() {
+                assert_eq!(usage.completion_tokens, 21);
+                assert_eq!(usage.cached.read_tokens, 60);
+                assert_eq!(usage.cached.written_tokens, 30);
+            }
+            assert_eq!(client.attempts(), 3);
+            for _ in 0..3 {
+                received.recv_timeout(Duration::from_secs(2)).unwrap();
+            }
+            let cancel = Cancel::new();
+            cancel.cancel();
+            client = client.with_cancel(cancel);
+            let stopped = client.complete_streaming(&mut policy, &request, |_| {});
+            assert!(matches!(stopped, Err(BedrockError::Cancelled)));
+            assert_eq!(client.attempts(), 0);
+            assert!(client.completed_usage().is_none());
+        }
+    }
+    /// Retry accounting retains completed bills independently of each attempt's reply state.
+    #[test]
+    fn completed_retry_usage_survives_success_failure_and_backoff_cancellation() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        for (first_completed, second_completed, zero) in [
+            (false, false, false),
+            (false, true, false),
+            (true, true, false),
+            (true, true, true),
+        ] {
+            for ending in ["success", "failure", "cancel"] {
+                let response = |input, output, cached, written, ended, failed| {
+                    let mut body = eventstream::tests::frame(
+                        "contentBlockDelta",
+                        br#"{"delta":{"text":"reply"}}"#,
+                    );
+                    if ended {
+                        body.extend(eventstream::tests::frame(
+                            "messageStop",
+                            br#"{"stopReason":"end_turn"}"#,
+                        ));
+                    }
+                    body.extend(eventstream::tests::frame(
+                        "metadata",
+                        serde_json::json!({"usage":{
+                            "inputTokens":input,"outputTokens":output,"cacheReadInputTokens":cached,"cacheWriteInputTokens":written
+                        }})
+                        .to_string()
+                        .as_bytes(),
+                    ));
+                    if failed {
+                        body.extend(eventstream::tests::failure("internalServerException"));
+                    }
+                    let mut response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .into_bytes();
+                    response.extend(body);
+                    response
+                };
+                let billed = |n| if zero { 0 } else { n };
+                let mut responses = vec![
+                    response(
+                        billed(71),
+                        billed(7),
+                        billed(20),
+                        billed(9),
+                        first_completed,
+                        true,
+                    ),
+                    response(
+                        billed(17),
+                        billed(3),
+                        billed(4),
+                        billed(2),
+                        second_completed,
+                        true,
+                    ),
+                ];
+                if ending != "cancel" {
+                    responses.push(if ending == "success" {
+                        response(6, 1, 3, 1, true, false)
+                    } else {
+                        response(813, 99, 80, 7, false, false)
+                    });
+                }
+                let (http, received) = scripted_responses(responses);
+                let config = config();
+                let egress = Egress::new();
+                let cancel = Cancel::new();
+                let mut client = BedrockClient::new(&config, &egress).with_cancel(cancel.clone());
+                client.test_request = Some(http);
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "test");
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::WebFetch]),
+                    &mut sink,
+                )
+                .unwrap();
+                let request = ChatRequest::new("opus-arn", vec![]);
+                let result = client.complete_streaming(&mut policy, &request, |progress| {
+                    if ending == "cancel" && progress.attempt == 3 {
+                        cancel.cancel();
+                    }
+                });
+                let expected = (if first_completed { billed(107) } else { 0 })
+                    + if second_completed { billed(26) } else { 0 }
+                    + if ending == "success" { 11 } else { 0 };
+                match ending {
+                    "success" => assert_eq!(result.unwrap().usage.total(), expected),
+                    "failure" => assert!(matches!(result, Err(BedrockError::Incomplete))),
+                    _ => assert!(matches!(result, Err(BedrockError::Cancelled))),
+                }
+                let known = first_completed || second_completed || ending == "success";
+                assert_eq!(
+                    client.completed_usage().map(|usage| usage.total()),
+                    known.then_some(expected)
+                );
+                if let Some(usage) = client.completed_usage() {
+                    assert_eq!(
+                        usage.cached.read_tokens,
+                        (if first_completed { billed(20) } else { 0 })
+                            + if second_completed { billed(4) } else { 0 }
+                            + if ending == "success" { 3 } else { 0 }
+                    );
+                }
+                if let Some(usage) = client.completed_usage() {
+                    assert_eq!(
+                        usage.cached.written_tokens,
+                        (if first_completed { billed(9) } else { 0 })
+                            + if second_completed { billed(2) } else { 0 }
+                            + if ending == "success" { 1 } else { 0 }
+                    );
+                }
+                assert_eq!(client.attempts(), if ending == "cancel" { 2 } else { 3 });
+                for _ in 0..client.attempts() {
+                    received.recv_timeout(Duration::from_secs(2)).unwrap();
+                }
+                cancel.cancel();
+                assert!(matches!(
+                    client.complete_streaming(&mut policy, &request, |_| {}),
+                    Err(BedrockError::Cancelled)
+                ));
+                assert_eq!(client.completed_usage(), None);
+                assert_eq!(client.attempts(), 0);
             }
         }
     }

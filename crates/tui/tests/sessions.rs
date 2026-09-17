@@ -1853,3 +1853,144 @@ fn completed_failed_and_stopped_usage_survives_session_storage() {
     assert_eq!(&record.spend, session.spend_by_turn());
     assert_eq!(&record.timing, session.timing_by_turn());
 }
+
+mod completed_usage {
+    use super::*;
+    use bravebot_tui::state::Session;
+    use std::io::Write;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+    fn an_endpoint(script: Vec<String>) -> (String, mpsc::Receiver<String>) {
+        use std::io::{BufRead, Read};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            for frames in script {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = std::io::BufReader::new(&mut stream);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                sender.send(String::from_utf8(body).unwrap()).unwrap();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}", frames.len()).unwrap();
+            }
+        });
+        (endpoint, receiver)
+    }
+    /// A rejected reply is charged once through the real reporter and stored session.
+    #[test]
+    fn malformed_completed_usage_survives_turn_storage_and_resume() {
+        for gateway in [false, true] {
+            let scratch = Scratch::new(if gateway {
+                "malformed-gateway-usage"
+            } else {
+                "malformed-default-usage"
+            });
+            let root = &scratch.project;
+            let workspace = Workspace::new(root).unwrap();
+            let payload = serde_json::json!({
+                "choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":7,"arguments":"{}"}}]},"finish_reason":"tool_calls"}],
+                "usage":{"prompt_tokens":100,"completion_tokens":7}
+            });
+            let (endpoint, requests) =
+                an_endpoint(vec![format!("data: {payload}\n\ndata: [DONE]\n\n")]);
+            let mut config = bravebot_config::Config::from_lookup(|key| match key {
+                "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+                "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+                "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+                _ => None,
+            })
+            .unwrap();
+            let model = if gateway {
+                let settings = serde_json::json!({"provider":{"test-gateway":{
+                    "options":{"baseURL":endpoint,"apiKey":"test-key"},"models":{"test-model":{}}
+                }}});
+                config.providers =
+                    bravebot_config::provider::Provider::all(settings.as_object().unwrap());
+                "test-gateway/test-model"
+            } else {
+                "test-model"
+            };
+            let mut session = Session::new("test");
+            let mut conversation = Conversation::new();
+            session.type_char('x');
+            session.submit().unwrap();
+            let mut reporter = bravebot_agent::report::RecordingReporter::default();
+            let error = bravebot_agent::turn::resume(
+                &config,
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &bravebot_agent::Task::new("work").with_model(Some(model.into())),
+                &mut conversation,
+                &mut bravebot_agent::Unattended,
+                &mut reporter,
+                &mut bravebot_core::event::RecordingSink::new(),
+                TrustStore::new(root),
+                TrustedPrograms::new(),
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+            )
+            .unwrap_err();
+            for spent in reporter.spent {
+                session.progressed(spent);
+            }
+            assert_eq!(
+                error.ending().diagnosis().unwrap().category,
+                bravebot_agent::Category::Undecodable
+            );
+            session.fail("unusable reply", error.ending());
+            requests.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(
+                requests.try_recv().is_err(),
+                "malformed completion was retried"
+            );
+            assert!(session.finished.unwrap().failed());
+            assert_eq!(session.tokens, 107);
+            assert_eq!(session.spend_by_turn()[&1], 107);
+            let mut stored = sessions::Handle::begin(root);
+            stored.save(
+                "work",
+                sessions::Standing {
+                    conversation: &conversation.snapshot(),
+                    turns: session.turns,
+                    tokens: session.tokens,
+                    spend: session.spend_by_turn(),
+                    timing: session.timing_by_turn(),
+                    model: None,
+                    todos: &session.todos_by_turn(),
+                    asides: &[],
+                    trust: &TrustStore::new(root),
+                    programs: &TrustedPrograms::new(),
+                    directories: &[],
+                    manifest: None,
+                    rewind: &[],
+                },
+            );
+            let record = sessions::load(root, stored.id()).unwrap();
+            assert_eq!(record.tokens, 107);
+            assert_eq!(record.spend[&1], 107);
+            let recalled = sessions::recall(root, &record);
+            let mut resumed = Session::new("test");
+            resumed.replay(
+                &Conversation::restored(record.conversation),
+                "work",
+                &recalled,
+            );
+            resumed.restore_spend(record.tokens, record.spend);
+            assert_eq!(resumed.tokens, 107);
+            assert_eq!(resumed.spend_by_turn()[&1], 107);
+        }
+    }
+}

@@ -120,6 +120,16 @@ impl FrameDecoder {
         }
     }
 
+    /// Iterate decoded events through the existing batch decoder.
+    pub fn events(&mut self, bytes: &[u8]) -> impl Iterator<Item = Result<Event, FrameError>> {
+        self.push(bytes)
+            .map_or_else(
+                |error| vec![Err(error)],
+                |events| events.into_iter().map(Ok).collect(),
+            )
+            .into_iter()
+    }
+
     /// Whether bytes are held that did not form a whole frame.
     ///
     /// A stream that ended here ended mid-frame, which is a reply that was cut off rather than one
@@ -514,6 +524,28 @@ pub(crate) mod tests {
             decoder.push(&bytes),
             Err(FrameError::Corrupt { .. })
         ));
+    }
+
+    /// Read boundaries must not decide whether valid events before corruption reach the caller.
+    #[test]
+    fn events_before_corruption_survive_any_read_boundary() {
+        let mut bytes = frame("messageStop", br#"{"stopReason":"end_turn"}"#);
+        bytes.extend(frame(
+            "metadata",
+            br#"{"usage":{"inputTokens":100,"outputTokens":7}}"#,
+        ));
+        let mut corrupt = frame("metadata", b"{}");
+        *corrupt.last_mut().unwrap() ^= 1;
+        bytes.extend(corrupt);
+        for split in 0..=bytes.len() {
+            let mut decoder = FrameDecoder::new();
+            let mut events: Vec<_> = decoder.events(&bytes[..split]).collect();
+            events.extend(decoder.events(&bytes[split..]));
+            assert_eq!(events.len(), 3, "split at {split}");
+            assert!(matches!(&events[0], Ok(Event::Named { name, .. }) if name == "messageStop"));
+            assert!(matches!(&events[1], Ok(Event::Named { name, .. }) if name == "metadata"));
+            assert!(matches!(&events[2], Err(FrameError::Corrupt { .. })));
+        }
     }
 
     /// The framing was sound, so the position in the stream is still known. A frame whose headers

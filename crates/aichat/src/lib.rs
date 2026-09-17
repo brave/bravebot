@@ -196,6 +196,11 @@ impl<'a> AichatClient<'a> {
         self.attempts
     }
 
+    /// Usage reported by a completed reply, even when its content was unusable.
+    pub fn completed_usage(&self) -> Option<protocol::Usage> {
+        None
+    }
+
     pub fn new(config: &'a Config, egress: &'a Egress) -> Self {
         Self {
             attempts: 0,
