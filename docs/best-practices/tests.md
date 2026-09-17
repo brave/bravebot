@@ -30,11 +30,19 @@ allowed one is.
 
 <a id="TS-003"></a>
 
-## A new test fails before the fix
+## Show that a regression test rejects the bug
 
-**A test that would pass against the buggy code is worthless.** Run the new test against the
-unfixed code and see it fail, then fix, then see it pass. A test written after the fix and never
-run against the bug proves the code compiles.
+**A passing test does not show that it rejects the bug.** For a regression fix, demonstrate
+failure against the old behaviour when feasible, then pass against the intended implementation.
+A narrow mutation that restores the fault can replace building the old revision. The failure
+must come from the behaviour being checked, not a compile error or an unrelated setup failure.
+Apply the same standard when changing an existing regression test: preserve its ability to
+reject the fault it was written for.
 
-Say in the pull request that the new test reproduces the bug. It is the one fact about a test a
-reviewer cannot get from the diff.
+If demonstrating failure is unsafe or impractical, explain why and identify the remaining
+uncertainty. Report that coverage as reasoned only, not demonstrated protection. Passing tests
+or a reviewer's agreement do not remove that limit.
+
+In the pull request, name the test, the fault it rejects, and whether failure was demonstrated.
+The [testing-preflight skill](../../agents/skills/testing-preflight/SKILL.md) describes how to
+run and report the experiment without discarding unrelated work.

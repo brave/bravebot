@@ -6369,6 +6369,35 @@ mod tests {
         );
     }
 
+    /// Shell mode is told from ordinary mode by the colour of the line being typed, its border and
+    /// the row under it, so that colour carries a meaning this interface owns rather than one the
+    /// terminal owns. Magenta is a slot a scheme repaints, and it is not one of the three whose
+    /// meaning belongs to the terminal, so what the distinction looked like was somebody else's
+    /// choice: a scheme painting slot 5 near its brand primary collapsed it altogether.
+    #[test]
+    fn shell_mode_is_marked_in_a_shade_and_not_a_slot() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+
+        let mut session = Session::new("none");
+        session.shell = true;
+
+        let inks = inks_on_row_containing(&session, "esc to cancel");
+        assert!(
+            inks.contains(&theme::accent()),
+            "shell mode is not marked in the interface's own ink: {inks:?}"
+        );
+        assert!(
+            matches!(theme::accent(), Color::Rgb(..)),
+            "shell mode is marked in a named colour, which the terminal chooses: {:?}",
+            theme::accent()
+        );
+        assert!(
+            !inks.contains(&Color::Magenta),
+            "a slot the terminal repaints is still carrying it: {inks:?}"
+        );
+    }
+
     /// Starting up leaves several notes at once, and a blank between each of them presents one
     /// report as three separate turns. The run still has to end where the session starts saying
     /// something else, so the blank goes after the last of them rather than between each.
