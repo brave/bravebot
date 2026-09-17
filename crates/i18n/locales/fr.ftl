@@ -86,6 +86,9 @@ cli-option-print = Non interactif. Lit l'entrée redirigée comme contexte en qu
 cli-option-trace = Afficher le journal d'audit
 cli-option-json = Afficher un objet de résultat sur stdout au lieu de la réponse
 cli-option-incognito = Ne rien écrire dans ~/.bravebot : ni historique, ni session, ni préférence
+cli-option-vet =
+    Pour cette exécution, laisser une vérification sans rien trouver promouvoir du contenu sans
+    vous demander
 cli-option-dangerously-skip-permissions =
     Contourner toutes les vérifications de permission. Recommandé uniquement pour des bacs à sable
     sans accès à Internet
@@ -190,6 +193,10 @@ doctor-settings-no-variables = settings.json, ne nommant aucune variable
 doctor-settings-layer = couche
 doctor-settings-override = remplacement
 doctor-settings-overridden = { $name } depuis { $path }
+doctor-settings-ignored = ignoré
+doctor-settings-vetting-ignored =
+    vetting.auto dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json
 doctor-managed = géré
 doctor-managed-pinned = { $names } depuis { $path }
 doctor-managed-nothing = { $path }, n'épinglant rien
@@ -496,7 +503,11 @@ vet-covers-this-only =
 vet-expected = le modèle a demandé ceci en attendant { $expects }
 vet-empty = (il n'y a rien dedans)
 vet-yes = le laisser lire ceci
+vet-always = ne plus demander
 vet-no = le garder pour vous
+vet-always-covers =
+    a supprime cette question partout où une vérification ne trouve rien, dans cette session et
+    la suivante, jusqu'à ce que vous changiez d'avis. Conservé dans ~/.bravebot/vetting.
 
 
 ## Récupérer une URL
@@ -633,6 +644,10 @@ status-watch-armed-by = posée au tour { $turn } · il reste { $left }
 status-goal-rounds = renvoyé { $rounds } fois, il en reste { $left }
 status-permissions = Permissions
 status-permissions-cycle = shift-tab pour changer
+status-vetting = Vérification
+status-vetting-auto =
+    une vérification qui ne trouve rien donne le contenu au modèle sans demander
+status-vetting-where = conservé dans ~/.bravebot/vetting
 status-this-session = Cette session
 status-time = Temps
 status-time-inference = sur le modèle
@@ -853,6 +868,11 @@ session-trusting-unasked =
 session-not-trusting =
     ce répertoire n'est pas approuvé ; chaque écriture vous sera montrée
 session-vouched-for = { $path } approuvé pour cette session
+session-vetting-on =
+    une vérification qui ne trouve rien donnera désormais le contenu au modèle sans vous
+    demander (~/.bravebot/vetting)
+session-vetting-in-force =
+    une vérification qui ne trouve rien donne le contenu au modèle sans vous demander
 update-available =
     bravebot { $version } est disponible (celle-ci est { $running }) ; pour la mettre à jour :
     { $command }

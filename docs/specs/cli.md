@@ -611,3 +611,37 @@ needs the terminal put in a state a session in lines does not put it in.
 `verified-by: bravebot_cli::plain::the_mode_that_asks_about_nothing_is_not_asked_about_the_directory`
 `verified-by: bravebot_cli::running::a_session_in_lines_is_refused_where_its_input_is_not_a_terminal`
 `verified-by: bravebot_cli::main::a_named_settings_file_composes_with_the_other_flags_before_dispatch`
+
+<a id="CLI-15"></a>
+### CLI-15: `--vet` lets a check that finds nothing answer, for this run
+
+`--vet` turns auto-vetting on for the length of the run: where a check completes and finds nothing,
+the slot the planner asked to be shown is promoted without a prompt.
+[vetting.md](vetting.md#CHECK-12) is what that covers and what it does not, and
+[vetting.md](vetting.md#CHECK-11) is the other two routes in and how they resolve against this one.
+
+The flag is taken out of the arguments before anything dispatches on them, so it composes with
+every way of starting and with the other three flags taken out there, `--plain` included. Given
+twice it is given once, which is asking for something that is already on rather than an error to
+report.
+
+It outranks both standing answers, a recorded `off` included, because it is the narrowest in time:
+somebody typing it has said what they want of the run in front of them, and that is the footing
+`--dangerously-skip-permissions` sits on, which is a strictly larger thing anything able to pass
+this flag could pass instead. There is no flag the other way, which would matter only to somebody
+who had turned the mode on standing and wanted one run without it; for them the answer is the file
+the standing answer is kept in.
+
+**Why a flag at all.** CLI-1 refuses everything nobody can be asked about, which makes a check on
+this path a model call whose word ends in a refusal: the one-shot run has no prompt to fall back to.
+So a run that wants the agent to use a fetched page has the two moves the whole of
+[vetting.md](vetting.md) exists to add a third to, and on this path the third one needs saying in
+advance. That is the same footing [permission-modes.md](permission-modes.md) sits on, and it is a
+narrower statement than `--dangerously-skip-permissions`: it answers one question, about one slot at
+a time, and only where a check completed and found nothing.
+
+`verified-by: bravebot_cli::main::the_vet_flag_is_taken_out_wherever_it_appears`
+`verified-by: bravebot_cli::main::asking_to_vet_twice_is_asking_once`
+`verified-by: bravebot_cli::main::an_invocation_that_only_mentions_vetting_does_not_ask_for_it`
+`verified-by: bravebot_cli::main::vetting_composes_with_the_other_flags_that_lead`
+`verified-by: bravebot_core::vetting::asking_on_the_command_line_is_one_way_and_idempotent`

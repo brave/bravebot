@@ -2306,6 +2306,10 @@ fn event_loop(
     let settings = bravebot_config::Settings::load();
     // Settled before a key can be pressed, since this is what decides whether a letter is a letter.
     session.adopt_editing(settings.editor_mode());
+    // Settled here too, and once, for the reason the mode is read once per turn: what decides
+    // whether somebody is asked must not change under a prompt already on the screen. The command
+    // line's switch is read here and nowhere else in the interface.
+    session.adopt_vetting(bravebot_core::vetting::asked_for(), settings.auto_vetting());
     session.adopt_keybindings(settings.keybindings());
     let (permissions, rejected) = bravebot_agent::permissions::from_settings(
         &settings,
@@ -2325,6 +2329,12 @@ fn event_loop(
     // for the rest of the session, since a note scrolls away.
     if skip_permissions {
         session.note(t!(session_permissions_skipped));
+    }
+    // And for the same reason again: a mode that stops a prompt appearing has to be said before
+    // the first slot reaches it, since the one thing a person cannot read off the transcript is a
+    // question that was never put. `/status` says it too, for the rest of the session.
+    if session.auto_vetting() {
+        session.note(t!(session_vetting_in_force));
     }
     // After the startup question, and put rather than applied: naming a directory in a settings
     // file asks for it instead of granting it, so one the person accepts is opened on the same
@@ -2563,6 +2573,7 @@ fn event_loop(
                     config,
                     confinement: &session.confinement,
                     permission_mode: session.permission_mode(),
+                    auto_vetting: session.auto_vetting(),
                     turns: session.turns,
                     tokens: session.tokens,
                     timing: session.timing_total(),
@@ -4684,6 +4695,10 @@ fn run_turn_animated(
         .with_effort(session.effort_in_force())
         .with_permissions(permissions.clone())
         .with_permission_mode(permission_mode)
+        // Whether a check that finds nothing answers in the person's place. Read off the session
+        // for the reason the mode is: the `a` key can change it, and a turn keeps the answer it
+        // began with.
+        .with_auto_vetting(session.auto_vetting())
         .ticking(tick)
         .arming(arming)
         .working_towards(working_towards);
@@ -4856,9 +4871,17 @@ fn run_turn_animated(
                 if answer.stops_the_turn() {
                     cancel.cancel();
                 }
-                // Nothing is noted on the transcript: an approval covers the bytes that were on
-                // the screen and leaves no rule behind, so there is no standing decision to
-                // record.
+                // The approval itself is noted nowhere: it covers the bytes that were on the
+                // screen and leaves no rule behind, so there is no standing decision to record.
+                // Turning the mode on is a standing decision, and it is the interface's own rather
+                // than the turn's: the answer the worker is waiting for is the same either way,
+                // and what this adds takes effect from the next turn.
+                if answer.turns_vetting_on() {
+                    session.choose_vetting(true);
+                    // Said on the transcript because the person will not otherwise see it
+                    // recorded anywhere, and what it changes is that later prompts do not appear.
+                    session.note(t!(session_vetting_on));
+                }
                 let _ = answer_tx.send(crate::remote_confirm::Reply::Vet(answer.decision()));
             }
             crate::remote_confirm::ToMain::Fetch(request) => {

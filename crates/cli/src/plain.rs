@@ -165,6 +165,11 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         programs: TrustedPrograms::new(),
         servers: None,
         asked_about: AskedAbout::new(),
+        auto_vetting: bravebot_core::vetting::auto(
+            bravebot_core::vetting::asked_for(),
+            bravebot_tui::store::load_vetting(),
+            settings.auto_vetting(),
+        ),
     };
 
     // The streams themselves rather than a lock on each. A lock held for the length of the session
@@ -290,6 +295,13 @@ struct Running<'a> {
     programs: TrustedPrograms,
     servers: Option<bravebot_agent::lsp::LanguageServers>,
     asked_about: AskedAbout,
+    /// Whether a check that finds nothing may promote a slot without the person being asked.
+    ///
+    /// Resolved once, where the session is assembled, out of the three routes
+    /// [`bravebot_core::vetting::auto`] takes. There is somebody here, so the flag and the two
+    /// standing answers mean what they mean in a session that draws; what this mode does not have
+    /// is the key that turns the mode on, since it offers one answer per question (CLI-14).
+    auto_vetting: bool,
 }
 
 impl<C: Confirmer + Send> Turns<C> for Running<'_> {
@@ -304,6 +316,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .with_effort(bravebot_tui::store::load_effort())
             .with_permissions(self.permissions.clone())
             .with_permission_mode(self.mode)
+            .with_auto_vetting(self.auto_vetting)
             .already_asked_about(self.asked_about.clone());
 
         // The mode as the session holds it. The confirmer below is what enforces it, and the task

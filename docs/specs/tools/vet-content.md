@@ -64,5 +64,11 @@ Where the person agrees, the content comes back as text the planner may read. Wh
 the planner is told so and told to work with what it has or to say what it needed, rather than
 being left to guess or to ask again. Nothing the check wrote goes back either way.
 
+Where auto-vetting is on and the check found nothing, the content comes back with no prompt drawn
+([CHECK-12](../vetting.md#CHECK-12)). The result the planner reads is the same in both cases: it is
+told the bytes, and never which of the two answered or what the check said, so nothing it writes
+can be aimed at one path rather than the other.
+
 `verified-by: bravebot_agent::turn::content_a_person_reads_after_a_check_reaches_the_planner`
 `verified-by: bravebot_agent::turn::content_a_person_refuses_after_a_check_stays_out_of_the_planner`
+`verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked`

@@ -81,6 +81,8 @@ cli-option-print = Non-interactive. Reads piped stdin as quarantined context
 cli-option-trace = Print the audit trail
 cli-option-json = Print one result object on stdout instead of the reply
 cli-option-incognito = Write nothing to ~/.bravebot: no history, no session record, no preference
+cli-option-vet =
+    For this run, let a check that finds nothing promote content without asking you
 cli-option-dangerously-skip-permissions =
     Bypass all permission checks. Recommended only for sandboxes with no internet access
 cli-option-help = Show this message
@@ -198,6 +200,11 @@ doctor-settings-override = override
 # Which file a name finally came from, where more than one set it. Somebody looking at a value they
 # did not expect has three files to open otherwise.
 doctor-settings-overridden = { $name } from { $path }
+# A file that named vetting.auto and was not obeyed. Read from the home layer alone, so a
+# checkout cannot stop somebody being asked, and a line that does nothing is worth saying so.
+doctor-settings-ignored = ignored
+doctor-settings-vetting-ignored =
+    vetting.auto in { $path } is not obeyed: it is read from ~/.bravebot/settings.json only
 # The machine-level layer, above everything a person can set. The names rather than the values, for
 # the reason the settings lines give, and the path because a pin somebody wants lifted is lifted by
 # whoever can write that file.
@@ -540,7 +547,16 @@ vet-covers-this-only =
 vet-expected = the model asked for this expecting { $expects }
 vet-empty = (there is nothing in it)
 vet-yes = let it read this
+# What stops is the asking, not the checking: a check runs before this prompt either way, so a
+# label about vetting would name the one thing this key does not change, and would read as the
+# more cautious choice when it is the looser one.
+vet-always = don't ask when safe
 vet-no = keep it back
+# What the standing key turns on, drawn only where it is offered. Not about these bytes: it says
+# that from here on a check finding nothing answers this question, and where that is written down.
+vet-always-covers =
+    a stops this question wherever a check finds nothing, in this session and the next, until
+    you change it. Kept in ~/.bravebot/vetting.
 
 
 ## Fetching a URL
@@ -682,6 +698,11 @@ status-goal-rounds = { $rounds ->
 # one that says otherwise.
 status-permissions = Permissions
 status-permissions-cycle = shift-tab to change
+# Said only where auto-vetting is on. The file is named because that is where the answer is kept
+# and where it is undone; nothing in the interface turns it back off.
+status-vetting = Vetting
+status-vetting-auto = a check that finds nothing reads content to the model without asking
+status-vetting-where = kept in ~/.bravebot/vetting
 status-this-session = This session
 # Where a session's wall clock went. Four figures, because the whole is unactionable: a session
 # that took an hour on the model, an hour on subprocesses, and an hour waiting for its user to
@@ -953,6 +974,16 @@ session-trusting-unasked =
     trusting { $directory } (--dangerously-skip-permissions, so you were not asked)
 session-not-trusting = this directory is not trusted; every write will be shown to you
 session-vouched-for = trusting { $path } for this session
+# Said when the person pressed the standing key at a vetting prompt. What it changes is that a
+# later prompt does not appear, so it is the one decision here they would otherwise see no record
+# of, and the file is named because that is where they undo it.
+session-vetting-on =
+    a check that finds nothing will now read content to the model without asking (~/.bravebot/vetting)
+# Said at the top of a session that opened with the mode already on, whichever of the three routes
+# turned it on. A question that was never put is the one thing a person cannot read off a
+# transcript, so it has to be said before the first slot reaches it.
+session-vetting-in-force =
+    a check that finds nothing reads content to the model without asking you
 # Said once at the top of a session when a newer release has been published. The command is
 # passed in rather than written here: it is a line somebody pastes into a shell, and which one it
 # is depends on how this copy was installed, so it is not a translator's to reword.

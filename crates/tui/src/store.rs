@@ -14,6 +14,11 @@
 //! answers `None`, and every write below takes the branch it already had for a machine with no
 //! home. Reads are untouched, so the session still opens with the model and theme the user chose.
 //!
+//! [`load_vetting`] is the one read resolved through [`writable`] as well, so a session that adds
+//! nothing here inherits nothing from that file either. The model and the theme decide what a
+//! session looks like; that one decides whether somebody is asked before content nobody vouched
+//! for reaches the planner, and a private session is the wrong place to inherit an answer to it.
+//!
 //! # What comes back is not trusted
 //!
 //! A history file can be edited, and on a shared machine it can be edited by someone else. So a
@@ -48,6 +53,12 @@ const EFFORT_FILE: &str = "effort";
 /// Named for the setting a file spells rather than for the type here, so somebody looking at both
 /// sees one name.
 const EDITING_FILE: &str = "editor-mode";
+
+/// The standing answer about auto-vetting, one word, inside the global state directory.
+///
+/// Named for the setting rather than for the type, as the editing style's file is, so somebody
+/// looking at the file and at `vetting.auto` in a settings file sees one name.
+const VETTING_FILE: &str = "vetting";
 
 /// The longest model name worth reading back.
 ///
@@ -402,6 +413,59 @@ pub fn save_editing(editing: crate::vim::Editing) {
     }
 }
 
+/// The standing answer about auto-vetting, or `None` where nobody has recorded one.
+///
+/// Resolved through [`writable`] rather than [`directory`], which is the one read here that is,
+/// and the reason is what this answer decides: a session that records nothing must not pick up a
+/// developer's standing answer to whether content is promoted with nobody asked. The model and the
+/// theme are read in such a session because they decide what it looks like; this decides whether
+/// somebody is asked.
+pub fn load_vetting() -> Option<bool> {
+    let path = writable()?.join(VETTING_FILE);
+    parse_vetting(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Read the answer out of the file's contents.
+///
+/// Separate from the I/O so the rules are testable. Exactly the two words, after trimming: a blank
+/// file, a corrupt one, and one holding a word this program does not know are all no answer at
+/// all, which leaves the settings file's answer standing and the asking in place. Nothing here
+/// guesses, because guessing wrong in one direction stops a person being asked.
+pub fn parse_vetting(contents: &str) -> Option<bool> {
+    match contents.lines().next()?.trim() {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// Record the answer about auto-vetting the person gave.
+///
+/// Written to a temporary file and renamed, so an interrupted write leaves the previous answer
+/// rather than half a word. Best-effort like everything else here.
+///
+/// Off is written rather than the file removed, for the reason the editing style is: the absent
+/// file and the chosen absence are not the same request here. Somebody who turned auto-vetting off
+/// has made a decision that has to outlast the session, and removing the file would let a settings
+/// file turn it back on for them tomorrow.
+pub fn save_vetting(auto: bool) {
+    let Some(dir) = writable() else {
+        return;
+    };
+    if bravebot_agent::home::create_directory(&dir).is_err() {
+        return;
+    }
+
+    let word = match auto {
+        true => "on",
+        false => "off",
+    };
+    let temporary = dir.join("vetting.tmp");
+    if bravebot_agent::home::write_file(&temporary, format!("{word}\n").as_bytes()).is_ok() {
+        let _ = std::fs::rename(&temporary, dir.join(VETTING_FILE));
+    }
+}
+
 /// Encode a prompt as one line.
 ///
 /// A prompt may contain newlines, which would otherwise become several entries on the way back
@@ -635,6 +699,33 @@ and this?
     #[test]
     fn only_the_first_effort_line_is_read() {
         assert_eq!(parse_effort("low\nmax\n"), Some(Effort::Low));
+    }
+
+    /// Both answers round-trip, and off is an answer rather than absence: somebody who turned
+    /// auto-vetting off has to stay turned off against a settings file that asks for it.
+    #[test]
+    fn a_recorded_answer_about_vetting_is_read_back_both_ways() {
+        assert_eq!(parse_vetting("on\n"), Some(true));
+        assert_eq!(parse_vetting("off\n"), Some(false));
+    }
+
+    /// A corrupt or hand-edited file must leave the asking in place. Read as `on`, a word this
+    /// program does not know would stop a person being asked before content nobody vouched for
+    /// reached the planner, and the typo that caused it is the one thing they cannot see.
+    #[test]
+    fn a_file_naming_no_answer_about_vetting_is_not_a_choice() {
+        for contents in ["", "\n", "   \n", "true\n", "yes\n", "auto\n", "1\n"] {
+            assert_eq!(
+                parse_vetting(contents),
+                None,
+                "{contents:?} became a choice"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_first_vetting_line_is_read() {
+        assert_eq!(parse_vetting("off\non\n"), Some(false));
     }
 
     #[test]

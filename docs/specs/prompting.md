@@ -177,9 +177,22 @@ as either.
 
 The plan prompt offers no standing form at all, and Enter does not approve a plan either. A plan is
 written afresh for each run, so remembering an answer to one would be approving steps nobody has
-seen. The vetting prompt offers none either, and Enter does not reach it: what it asks about is one
-slot's bytes, so there is nothing a standing answer could be about, and a second model saying the
-content looked fine is not a reason to stop asking.
+seen.
+
+The vetting prompt's standing key is not an answer to the question it asks. What the question asks
+about is one slot's bytes, so there is nothing a standing answer to *that* could be about: a
+promotion covers those bytes once and writes no rule. The key turns on auto-vetting
+([vetting.md](vetting.md#CHECK-11)), which is a decision about which of two questions later slots
+raise, and everything above holds of it: it has a key of its own, Enter does not reach it, and
+declining or Ctrl-C turns nothing on.
+
+**It is offered only where the check completed and found nothing.** A prompt carrying a warning, or
+saying the check could not be made, is the worst moment to grant it, which is the reasoning behind
+the rule that a run releasing private data offers no standing permission at all. The key is unbound
+where it is not drawn, since a key granting something the same screen does not offer is worse than
+an unbound one, and this key's grant outlives the session that could have corrected it. What that
+costs is on [labels.md](labels.md)'s list: an attacker who can force a safe verdict can put the key
+on the screen, and a person still has to press it with the bytes in front of them.
 
 `verified-by: bravebot_tui::confirm::the_run_keys_separate_running_once_from_running_always`
 `verified-by: bravebot_tui::confirm::the_run_keys_separate_this_session_from_every_session`
@@ -191,6 +204,9 @@ content looked fine is not a reason to stop asking.
 `verified-by: bravebot_tui::confirm::enter_does_not_approve_a_plan`
 `verified-by: bravebot_tui::confirm::enter_does_not_approve_a_vetted_read`
 `verified-by: bravebot_tui::confirm::a_safe_verdict_does_not_change_which_keys_the_vet_prompt_offers`
+`verified-by: bravebot_tui::confirm::only_a_safe_verdict_offers_to_stop_asking`
+`verified-by: bravebot_tui::confirm::pressing_always_at_a_not_safe_vet_prompt_grants_nothing`
+`verified-by: bravebot_tui::confirm::refusing_a_vetted_read_turns_nothing_on`
 `verified-by: bravebot_tui::confirm::a_run_that_releases_private_data_offers_no_standing_permission`
 `verified-by: bravebot_tui::confirm::pressing_always_at_a_private_input_prompt_grants_nothing`
 `verified-by: bravebot_tui::confirm::a_private_input_run_can_still_be_approved_once_or_refused`
@@ -231,6 +247,12 @@ and is never written down, so a resumed turn cannot replay a write or a run that
 was allowed. Answers to the planner's own questions are remembered only in the live session, so a
 resumed session puts them again.
 
+Auto-vetting ([vetting.md](vetting.md#CHECK-11)) is not one of the three and is not in the session
+record either. It is not a grant about any particular thing: it says which of two questions a
+session asks, in the way `editorMode` says which keys move the caret, and the routes that turn it on
+are a flag for one run and two files read at startup. A resumed session reads those the way a fresh
+one does, so the record would be a fourth answer for the same question to disagree with.
+
 **Why.** A standing permission is a decision about the future that its owner made deliberately. An
 endorsement is a decision about one act that has already happened, and reviving one would be
 approving something nobody looked at.
@@ -254,12 +276,20 @@ A person may answer these eight in advance, for a session or for a run, by choos
 That is somebody's own standing answer rather than a default, and no mode answers a question the
 planner posed, since that asks for information rather than consent.
 
+`--vet` ([vetting.md](vetting.md#CHECK-11)) is such an answer in advance, and to one of the eight
+only: with it, a check that completes and finds nothing promotes the one slot the planner asked to
+be shown, and nothing else about a run nobody is watching changes. Without it a check on that path
+is a model call whose word ends in the refusal above. The closed channel keeps refusing either way:
+a channel that cannot carry a question is a session whose person went away mid-turn, not somebody
+saying anything in advance.
+
 `verified-by: bravebot_tui::remote_confirm::a_closed_channel_refuses_a_run`
 `verified-by: bravebot_tui::remote_confirm::a_closed_channel_refuses_a_vetted_read`
 `verified-by: bravebot_tui::remote_confirm::a_closed_channel_answers_no_question`
 `verified-by: bravebot_tui::remote_confirm::a_dropped_answer_channel_answers_no_question`
 `verified-by: bravebot_tui::remote_confirm::a_refusal_travels_back_too`
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
+`verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked`
 `verified-by: bravebot_agent::manifest::a_plan_nobody_approved_runs_nothing`
 
 <a id="PROMPT-10"></a>

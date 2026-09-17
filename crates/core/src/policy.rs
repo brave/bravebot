@@ -2966,7 +2966,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         (stated.verdict, reason)
     }
 
-    /// Take a person's word that they have read one slot's content and the planner may have it.
+    /// Take the word of whoever endorsed one slot's content and give the planner those bytes.
     ///
     /// **Not a relabel, and not a claim about a file.** The slot keeps the label it was
     /// quarantined at, exactly as it does when a command's output is read aloud, and what comes
@@ -2984,12 +2984,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// may have come out of the workspace and nothing about being vetted makes them public, so
     /// vetting unlocks no egress.
     ///
-    /// **The verdict is not a party to this.** What authorises the promotion is the endorsement,
-    /// which only an approval mints. A check that said `safe` mints nothing.
+    /// **What authorises the promotion is the endorsement, never the verdict.** `by` says who
+    /// minted it and reaches the trail and nothing else: the label, the single use and what
+    /// happens to the slot are the same whichever it was. A check that said `safe` mints nothing
+    /// here; where auto-vetting is on it is [`crate::vetting::auto`]'s answer, decided before this
+    /// is called, that let the driver mint one in a person's place.
     pub fn promote_vetted(
         &mut self,
         slot: &SlotId,
         slots: &crate::slot::SlotStore,
+        by: crate::vetting::Endorsed,
     ) -> Gated<Labelled<String>> {
         self.consume_grant("vet_content", "ref", slot.as_str())?;
 
@@ -2999,18 +3003,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         })?;
 
         // The bytes leave the slot at the label they were quarantined at and are dropped here
-        // without being inspected. What is returned is a new value at a label the person's
-        // reading established, not this one carried across.
+        // without being inspected. What is returned is a new value at a label the endorsement
+        // established, not this one carried across.
         let was = content.label();
-        let proof = Declassification::authorise("content a person read and vouched for");
+        let proof = Declassification::authorise("content that was endorsed for the planner");
         let text = content.declassify(&proof);
 
         let label = Label::trusted_private();
         self.allow(
             "vet_content",
             format!(
-                "{slot} was {was}; the user read it and vouched for it, so the planner is given \
-                 {label}. {slot} is unchanged and no path was vouched for"
+                "{slot} was {was}; {}, so the planner is given {label}. {slot} is unchanged and \
+                 no path was vouched for",
+                by.describe()
             ),
         );
         Ok(Labelled::new(text, label))
@@ -7649,7 +7654,9 @@ five
         );
         assert_eq!(verdict, crate::vetting::Verdict::Safe);
         assert!(
-            policy.promote_vetted(&slot, &slots).is_err(),
+            policy
+                .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+                .is_err(),
             "a check's own word promoted a slot with nobody having approved it"
         );
     }
@@ -7673,7 +7680,9 @@ five
         assert_eq!(verdict, crate::vetting::Verdict::Unsafe);
         policy.issue_grant("vet_content", "ref", slot.as_str());
         assert!(
-            policy.promote_vetted(&slot, &slots).is_ok(),
+            policy
+                .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+                .is_ok(),
             "a word from a model overruled the person at the keyboard"
         );
     }
@@ -7732,7 +7741,9 @@ five
         let (slots, slot) = fetched("a page");
 
         assert!(
-            policy.promote_vetted(&slot, &slots).is_err(),
+            policy
+                .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+                .is_err(),
             "the planner promoted a slot with nobody's approval"
         );
     }
@@ -7745,7 +7756,9 @@ five
         let (slots, slot) = fetched("a page");
         policy.issue_grant("vet_content", "ref", slot.as_str());
 
-        let given = policy.promote_vetted(&slot, &slots).expect("approved");
+        let given = policy
+            .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+            .expect("approved");
         assert_eq!(given.label(), Label::trusted_private());
     }
 
@@ -7758,7 +7771,9 @@ five
         let (slots, slot) = fetched("a page");
         policy.issue_grant("vet_content", "ref", slot.as_str());
 
-        let given = policy.promote_vetted(&slot, &slots).expect("approved");
+        let given = policy
+            .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+            .expect("approved");
         assert_ne!(
             given.label(),
             Label::trusted_public(),
@@ -7774,7 +7789,9 @@ five
         let mut policy = open_policy(&mut sink);
         let (slots, slot) = fetched("a page");
         policy.issue_grant("vet_content", "ref", slot.as_str());
-        policy.promote_vetted(&slot, &slots).expect("approved");
+        policy
+            .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+            .expect("approved");
 
         assert_eq!(
             slots.label_of(&slot),
@@ -7790,9 +7807,15 @@ five
         let mut policy = open_policy(&mut sink);
         let (slots, slot) = fetched("a page");
         policy.issue_grant("vet_content", "ref", slot.as_str());
-        assert!(policy.promote_vetted(&slot, &slots).is_ok());
         assert!(
-            policy.promote_vetted(&slot, &slots).is_err(),
+            policy
+                .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+                .is_ok()
+        );
+        assert!(
+            policy
+                .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+                .is_err(),
             "one approval read the same slot twice"
         );
     }
@@ -7807,7 +7830,9 @@ five
         policy.issue_grant("read_output", "ref", slot.as_str());
 
         assert!(
-            policy.promote_vetted(&slot, &slots).is_err(),
+            policy
+                .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+                .is_err(),
             "an approval to read output promoted a slot through the other route"
         );
     }
@@ -7820,11 +7845,62 @@ five
         let mut policy = open_policy(&mut sink);
         let (slots, slot) = fetched("a page");
         policy.issue_grant("vet_content", "ref", slot.as_str());
-        policy.promote_vetted(&slot, &slots).expect("approved");
+        policy
+            .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+            .expect("approved");
 
         assert!(
             policy.vouched().trust.is_empty(),
             "a trust rule was written by a read of one slot"
+        );
+    }
+
+    /// A promotion nobody was asked about says so on the trail, in the driver's own words. A trail
+    /// claiming a person read bytes that were never on a screen would be the one record a reader
+    /// cannot check, and it is the record that says whether the mode was in force.
+    #[test]
+    fn the_trail_says_when_nobody_was_asked() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = fetched("a page");
+        policy.issue_grant("vet_content", "ref", slot.as_str());
+        policy
+            .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByASafeVerdict)
+            .expect("endorsed");
+
+        let recorded = format!("{:?}", sink.events());
+        assert!(
+            recorded.contains("nobody was asked"),
+            "a promotion nobody was asked about is not distinguishable on the trail: {recorded}"
+        );
+        assert!(
+            !recorded.contains("the user read it"),
+            "the trail credited a person who was never shown the bytes: {recorded}"
+        );
+    }
+
+    /// Auto-vetting changes who answers and nothing about what an answer is worth. The bytes come
+    /// back at the same label, so the mode unlocks no egress and buys the planner no more than a
+    /// person pressing `y` would have.
+    #[test]
+    fn a_promotion_nobody_was_asked_about_is_no_wider() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = fetched("a page");
+        policy.issue_grant("vet_content", "ref", slot.as_str());
+
+        let given = policy
+            .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByASafeVerdict)
+            .expect("endorsed");
+        assert_eq!(given.label(), Label::trusted_private());
+        assert_eq!(
+            slots.label_of(&slot),
+            Some(Label::untrusted_private()),
+            "the slot was relabelled by a promotion nobody was asked about"
+        );
+        assert!(
+            policy.vouched().trust.is_empty(),
+            "a trust rule was written by a promotion nobody was asked about"
         );
     }
 

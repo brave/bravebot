@@ -35,7 +35,7 @@ use bravebot_core::policy::{Destination, Policy};
 use bravebot_core::slot::{SlotId, SlotStore};
 use bravebot_core::todo::{self, Item, List, Status};
 use bravebot_core::value::Labelled;
-use bravebot_core::vetting::Verdict;
+use bravebot_core::vetting::{Endorsed, Verdict};
 use serde_json::{Value, json};
 
 use crate::lsp::LanguageServers;
@@ -1123,6 +1123,17 @@ pub struct Tools<'a> {
     /// path a rule in the settings file allows, raise no prompt at all, so a refusal that waited
     /// for one would let exactly those writes through.
     pub permission_mode: crate::PermissionMode,
+    /// Whether a check that finds nothing may promote a slot without anybody being asked.
+    ///
+    /// `false` for every turn nobody turned it on for, which is the default and what a turn has
+    /// always done. The three routes into it and the rule that resolves them are
+    /// [`bravebot_core::vetting::auto`]; by the time it reaches here it is one answer, settled
+    /// before the session opened and unchanged for its life.
+    ///
+    /// Read by `vet_content` and by nothing else. The other two prompts a check runs for release
+    /// what a program printed and write a trust rule, and neither is something a word from a model
+    /// may answer with nobody asked.
+    pub auto_vetting: bool,
     /// The current working directory for `run` commands in this turn.
     ///
     /// Initialized to the workspace root and updated when `run` specifies a `directory`.
@@ -3524,9 +3535,12 @@ fn read_output<S: Sink, C: Confirmer>(
 /// the person in full. Only then, if they agree, does an endorsement exist for the kernel to
 /// consume.
 ///
-/// **The verdict is not consulted here.** Nothing in this function branches on what the check
-/// said: the word travels to the prompt, the prompt draws it, and what decides is the answer. A
-/// check that said the content was safe promotes nothing.
+/// **The verdict decides who answers, and nothing else.** With auto-vetting off, which is the
+/// default and every session nobody turned it on for, the word travels to the prompt, the prompt
+/// draws it, and what decides is the person's answer. With auto-vetting on, a verdict of `safe`
+/// answers in their place and every other verdict falls back to the same prompt with the same
+/// warning on it. What a verdict never decides is which slot, what label, or how long: those are
+/// the same down both paths.
 ///
 /// Unlike `read_output` this covers any quarantined slot, including a file, and it is still not a
 /// second answer to what a file is worth: nothing written here reaches the trust map, so a later
@@ -3574,47 +3588,68 @@ fn vet_content<S: Sink, C: Confirmer>(
     let checked = crate::vet::run(policy, &mut tools.chat, &spec);
     let waited = asked_at.elapsed();
 
-    // Released for the person to read, which is the whole of what this call is for. A display
-    // release cannot feed an effect, and both of these feed a screen.
-    let shown = {
-        let content = match policy.resolve("vet_content", &slot, tools.slots) {
-            Ok(content) => content,
-            Err(denial) => return problem(format!("refused: {denial}")),
+    // The one branch on a verdict that decides more than which sentence a person reads first, and
+    // it is reachable only where somebody turned auto-vetting on. `Safe` is the only word that
+    // answers here: unsafe, and every way a check can fail to complete, fall through to the prompt
+    // with the banner they would have carried anyway. Written down as the third known cost in
+    // `docs/specs/labels.md`.
+    let endorsed = match tools.auto_vetting && checked.verdict.is_safe() {
+        true => Endorsed::ByASafeVerdict,
+        false => Endorsed::ByAPerson,
+    };
+
+    // A `match` rather than an `if`, so a third way of endorsing cannot be added and default to
+    // skipping the prompt: a new variant stops compiling here until somebody says which it is.
+    let ask = match endorsed {
+        Endorsed::ByAPerson => true,
+        Endorsed::ByASafeVerdict => false,
+    };
+    if ask {
+        // Released for the person to read, which is the whole of what a prompt here is for. A
+        // display release cannot feed an effect, and both of these feed a screen. Inside the
+        // branch because there is no screen on the other one: releasing for a display nobody is
+        // looking at would put a declassification in the trail with no audience for it.
+        let shown = {
+            let content = match policy.resolve("vet_content", &slot, tools.slots) {
+                Ok(content) => content,
+                Err(denial) => return problem(format!("refused: {denial}")),
+            };
+            let proof = policy.authorise_display_release("content the planner asked to be shown");
+            content.declassify(&proof)
         };
-        let proof = policy.authorise_display_release("content the planner asked to be shown");
-        content.declassify(&proof)
-    };
-    let reason = checked.reason.map(|reason| {
-        let proof = policy.authorise_display_release("what a check said about content");
-        reason.declassify(&proof)
-    });
+        let reason = checked.reason.map(|reason| {
+            let proof = policy.authorise_display_release("what a check said about content");
+            reason.declassify(&proof)
+        });
 
-    let request = crate::confirm::VetRequest {
-        origin: spec.origin().to_string(),
-        // Never absent on this route: the argument is required above, and this is the one entry
-        // point into a check that carries what the planner claimed.
-        expects: spec.expects().unwrap_or_default().to_string(),
-        content: shown,
-        verdict: checked.verdict,
-        reason,
-    };
+        let request = crate::confirm::VetRequest {
+            origin: spec.origin().to_string(),
+            // Never absent on this route: the argument is required above, and this is the one
+            // entry point into a check that carries what the planner claimed.
+            expects: spec.expects().unwrap_or_default().to_string(),
+            content: shown,
+            verdict: checked.verdict,
+            reason,
+        };
 
-    if confirmer.confirm_vetted_read(&request) == Decision::Reject {
-        return problem(format!(
-            "refused: the user did not let you read {slot}. Do not ask for it again. Work with \
-             what you have, pass {slot} to spawn_processor, or say in your reply what you needed \
-             from it."
-        ))
-        .costing(checked.usage)
-        .waiting(waited);
+        if confirmer.confirm_vetted_read(&request) == Decision::Reject {
+            return problem(format!(
+                "refused: the user did not let you read {slot}. Do not ask for it again. Work \
+                 with what you have, pass {slot} to spawn_processor, or say in your reply what \
+                 you needed from it."
+            ))
+            .costing(checked.usage)
+            .waiting(waited);
+        }
     }
 
-    // The approval is what makes these bytes readable, and it is bound to this exact reference.
+    // The endorsement is what makes these bytes readable, and it is bound to this exact reference
+    // whichever of the two answered.
     policy.issue_grant("vet_content", "ref", slot.to_string());
 
-    match policy.promote_vetted(&slot, tools.slots) {
+    match policy.promote_vetted(&slot, tools.slots, endorsed) {
         Ok(text) => {
-            let lines = tally(request.lines(), "line", "lines");
+            let lines = tally(spec.lines(), "line", "lines");
             Produced::new(text, format!("what {slot} held"), format!("{lines}, read"))
                 .of_content()
                 .costing(checked.usage)

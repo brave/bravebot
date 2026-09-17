@@ -822,6 +822,12 @@ pub struct Session {
     /// A choice about the person rather than about the session, so it is read from `~/.bravebot` at
     /// startup and written back when one is made, the same as the model and the theme.
     editing: crate::vim::Editing,
+    /// Whether a check that finds nothing may promote a slot without the person being asked.
+    ///
+    /// A choice about the person rather than about the session, read at startup the same way the
+    /// editing style is, and off until one of the three routes says otherwise. Held on the session
+    /// because a turn is built from it and because the `a` key changes it mid-session.
+    vetting: bool,
     /// Configurable keybindings for navigation and shortcuts.
     bindings: crate::keybindings::Keybindings,
     /// Which vi mode the box is in, where vi is the style.
@@ -1221,6 +1227,9 @@ impl Session {
             // The box everybody has, until a settings file or a choice says otherwise. A session
             // constructed by a test reads nothing from disk and edits the ordinary way.
             editing: crate::vim::Editing::default(),
+            // Asking, until a flag, a recorded choice or a settings key says otherwise. A session
+            // constructed by a test reads nothing from disk and asks.
+            vetting: false,
             bindings: crate::keybindings::Keybindings::default(),
             mode: crate::vim::Mode::default(),
             half_typed: None,
@@ -2322,6 +2331,44 @@ impl Session {
         self.editing = chosen
             .or_else(|| configured.and_then(crate::vim::Editing::named))
             .unwrap_or_default();
+    }
+
+    /// Settle whether a check that finds nothing may promote a slot without anybody being asked.
+    ///
+    /// The three routes resolved into one answer, by
+    /// [`bravebot_core::vetting::auto`], which is the whole of the rule. `asked` is the
+    /// command line's, taken as an argument rather than read here so a test decides it; `configured`
+    /// is the `vetting.auto` key from the home settings layer.
+    ///
+    /// The recorded choice is read only for a session that persists, which is the rule
+    /// [`Session::adopt_editing`] follows and matters more here: a test, and a session asked to
+    /// leave nothing behind, must not pick up a developer's standing answer to whether somebody is
+    /// asked before content nobody vouched for reaches the planner.
+    pub fn adopt_vetting(&mut self, asked: bool, configured: Option<bool>) {
+        let chosen = self.persist.then(crate::store::load_vetting).flatten();
+        self.vetting = bravebot_core::vetting::auto(asked, chosen, configured);
+    }
+
+    /// Whether a check that finds nothing may promote a slot without the person being asked.
+    pub fn auto_vetting(&self) -> bool {
+        self.vetting
+    }
+
+    /// Record the answer about auto-vetting the person gave at a prompt.
+    ///
+    /// Written through to disk only for a session that persists, the same rule the editing style
+    /// follows and for the same reason: a test, and a session asked to leave nothing behind, must
+    /// not rewrite the developer's own answer.
+    ///
+    /// Takes effect from the next turn. The turn in flight keeps the mode it began with, which is
+    /// the rule the permission mode already follows: a key pressed while a turn runs describes what
+    /// comes after it, and a question already on the screen must not be withdrawn from under the
+    /// person answering it.
+    pub fn choose_vetting(&mut self, auto: bool) {
+        if self.persist {
+            crate::store::save_vetting(auto);
+        }
+        self.vetting = auto;
     }
 
     /// Adopt configured keybindings from settings.
@@ -11198,6 +11245,51 @@ mod tests {
             1,
             "the picture did not survive the round trip"
         );
+    }
+
+    /// Off is what a session opens with, so a prompt appears for every slot until somebody says
+    /// otherwise. A session constructed here records nothing, so `adopt_vetting` reads no file and
+    /// the two arguments are the whole of what decides.
+    #[test]
+    fn a_session_asks_until_something_says_otherwise() {
+        let mut s = Session::new("none");
+        assert!(!s.auto_vetting(), "a fresh session did not ask");
+        s.adopt_vetting(false, None);
+        assert!(
+            !s.auto_vetting(),
+            "nothing said anything and it stopped asking"
+        );
+        s.adopt_vetting(false, Some(false));
+        assert!(!s.auto_vetting(), "a settings key saying no turned it on");
+    }
+
+    /// Either of the two arguments turns it on, which is the rule
+    /// `bravebot_core::vetting::auto` states; this pins that the interface passes them through
+    /// rather than deciding for itself.
+    #[test]
+    fn the_flag_and_the_settings_key_each_reach_the_session() {
+        let mut s = Session::new("none");
+        s.adopt_vetting(true, None);
+        assert!(s.auto_vetting(), "the flag did not reach the session");
+
+        let mut s = Session::new("none");
+        s.adopt_vetting(false, Some(true));
+        assert!(
+            s.auto_vetting(),
+            "the settings key did not reach the session"
+        );
+    }
+
+    /// The standing key at a vetting prompt turns it on from the next turn. Written through to
+    /// disk only for a session that persists, which this one is not, so nothing here touches the
+    /// developer's own answer.
+    #[test]
+    fn pressing_the_standing_key_turns_vetting_on_for_the_session() {
+        let mut s = Session::new("none");
+        s.choose_vetting(true);
+        assert!(s.auto_vetting());
+        s.choose_vetting(false);
+        assert!(!s.auto_vetting(), "turning it back off did not take");
     }
 
     /// A session editing vi's way, with the choice recorded nowhere: `adopt_editing` reads the store

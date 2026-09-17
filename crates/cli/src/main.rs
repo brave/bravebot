@@ -49,6 +49,13 @@ fn main() -> ExitCode {
         bravebot_core::incognito::engage();
     }
 
+    // Beside the mode above and for the same reason: the switch has to be settled before a session
+    // is assembled, and this is the last moment certain to be before every way of assembling one.
+    // What it turns on is read once per session, where the three routes into it are resolved.
+    if take_vet(&mut args) {
+        bravebot_core::vetting::ask_for_it();
+    }
+
     // Taken out before anything dispatches on the first argument, because this one belongs to every
     // way of starting: a session, a resumed session, and a one-shot run all put the same four
     // questions to the same trait. Reading it per subcommand would be four chances to read it in
@@ -262,6 +269,7 @@ fn print_help() {
         ("--trace", t!(cli_option_trace)),
         ("--json", t!(cli_option_json)),
         ("--incognito", t!(cli_option_incognito)),
+        ("--vet", t!(cli_option_vet)),
         (
             "--dangerously-skip-permissions",
             t!(cli_option_dangerously_skip_permissions),
@@ -334,6 +342,29 @@ fn how_to_configure_a_model(refused: Option<&str>, a_service_is_configured: bool
 fn take_incognito(args: &mut Vec<String>) -> bool {
     let asked = args.len();
     args.retain(|arg| arg != "--incognito");
+    args.len() != asked
+}
+
+/// Take `--vet` out of the arguments, reporting whether it was there.
+///
+/// Removed before dispatch for the reason `--incognito` is, and it composes with everything the
+/// same way: a session, a resumed session and a one-shot run all reach the same check and the same
+/// prompt, so reading it per subcommand would be three chances to forget it in two of them.
+///
+/// Turns auto-vetting on for this run, and outranks both standing answers because it is the
+/// narrowest in time: somebody typing it has said what they want of the run in front of them. That
+/// includes a recorded `off`, on the footing `--dangerously-skip-permissions` sits on, which is a
+/// strictly larger thing anything able to pass this flag could pass instead.
+///
+/// There is no flag the other way. It would matter only to somebody who had turned the mode on
+/// standing and wanted one run without it, and for them the answer is the file the standing answer
+/// is kept in. A second flag whose absence and presence both mean something is worth adding when
+/// there is a case for it, not before.
+///
+/// Repeats are one flag rather than an error, as with `--incognito`.
+fn take_vet(args: &mut Vec<String>) -> bool {
+    let asked = args.len();
+    args.retain(|arg| arg != "--vet");
     args.len() != asked
 }
 
@@ -574,7 +605,16 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         .with_model(model_asked_for(named, bravebot_tui::store::load_model()))
         .with_effort(bravebot_tui::store::load_effort())
         .with_permissions(permissions)
-        .with_permission_mode(permission_mode);
+        .with_permission_mode(permission_mode)
+        // Whether a check that finds nothing answers in a person's place. Resolved here, once, out
+        // of the three routes: `bravebot_core::vetting::auto` is the rule and nothing below reads
+        // any of the three again. A run nobody is watching has no prompt to fall back to, so
+        // without this every check on this path ends in a refusal.
+        .with_auto_vetting(bravebot_core::vetting::auto(
+            bravebot_core::vetting::asked_for(),
+            bravebot_tui::store::load_vetting(),
+            settings.auto_vetting(),
+        ));
     for file in files {
         task = task.with_file(file);
     }
@@ -1649,6 +1689,20 @@ fn doctor() -> ExitCode {
                     t!(
                         doctor_settings_overridden,
                         name = name,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+
+            // A key that looks like configuration and does nothing, which is the one worth saying
+            // out loud: it is read from the home layer alone, so a checkout cannot stop whoever
+            // opened it being asked, and somebody who wrote it into one has to be told rather than
+            // left wondering why the prompt still appears.
+            for path in settings.vetting_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_vetting_ignored,
                         path = path.display().to_string()
                     ),
                 );
@@ -3215,6 +3269,58 @@ mod tests {
         let mut arguments = args(&["-p", "write about incognito mode"]);
         assert!(!take_incognito(&mut arguments));
         assert_eq!(arguments, args(&["-p", "write about incognito mode"]));
+    }
+
+    /// `--vet` belongs to every way of starting, so it is taken out wherever it appears and the
+    /// dispatch below goes on matching a list it is no longer in. A flag left in the arguments
+    /// would be refused as an unknown option by whichever subcommand read them next.
+    #[test]
+    fn the_vet_flag_is_taken_out_wherever_it_appears() {
+        for typed in [
+            &["--vet", "-p", "do a thing"][..],
+            &["-p", "--vet", "do a thing"][..],
+            &["-p", "do a thing", "--vet"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert!(take_vet(&mut arguments), "{typed:?} did not ask for it");
+            assert_eq!(
+                arguments,
+                args(&["-p", "do a thing"]),
+                "left over: {typed:?}"
+            );
+        }
+    }
+
+    /// Asking twice for something that is already on is not an error to report.
+    #[test]
+    fn asking_to_vet_twice_is_asking_once() {
+        let mut arguments = args(&["--vet", "--vet", "do a thing"]);
+        assert!(take_vet(&mut arguments));
+        assert_eq!(arguments, args(&["do a thing"]));
+    }
+
+    /// An ordinary invocation is untouched and stays as it was. A run that turned the asking off
+    /// because the prompt mentioned vetting would be worse than a flag that never worked.
+    #[test]
+    fn an_invocation_that_only_mentions_vetting_does_not_ask_for_it() {
+        let mut arguments = args(&["-p", "explain --vetting to me"]);
+        assert!(!take_vet(&mut arguments));
+        assert_eq!(arguments, args(&["-p", "explain --vetting to me"]));
+    }
+
+    /// It composes with the other two flags that belong to every way of starting, which is the
+    /// whole reason all three are taken out before anything dispatches.
+    #[test]
+    fn vetting_composes_with_the_other_flags_that_lead() {
+        for typed in [
+            &["--vet", "--incognito", "-p", "x"][..],
+            &["--incognito", "--vet", "-p", "x"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert!(take_vet(&mut arguments), "{typed:?}");
+            assert!(take_incognito(&mut arguments), "{typed:?}");
+            assert_eq!(arguments, args(&["-p", "x"]), "{typed:?}");
+        }
     }
 
     fn a_plan() -> ManifestRequest {
