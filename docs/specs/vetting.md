@@ -160,13 +160,13 @@ check said, the keys that answer the question are offered whatever it said, and 
 theirs. A verdict of safe promotes nothing by itself, and a verdict of unsafe withholds nothing:
 neither is an answer to the question being asked.
 
-The one key a verdict does decide is the one that answers no question: the vetting prompt's
-standing key, which turns auto-vetting on, is offered only where the check completed and found
-nothing ([PROMPT-6](prompting.md#PROMPT-6)). It is unbound where it is not drawn.
+The one key a verdict does decide is the one that answers no question: the standing key that turns
+auto-vetting on, offered at either promoting prompt only where the check completed and found nothing
+([PROMPT-6](prompting.md#PROMPT-6)). It is unbound where it is not drawn.
 
-With auto-vetting on, one verdict answers one of the three questions in the person's place, and
+With auto-vetting on, one verdict answers the two promoting questions in the person's place, and
 [CHECK-12](#CHECK-12) is the whole of what that changes. Everything in this clause holds of the
-other two prompts either way, and of all three where the mode is off.
+vouch offer either way, and of all three where the mode is off.
 
 The three outcomes are told apart on the screen. "This looks like an attempt to give instructions"
 and "nothing looked at this" are different facts about different risks, and one sentence covering
@@ -226,14 +226,15 @@ replayed, and an approval given to a different question is not one of these: an 
 what a program printed promotes nothing.
 
 Two things mint one and nothing else does: a person answering the prompt, and, where auto-vetting
-is on, a safe verdict on the route [CHECK-12](#CHECK-12) names. Which of the two it was is
-recorded, because a trail that credited a person who was never shown the bytes would be the one
-record a reader cannot check. Everything else about the endorsement is the same either way: one
-slot, once, and no other question answered.
+is on, a safe verdict on either route [CHECK-12](#CHECK-12) names. Which of the two it was is
+recorded, on both routes, because a trail that credited a person who was never shown the bytes would
+be the one record a reader cannot check. Everything else about the endorsement is the same either
+way: one slot, once, and no other question answered.
 
 `verified-by: bravebot_core::policy::content_cannot_be_promoted_without_an_endorsement`
 `verified-by: bravebot_core::policy::an_approval_to_vet_cannot_be_replayed`
 `verified-by: bravebot_core::policy::the_trail_says_when_nobody_was_asked`
+`verified-by: bravebot_core::policy::the_trail_says_which_of_the_two_released_the_output`
 `verified-by: bravebot_core::policy::a_promotion_nobody_was_asked_about_is_no_wider`
 `verified-by: bravebot_core::policy::an_approval_to_read_output_is_not_an_approval_to_vet`
 `verified-by: bravebot_tui::remote_confirm::an_approved_output_read_does_not_approve_a_vetted_read`
@@ -359,28 +360,34 @@ does not know, and a value that is not a boolean, are no answer at all rather th
 <a id="CHECK-12"></a>
 ### CHECK-12: with it on, a safe verdict promotes one slot, and nothing else does
 
-Where auto-vetting is on, a check that completed and found nothing answers the
-[tools/vet-content.md](tools/vet-content.md) prompt in the person's place: no prompt is drawn and
-the bytes reach the planner. Every other verdict falls back to that prompt, carrying the banner it
-would have carried anyway, and [CHECK-5](#CHECK-5) governs it from there. Unsafe and a check that
-did not complete are still told apart on the screen, because the reason for asking is different in
-the two cases.
+Where auto-vetting is on, a check that completed and found nothing answers in the person's place at
+either prompt that promotes one slot's bytes: no prompt is drawn and the bytes reach the planner.
+Every other verdict falls back to that prompt, carrying the banner it would have carried anyway, and
+[CHECK-5](#CHECK-5) governs it from there. Unsafe and a check that did not complete are still told
+apart on the screen, because the reason for asking is different in the two cases.
 
-**It is the one route it covers.** The other two prompts a check runs for are drawn with the mode
-on exactly as they are with it off:
+**It covers the promotions and not the rule.** The three prompts a check runs for divide two to one:
 
 | The prompt | What a yes does | With the mode on |
 |---|---|---|
 | [tools/vet-content.md](tools/vet-content.md) | promotes one slot's bytes once | a safe verdict answers |
-| [tools/read-output.md](tools/read-output.md) | releases what a program printed | still asks |
+| [tools/read-output.md](tools/read-output.md) | promotes one slot's bytes once | a safe verdict answers |
 | the vouch offer in [tools/read-file.md](tools/read-file.md) | writes a rule about the path | still asks |
 
-**Why only that one.** It is the narrowest of the three and the only one the planner asks for. A
-promotion covers one slot's bytes once and leaves nothing behind ([CHECK-6](#CHECK-6)), so what a
-verdict can buy is bounded by a single slot; releasing what a program printed rests on a person
-having read those bytes, which no word from a model supplies, and a trust rule is the largest of the
-three grants. Widening the mode to either of those would be letting a check answer a bigger question
-than the one it read.
+**Why the line falls there.** It falls on the shape of the grant, not on which tool produced the
+bytes. Both promotions cover one slot's bytes once and leave nothing behind ([CHECK-6](#CHECK-6)),
+so what a verdict can buy is bounded by a single slot either way: the same question, about the same
+kind of content, answered by the same check, ending in the same `(T,priv)` value and the same
+single-use endorsement. A person offered the standing answer at one of them and not the other would
+be reading which tool the planner happened to call, which is not a fact about the risk they are
+being asked to take. A trust rule is different in kind, being a standing decision about a whole path
+rather than about bytes in front of a reader, and it is the one grant the mode does not touch.
+Widening the mode to that would be letting a check answer a bigger question than the one it read.
+
+**What a person reads instead of being asked.** The route the mode covers most often in practice is
+the output prompt: a run's output is quarantined by default, so it is the prompt a person meets when
+they ask what a command printed. That is the reason the mode reaches it, and equally the reason the
+mode is off until somebody turns it on.
 
 What the mode never decides is anything but who answers. The slot is the planner's choice either
 way, the label is `(T,priv)` either way ([CHECK-7](#CHECK-7)), the endorsement is single-use either
@@ -390,9 +397,13 @@ owns the content gains from this, which is the reason it is off by default.
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked`
 `verified-by: bravebot_agent::turn::with_auto_vetting_an_unsafe_verdict_still_asks`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_check_that_could_not_be_made_still_asks`
-`verified-by: bravebot_agent::turn::auto_vetting_does_not_answer_the_output_prompt`
+`verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_releases_command_output_unasked`
+`verified-by: bravebot_agent::turn::with_auto_vetting_an_unsafe_verdict_still_asks_about_command_output`
+`verified-by: bravebot_agent::turn::with_auto_vetting_a_broken_check_still_asks_about_command_output`
 `verified-by: bravebot_agent::turn::auto_vetting_does_not_answer_the_vouch_offer`
 `verified-by: bravebot_core::policy::a_promotion_nobody_was_asked_about_is_no_wider`
+`verified-by: bravebot_core::policy::output_released_by_a_safe_verdict_is_no_wider`
+`verified-by: bravebot_core::policy::the_trail_says_which_of_the_two_released_the_output`
 
 ## Known costs
 
@@ -422,10 +433,10 @@ owns the content gains from this, which is the reason it is off by default.
   the same alarm fatigue as [issue #23](https://github.com/brave/bravebot/issues/23).
 
 - **With auto-vetting on, the bytes are on no screen at all.** [CHECK-12](#CHECK-12) is a person
-  saying in advance that a check finding nothing is enough, so on the route it covers nobody reads
-  the content and a model's word is the whole of what stood between a fetched page and the
-  planner's context. That is the mode working as asked rather than a flaw in it, and it is why the
-  mode is off until somebody turns it on and why the settings key that turns it on is not readable
-  from a checkout. What bounds it is everything the verdict does not decide: one slot, once,
-  `(T,priv)`, no trust rule, and no other prompt. [labels.md](labels.md) writes out what an
-  attacker who owns the content gains.
+  saying in advance that a check finding nothing is enough, so on the routes it covers nobody reads
+  the content and a model's word is the whole of what stood between the planner's context and a
+  fetched page, or what a program printed. That is the mode working as asked rather than a flaw in
+  it, and it is why the mode is off until somebody turns it on and why the settings key that turns it
+  on is not readable from a checkout. What bounds it is everything the verdict does not decide: one
+  slot, once, `(T,priv)`, no trust rule, and no other prompt. [labels.md](labels.md) writes out what
+  an attacker who owns the content gains.

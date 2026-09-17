@@ -616,7 +616,8 @@ needs the terminal put in a state a session in lines does not put it in.
 ### CLI-15: `--vet` lets a check that finds nothing answer, for this run
 
 `--vet` turns auto-vetting on for the length of the run: where a check completes and finds nothing,
-the slot the planner asked to be shown is promoted without a prompt.
+the slot the planner asked to be shown, or the output it asked to read back, is promoted without a
+prompt.
 [vetting.md](vetting.md#CHECK-12) is what that covers and what it does not, and
 [vetting.md](vetting.md#CHECK-11) is the other two routes in and how they resolve against this one.
 

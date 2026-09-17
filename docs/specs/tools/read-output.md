@@ -37,8 +37,10 @@ A person is shown the bytes themselves with the command that printed them, and d
 ```
 
 The slot keeps the label it was quarantined at. What the planner receives is a **new value** whose
-first label comes from the provenance the policy layer tracked, which is a person having read it. It
-covers one result, needs a single-use endorsement naming that slot, and the next run asks again.
+first label comes from the provenance the policy layer tracked: a person having read it, or, where
+somebody turned auto-vetting on, a check having found nothing ([CHECK-12](../vetting.md#CHECK-12)).
+Which of the two it was is named in the trail. Either way it covers one result, needs a single-use
+endorsement naming that slot, and the next run asks again.
 
 Only output from `run` can be read this way. A file's worth is the trust map's answer, and a second
 route to it would be a way to disagree with the first.
@@ -52,6 +54,8 @@ stderr, and a planner that cannot see it will report that the command worked.
 `verified-by: bravebot_core::policy::output_a_person_vouched_for_is_still_private`
 `verified-by: bravebot_core::policy::vouching_for_output_does_not_relabel_the_slot`
 `verified-by: bravebot_core::policy::an_approval_to_read_output_cannot_be_replayed`
+`verified-by: bravebot_core::policy::output_released_by_a_safe_verdict_is_no_wider`
+`verified-by: bravebot_core::policy::the_trail_says_which_of_the_two_released_the_output`
 `verified-by: bravebot_agent::turn::output_a_person_reads_and_approves_reaches_the_planner`
 `verified-by: bravebot_agent::turn::output_a_person_refuses_stays_out_of_the_planner`
 
@@ -79,8 +83,13 @@ that the check runs before the question rather than after the answer.
 No expectation is sent with it. The planner asked for the output to be read, not for it to be
 checked, and it has said nothing about what the command printed.
 
-The verdict decides nothing in this function. Nothing here branches on it: the word travels to the
-prompt, the prompt draws it, and the answer is what releases the bytes.
+While auto-vetting is off, which is the default, the verdict decides nothing here: the word travels
+to the prompt, the prompt draws it, and the answer is what releases the bytes. Where somebody turned
+it on, a verdict of nothing found is what releases them, and every other verdict still draws the
+prompt. [CHECK-12](../vetting.md#CHECK-12) is that rule and the reasoning for it.
 
 `verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
 `verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`
+`verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_releases_command_output_unasked`
+`verified-by: bravebot_agent::turn::with_auto_vetting_an_unsafe_verdict_still_asks_about_command_output`
+`verified-by: bravebot_agent::turn::with_auto_vetting_a_broken_check_still_asks_about_command_output`

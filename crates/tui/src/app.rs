@@ -4864,6 +4864,16 @@ fn run_turn_animated(
                 if answer.stops_the_turn() {
                     cancel.cancel();
                 }
+                // The standing key, handled as at the other vetting prompt and for the same
+                // reasons: the approval itself leaves no rule behind, and turning the mode on is
+                // the interface's own standing decision rather than the turn's, so the answer the
+                // worker is waiting for is the same either way and this takes effect next turn.
+                if answer.turns_vetting_on() {
+                    session.choose_vetting(true);
+                    // Said on the transcript because the person will not otherwise see it
+                    // recorded anywhere, and what it changes is that later prompts do not appear.
+                    session.note(t!(session_vetting_on));
+                }
                 let _ = answer_tx.send(crate::remote_confirm::Reply::ReadOutput(answer.decision()));
             }
             crate::remote_confirm::ToMain::Vet(request) => {

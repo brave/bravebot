@@ -179,12 +179,19 @@ The plan prompt offers no standing form at all, and Enter does not approve a pla
 written afresh for each run, so remembering an answer to one would be approving steps nobody has
 seen.
 
-The vetting prompt's standing key is not an answer to the question it asks. What the question asks
+The standing key at a vetting prompt is not an answer to the question it asks. What the question asks
 about is one slot's bytes, so there is nothing a standing answer to *that* could be about: a
 promotion covers those bytes once and writes no rule. The key turns on auto-vetting
 ([vetting.md](vetting.md#CHECK-11)), which is a decision about which of two questions later slots
 raise, and everything above holds of it: it has a key of its own, Enter does not reach it, and
 declining or Ctrl-C turns nothing on.
+
+Both prompts that promote one slot's bytes offer it, and offer it identically: the one over content
+the planner asked to be shown, and the one over what a program printed. They ask the same question
+about the same kind of grant, so a key present at one and missing at the other would tell a person
+only which tool the planner happened to call. The vouch offer does not carry it, because what a yes
+there writes is a rule about a path rather than a promotion, and the mode it would turn on does not
+reach that question.
 
 **It is offered only where the check completed and found nothing.** A prompt carrying a warning, or
 saying the check could not be made, is the worst moment to grant it, which is the reasoning behind
@@ -207,6 +214,9 @@ on the screen, and a person still has to press it with the bytes in front of the
 `verified-by: bravebot_tui::confirm::only_a_safe_verdict_offers_to_stop_asking`
 `verified-by: bravebot_tui::confirm::pressing_always_at_a_not_safe_vet_prompt_grants_nothing`
 `verified-by: bravebot_tui::confirm::refusing_a_vetted_read_turns_nothing_on`
+`verified-by: bravebot_tui::confirm::only_a_safe_verdict_offers_to_stop_asking_about_output`
+`verified-by: bravebot_tui::confirm::the_standing_key_is_bound_at_the_output_prompt_only_where_it_is_drawn`
+`verified-by: bravebot_tui::confirm::every_verdict_still_offers_both_answers_about_output`
 `verified-by: bravebot_tui::confirm::a_run_that_releases_private_data_offers_no_standing_permission`
 `verified-by: bravebot_tui::confirm::pressing_always_at_a_private_input_prompt_grants_nothing`
 `verified-by: bravebot_tui::confirm::a_private_input_run_can_still_be_approved_once_or_refused`

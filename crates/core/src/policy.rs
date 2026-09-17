@@ -3092,13 +3092,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// **Not a relabel.** [`Labelled::relabel`] refuses to upgrade and labels only ever degrade,
     /// so nothing here touches the slot: the slot keeps the label it was quarantined at, and what
     /// comes back is a new value whose first label is assigned from the provenance the kernel
-    /// tracked, exactly as [`Policy::label_model_output`] assigns one. The provenance here is a
-    /// person having read the bytes on their screen and said the planner may have them.
+    /// tracked, exactly as [`Policy::label_model_output`] assigns one. The provenance here is
+    /// whoever `by` names having said the planner may have them.
     ///
-    /// That is the strongest assertion available anywhere in this system, and it is stronger than
-    /// the one behind a vouched command: vouching for `git log` is a prediction about output that
-    /// does not exist yet, while this is a statement about bytes the person has just read. It is
-    /// still an assertion, and nothing here checks it.
+    /// Where that is a person, it is a statement about bytes they have just read, and the strongest
+    /// assertion available anywhere in this system: stronger than the one behind a vouched command,
+    /// since vouching for `git log` is a prediction about output that does not exist yet. Where it
+    /// is a safe verdict, it is a second model's word about bytes nobody was shown, which is a
+    /// weaker claim wearing the same label, and the reason the mode behind it is off until somebody
+    /// turns it on. Either way it is an assertion, and nothing here checks it.
+    ///
+    /// `by` is carried rather than assumed so the trail says which happened. A record crediting a
+    /// person who was never shown the bytes is the one entry a reader cannot check.
     ///
     /// The result is `(T,priv)`. Trusted, so the planner may read it; private, because the bytes
     /// may have come out of the workspace and nothing about being read aloud makes them public.
@@ -3113,6 +3118,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         &mut self,
         slot: &SlotId,
         slots: &crate::slot::SlotStore,
+        by: crate::vetting::Endorsed,
     ) -> Gated<Labelled<String>> {
         if !slots.is_from_command(slot) {
             return Err(self.deny(
@@ -3133,18 +3139,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         })?;
 
         // The bytes leave the slot at the label they were quarantined at, and are dropped here
-        // without being inspected. What is returned is a new value at a label the person's reading
+        // without being inspected. What is returned is a new value at a label the endorsement
         // established, not this one carried across.
         let was = content.label();
-        let proof = Declassification::authorise("output a person read and vouched for");
+        let proof = Declassification::authorise("output that was endorsed for the planner");
         let text = content.declassify(&proof);
 
         let label = Label::trusted_private();
         self.allow(
             "read_output",
             format!(
-                "{slot} was {was}; the user read it and vouched for it, so the planner is given \
-                 {label}"
+                "{slot} was {was}; {}, so the planner is given {label}",
+                by.describe()
             ),
         );
         Ok(Labelled::new(text, label))
@@ -4427,6 +4433,7 @@ mod tests {
     use super::*;
     use crate::event::RecordingSink;
     use crate::slot::SlotStore;
+    use crate::vetting::Endorsed;
 
     fn routing_with(key: &str, value: &str) -> Routing {
         let mut r = Routing::new();
@@ -7948,7 +7955,9 @@ five
         let mut policy = open_policy(&mut sink);
         let (slots, slot) = printed("Darwin\n");
         assert!(
-            policy.read_output(&slot, &slots).is_err(),
+            policy
+                .read_output(&slot, &slots, Endorsed::ByAPerson)
+                .is_err(),
             "the planner read quarantined output with nobody's approval"
         );
     }
@@ -7961,7 +7970,9 @@ five
         let (slots, slot) = printed("Darwin\n");
         policy.issue_grant("read_output", "ref", slot.as_str());
 
-        let given = policy.read_output(&slot, &slots).expect("approved");
+        let given = policy
+            .read_output(&slot, &slots, Endorsed::ByAPerson)
+            .expect("approved");
         assert_eq!(given.label(), Label::trusted_private());
     }
 
@@ -7974,12 +7985,71 @@ five
         let (slots, slot) = printed("Darwin\n");
         policy.issue_grant("read_output", "ref", slot.as_str());
 
-        let given = policy.read_output(&slot, &slots).expect("approved");
+        let given = policy
+            .read_output(&slot, &slots, Endorsed::ByAPerson)
+            .expect("approved");
         assert_ne!(
             given.label(),
             Label::trusted_public(),
             "output a person read became routing-safe on its own"
         );
+    }
+
+    /// A release nobody was asked about is no wider than one somebody answered. The label, the
+    /// slot and the trust map come out the same; the only difference is who said so.
+    #[test]
+    fn output_released_by_a_safe_verdict_is_no_wider() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = printed("Darwin\n");
+        policy.issue_grant("read_output", "ref", slot.as_str());
+
+        let given = policy
+            .read_output(&slot, &slots, Endorsed::ByASafeVerdict)
+            .expect("endorsed");
+        assert_eq!(given.label(), Label::trusted_private());
+        assert_eq!(
+            slots.label_of(&slot),
+            Some(Label::untrusted_private()),
+            "the slot was relabelled by a release nobody was asked about"
+        );
+        assert!(
+            policy.vouched().trust.is_empty(),
+            "a trust rule was written by a release nobody was asked about"
+        );
+    }
+
+    /// A trail crediting a person who was never shown the bytes is the one record a reader cannot
+    /// check, so the two ways in are told apart in what the trail says.
+    #[test]
+    fn the_trail_says_which_of_the_two_released_the_output() {
+        let credits_a_person = "the user read it and vouched for it";
+        let credits_the_check = "nobody was asked";
+        for (by, expected, absent) in [
+            (Endorsed::ByAPerson, credits_a_person, credits_the_check),
+            (
+                Endorsed::ByASafeVerdict,
+                credits_the_check,
+                credits_a_person,
+            ),
+        ] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let (slots, slot) = printed("Darwin\n");
+            policy.issue_grant("read_output", "ref", slot.as_str());
+            policy.read_output(&slot, &slots, by).expect("endorsed");
+            drop(policy);
+
+            let trail = format!("{:?}", sink.events());
+            assert!(
+                trail.contains(expected),
+                "{by:?} was not credited in the trail: {trail}"
+            );
+            assert!(
+                !trail.contains(absent),
+                "{by:?} was credited to the other one as well: {trail}"
+            );
+        }
     }
 
     /// The slot itself is untouched. Nothing is relabelled: the quarantined value keeps the label
@@ -7990,7 +8060,9 @@ five
         let mut policy = open_policy(&mut sink);
         let (slots, slot) = printed("Darwin\n");
         policy.issue_grant("read_output", "ref", slot.as_str());
-        policy.read_output(&slot, &slots).expect("approved");
+        policy
+            .read_output(&slot, &slots, Endorsed::ByAPerson)
+            .expect("approved");
 
         assert_eq!(
             slots.label_of(&slot),
@@ -8006,9 +8078,15 @@ five
         let mut policy = open_policy(&mut sink);
         let (slots, slot) = printed("Darwin\n");
         policy.issue_grant("read_output", "ref", slot.as_str());
-        assert!(policy.read_output(&slot, &slots).is_ok());
         assert!(
-            policy.read_output(&slot, &slots).is_err(),
+            policy
+                .read_output(&slot, &slots, Endorsed::ByAPerson)
+                .is_ok()
+        );
+        assert!(
+            policy
+                .read_output(&slot, &slots, Endorsed::ByAPerson)
+                .is_err(),
             "one approval read the same output twice"
         );
     }
@@ -8030,7 +8108,9 @@ five
         }
         policy.issue_grant("read_output", "ref", "ref:1");
         assert!(
-            policy.read_output(&SlotId::new("ref:2"), &slots).is_err(),
+            policy
+                .read_output(&SlotId::new("ref:2"), &slots, Endorsed::ByAPerson)
+                .is_err(),
             "an approval for one result read another"
         );
     }
@@ -8051,7 +8131,9 @@ five
         // Deliberately not marked: this came from a read, not from a run.
         policy.issue_grant("read_output", "ref", slot.as_str());
         assert!(
-            policy.read_output(&slot, &slots).is_err(),
+            policy
+                .read_output(&slot, &slots, Endorsed::ByAPerson)
+                .is_err(),
             "a file's contents were promoted through the output route"
         );
     }
