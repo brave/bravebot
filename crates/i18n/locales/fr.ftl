@@ -988,7 +988,6 @@ turn-ended-unexpectedly = le tour s'est terminé de façon inattendue
 btw-needs-a-question = /btw prend la question à poser, que la conversation ne lira pas
 btw-uninterruptible = la question ne peut pas être interrompue ; elle prend une requête
 btw-ended-unexpectedly = la question s'est terminée de façon inattendue
-btw-answered = demandé à côté du travail, et répondu là ; { $chord } l'ouvre à nouveau
 btw-failed = la question n'a pas pu recevoir de réponse : { $problem }
 
 # Ce que la session dit d'une exécution planifiée lancée depuis elle. Le plan, chaque étape et la
