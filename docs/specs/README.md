@@ -6,7 +6,8 @@ Spec changes, additions, and removals are closely reviewed by humans.
 If a mini-spec disagrees, that is a bug in the spec that should be fixed.
 
 Specs have automation attached which verifies that there is coverage of functionality and also
-that functionality matches specs. Bugs are posted for any problems found.
+that functionality matches specs. It drafts a bug for every problem it finds, showing what went
+wrong rather than describing it, and a person reads the drafts and says which get posted.
 
 ## The specs
 
@@ -28,7 +29,7 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [shell-mode.md](shell-mode.md) | `SHELL` | 5 | the `!` prompt: a line the user typed, and why the planner can never reach it |
 | [skills.md](skills.md) | `SKILL` | 11 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
 | [instructions.md](instructions.md) | `INSTR` | 9 | which instruction files are looked for, where, in what order, and where what they say ends up |
-| [cli.md](cli.md) | `CLI` | 12 | running without the interactive interface: one-shot tasks, piped input, and `doctor` |
+| [cli.md](cli.md) | `CLI` | 14 | running without the interactive interface: one-shot tasks, piped input, and `doctor` |
 | [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 33 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 8 | a line beginning with `/`: where one may come from, when a line is one, and what it does to the line |
@@ -40,7 +41,7 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [mcp.md](mcp.md) | `MCP` | 8 | tools that come from outside this repository, and what they are allowed to do |
 | [hooks.md](hooks.md) | `HOOK` | 7 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 8 | every request that leaves this process, and what comes back |
-| [backends.md](backends.md) | `BACKEND` | 38 | which service answers a request, and what a person may choose between |
+| [backends.md](backends.md) | `BACKEND` | 39 | which service answers a request, and what a person may choose between |
 | [compaction.md](compaction.md) | `COMPACT` | 12 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 14 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 17 | one condition a person set, judged after every turn, until it holds |
@@ -106,7 +107,7 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
   Within one spec, either every entry pins its sites or none does: an unpinned entry beside pinned
   ones reads as though it were checked too.
 - **`verified-by:`** lines name the tests that pin a clause, as `crate::module::test_name`. The
-  coverage check reads them, fails when a name does not resolve to a test that exists, and posts a
+  coverage check reads them, fails when a name does not resolve to a test that exists, and drafts a
   bug for any clause whose value is `none`. `by-construction` is for a clause nothing can execute,
   such as a crate having no dependencies, and says in brackets what makes it hold.
 

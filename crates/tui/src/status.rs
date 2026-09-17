@@ -246,8 +246,8 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // The note says which tier the last turn actually ran on, not whether this build knows a premium
     // host. It used to say the latter, which is baked in at compile time and true of every build:
     // a session whose subscription was never read still reported "premium configured" while every
-    // request went out on the free tier and came back answered by a weaker model. What a person
-    // wants from this line is which tier they are getting, and that is a fact about a request.
+    // request went out spending no subscription and came back answered by a weaker model. What a
+    // person wants from this line is what they are getting, and that is a fact about a request.
     lines.push(
         Line::new(t!(status_endpoint), environment(&facts.config.endpoint)).with_note(
             match (facts.config.premium_endpoint.is_some(), facts.premium) {
@@ -336,8 +336,8 @@ pub fn report(facts: &Facts<'_>) -> Report {
     ));
 
     // Under the turn and token counts, because it is the same question about the same session:
-    // what did this cost. Drawn only once a turn has run, since every figure would be zero before
-    // that and a panel of zeroes reads as a broken feature rather than as an idle session.
+    // what did this cost. A session with no turn yet has as much to say here as any other, since an
+    // aside asked before the first prompt waits on the model for however long it waits.
     //
     // The threshold is a whole second rather than any time at all, because the figures are rendered
     // by the same formatter the indicator uses and it floors to seconds: a part of 400ms would be
@@ -514,7 +514,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
 pub fn configured_tier(config: &Config) -> &'static str {
     match config.premium_endpoint {
         Some(_) => t!(status_premium_available),
-        None => t!(status_free_tier),
+        None => t!(status_no_subscription),
     }
 }
 
@@ -1063,7 +1063,7 @@ mod tests {
 
     /// The bug this replaced. Every build knows a premium host, so reporting premium from the
     /// configuration said "premium" for a session whose credentials were never read, while every
-    /// request went out on the free tier and came back answered by a weaker model. A status panel
+    /// request went out spending no subscription and came back answered by a weaker model. A panel
     /// that cannot be trusted on this point is worse than one that omits it.
     #[test]
     fn the_tier_reported_is_the_one_the_last_turn_actually_ran_on() {
@@ -1078,10 +1078,10 @@ mod tests {
         let mut free = facts(&config, &trust);
         free.premium = Some(false);
         let shown = rendered(&report(&free));
-        assert!(shown.contains("no subscription was used"), "{shown}");
+        assert!(shown.contains("no subscription was spent"), "{shown}");
         assert!(
             !shown.contains("premium, a credential"),
-            "a free-tier turn was reported as premium: {shown}"
+            "a turn that spent no subscription was reported as premium: {shown}"
         );
 
         let mut premium = facts(&config, &trust);
@@ -1108,7 +1108,7 @@ mod tests {
 
         // And a build that cannot reach premium at all says so in both places.
         let free = config_for("https://ai-chat.bsg.brave.com", None);
-        assert_eq!(configured_tier(&free), t!(status_free_tier));
+        assert_eq!(configured_tier(&free), t!(status_no_subscription));
         let shown = rendered(&report(&facts(&free, &trust)));
         assert!(shown.contains(configured_tier(&free)), "{shown}");
     }
@@ -1357,8 +1357,8 @@ mod tests {
         );
     }
 
-    /// Before a turn has run every figure is zero, and a panel of zeroes reads as a broken feature
-    /// rather than as a session that has not started.
+    /// A session that has measured nothing has nothing to say about where its time went, and a
+    /// panel of zeroes reads as a broken feature rather than as a session that has not started.
     #[test]
     fn a_session_with_no_turn_yet_reports_no_time() {
         let config = config_for("http://127.0.0.1:1", None);

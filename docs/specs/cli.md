@@ -6,15 +6,18 @@ governs:
   - crates/cli/src/main.rs
   - crates/cli/src/exit.rs
   - crates/cli/src/json.rs
+  - crates/cli/src/plain.rs
 ---
 
 ## Scope
 
-Running bravebot without the interactive interface: a one-shot task, piped input, `doctor`, and
-what goes where on the way out. The interactive session is
+Running bravebot without the interface that draws: a one-shot task, piped input, `doctor`, a
+session in lines, and what goes where on the way out. The interface that draws is
 [terminal-input.md](terminal-input.md) and [terminal-transcript.md](terminal-transcript.md).
 
-A one-shot run has nobody to ask, and most of what makes it different follows from that.
+A one-shot run has nobody to ask, and most of what makes it different follows from that. A session
+in lines (CLI-14) has somebody, and everything that makes *it* different follows from the terminal
+it does not take.
 
 ## Clauses
 
@@ -155,7 +158,8 @@ over one set of failures is one of them going out of date.
 
 It prints every backend this build can reach and what identifies it, which names the settings set,
 which settings files are in force and which of them won a name more than one set, which names a
-machine-level file pinned and where that file is, the model in force
+machine-level file pinned and where that file is, how to configure a service where nothing
+configured will serve a turn, the model in force
 and whether it was chosen or defaulted, where the state directory is or that there is none, what a
 TLS handshake is validated against and what a request is routed through, the
 confinement available on this platform, and the state of any imported subscription. The signing key
@@ -247,11 +251,18 @@ because which variables a machine states them in is not something the reader is 
 The proxy is named without the credential it carries, and the hosts it is not used for are named
 beside it, since those decide whether it applies to the host that is failing.
 
-Three of the things it can say are configuration errors rather than findings, and make the command
-fail: a named path that yielded no certificate, a set of roots that leaves nothing trusted, and a
-proxy named in a protocol this build cannot connect through. Each is a statement about the machine
-that the program is not honouring, which is the case a report passing with a warning would leave
-somebody to discover at the next request.
+Four of the things it can say are configuration errors rather than findings, and make the command
+fail: a named path that yielded no certificate, a set of roots that leaves nothing trusted, a
+proxy named in a protocol this build cannot connect through, and a configuration naming nothing
+that will serve a turn. Each is a statement about the machine that the program is not honouring,
+which is the case a report passing with a warning would leave somebody to discover at the next
+request.
+
+The last of the four is where the report and the session have to agree. A configuration naming only
+no model service is one a session refuses to open on ([BACKEND-39](backends.md#BACKEND-39)), and
+the three ways to configure one are what the report says, in the same words. A report calling that machine
+healthy would be read before anything else by the one person certain to run this command, which is
+whoever was just refused.
 
 The development section asks the same question one step in rather than one step out: not what this
 machine will use, but whether this checkout is set up to be worked on. The links `agents/setup.py`
@@ -378,9 +389,9 @@ name that asks for whichever model the server picks rather than for a particular
 that does not report the name it was asked for.
 
 **Why.** A model a run cannot be served is substituted rather than refused. One that needs a
-subscription is answered by whatever the free tier serves, with an ordinary reply and nothing to
-distinguish it, so the name the server reports is the only trace there is. Reporting it is about
-the model in force rather than the flag alone, because every route to a model is somebody naming
+subscription is answered by a weaker model, with an ordinary reply and nothing to distinguish it, so
+the name the server reports is the only trace there is. Reporting it is about the model in force
+rather than the flag alone, because every route to a model is somebody naming
 one they expect to be answered by: the settings file's key is what a repository commits beside its
 scripts, and a remembered choice is what a person picked and is being shown.
 
@@ -477,3 +488,126 @@ what may change, every field is either frozen by accident or broken without warn
 `verified-by: bravebot_cli::json::a_failure_before_the_turn_is_still_a_result_object`
 `verified-by: bravebot_cli::json::a_refusal_names_the_principle_it_upholds`
 `verified-by: bravebot_cli::json::content_cannot_break_out_of_the_object_it_is_written_in`
+
+<a id="CLI-13"></a>
+### CLI-13: `--settings` names a file that outranks every layer found
+
+`--settings <path>` reads one more settings file, above the three that
+[backends.md](backends.md) resolves, for the length of the run. It resolves as those do, a name at
+a time, so a file setting one value leaves the rest of what a person and a checkout configured in
+force. The flag and its path are taken out of the arguments before anything dispatches on them, so
+it composes with every way of starting and with the other two flags that are taken out there. Given
+twice, the last file is the one read, and a path naming a file that is already one of the three is
+read once. A path naming no file, and a path that is blank, are refused by name and the run stops
+before it starts, with the result object of CLI-12 where one was asked for.
+
+**Why.** The three layers that are found are properties of a person, of a checkout and of a machine.
+None of them is a property of one invocation, so configuring one run differently from the next means
+editing the home directory or the checkout, and a CI job or somebody holding two accounts can do
+neither. That is the case for a flag, and there is nothing else it could be: a settings file is read
+before a turn exists, so nothing inside a session can name one.
+
+Above all three because naming a file is a stronger statement than a file being found where one was
+looked for. A fourth layer rather than a replacement for them, because a job that wants one key
+changed would otherwise lose the configuration the checkout carries, which it wants as well, and
+would have to restate a whole configuration to move a profile.
+
+Refused rather than ignored, on CLI-11's argument about two audiences: a run told to configure
+itself from a file is a run whose configuration is that file, so carrying on under whatever the
+directory happened to hold is the wrong configuration used in silence. A mistyped path and a
+variable that expanded to nothing look the same from here, and both are ordinary.
+
+What is checked is that the file is there, which is the mistake a command line makes. What is in it
+is read by the rule [backends.md](backends.md) states for every layer, where one that is oversized
+or unparseable leaves the others in force, and `doctor` lists the layers it read, so a named file
+that did not parse is visible by its absence from that list.
+
+`verified-by: bravebot_cli::main::the_settings_flag_is_taken_out_with_the_file_it_named`
+`verified-by: bravebot_cli::main::a_named_settings_file_leaves_every_other_way_of_starting_intact`
+`verified-by: bravebot_cli::main::the_last_settings_file_named_is_the_one_read`
+`verified-by: bravebot_cli::main::a_settings_flag_with_no_path_is_refused`
+`verified-by: bravebot_cli::main::a_named_settings_file_composes_with_the_other_flags_before_dispatch`
+`verified-by: bravebot_cli::running::a_settings_file_named_on_the_command_line_is_read_above_the_ones_found`
+`verified-by: bravebot_cli::running::a_refused_argument_exits_non_zero`
+`verified-by: bravebot_cli::running::a_refused_settings_file_still_answers_with_a_result_object`
+`verified-by: bravebot_config::settings::a_command_line_file_that_is_already_a_layer_is_read_once`
+`verified-by: bravebot_config::settings::a_file_the_command_line_named_beats_every_layer_that_was_found`
+`verified-by: bravebot_config::settings::a_name_a_command_line_file_left_alone_keeps_the_answer_below_it`
+
+<a id="CLI-14"></a>
+### CLI-14: `--plain` is a session in lines, and takes nothing from the terminal
+
+The flag starts an ordinary session, with the same turns, the same conversation carried between
+them, the same trust map and the same questions, and with nothing drawn. None of what the interface
+that draws takes ([terminal-input.md](terminal-input.md)) is taken here: no raw mode, no screen of
+its own, no mouse reporting, no bracketed paste, no focus reporting and no keyboard enhancement. So
+what the terminal held before is where it stays, the session's own lines are added to its
+scrollback, nothing is repainted, and nothing moves on its own.
+
+A line typed is a prompt, and Enter sends it. A blank line is not a prompt. The end of the input
+ends the session, which is the only way out of it: no chord is read, because none can be. The
+keyboard is the terminal's, so its own interrupt ends the process and its own end of file ends the
+session.
+
+stdin must be a terminal, and `--plain` is refused where it is not, naming `-p` as the invocation
+that reads a pipe. The reply goes to stdout and everything else to stderr, which is CLI-5's
+division, so a session in lines is as pipeable as a one-shot run.
+
+Every question is put the same way: what it is about, a line at a time, then the question, then how
+to answer it. Only the affirmative approves. Any other line refuses, and so does the end of the
+input. One answer per question and no second key, so the answers that record something, stop asking
+about these programs and remember this line, are not offered, and nothing answered here outlives
+the session. The startup question about the working directory
+([trust-map.md](trust-map.md)) is put the same way, and the end of the input in place of an answer
+to that one starts no session at all.
+
+It composes with `--incognito`, `--dangerously-skip-permissions` and the `--settings` file of
+CLI-13, which belong to every way of starting, and with nothing else: it starts a session rather
+than describing one.
+
+**Why.** A viewport repainted in place is not a document a screen reader can follow, and what
+leaves the top of it is in this program's own scroller rather than in the terminal's scrollback,
+where a person's own tooling knows how to look. [terminal-input.md](terminal-input.md) says what
+the interface takes and why each part of it is needed; the answer to somebody who cannot use the
+result is not a smaller version of the same thing, it is a session that takes none of it.
+
+A line rather than a panel for every question, because the panel is the takeover: a box drawn over
+a transcript needs the screen the transcript is on. What a line loses is the second and third key,
+the ones that grant something standing, and that is the right thing to lose here rather than to
+spell as more letters after `y`. A standing permission granted by a mistyped character cannot be
+taken back, and saying yes again next time costs a keystroke.
+
+Prompts are read only from a terminal because they are the trusted input, and what CLI-3 settles is
+that a pipe carries bytes nothing vouched for. A session reading prompts from a pipe would take its
+instructions from whatever fed it, and answer its own approval questions out of the same bytes,
+which is the whole guarantee inverted for the sake of a convenience `-p` already provides.
+
+**What it does not have.** Everything that was a drawing: the scroller and its search, the key
+list, the slash commands, `@` naming a file, a picture on the clipboard, the audit trail under a
+key. No session record is written either, so nothing picks a session in lines up again, and a
+`--resume` reached for afterwards will not find it. Each of those is a thing the interface draws or
+a thing that needs what it draws, and a session in lines is the turns without them.
+
+**A known cost.** A line typed before a question was asked is read as the answer to it. The
+terminal queues what is typed and this reads a line at a time, so somebody who pastes several lines
+at once has typed all of them before anything asked them anything, and a question raised while
+those lines are still queued takes the next one as its answer. Only the affirmative approves, so
+the line has to be exactly that word for an effect to follow, and every other line refuses. The
+interface that draws is not exposed to this because bracketed paste tells it where a paste begins
+and ends, which is one of the modes this mode does not take: reading the queue ahead of a question
+needs the terminal put in a state a session in lines does not put it in.
+
+`verified-by: bravebot_cli::plain::a_session_in_lines_asks_the_terminal_for_nothing`
+`verified-by: bravebot_cli::plain::the_reply_is_the_only_thing_on_the_reply_stream`
+`verified-by: bravebot_cli::plain::the_end_of_the_input_ends_the_session`
+`verified-by: bravebot_cli::plain::a_blank_line_is_not_a_turn`
+`verified-by: bravebot_cli::plain::a_failed_turn_says_so_beside_and_the_session_goes_on`
+`verified-by: bravebot_cli::plain::only_the_affirmative_approves_and_silence_refuses`
+`verified-by: bravebot_cli::plain::a_substituted_model_is_said_beside_the_reply`
+`verified-by: bravebot_cli::plain::a_write_is_asked_about_with_the_change_it_would_make`
+`verified-by: bravebot_cli::plain::a_write_a_processor_produced_carries_what_it_said_about_it`
+`verified-by: bravebot_cli::plain::a_run_is_asked_about_one_argument_to_a_row`
+`verified-by: bravebot_cli::plain::the_startup_question_is_asked_in_lines_and_answered_the_same_way`
+`verified-by: bravebot_cli::plain::the_mode_that_asks_about_nothing_is_not_asked_about_the_directory`
+`verified-by: bravebot_cli::running::a_session_in_lines_is_refused_where_its_input_is_not_a_terminal`
+`verified-by: bravebot_cli::main::a_named_settings_file_composes_with_the_other_flags_before_dispatch`

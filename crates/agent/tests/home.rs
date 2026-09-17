@@ -103,8 +103,8 @@ fn an_empty_home_is_treated_as_no_home_at_all() {
 ///
 /// A write interrupted partway leaves it that way, since the file is truncated before anything is
 /// put in it. Passing over it quietly is the silent downgrade PREM-8 exists to prevent: the turn
-/// runs on the free tier, the endpoint answers a premium model name with a weaker model rather than
-/// an error, and nothing on screen says the subscription needs importing again.
+/// spends no subscription, the endpoint answers a premium model name with a weaker model rather
+/// than an error, and nothing on screen says the subscription needs importing again.
 #[test]
 fn an_empty_credentials_file_is_reported_rather_than_read_as_absent() {
     with_temp_home("empty-credentials", |_| {
@@ -130,9 +130,9 @@ fn an_empty_credentials_file_is_reported_rather_than_read_as_absent() {
 ///
 /// A credential only verifies against the deployment that signed it, so a staging batch cannot be
 /// spent against the production endpoint. Skipping it quietly is the silent downgrade PREM-8 exists
-/// to prevent: the request goes out on the free tier, the endpoint answers a premium model name with
-/// a weaker model rather than an error, and the subscription the user is paying for goes unused with
-/// nothing on screen to connect the two.
+/// to prevent: the request goes out with no credential, the endpoint answers a premium model name
+/// with a weaker model rather than an error, and the subscription the user is paying for goes unused
+/// with nothing on screen to connect the two.
 #[test]
 fn a_subscription_imported_for_another_environment_is_reported() {
     with_temp_home("environment-mismatch", |_| {

@@ -5,6 +5,8 @@ status: normative
 governs:
   - crates/agent/src/backend.rs
   - crates/agent/src/outcome.rs
+  - crates/agent/src/subscription.rs
+  - crates/cli/src/main.rs
   - crates/bedrock/src/credentials.rs
   - crates/tui/src/app.rs
   - crates/tui/src/status.rs
@@ -665,12 +667,16 @@ nothing or somebody told their configuration is broken when their session merely
 
 
 <a id="BACKEND-24"></a>
-### BACKEND-24: three settings layers resolve a name at a time, closest first
+### BACKEND-24: settings layers resolve a name at a time, closest first
 
 Settings are read from three files: `settings.json` in the user's own directory, then
 `settings.json` in a `.bravebot` directory beside the work, then `settings.local.json` beside that
 one. A later file overrides an earlier one per name rather than wholesale, so a file setting one thing
 leaves everything else in force.
+
+A file the command line named is read after all three, by these same rules, so what it sets beats
+every file that was found. The flag that names one, and the path it refuses, are in
+[cli.md](cli.md).
 
 | What | How layers combine |
 |---|---|
@@ -714,6 +720,12 @@ skipped rather than parsed, and 64 KB is far above anything a person writes by h
 The order and the merge rules are Claude Code's, down to the name `settings.local.json`, so that
 knowing where to put a value for one tool is knowing it for the other.
 
+The file a command line named is a fourth scope rather than a fourth place to look: it is a property
+of the invocation, which none of the three is, and it is above them because naming a file explicitly
+is a stronger statement than finding one where it was looked for. It fails independently as they do,
+so a named file that has gone missing under a running process does not take a person's own profile
+with it.
+
 `verified-by: bravebot_config::settings::a_project_layer_overrides_a_name_the_global_one_set`
 `verified-by: bravebot_config::settings::a_name_only_the_global_layer_set_survives_a_project_layer`
 `verified-by: bravebot_config::settings::the_local_layer_beats_the_one_a_checkout_carries`
@@ -729,6 +741,10 @@ knowing where to put a value for one tool is knowing it for the other.
 `verified-by: bravebot_config::settings::an_unparseable_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::an_oversized_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::a_directory_with_no_project_layer_reads_the_global_one_alone`
+`verified-by: bravebot_config::settings::a_command_line_file_adds_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::a_command_line_file_is_reported_as_the_layer_that_won_a_name`
+`verified-by: bravebot_config::settings::a_command_line_file_that_is_not_there_leaves_the_found_layers_in_force`
+`verified-by: bravebot_config::settings::a_command_line_file_that_is_already_a_layer_is_read_once`
 `verified-by: bravebot_config::settings::the_layers_that_were_read_are_reported_weakest_first`
 `verified-by: bravebot_config::settings::a_name_more_than_one_layer_set_reports_the_file_that_won`
 `verified-by: bravebot_config::settings::an_override_reports_the_name_and_the_file_and_never_the_value`
@@ -1323,7 +1339,92 @@ that path rather than with the person in front of the screen.
 `verified-by: bravebot_config::lib::an_empty_managed_gateway_block_leaves_no_gateways`
 `verified-by: bravebot_config::lib::a_managed_layer_silent_on_gateways_keeps_the_configured_ones`
 
+<a id="BACKEND-39"></a>
+### BACKEND-39: a configuration naming no model service says what to configure
+
+Where the model in force would be sent to Brave's own aichat endpoint and no Leo Premium
+subscription is in hand to spend on it, nothing is configured to serve the turn and no work starts.
+A session does not open and a one-shot run asks nothing. What is said instead is the three ways to
+configure a service that can answer, each naming the thing to type or to write: an AWS account
+through Bedrock, an OpenAI-compatible gateway, and importing a Leo Premium subscription. `doctor`
+says the same and fails, which is [CLI-7](cli.md#CLI-7).
+
+The model decides, as it does everywhere here: a model a configured service serves is not this
+case, whatever the aichat fields hold. The model asked about is the one the run will actually
+request, which is a name given on the command line, then the one a session recorded, then the
+configured default.
+
+An endpoint that is not one of Brave's own deployments is not this case either, development channel
+and production alike. That is somebody's own host, a local model server or a private deployment or
+a proxy in front of either, and nobody is handed a configuration pointing at one. A port written
+into an endpoint does not change which deployment it names.
+
+**A service configured while the model in force is Brave's own is told apart, and gets one line
+rather than the three.** That is where a settings block copied out of the tool BACKEND-13 borrows
+its shape from lands: those blocks name their models and name no default, so the model stays the
+one the build baked in. What is said there is the key that names one of the configured service's
+models, and the three routes are left out.
+
+The refusal is the configuration ending of [CLI-6](cli.md#CLI-6) rather than a status of its own.
+Where a subscription is stored and could not be read, what the store said about it is said first.
+A machine with nowhere to keep credentials has none stored rather than a batch it could not read.
+
+**Why.** Nothing has been set up yet. A released binary arrives pointed at Brave's own aichat
+endpoint, and being pointed at it is not the same as having a service configured to do this work: no
+account was named, no gateway was written down, and no subscription was imported. A run that went
+ahead would send the turn there anyway and hand back whatever that request became, and whatever it
+became is not the agent doing the work. What a person is left with is a session that failed, or one
+that answered poorly, and nothing on the screen saying the missing piece was a configuration. The
+conclusion drawn from a first session is the one that sticks.
+
+Said before anything runs because that is the only moment where the answer is "configure a
+service". Afterwards the question a person has is why the answers are bad, which is a question the
+configuration cannot be reached from.
+
+Refusing rather than letting the request go, for the reason
+[PREM-8](premium-credentials.md#PREM-8) reports a subscription it could not read rather than passing
+over it: what comes back from a request that was never going to be served carries no sign of why,
+and nothing about a bad session points at where a request went.
+
+Three routes rather than one, and each named by what to type, because a refusal that states the
+problem and no way out of it has moved the work to the person and told them nothing they could not
+already see. Leo Premium is last and says why it is last: those models are reached through Brave's
+AI gateway, which has problems of its own being worked on. It is still the shortest route for
+somebody who already subscribes, which is why it is offered rather than left out.
+
+Telling the configured case apart is the same argument in the other direction. Somebody there is
+one settings key from working, and three ways to set up a service would be three things to read
+past on the way to the one that applies, the first of which is the thing they already did.
+
+The test is the endpoint rather than a switch somebody sets. A build pointed at a host that is not
+Brave's has been configured by whoever pointed it, and that covers every development build and
+every local service without a preference to store. A switch would be the thing set once and
+forgotten, which is how an unconfigured build comes back on the machine of the person who was going
+to configure something properly later.
+
+What would change this clause is a released binary arriving with a model service already set up. The
+refusal exists because one does not.
+
+`verified-by: bravebot_agent::backend::braves_endpoint_with_nothing_beside_it_has_no_service_configured`
+`verified-by: bravebot_agent::backend::a_model_a_configured_service_serves_has_one`
+`verified-by: bravebot_agent::backend::a_service_configured_while_the_model_is_braves_own_has_none_for_that_model`
+`verified-by: bravebot_agent::backend::an_endpoint_that_is_not_braves_is_a_service_that_was_chosen`
+`verified-by: bravebot_agent::subscription::braves_own_deployments_are_told_from_a_host_somebody_chose`
+`verified-by: bravebot_agent::subscription::a_port_is_not_part_of_the_host`
+`verified-by: bravebot_cli::running::a_first_run_with_no_service_configured_says_how_to_configure_one`
+`verified-by: bravebot_cli::running::a_configured_gateway_is_not_refused`
+`verified-by: bravebot_cli::running::a_service_configured_with_no_model_of_its_own_named_says_to_name_one`
+`verified-by: bravebot_cli::running::a_model_named_on_the_command_line_is_not_refused`
+
 ## Known costs
+
+- **The refusal is made at startup, and a model chosen mid-session is not checked again.**
+  BACKEND-39 is asked once, before a session opens, so somebody who opens on a configured model and
+  then picks one of Brave's from `/model` keeps it for the rest of that session.
+  Checking per turn would put a file read and a refusal in front of every round, and the choice
+  there is a person naming a model from a list that says which service answers it (BACKEND-6),
+  which is the opposite of the case the clause exists for: nobody arrives at it without knowing
+  what they picked.
 
 - **Which model answers is the individual's, and a managed layer cannot pin it.** A pinned default
   model would lose to a `/model` choice the moment one was recorded, so it would pin nothing, and
@@ -1374,7 +1475,7 @@ that path rather than with the person in front of the screen.
   nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits
   the field, so it is not validated, and on `near-glm-5`, which reports a non-zero reasoning-token
   count for an ordinary prompt, that count does not move with the level. The premium rows of the
-  roster were not measured, a free-tier credential being substituted to a weaker model before the
+  roster were not measured, an unsubscribed request being substituted to a weaker model before the
   request lands, so nothing here is established about them. A level chosen against a Brave-served
   model is therefore carried, sent, and dropped, while the interface goes on reporting it as in
   force. Bedrock is unaffected, the level reaching the model in the field that model defines.

@@ -3962,7 +3962,6 @@ fn aside_animated(
 
     session.begin_aside();
 
-    let streaming = to_main.clone();
     let worker = thread::spawn(move || {
         let mut sink = Trail::new();
         let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
@@ -3977,11 +3976,10 @@ fn aside_animated(
             &mut reporter,
             &mut sink,
             worker_trust,
-            |written| {
-                let _ = streaming.send(crate::remote_confirm::ToMain::Streaming(
-                    written.to_string(),
-                ));
-            },
+            // Taken and dropped. An answer has to be released to be looked at, and the one place
+            // this side could draw it as it arrives is the tail the turn's own half-written reply
+            // fills, which is among the turn's own lines.
+            |_written| {},
         )
         .map_err(|e| e.to_string());
         (done, sink)
@@ -4015,11 +4013,8 @@ fn aside_animated(
             }
         }
 
-        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| match message {
-            crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
-            crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
-            crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
-            _ => {}
+        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
+            aside_reported(session, message);
         });
 
         if !carrying_on {
@@ -4032,20 +4027,7 @@ fn aside_animated(
         .unwrap_or_else(|_| (Err(t!(btw_ended_unexpectedly).to_string()), Trail::new()));
 
     match done {
-        Ok(answered) => {
-            session.end_aside(answered.usage.total());
-            // The row and the view carry the answer; the transcript carries a line saying it
-            // happened. Both are wanted: the view is what the person is reading a moment from
-            // now, and the note is what tells them afterwards that there was an aside here at
-            // all, since nothing else about it is in the transcript.
-            session.asked_aside(crate::state::Aside {
-                question: asked,
-                answer: Some(answered.shown),
-                kept: answered.kept.is_some(),
-            });
-            let chord = session.bindings().watch_name();
-            session.note(t!(btw_answered, chord = chord));
-        }
+        Ok(answered) => aside_answered(session, asked, answered),
         Err(message) => {
             session.end_aside(0);
             session.note(t!(btw_failed, problem = message));
@@ -4053,6 +4035,37 @@ fn aside_animated(
     }
 
     Ok(sink.events().to_vec())
+}
+
+/// Take what a question asked beside the work came back with.
+///
+/// WATCH-18: the row and the view are where an aside is read, and neither half of it is anywhere
+/// else. Apart from [`aside_animated`], which needs a terminal and a backend to reach, so that
+/// what an answer does to the session is somewhere a test can call.
+fn aside_answered(session: &mut Session, asked: String, answered: bravebot_agent::aside::Answered) {
+    session.end_aside(answered.usage.total());
+    // The row and the view are the whole of it, and nothing joins the transcript. A line there
+    // about an exchange the planner has read no part of is one a reader takes it to have had, and
+    // what says afterwards that an aside happened is the hint line, which counts the rows and
+    // names the key that opens them.
+    session.asked_aside(crate::state::Aside {
+        question: asked,
+        answer: Some(answered.shown),
+        kept: answered.kept.is_some(),
+    });
+}
+
+/// Take what the thread answering a question beside the work says while it works.
+///
+/// Apart from [`aside_animated`] for the reason [`aside_answered`] is, and under the same clause:
+/// an answer arriving as it is written is half of an aside, and the one place this side could draw
+/// it is the tail where the planner's own half-written reply goes.
+fn aside_reported(session: &mut Session, message: crate::remote_confirm::ToMain) {
+    match message {
+        crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
+        crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
+        _ => {}
+    }
 }
 
 /// Plan one task in full, put the frozen plan to the person, and walk it, redrawing throughout.
@@ -5245,8 +5258,8 @@ fn fold_outcome(
             session.measured(outcome.context_tokens, occupied.budget, occupied.guessed);
 
             // What was asked for against what answered. The endpoint substitutes rather than
-            // refusing: a premium model requested without a credential comes back as whatever the
-            // free tier serves, with a 200 and a perfectly ordinary reply. So the only trace is
+            // refusing: a premium model requested without a credential comes back answered by a
+            // weaker model, with a 200 and a perfectly ordinary reply. So the only trace is
             // this field, and a session that never compares them cannot tell a model it chose from
             // one chosen for it.
             //
@@ -8853,6 +8866,71 @@ mod tests {
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
             Action::Submit("/btwice is not a word".to_string())
+        );
+    }
+
+    /// Neither half of an aside is in the conversation, so an answer that arrives adds nothing to
+    /// the turn's own lines: a line about it there is one a reader takes the planner to have had,
+    /// and the planner has read neither the question nor the answer. The row the answer becomes,
+    /// and the hint line that counts it, are where an aside is said to have happened.
+    #[test]
+    fn answering_a_question_beside_the_work_leaves_the_transcript_alone() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+        let before = session.transcript.len();
+
+        aside_answered(
+            &mut session,
+            "why is the parser recursive?".to_string(),
+            bravebot_agent::aside::Answered {
+                shown: "because the grammar nests".to_string(),
+                kept: Some("because the grammar nests".to_string()),
+                usage: Default::default(),
+            },
+        );
+
+        assert_eq!(
+            session.watched_aside().and_then(|a| a.answer.as_deref()),
+            Some("because the grammar nests"),
+            "the answer did not reach the row that is the only place it is read"
+        );
+        let added: Vec<&str> = session.transcript[before..]
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert!(
+            added.is_empty(),
+            "an answered aside put a line among the turn's own: {added:?}"
+        );
+    }
+
+    /// The tail is where the planner's own half-written reply is drawn, so an answer arriving
+    /// there reads as the planner writing something it has not read. There is one model writing
+    /// at a time in that place, and an aside is not the one.
+    #[test]
+    fn an_answer_being_written_beside_the_work_is_not_drawn_over_the_turn() {
+        let mut session = Session::new("none");
+        session.streaming("the turn was saying this");
+        session.begin_aside();
+        let before = session.transcript.len();
+
+        aside_reported(
+            &mut session,
+            crate::remote_confirm::ToMain::Streaming("because the grammar".to_string()),
+        );
+
+        assert_eq!(
+            session.reply_so_far(),
+            "the turn was saying this",
+            "the answer reached the tail the turn's own reply is drawn in"
+        );
+        let added: Vec<&str> = session.transcript[before..]
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert!(
+            added.is_empty(),
+            "the answer was drawn among the turn's own lines: {added:?}"
         );
     }
 

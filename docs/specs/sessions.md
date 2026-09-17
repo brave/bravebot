@@ -53,11 +53,20 @@ so what lands on disk is what the planner was allowed to hold: no untrusted byte
 rather than by filtering. Quarantined content is not written at all, and the trail is labels and
 gate names with no content in it.
 
+A rewind point is the one part of a record built from bytes no message carried: it keeps what the
+files a turn wrote over held, read off the disk rather than out of the conversation, so a later
+session can put them back. Those bytes are written down only where the map that stood before the
+turn vouched for the path, which is the map that labelled them. What a file nobody vouched for held
+is written down as contents this session did not keep, and a resumed session says that path did not
+go back rather than putting it back.
+
 **Why.** A record is read back into a later turn's context. Anything written that the planner could
 not have held would enter that context on the next resume, which is the laundering route the whole
 design exists to close.
 
-`verified-by: none`
+`verified-by: bravebot_tui::sessions::what_a_file_nobody_vouched_for_held_is_not_written_down`
+`verified-by: bravebot_tui::sessions::an_answer_the_planner_could_not_have_held_is_not_written_down`
+`verified-by: bravebot_agent::turn::the_trail_records_the_slot_and_the_path_rather_than_the_content`
 
 <a id="SESSION-3"></a>
 ### SESSION-3: the record carries what a resume needs and nothing more
@@ -218,7 +227,10 @@ still refused, since a fork continues a conversation and there is none to contin
 
 The model the server reported answering with is written down, along with what each turn spent as
 well as the total. The breakdown adds up to the total, and a turn that compacted part way through
-is charged for that too, since it was asked for in the middle of that turn's work.
+is charged for that too, since it was asked for in the middle of that turn's work. Something asked
+for before the first turn, an aside or a run as the first thing a session does, is charged to a
+leading entry ahead of that turn rather than to no turn at all, so the breakdown still adds up to
+the total there as well.
 
 The name recorded is the one that answered, not the one asked for: an endpoint may serve something
 other than the name it was given, and the record is an account of what happened. A record written
@@ -234,6 +246,8 @@ than the one in force at the time.
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
 `verified-by: bravebot_tui::state::each_turn_records_what_it_cost_on_its_own`
 `verified-by: bravebot_tui::state::an_aside_is_charged_to_the_turn_it_interrupted`
+`verified-by: bravebot_tui::state::an_aside_before_the_first_turn_is_charged_to_a_leading_entry`
+`verified-by: bravebot_tui::state::a_run_before_the_first_turn_is_charged_to_a_leading_entry`
 `verified-by: bravebot_tui::state::clearing_forgets_what_each_turn_cost`
 
 <a id="SESSION-12"></a>
@@ -246,10 +260,11 @@ whole and the remainder is meaningful. An approval prompt is drawn from inside a
 was spent waiting for a person is taken off the tool figure rather than counted in both.
 
 A turn that failed is recorded on the same footing as one that succeeded, and a `/compact` asked for
-mid-turn is charged to the turn it interrupted, as its tokens are. `/status` reports the session
-total and each part that actually happened; a part that did not happen is left out rather than shown
-as zero. A record written before this was kept reads as an empty breakdown, which is not the same as
-a session that took no time.
+mid-turn is charged to the turn it interrupted, as its tokens are; one asked for before the first
+turn is charged to the leading entry its tokens go to. `/status` reports the session total and each
+part that actually happened; a part that did not happen is left out rather than shown as zero. A
+record written before this was kept reads as an empty breakdown, which is not the same as a session
+that took no time.
 
 **Why.** A duration alone is unactionable, and the three things it conflates want three different
 fixes. A turn that took four minutes on the model, one that took four minutes running a test suite,
@@ -260,6 +275,7 @@ harness's own overhead.
 
 `verified-by: bravebot_tui::state::each_turn_records_where_its_time_went`
 `verified-by: bravebot_tui::state::an_aside_charges_its_wait_to_the_turn_it_interrupted`
+`verified-by: bravebot_tui::state::an_aside_before_the_first_turn_records_its_wait_ahead_of_that_turn`
 `verified-by: bravebot_tui::state::a_failed_turn_still_accounts_for_its_wall_clock`
 `verified-by: bravebot_tui::state::a_resumed_session_carries_on_from_the_time_it_had_spent`
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
@@ -545,8 +561,10 @@ that stood before its turn, what that turn was asked, and what its writes overwr
 `/rewind` after a resume reach the same turns they reached before the program was closed.
 
 What a path held is written base64 in the record, so the record carries the rewind budget as well
-as the conversation. Paths inside the project are recorded relative to it and come back under the
-directory the resumed session works in, as trust rules do.
+as the conversation. Only for a path the map that stood before the turn vouched for: SESSION-2 is
+why one it did not vouch for is written down as a path whose contents this session did not keep,
+which the session itself still holds and can still put back. Paths inside the project are recorded
+relative to it and come back under the directory the resumed session works in, as trust rules do.
 
 Only the points a rewind can still reach are written. A record holds what the session holds, so a
 point that ages out of the session's depth or budget, and every point given up when something
@@ -600,20 +618,20 @@ names it on the line that reports the rewind.
   storing diffs between consecutive points rather than copies would, at the cost of a mechanism
   that has to be right about every write a turn makes.
 
-- **A record holds what the last few turns overwrote, whoever wrote it.** A turn that replaces a
-  file puts that file's previous contents in the record, and those contents were not necessarily
-  ever shown to the planner: overwriting a file of credentials copies them out of the project and
-  into the state directory. They leave the record once the point ages out, and 0600 covers them
-  while they are there, but a session that ends on such a turn leaves them in its record until the
-  record is deleted. Nothing here distinguishes a file worth keeping from one that is not, because
-  nothing here reads the bytes.
+- **A record holds what the last few turns overwrote inside a directory somebody vouched for.** A
+  turn that replaces such a file puts that file's previous contents in the record, and vouching for
+  a directory is not saying that every file in it is worth copying anywhere: overwriting a file of
+  credentials inside a project the user trusts copies them out of it and into the state directory.
+  They leave the record once the point ages out, and 0600 covers them while they are there, but a
+  session that ends on such a turn leaves them in its record until the record is deleted. Nothing
+  here distinguishes a file worth keeping from one that is not, because nothing here reads the
+  bytes.
 
-- **A record grows with what its turns wrote over.** Every rewind point carries a copy of the
-  conversation and the bytes the turn overwrote, and the whole record is rewritten after every
-  turn. A session whose turns rewrite large files therefore writes a large record repeatedly,
-  whether or not anything is ever rewound. The memory budget bounds it and nothing smaller does;
-  storing the difference between consecutive points rather than copies would, at the cost of a
-  mechanism that has to be right about every write a turn makes.
+- **A resumed session cannot rewind a file nobody vouched for.** What such a file held is kept in
+  memory for the session that took the backup and left out of the record, so after a resume that
+  path is reported as one that did not go back, beside the paths whose contents were past the
+  budget. The turn is still undone in every other respect and the file is left alone rather than
+  deleted. The alternative is those bytes on disk, which is what SESSION-2 refuses.
 
 - **A rewind sees file-tool writes and nothing else.** The backups are taken inside the workspace,
   so a turn that changed a file by running a program instead (`run`, per [run.md](tools/run.md))

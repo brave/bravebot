@@ -131,8 +131,9 @@ block replaces control characters with visible glyphs on its way to the screen, 
 what a needle meets and the bytes behind them are not there to be found.
 
 Every match is drawn highlighted where it already is. `n` and `N` move to the next and the previous
-and wrap at the ends, and how many matches there are is drawn. A needle that matches nothing says
-so and moves nothing.
+and wrap at the ends, and how many matches there are is drawn. Two matches on one row are two
+matches: the count says so, and the second is a press of its own, which moves the count on and
+leaves the view where it already is. A needle that matches nothing says so and moves nothing.
 
 **Why.** A pattern language is an interpreter reached by a line the person types over text an
 attacker may have written, and a backtracking one is a stall waiting to be found. Literal matching
@@ -150,6 +151,8 @@ is also what somebody scanning a transcript for a filename actually wants.
 `verified-by: bravebot_tui::app::backspacing_past_the_start_abandons_the_search`
 `verified-by: bravebot_tui::render::every_match_on_the_screen_is_highlighted`
 `verified-by: bravebot_tui::render::how_many_matches_there_are_is_drawn`
+`verified-by: bravebot_tui::render::a_line_holding_two_matches_is_counted_as_two`
+`verified-by: bravebot_tui::state::two_matches_on_one_row_are_two_steps_of_the_walk`
 
 
 <a id="SCROLL-5"></a>
@@ -175,6 +178,7 @@ under Known costs rather than left to be found.
 `verified-by: bravebot_tui::render::a_search_matches_quarantined_content_too`
 `verified-by: bravebot_tui::render::a_match_inside_a_quarantined_block_stays_inside_it`
 `verified-by: bravebot_tui::render::the_search_footer_never_quotes_what_it_matched`
+`verified-by: bravebot_tui::render::two_matches_in_one_quarantined_row_are_counted_as_two`
 `verified-by: bravebot_tui::render::a_quarantined_row_is_marked_in_the_scroller_as_it_is_in_the_transcript`
 
 

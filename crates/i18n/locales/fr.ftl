@@ -33,6 +33,7 @@ cli-tagline =
     bravebot { $version } : un agent polyvalent résistant à l'injection de prompt
 cli-usage-heading = Utilisation :
 cli-usage-interactive = Démarrer une session interactive
+cli-usage-plain = Démarrer une session en lignes, sans rien prendre au terminal
 cli-usage-task = Exécuter une seule tâche
 cli-usage-piped = ... avec une entrée redirigée, jamais fiable
 cli-usage-resume = Reprendre une session dans ce répertoire
@@ -54,6 +55,23 @@ cli-key-leave = Partir
 cli-commands-heading = Commandes interactives :
 cli-name-a-file = Inclure un fichier de l'espace de travail comme contexte fiable
 
+## Une session en lignes : pas d'écran à elle, pas de couleur, rien de redessiné
+
+cli-plain-opening =
+    bravebot { $version } en lignes, { $model }. Une ligne est une demande ; la fin de
+    l'entrée (Ctrl-D) termine la session.
+# Dit lorsque --plain est donné avec autre chose qu'un terminal sur l'entrée standard. Les lignes
+# qu'il lit sont des demandes, et rien ne se porte garant de ce qu'un tube transporte.
+cli-plain-needs-a-terminal =
+    --plain lit ce que vous tapez, donc son entrée doit être un terminal. Utilisez -p pour
+    exécuter une seule tâche avec une entrée redirigée, lue comme un contexte mis en quarantaine.
+# Dit lorsque --plain est donné à côté d'une autre manière de démarrer. Il démarre une session
+# plutôt qu'il ne la décrit, donc il n'y a rien à combiner avec lui.
+cli-plain-takes-nothing-else =
+    --plain démarre une session et ne prend aucun autre argument. --incognito,
+    --dangerously-skip-permissions et --settings vont avec lui ; tout le reste est une autre
+    manière de démarrer.
+
 mode-accept-edits = ⏵ modifications acceptées
 mode-plan = ⏸ mode plan
 mode-bypass = ⏵⏵ permissions contournées
@@ -61,6 +79,7 @@ mode-bypass = ⏵⏵ permissions contournées
 cli-options-heading = Options :
 cli-option-file = Inclure un fichier de l'espace de travail comme contexte (répétable)
 cli-option-add-dir = Accéder à un répertoire hors de celui de travail (répétable)
+cli-option-settings = Lire ce fichier de réglages pour cette exécution, au-dessus de ceux trouvés sur le disque
 cli-option-mode = turn (par défaut) décide étape par étape ; manifest planifie tout le déroulement d'abord
 cli-option-model = Le modèle demandé par cette exécution, à la place de celui mémorisé ou configuré
 cli-option-print = Non interactif. Lit l'entrée redirigée comme contexte en quarantaine
@@ -79,6 +98,8 @@ cli-option-version = Afficher la version
 cli-unknown-option = option inconnue : { $flag }
 cli-file-needs-a-path = --file demande un chemin
 cli-add-dir-needs-a-path = --add-dir demande le chemin absolu d'un répertoire
+cli-settings-needs-a-path = --settings demande le chemin d'un fichier de réglages
+cli-settings-not-a-file = --settings ne nomme aucun fichier : { $path }
 cli-mode-needs-a-name = --mode demande l'un de : { $names }
 cli-model-needs-a-name = --model demande le nom d'un modèle
 cli-unexpected-argument = argument inattendu : { $argument }
@@ -95,6 +116,23 @@ cli-piped-input-unreadable = avertissement : impossible de lire l'entrée rediri
 cli-piped-input-too-large =
     l'entrée redirigée dépasse { $limit } Mio. Écrivez-la dans un fichier et nommez celui-ci
     à la place
+
+
+## Ce qu'une exécution dit quand aucun service de modèle n'est configuré
+
+onboarding-no-model = aucun service de modèle n'est encore configuré
+onboarding-subscription-unusable = l'abonnement enregistré n'a pas pu être utilisé : { $problem }
+onboarding-name-a-configured-model =
+    Un service est configuré, mais le modèle en vigueur est l'un de ceux de Brave : indiquez l'un des vôtres avec la clé `model` dans ~/.bravebot/settings.json, ou avec --model pour une exécution unique. `bravebot doctor` indique ce que propose chaque service configuré.
+onboarding-pick-one = Configurez l'une de ces options, puis relancez bravebot :
+onboarding-bedrock =
+    AWS Bedrock, via votre propre compte : ajoutez un bloc `provider` nommé `amazon-bedrock` dans ~/.bravebot/settings.json, avec sa région et les modèles à proposer.
+onboarding-openrouter =
+    OpenRouter, ou toute autre passerelle compatible OpenAI : ajoutez un bloc `provider` à son nom dans ~/.bravebot/settings.json, avec la variable qui contient sa clé d'API et les modèles à proposer.
+onboarding-leo =
+    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot import-leo-creds` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des deux options ci-dessus.
+onboarding-where-to-read =
+    Des exemples concrets se trouvent dans https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 
 
 ## Ce qu'une exécution unique dit à côté de la réponse
@@ -216,8 +254,8 @@ leo-browser-untouched =
     pas été touchés
 
 subscription-unusable =
-    l'abonnement importé n'a pas pu être utilisé ({ $problem }) ; ce tour utilise donc
-    l'offre gratuite
+    l'abonnement importé n'a pas pu être utilisé ({ $problem }) ; ce tour n'en utilise
+    donc aucun
 
 background-job-finished = `{ $command }` s'est terminé en arrière-plan : { $outcome }
 
@@ -511,8 +549,13 @@ plan-nothing-yet =
     rien n'a encore été lu ni écrit, donc refuser laisse tout en l'état.
 plan-yes = l'exécuter
 plan-no = ne pas l'exécuter
+# Là où une question est une ligne sur un terminal plutôt qu'un panneau : à quoi ressemble un oui,
+# et la seule réponse qui approuve. Toute autre ligne, et la fin de l'entrée, refuse. Partagé par
+# toutes les questions posées en lignes, pour qu'un seul oui les couvre.
+line-answer = [o/N]
+line-answer-yes = o
+# La ligne propre au plan, qui nomme ce qu'un oui exécute.
 plan-answer = l'exécuter ? [o/N]
-plan-answer-yes = o
 
 
 ## Approuver un fichier en quarantaine
@@ -573,8 +616,8 @@ status-served-instead = servi à la place du modèle demandé
 status-endpoint = Adresse
 status-premium-available = premium disponible, rien encore envoyé
 status-premium-in-use = premium, un jeton a été dépensé
-status-premium-not-spent = offre gratuite : aucun abonnement utilisé
-status-free-tier = offre gratuite seulement
+status-premium-not-spent = aucun abonnement utilisé
+status-no-subscription = aucun abonnement configuré
 status-confinement = Confinement
 status-loop = Boucle
 status-loop-every = toutes les { $every }
@@ -988,7 +1031,6 @@ turn-ended-unexpectedly = le tour s'est terminé de façon inattendue
 btw-needs-a-question = /btw prend la question à poser, que la conversation ne lira pas
 btw-uninterruptible = la question ne peut pas être interrompue ; elle prend une requête
 btw-ended-unexpectedly = la question s'est terminée de façon inattendue
-btw-answered = demandé à côté du travail, et répondu là ; { $chord } l'ouvre à nouveau
 btw-failed = la question n'a pas pu recevoir de réponse : { $problem }
 
 # Ce que la session dit d'une exécution planifiée lancée depuis elle. Le plan, chaque étape et la
