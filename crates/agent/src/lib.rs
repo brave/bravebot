@@ -4,7 +4,7 @@
 //! from precommitted routing, never from model output, so a turn cannot be redirected
 //! by the content it processes.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 pub mod aside;
 pub mod backend;
