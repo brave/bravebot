@@ -135,6 +135,26 @@ impl BackendError {
         };
         Diagnosis::of(category)
     }
+
+    /// Whether the request never reached the service.
+    ///
+    /// Worth telling apart from every other failure because it is the one a caller can do
+    /// something about without a person: a service that was not there a moment ago may be there
+    /// on the next attempt, while a refused model or an unusable configuration will not be.
+    ///
+    /// The transport's own failures and no others. A non-success status is the service answering,
+    /// and a caller that read a refused credential as a connection to try again would retry it
+    /// until it gave up.
+    pub fn is_unreachable(&self) -> bool {
+        match self {
+            Self::Aichat(ChatError::Egress(bravebot_net::EgressError::Transport { .. }))
+            | Self::Bedrock(BedrockError::Egress(bravebot_net::EgressError::Transport {
+                ..
+            })) => true,
+            Self::Attempted { cause, .. } => cause.is_unreachable(),
+            _ => false,
+        }
+    }
 }
 
 /// Keep the HTTP status but omit URLs, which may contain credentials.
@@ -156,26 +176,6 @@ fn of_egress(error: &bravebot_net::EgressError) -> Diagnosis {
             _ => Category::Refused,
         })
         .with_status(*status),
-    }
-
-    /// Whether the request never reached the service.
-    ///
-    /// Worth telling apart from every other failure because it is the one a caller can do
-    /// something about without a person: a service that was not there a moment ago may be there
-    /// on the next attempt, while a refused model or an unusable configuration will not be.
-    ///
-    /// The transport's own failures and no others. A non-success status is the service answering,
-    /// and a caller that read a refused credential as a connection to try again would retry it
-    /// until it gave up.
-    pub fn is_unreachable(&self) -> bool {
-        matches!(
-            self,
-            Self::Aichat(ChatError::Egress(
-                bravebot_net::EgressError::Transport { .. }
-            )) | Self::Bedrock(BedrockError::Egress(
-                bravebot_net::EgressError::Transport { .. }
-            ))
-        )
     }
 }
 
@@ -855,6 +855,19 @@ mod tests {
             transient: true,
         };
         assert!(BackendError::from(BedrockError::Egress(dropped)).is_unreachable());
+
+        // Every request path wraps its failure in the attempt count, so a caller only ever meets
+        // one through that wrapper, and a check that stopped there would answer for no real run.
+        let retried = bravebot_net::EgressError::Transport {
+            url: "http://127.0.0.1:1/v1".to_string(),
+            detail: "connection refused".to_string(),
+            transient: true,
+        };
+        assert!(
+            BackendError::from(ChatError::Egress(retried))
+                .counted(3)
+                .is_unreachable()
+        );
 
         // The service answered, so there is nothing to reach again: a caller that read this as a
         // connection to retry would retry a refused credential until it gave up.
