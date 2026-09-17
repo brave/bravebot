@@ -135,6 +135,26 @@ impl BackendError {
         };
         Diagnosis::of(category)
     }
+
+    /// Whether the request never reached the service.
+    ///
+    /// Worth telling apart from every other failure because it is the one a caller can do
+    /// something about without a person: a service that was not there a moment ago may be there
+    /// on the next attempt, while a refused model or an unusable configuration will not be.
+    ///
+    /// The transport's own failures and no others. A non-success status is the service answering,
+    /// and a caller that read a refused credential as a connection to try again would retry it
+    /// until it gave up.
+    pub fn is_unreachable(&self) -> bool {
+        matches!(
+            self,
+            Self::Aichat(ChatError::Egress(
+                bravebot_net::EgressError::Transport { .. }
+            )) | Self::Bedrock(BedrockError::Egress(
+                bravebot_net::EgressError::Transport { .. }
+            ))
+        )
+    }
 }
 
 /// Keep the HTTP status but omit URLs, which may contain credentials.
@@ -156,26 +176,6 @@ fn of_egress(error: &bravebot_net::EgressError) -> Diagnosis {
             _ => Category::Refused,
         })
         .with_status(*status),
-    }
-
-    /// Whether the request never reached the service.
-    ///
-    /// Worth telling apart from every other failure because it is the one a caller can do
-    /// something about without a person: a service that was not there a moment ago may be there
-    /// on the next attempt, while a refused model or an unusable configuration will not be.
-    ///
-    /// The transport's own failures and no others. A non-success status is the service answering,
-    /// and a caller that read a refused credential as a connection to try again would retry it
-    /// until it gave up.
-    pub fn is_unreachable(&self) -> bool {
-        matches!(
-            self,
-            Self::Aichat(ChatError::Egress(
-                bravebot_net::EgressError::Transport { .. }
-            )) | Self::Bedrock(BedrockError::Egress(
-                bravebot_net::EgressError::Transport { .. }
-            ))
-        )
     }
 }
 
