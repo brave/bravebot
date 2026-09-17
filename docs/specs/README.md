@@ -37,8 +37,8 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [watching.md](watching.md) | `WATCH` | 21 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, and the mode Ctrl-L opens over them |
 | [scroller.md](scroller.md) | `SCROLL` | 9 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | importing a Leo Premium subscription and spending its credentials |
-| [sandboxing.md](sandboxing.md) | `SANDBOX` | 7 | operating-system confinement for processes running code we did not write |
-| [mcp.md](mcp.md) | `MCP` | 8 | tools that come from outside this repository, and what they are allowed to do |
+| [sandboxing.md](sandboxing.md) | `SANDBOX` | 8 | operating-system confinement for processes running code we did not write |
+| [mcp.md](mcp.md) | `MCP` | 9 | tools that come from outside this repository, and what they are allowed to do |
 | [hooks.md](hooks.md) | `HOOK` | 7 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 8 | every request that leaves this process, and what comes back |
 | [backends.md](backends.md) | `BACKEND` | 39 | which service answers a request, and what a person may choose between |

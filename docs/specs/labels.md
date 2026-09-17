@@ -22,7 +22,7 @@ guards:
       - crates/core/src/policy.rs: 48
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 1
-      - crates/mcp/tests/stdio.rs: 1
+      - crates/mcp/tests/stdio.rs: 2
   - symbol: Labelled::relabel
     sites:
       - crates/core/src/policy.rs: 1
