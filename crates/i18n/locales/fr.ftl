@@ -218,6 +218,12 @@ subscription-unusable =
 
 background-job-finished = `{ $command }` s'est terminé en arrière-plan : { $outcome }
 
+hook-not-started = le hook { $moment } `{ $program }` n'a pas pu être démarré ({ $detail })
+hook-failed = le hook { $moment } `{ $program }` s'est mal terminé ({ $status })
+hook-stopped =
+    le hook { $moment } `{ $program }` tournait encore après { $seconds } secondes et a été
+    arrêté
+
 
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
 

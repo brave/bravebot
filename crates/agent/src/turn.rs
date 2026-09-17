@@ -1740,6 +1740,64 @@ fn collect_jobs<S: Sink, R: Reporter>(
     Ok(())
 }
 
+/// Run the hooks a person attached to `moment`, and answer with what went wrong where something
+/// did.
+///
+/// A hook that ended well is said nothing about: it did what it was asked, and a line per round
+/// saying so would bury the turn. A hook that could not run is worth a sentence, because the
+/// person is otherwise waiting for a formatter that has not run since they mistyped its path.
+///
+/// Said to a live display as it happens and handed back as well, because a caller with nowhere to
+/// draw reads the turn's notices off the outcome, and a one-shot run whose hook never fired is
+/// exactly the case that needs telling.
+///
+/// Nothing here reads what a hook produced or changes what the turn does next. See
+/// [`crate::hooks`], which is where that argument lives.
+fn fire_hooks<R: Reporter + ?Sized>(
+    hooks: &bravebot_config::hooks::Hooks,
+    moment: bravebot_config::hooks::Moment,
+    tool: Option<&str>,
+    workspace: &Workspace,
+    reporter: &mut R,
+) -> Vec<String> {
+    let mut said = Vec::new();
+    for fired in crate::hooks::fire(hooks, moment, tool, workspace.root()) {
+        let Some(trouble) = fired.trouble else {
+            continue;
+        };
+        said.push(match trouble {
+            crate::hooks::Trouble::NotStarted(detail) => t!(
+                hook_not_started,
+                moment = fired.moment,
+                program = fired.program,
+                detail = detail
+            ),
+            crate::hooks::Trouble::Ended(status) => t!(
+                hook_failed,
+                moment = fired.moment,
+                program = fired.program,
+                status = status
+            ),
+            crate::hooks::Trouble::Stopped => t!(
+                hook_stopped,
+                moment = fired.moment,
+                program = fired.program,
+                seconds = crate::hooks::LIMIT.as_secs()
+            ),
+        });
+    }
+    for one in &said {
+        reporter.notice(one.clone());
+    }
+    said
+}
+
+/// One turn, with the hooks a person attached to its beginning and its end around it.
+///
+/// A wrapper rather than two calls inside the loop, so that the moment a turn is over is the
+/// moment this returns, however it returned. A turn that was cancelled, or that failed on its
+/// first request, is a turn that is over, and a hook attached to that is most often the one
+/// telling somebody who walked away.
 #[allow(clippy::too_many_arguments)]
 fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter + ?Sized + Send>(
     config: &Config,
@@ -1754,6 +1812,81 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     programs: TrustedPrograms,
     servers: Option<&mut crate::lsp::LanguageServers>,
     cancel: &Cancel,
+) -> Result<Outcome, TurnError> {
+    // Read once, here, rather than at each moment. What the file says is a property of the machine
+    // and not of a round, and a turn whose hooks changed halfway through would be the harder thing
+    // to explain to whoever edited it mid-session.
+    let hooks = bravebot_config::hooks::Hooks::load(task.home.as_deref());
+
+    // The turn moments belong to the turn a person asked for. A delegate is a run inside this one,
+    // started by a call the person did not make, so firing "the turn began" for each of them would
+    // say it four times for a turn that spawned three.
+    let own = task.delegate.is_none();
+    let began = match own {
+        true => fire_hooks(
+            &hooks,
+            bravebot_config::hooks::Moment::TurnStarted,
+            None,
+            workspace,
+            reporter,
+        ),
+        false => Vec::new(),
+    };
+
+    let mut outcome = one_turn(
+        config,
+        egress,
+        workspace,
+        task,
+        conversation,
+        confirmer,
+        reporter,
+        sink,
+        trust,
+        programs,
+        servers,
+        cancel,
+        &hooks,
+    );
+
+    let ended = match own {
+        true => fire_hooks(
+            &hooks,
+            bravebot_config::hooks::Moment::TurnFinished,
+            None,
+            workspace,
+            reporter,
+        ),
+        false => Vec::new(),
+    };
+
+    // In the order the moments came, which is not the order the turn produced them: what it found
+    // on the way in is already in there, and the two ends of the turn go around it.
+    if let Ok(outcome) = &mut outcome {
+        let mut said = began;
+        said.append(&mut outcome.notices);
+        said.extend(ended);
+        outcome.notices = said;
+    }
+
+    outcome
+}
+
+#[allow(clippy::too_many_arguments)]
+fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter + ?Sized + Send>(
+    config: &Config,
+    egress: &Egress,
+    workspace: &Workspace,
+    task: &Task,
+    conversation: &mut Conversation,
+    confirmer: &mut C,
+    reporter: &mut R,
+    sink: &mut S,
+    trust: TrustStore,
+    programs: TrustedPrograms,
+    servers: Option<&mut crate::lsp::LanguageServers>,
+    cancel: &Cancel,
+    hooks: &bravebot_config::hooks::Hooks,
 ) -> Result<Outcome, TurnError> {
     // First thing in the turn, so the wall figure covers the work that happens before the first
     // request goes out. Skill discovery and the preamble read files, and a turn in a large tree can
@@ -2093,6 +2226,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // whatever is still going, which is what keeps a background job from outliving the turn that
     // started it and becoming an effect nobody is watching.
     let mut jobs = crate::tools::Jobs::new();
+    // Kept beside the turn's own notices rather than in them: those are what the turn found before
+    // it started, and a hook that would not run is news from the middle of it.
+    let mut hook_notices: Vec<String> = Vec::new();
     // Where the next command line runs, absent one naming its own directory (CMDLINE-12).
     //
     // Per turn rather than per session, which is short of what the clause asks for: it says a line
@@ -2470,6 +2606,21 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
                 );
                 let took = ran_at.elapsed();
                 let cancellation = output.cancelled;
+
+                // The call is over, whatever came of it. Fired here rather than on a successful
+                // one because "the call finished" is what a person can point at: a write that was
+                // refused is still a moment their formatter was told about, and a hook deciding
+                // what to make of that is a hook reading nothing this turn produced.
+                //
+                // The name is the one dispatch just matched on, which selects the entries that
+                // fire and reaches no process: what a hook is told is the moment and nothing else.
+                hook_notices.extend(fire_hooks(
+                    hooks,
+                    bravebot_config::hooks::Moment::ToolFinished,
+                    Some(&call.function.name),
+                    workspace,
+                    &mut reporter,
+                ));
 
                 // Started here rather than inside the call. A delegate outlives the call that asked
                 // for one: that call has already answered, and what is still here when the work
@@ -3061,7 +3212,11 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         timing: spent.finish(),
         clean: policy.finish(),
         display,
-        notices: notices.into_iter().map(|n| n.message).collect(),
+        notices: notices
+            .into_iter()
+            .map(|n| n.message)
+            .chain(hook_notices)
+            .collect(),
         attempt: None,
     })
 }

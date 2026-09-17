@@ -18,6 +18,7 @@ pub mod exec;
 pub mod glob;
 pub mod goal;
 pub mod home;
+pub mod hooks;
 pub mod lsp;
 pub mod manifest;
 pub mod mode;

@@ -233,6 +233,16 @@ subscription-unusable =
 # printed goes to the view a person can open; this is the sentence saying the thing has ended.
 background-job-finished = `{ $command }` finished in the background: { $outcome }
 
+# Said when a hook a person attached to a moment did not end well. Three sentences rather than one
+# because what to do about each is different: a program that is not there is a path to fix, a
+# non-zero status is the hook's own business, and one that was stopped was too slow to be run from
+# a turn at all. Nothing a hook prints is read, so this is the whole of what can be said about it.
+hook-not-started = the { $moment } hook `{ $program }` could not be started ({ $detail })
+hook-failed = the { $moment } hook `{ $program }` did not end well ({ $status })
+hook-stopped =
+    the { $moment } hook `{ $program }` was still running after { $seconds } seconds and was
+    stopped
+
 
 ## Vouching for a directory, asked once when a session starts somewhere new
 

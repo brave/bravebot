@@ -17059,3 +17059,217 @@ fn a_stop_while_a_processor_runs_is_reported_as_a_stop_with_what_it_sent() {
         bravebot_agent::Ending::Stopped { attempts: Some(1) }
     );
 }
+
+/// A state directory holding a hooks file, and the scripts the hooks in it run.
+///
+/// The scripts go in the workspace rather than the state directory only because a test needs them
+/// somewhere; a hook names an absolute path either way.
+#[cfg(unix)]
+fn a_home_declaring(at: &std::path::Path, entries: &str) -> PathBuf {
+    let home = at.join("state");
+    std::fs::create_dir_all(&home).expect("a state directory");
+    std::fs::write(
+        home.join("hooks.json"),
+        format!("{{\"hooks\": [{entries}]}}"),
+    )
+    .expect("a hooks file");
+    home
+}
+
+/// Write an executable script into the workspace and answer with its path, quoted for JSON.
+#[cfg(unix)]
+fn a_hook_script(at: &std::path::Path, name: &str, body: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let path = at.join(name);
+    std::fs::write(&path, body).expect("write the script");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("executable");
+    format!("{:?}", path.canonicalize().expect("canonicalize"))
+}
+
+/// HOOK-2: the turn moments are the two ends of the turn a person asked for.
+#[cfg(unix)]
+#[test]
+fn a_hook_fires_when_the_turn_begins_and_when_it_is_over() {
+    let scratch = Scratch::new("hooks-turn");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho \"$(basename \"$0\") $1\" >> fired.txt\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            "{{\"on\": \"turn-started\", \"run\": [{note}, \"began\"]}},
+             {{\"on\": \"turn-finished\", \"run\": [{note}, \"ended\"]}}"
+        ),
+    );
+
+    let (endpoint, _received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("say something").with_home(Some(home)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt")).expect("both hooks ran");
+    assert_eq!(fired, "note began\nnote ended\n");
+}
+
+/// HOOK-2: a call finishing is a moment, and a hook naming the tool fires for that call.
+#[cfg(unix)]
+#[test]
+fn a_hook_fires_when_the_tool_it_names_finishes() {
+    let scratch = Scratch::new("hooks-tool");
+    std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho \"$1\" >> fired.txt\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            "{{\"on\": \"tool-finished\", \"tool\": \"read_file\", \"run\": [{note}, \"read\"]}},
+             {{\"on\": \"tool-finished\", \"tool\": \"write_file\", \"run\": [{note}, \"wrote\"]}}"
+        ),
+    );
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read it").with_home(Some(home)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt")).expect("the hook ran");
+    assert_eq!(
+        fired, "read\n",
+        "the hook for the tool that ran should be the only one that fired"
+    );
+}
+
+/// HOOK-6: a hook that ended badly is said out loud and changes nothing about the turn.
+#[cfg(unix)]
+#[test]
+fn a_turn_whose_hook_failed_still_answers() {
+    let scratch = Scratch::new("hooks-failed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let failing = a_hook_script(&scratch.path, "no", "#!/bin/sh\nexit 3\n");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"turn-started\", \"run\": [{failing}]}}"),
+    );
+
+    let (endpoint, _received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("say something").with_home(Some(home)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("a failing hook does not fail the turn");
+
+    assert_eq!(outcome.reply_for_display(), "the answer");
+    assert!(
+        reporter.notices.iter().any(|said| said.contains("no")),
+        "nobody watching was told the hook failed: {:?}",
+        reporter.notices
+    );
+    assert!(
+        outcome.notices.iter().any(|said| said.contains("no")),
+        "a caller with nowhere to draw was not told the hook failed: {:?}",
+        outcome.notices
+    );
+}
+
+/// HOOK-2: a delegate is a run inside the turn rather than a turn of its own, so the moments at
+/// the two ends of the turn fire once however many delegates it starts.
+#[cfg(unix)]
+#[test]
+fn a_delegate_does_not_fire_the_turn_s_own_moments() {
+    let scratch = Scratch::new("hooks-delegate");
+    std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho fired >> fired.txt\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"turn-started\", \"run\": [{note}]}}"),
+    );
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![
+                tool_request("read_file", r#"{"path":"a.txt"}"#),
+                reply_with("read it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK").with_home(Some(home)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        !reporter.delegated.is_empty(),
+        "no delegate ran, so this says nothing about one"
+    );
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt")).expect("the hook ran");
+    assert_eq!(fired, "fired\n", "a delegate fired the turn's own moment");
+}
