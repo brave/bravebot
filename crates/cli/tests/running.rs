@@ -37,6 +37,17 @@ impl Scratch {
     fn credentials(&self) -> PathBuf {
         self.path.join(".bravebot").join("leo-premium.json")
     }
+
+    /// Write the settings file this home's runs read, and return this scratch for chaining.
+    ///
+    /// A `provider` block is the only thing a test here configures with one, and it cannot be
+    /// stated in the environment: gateways are a block rather than a variable.
+    fn with_settings(self, json: &str) -> Self {
+        let directory = self.path.join(".bravebot");
+        std::fs::create_dir_all(&directory).expect("create the state directory");
+        std::fs::write(directory.join("settings.json"), json).expect("write settings");
+        self
+    }
 }
 
 impl Drop for Scratch {
@@ -108,6 +119,230 @@ fn a_configuration_error_exits_non_zero() {
         // endpoint it was handed and not over something else the environment lacks.
         stderr.contains("ai-chat.example.invalid"),
         "the run failed over something other than the endpoint it was given: {stderr}"
+    );
+}
+
+/// Brave's own endpoint with nothing imported and nothing else configured is a machine with no
+/// service configured to serve a turn, which is what a released binary arrives as. A run that went
+/// ahead would be answered by whatever that endpoint gives it, and read as the agent being poor.
+///
+/// So the run stops before it asks anything, and says the three ways to configure a service. Each
+/// is asserted by the words somebody has to type or write, not by the sentence around them: a
+/// refusal that named the problem and no route out is the first-use experience this replaced.
+#[test]
+fn a_first_run_with_no_service_configured_says_how_to_configure_one() {
+    let scratch = Scratch::new("cli-running-no-service");
+    let output = bravebot(
+        &scratch.path,
+        // Brave's own hosts, which is what a released binary arrives pointed at. Nothing is
+        // imported under this home, so no service is configured to answer.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+            (
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+                "https://ai-chat-premium.bsg.brave.com",
+            ),
+        ],
+        &["-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    // The configuration status rather than only a failure: what is wrong is the configuration, and
+    // a script that could not tell this from an unreachable backend would retry it forever.
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stdout.is_empty(),
+        "the reply stream carried the explanation instead: {stdout}"
+    );
+    for route in ["amazon-bedrock", "OpenRouter", "bravebot import-leo-creds"] {
+        assert!(
+            stderr.contains(route),
+            "the run refused without saying that {route} is a way to configure one: {stderr}"
+        );
+    }
+}
+
+/// And a configured gateway is not refused: it is a service that can answer, so the run goes to
+/// it. The status says which happened, since the gateway here is a port nothing is listening on:
+/// a run that reached it and found nothing there is a run that was not stopped beforehand.
+///
+/// The other half of the rule, and the half worth pinning. A refusal that fired on a configured
+/// backend would take the agent away from everybody who set one up, which is the failure mode a
+/// gate before the first request has.
+#[test]
+fn a_configured_gateway_is_not_refused() {
+    let scratch = Scratch::new("cli-running-gateway-configured").with_settings(
+        // Port 1 takes privileges the machine running tests does not give away, so the connection
+        // is refused at once rather than timing out or reaching a real service. The `model` key is
+        // what sends this run to the gateway rather than to Brave's endpoint.
+        r#"{
+            "provider": {
+                "openrouter": {
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            },
+            "model": "openrouter/z-ai/glm-4.6"
+        }"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+            (
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+                "https://ai-chat-premium.bsg.brave.com",
+            ),
+            ("OPENROUTER_API_KEY", "a-token"),
+        ],
+        &["-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(5),
+        "a configured gateway was refused as no service at all: {stderr}"
+    );
+    assert!(
+        stderr.contains("127.0.0.1:1"),
+        "the run went somewhere other than the gateway it was given: {stderr}"
+    );
+}
+
+/// A service configured while the model in force is still Brave's own has no service for that
+/// model, and is the case a settings block copied out of another tool lands in: those blocks name
+/// their models and name no default, so the model stays the one this build baked in.
+///
+/// Told apart from having nothing configured, since what this person has to do is name one of
+/// their own models. Read as "nothing is configured" they would be sent to write the block they
+/// have already written, and the three routes are what says which of the two happened.
+#[test]
+fn a_service_configured_with_no_model_of_its_own_named_says_to_name_one() {
+    let scratch = Scratch::new("cli-running-gateway-no-model").with_settings(
+        // The block, without the `model` key that names one of its own models.
+        r#"{
+            "provider": {
+                "openrouter": {
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            }
+        }"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+            (
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+                "https://ai-chat-premium.bsg.brave.com",
+            ),
+            ("OPENROUTER_API_KEY", "a-token"),
+        ],
+        &["-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("`model` key"),
+        "the run refused without saying which key names a model: {stderr}"
+    );
+    assert!(
+        !stderr.contains("bravebot import-leo-creds"),
+        "somebody who has configured a service was sent to configure another: {stderr}"
+    );
+}
+
+/// And the same block with a model of its own named is not refused at all: the run goes to the
+/// gateway, which here is a port nothing is listening on, so the status says it got that far.
+///
+/// `--model` rather than the settings key, because the flag is read at a different point from the
+/// file and a gate reading the wrong one refuses a run over a model it was never going to ask for.
+#[test]
+fn a_model_named_on_the_command_line_is_not_refused() {
+    let scratch = Scratch::new("cli-running-gateway-flagged").with_settings(
+        r#"{
+            "provider": {
+                "openrouter": {
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            }
+        }"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+            (
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+                "https://ai-chat-premium.bsg.brave.com",
+            ),
+            ("OPENROUTER_API_KEY", "a-token"),
+        ],
+        &["-p", "say something", "--model", "openrouter/z-ai/glm-4.6"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(5),
+        "a model the command line named was refused as no service at all: {stderr}"
+    );
+    assert!(
+        stderr.contains("127.0.0.1:1"),
+        "the run went somewhere other than the gateway it was given: {stderr}"
+    );
+}
+
+/// A machine with nowhere to keep credentials has none imported, rather than a batch that could
+/// not be read.
+///
+/// An absent profile directory is a state this program supports, and the store answers "there is
+/// nowhere to keep them" with the same error it uses for a file that would not read. Reported as
+/// the second, the refusal told somebody on a machine that has never held a subscription that
+/// theirs could not be used, and sent them to import it again.
+///
+/// Run as a process because the answer comes from the environment the program starts in, and a
+/// test that set a variable would set it for every other test sharing the binary.
+#[test]
+fn a_machine_with_no_profile_directory_has_nothing_imported() {
+    let output = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+        .env_clear()
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .env("SERVICES_KEY_AICHAT", "a-services-key")
+        .env("BRAVE_SERVICES_KEY_ID", "a-key-id")
+        .env("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com")
+        .env(
+            "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+            "https://ai-chat-premium.bsg.brave.com",
+        )
+        .args(["-p", "say something"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("the built binary runs");
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        !stderr.contains("subscription that is stored"),
+        "a machine with no profile directory was told its stored subscription is unusable: {stderr}"
     );
 }
 
@@ -383,6 +618,51 @@ fn a_refused_settings_file_still_answers_with_a_result_object() {
     for field in [r#""ok":false"#, r#""status":2"#, r#""reason":"argument""#] {
         assert!(stdout.contains(field), "{field} is missing from {stdout}");
     }
+}
+
+/// A session in lines reads what the person types, so its input has to be a terminal: the lines it
+/// reads are prompts, which are the one trusted input there is, and a pipe carries bytes nothing
+/// vouched for (CLI-3). A session that took its prompts from one would take instruction from
+/// whatever fed it and answer its own approval questions out of the same bytes, so it is refused
+/// before anything starts, and the refusal names the invocation that does read a pipe.
+///
+/// A property of the process rather than of a function: whether stdin is a terminal is a fact
+/// about how the program was started, and nothing inside it can arrange to be started the other
+/// way.
+#[test]
+fn a_session_in_lines_is_refused_where_its_input_is_not_a_terminal() {
+    let scratch = Scratch::new("cli-running-plain-not-a-terminal");
+    let output = bravebot(
+        &scratch.path,
+        // Complete and usable, so the refusal below is this one rather than the configuration's.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["--plain"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a refused argument did not exit as one: {stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "the reply stream carried the explanation instead: {stdout}"
+    );
+    assert!(
+        stderr.contains("-p"),
+        "the refusal does not name what does read a pipe: {stderr}"
+    );
+    // Nothing was taken from the terminal on the way to refusing, which is the whole claim of the
+    // mode: the alternate screen, mouse reporting and bracketed paste are each a `\x1b[?` away.
+    assert!(
+        !stderr.contains('\x1b') && !stdout.contains('\x1b'),
+        "something was asked of the terminal: {stderr:?}"
+    );
 }
 
 /// An import is a write by definition, so an incognito session refuses it rather than doing it

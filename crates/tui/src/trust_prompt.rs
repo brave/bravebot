@@ -124,7 +124,12 @@ pub fn answered_by(mode: PermissionMode, directory: &Path) -> Option<TrustStore>
 /// Every map is made against the working directory, declining included: a map is asked about
 /// relative names whatever it holds, and one made against somewhere else would answer about
 /// another project's files.
-fn trust_for(answer: Answer, directory: &Path) -> Option<TrustStore> {
+///
+/// Public because the question is put on two surfaces and answered in one place. A session in
+/// lines (CLI-14) asks it as a line rather than as a panel, and what a yes grants there has to be
+/// what a yes grants here: two functions writing the map would be two readings of TRUST-7, and the
+/// one the tests pin is this one.
+pub fn trust_for(answer: Answer, directory: &Path) -> Option<TrustStore> {
     match answer {
         Answer::Leave => None,
         Answer::Trust => Some(trusting_the_workspace(directory)),

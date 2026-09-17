@@ -4,6 +4,7 @@
 
 mod exit;
 mod json;
+mod plain;
 mod progress;
 
 use crate::exit::{Ending, fail};
@@ -106,6 +107,18 @@ fn main() -> ExitCode {
             Some(id) => fork_named(id, skip_permissions),
             None => fail(Ending::Argument, t!(cli_fork_needs_a_name)),
         },
+        // A session in lines, which takes nothing from the terminal (CLI-14). On its own, because
+        // it starts a session rather than describing one: the flags that compose with every way of
+        // starting are the three taken out above, and everything else on this list is another way of
+        // starting.
+        Some("--plain") => match args.len() {
+            1 => plain::session(skip_permissions),
+            _ => {
+                let refused = fail(Ending::Argument, t!(cli_plain_takes_nothing_else));
+                print_help();
+                refused
+            }
+        },
         // The task flags may lead: `bravebot -p "task"` and `bravebot --mode manifest "task"`
         // would otherwise be caught below as unknown options.
         Some(
@@ -195,6 +208,7 @@ fn print_help() {
     println!("{}", t!(cli_usage_heading));
     for (form, description) in [
         ("bravebot", t!(cli_usage_interactive)),
+        ("bravebot --plain", t!(cli_usage_plain)),
         ("bravebot \"<task>\" [--file <path>]...", t!(cli_usage_task)),
         ("cat file | bravebot -p \"<task>\"", t!(cli_usage_piped)),
         ("bravebot --resume [id]", t!(cli_usage_resume)),
@@ -257,6 +271,55 @@ fn print_help() {
     ] {
         println!("  {flags:<OPTION$}{description}");
     }
+}
+
+/// What to say to somebody whose configuration names no service that can serve a turn.
+///
+/// Three routes, each a line, in the order they are worth taking today. The two that reach a
+/// service directly lead; importing a Leo Premium subscription is last and says why, since those
+/// models are reached through Brave's AI gateway and it has open problems of its own. It is still
+/// the shortest route for somebody who already subscribes, which is why it is offered at all.
+///
+/// `a_service_is_configured` replaces all three with one line. That person set a service up and
+/// left the model this build baked in, which a settings block copied out of another tool does by
+/// design, so what they need is the key that names one of their own models.
+///
+/// `refused` is what was wrong with a stored subscription, where something was. It leads, because
+/// it changes what the person should do: a batch that could not be read is one import away.
+///
+/// Built as a string rather than printed, so the ending that carries it leads the block with its
+/// identifier the way it does every other failure, and so `doctor` can say the same thing. It says it too: a report reading "configuration OK" about a machine where a
+/// session refuses to start is the first thing somebody in that position goes and looks at.
+///
+/// Nothing here names `doctor` itself, for that reason. A line telling somebody to run the
+/// command they are reading the output of is a line that has to be edited out of one of the two
+/// places it appears, which is how the two come to say different things.
+fn how_to_configure_a_model(refused: Option<&str>, a_service_is_configured: bool) -> String {
+    let mut lines = vec![t!(onboarding_no_model).to_string()];
+    if let Some(problem) = refused {
+        lines.push(t!(onboarding_subscription_unusable, problem = problem));
+    }
+    lines.push(String::new());
+
+    // One line or three routes, never both. Somebody who has a service set up and only the wrong
+    // model in force is one settings key away, and three ways to set up a service is three things
+    // to read past on the way to the one that applies.
+    if a_service_is_configured {
+        lines.push(t!(onboarding_name_a_configured_model).to_string());
+    } else {
+        lines.push(t!(onboarding_pick_one).to_string());
+        for route in [
+            t!(onboarding_bedrock),
+            t!(onboarding_openrouter),
+            t!(onboarding_leo),
+        ] {
+            lines.push(format!("  - {route}"));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push(t!(onboarding_where_to_read).to_string());
+    lines.join("\n")
 }
 
 /// Take `--incognito` out of the arguments, reporting whether it was there.
@@ -421,6 +484,29 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             );
         }
     };
+
+    // Before anything runs, because nothing here is configured to serve a turn yet: what a person
+    // would conclude from whatever came back is that the agent is poor rather than that nothing has
+    // been set up.
+    //
+    // Asked of the model this run will actually request, which is what decides where the request
+    // goes. The flag it may have been named by is resolved below; what is read here is the same
+    // answer without it, since a `--model` naming a configured service's model is exactly the case
+    // this must not refuse.
+    if let bravebot_agent::backend::Serving::NothingConfigured {
+        subscription,
+        a_service_is_configured,
+    } = bravebot_agent::backend::serving(
+        &config,
+        &bravebot_net::Egress::new(),
+        &model_for_this_run(model.as_deref(), &config),
+    ) {
+        return stopped_before_the_turn(
+            as_json,
+            Ending::Configuration,
+            how_to_configure_a_model(subscription.as_deref(), a_service_is_configured),
+        );
+    }
 
     let settings = bravebot_config::Settings::load();
 
@@ -602,11 +688,11 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
                 None
             };
             // What was asked for against what answered. A model this run cannot be served is
-            // substituted rather than refused: one that needs a subscription comes back as
-            // whatever the free tier serves, with a 200 and an ordinary reply, so the name the
-            // server reports is the only trace of it. Which name the service was actually asked
-            // for, and whether it reports that name at all, are the backend's questions and are
-            // put to it here, where the configuration is in hand.
+            // substituted rather than refused: one that needs a subscription comes back answered
+            // by a weaker model, with a 200 and an ordinary reply, so the name the server reports
+            // is the only trace of it. Which name the service was actually asked for, and whether
+            // it reports that name at all, are the backend's questions and are put to it here,
+            // where the configuration is in hand.
             //
             // Against the model in force rather than the flag alone. A model pinned in the
             // settings file is the one a repository commits beside its scripts, so a substitution
@@ -864,6 +950,23 @@ fn model_asked_for(named: Option<String>, stored: Option<String>) -> Option<Stri
     named.or(stored)
 }
 
+/// The model this run or session will ask a service for.
+///
+/// The same three sources the task below is built from, in the same order: a name given on the
+/// command line, the one a session recorded, and the configured default. `named` is the raw
+/// argument, resolved against the configuration here for the reason the task resolves it, since a
+/// tier word names a model only the configuration knows.
+///
+/// A function because the question is asked before the task exists, and because an answer that
+/// differed from the task's would refuse a run over a model it was never going to request.
+fn model_for_this_run(named: Option<&str>, config: &Config) -> String {
+    model_asked_for(
+        named.map(|name| config.model_named(name)),
+        bravebot_tui::store::load_model(),
+    )
+    .unwrap_or_else(|| config.default_model.clone())
+}
+
 /// The complaint a run has when one model was asked for and another answered, if it has one.
 ///
 /// The endpoint substitutes rather than refusing, so the reported name is the only trace there is.
@@ -1003,7 +1106,7 @@ impl<R: Read, W: Write> OneShot<R, W> {
         // something else did not type that.
         let mut answer = String::new();
         self.input.read_line(&mut answer)?;
-        Ok(match answer.trim().to_lowercase() == t!(plan_answer_yes) {
+        Ok(match answer.trim().to_lowercase() == t!(line_answer_yes) {
             true => Decision::Approve,
             false => Decision::Reject,
         })
@@ -1245,6 +1348,23 @@ fn interactive(start: bravebot_tui::app::Start, skip_permissions: bool) -> ExitC
             );
         }
     };
+
+    // Before the session opens, for the reason a one-shot run is stopped before the turn: a
+    // transcript that began with nothing configured would read as the agent rather than as the
+    // configuration, and this is the one moment somebody is looking for what to do next.
+    if let bravebot_agent::backend::Serving::NothingConfigured {
+        subscription,
+        a_service_is_configured,
+    } = bravebot_agent::backend::serving(
+        &config,
+        &bravebot_net::Egress::new(),
+        &model_for_this_run(None, &config),
+    ) {
+        return fail(
+            Ending::Configuration,
+            how_to_configure_a_model(subscription.as_deref(), a_service_is_configured),
+        );
+    }
 
     let workspace = match current_workspace(&bravebot_config::Settings::load()) {
         Ok(w) => w,
@@ -1584,6 +1704,25 @@ fn doctor() -> ExitCode {
             // the Brave roster needs, and it means nothing to Bedrock.
             if config.serves_aichat() {
                 report_subscription();
+            }
+
+            // Last of the configuration section, and a failure, because a report that said
+            // "configuration OK" about a machine where a session refuses to start is the one
+            // thing a person in that position is certain to read first.
+            if let bravebot_agent::backend::Serving::NothingConfigured {
+                subscription,
+                a_service_is_configured,
+            } = bravebot_agent::backend::serving(
+                &config,
+                &bravebot_net::Egress::new(),
+                &model_for_this_run(None, &config),
+            ) {
+                ok = false;
+                println!();
+                println!(
+                    "{}",
+                    how_to_configure_a_model(subscription.as_deref(), a_service_is_configured)
+                );
             }
         }
         Err(err) => {
@@ -3319,25 +3458,43 @@ mod tests {
 
     /// It composes with the other two flags taken out before dispatch, in any order: all three are
     /// about the whole run rather than about a task, and a job that wants one may well want another.
+    /// What is left is the way of starting, whichever one it is, so a mode that refuses every
+    /// argument beside itself still reaches dispatch alone.
     #[test]
     fn a_named_settings_file_composes_with_the_other_flags_before_dispatch() {
-        for typed in [
-            &[
-                "--incognito",
-                "--settings",
-                "/etc/ci.json",
-                "--dangerously-skip-permissions",
-                "-p",
-                "x",
-            ][..],
-            &[
-                "--settings",
-                "/etc/ci.json",
-                "--dangerously-skip-permissions",
-                "--incognito",
-                "-p",
-                "x",
-            ][..],
+        for (typed, left) in [
+            (
+                &[
+                    "--incognito",
+                    "--settings",
+                    "/etc/ci.json",
+                    "--dangerously-skip-permissions",
+                    "-p",
+                    "x",
+                ][..],
+                &["-p", "x"][..],
+            ),
+            (
+                &[
+                    "--settings",
+                    "/etc/ci.json",
+                    "--dangerously-skip-permissions",
+                    "--incognito",
+                    "-p",
+                    "x",
+                ][..],
+                &["-p", "x"][..],
+            ),
+            (
+                &[
+                    "--settings",
+                    "/etc/ci.json",
+                    "--incognito",
+                    "--dangerously-skip-permissions",
+                    "--plain",
+                ][..],
+                &["--plain"][..],
+            ),
         ] {
             let mut arguments = args(typed);
             assert!(take_incognito(&mut arguments), "{typed:?}");
@@ -3347,7 +3504,7 @@ mod tests {
                 Some(PathBuf::from("/etc/ci.json")),
                 "{typed:?}"
             );
-            assert_eq!(arguments, args(&["-p", "x"]), "left over: {typed:?}");
+            assert_eq!(arguments, args(left), "left over: {typed:?}");
         }
     }
 

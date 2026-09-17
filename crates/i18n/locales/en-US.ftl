@@ -23,6 +23,7 @@ count-turns = { $count ->
 cli-tagline = bravebot { $version }: a general-purpose agent resistant to prompt injection
 cli-usage-heading = Usage:
 cli-usage-interactive = Start an interactive session
+cli-usage-plain = Start a session in lines, taking nothing from the terminal
 cli-usage-task = Run a single task
 cli-usage-piped = ...with piped input, never trusted
 cli-usage-resume = Pick up a session in this directory
@@ -43,6 +44,23 @@ cli-key-leave = Leave
 
 cli-commands-heading = Interactive commands:
 cli-name-a-file = Include a workspace file as trusted context
+
+## A session in lines: no screen of its own, no colour, nothing repainted
+
+cli-plain-opening =
+    bravebot { $version } in lines, { $model }. A line is a prompt; the end of the input
+    (Ctrl-D) ends the session.
+# Said where `--plain` was given with something other than a terminal on stdin. The lines it reads
+# are prompts, and nothing vouches for what a pipe carries.
+cli-plain-needs-a-terminal =
+    --plain reads what you type, so its input must be a terminal. Use -p to run one task
+    with piped input, which is read as quarantined context.
+# Said where --plain was given alongside another way of starting. It starts a session rather than
+# describing one, so there is nothing for it to combine with.
+cli-plain-takes-nothing-else =
+    --plain starts a session and takes no other arguments. --incognito,
+    --dangerously-skip-permissions and --settings go with it; everything else is another way of
+    starting.
 
 ## How much a session asks before it acts, drawn under the input box
 #
@@ -91,6 +109,35 @@ cli-fork-needs-a-name = --fork requires a session id
 cli-piped-input-unreadable = warning: could not read piped input: { $problem }
 cli-piped-input-too-large =
     piped input is larger than { $limit } MiB. Write it to a file and name that instead
+
+
+## What a run says when no model service is configured
+
+# Said instead of starting work at all. A session opened with nothing configured reads as the agent
+# being poor rather than as nothing having been set up yet, so the first run says what to configure
+# instead of starting work that has no service to do it.
+onboarding-no-model = no model service is configured yet
+# Said beside it where a subscription is stored and could not be read, because somebody in that
+# case is one import away rather than a whole configuration away.
+onboarding-subscription-unusable = the subscription that is stored could not be used: { $problem }
+# Said instead, where a service is configured and only the model in force is Brave's own. A
+# settings block copied out of another tool names its models and names no default, so this is
+# where somebody following that route lands, and what they have to do is name one of their own.
+onboarding-name-a-configured-model =
+    A service is configured, but the model in force is one of Brave's: name one of your own with the `model` key in ~/.bravebot/settings.json, or with --model on a one-shot run. `bravebot doctor` lists what each configured service offers.
+onboarding-pick-one = Configure one of these, then run bravebot again:
+onboarding-bedrock =
+    AWS Bedrock, through your own account: put a `provider` block named `amazon-bedrock` in ~/.bravebot/settings.json, with its region and the models to offer.
+onboarding-openrouter =
+    OpenRouter, or any other OpenAI-compatible gateway: put a `provider` block named for it in ~/.bravebot/settings.json, with the variable that holds its API key and the models to offer.
+# Last of the three, and said to be last, because these models are reached through Brave's AI
+# gateway, which has open problems of its own. It is still the shortest route for somebody who
+# already subscribes, so it is offered rather than left out.
+onboarding-leo =
+    Brave Leo Premium, if you already subscribe: run `bravebot import-leo-creds` on a machine where Brave is signed in to that subscription. It reaches models through Brave's AI gateway, which has open issues being worked on, so prefer one of the two above for now.
+# Said after either, so it reads after the three routes and after the one line alike.
+onboarding-where-to-read =
+    There are worked examples in https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 
 
 ## What a finished one-shot run says beside the reply
@@ -233,10 +280,10 @@ leo-browser-untouched =
     premium requests will now use them; the browser's own credentials were untouched
 
 # Said when a subscription is stored but could not be read. Worth a line because the request
-# then goes out on the free tier, where a premium model name is answered by a weaker model
+# then goes out with no subscription, where a premium model name is answered by a weaker model
 # rather than by an error, so the only symptom is a worse answer.
 subscription-unusable =
-    the imported subscription could not be used ({ $problem }), so this turn runs on the free tier
+    the imported subscription could not be used ({ $problem }), so this turn spends none
 
 # Said when a background job exits. The line drawn when it started said only that something had
 # been started, and nothing else in the transcript ever says it is over, so a build that failed
@@ -544,10 +591,13 @@ plan-nothing-yet =
     nothing has been read or written yet, so declining leaves everything as it is.
 plan-yes = run it
 plan-no = don't
-# Where the question is a line on a terminal rather than a panel: what to type, and the one answer
-# that runs the plan. Any other line, and end of input, declines.
+# Where a question is a line on a terminal rather than a panel: what a yes looks like, and the one
+# answer that approves. Any other line, and the end of the input, refuses. Shared by every question
+# put in lines, so one affirmative covers them all.
+line-answer = [y/N]
+line-answer-yes = y
+# The plan's own line, which names what saying yes runs.
 plan-answer = run it? [y/N]
-plan-answer-yes = y
 
 
 ## Vouching for a quarantined file
@@ -610,8 +660,8 @@ status-endpoint = Endpoint
 # Which tier the last turn actually ran on, not what this build was compiled knowing about.
 status-premium-available = premium available, nothing sent yet
 status-premium-in-use = premium, a credential was spent
-status-premium-not-spent = free tier: no subscription was used
-status-free-tier = free tier only
+status-premium-not-spent = no subscription was spent
+status-no-subscription = no subscription configured
 status-confinement = Confinement
 status-loop = Loop
 status-loop-every = every { $every }
@@ -1084,7 +1134,6 @@ turn-ended-unexpectedly = the turn ended unexpectedly
 btw-needs-a-question = /btw takes the question to ask, which the conversation will not read
 btw-uninterruptible = the question cannot be interrupted; it takes one request
 btw-ended-unexpectedly = the question ended unexpectedly
-btw-answered = asked beside the work, and answered there; { $chord } opens it again
 btw-failed = the question could not be answered: { $problem }
 
 # What the session says about a manifest run started from it. The plan, each step and the reply are

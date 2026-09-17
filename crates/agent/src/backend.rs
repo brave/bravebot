@@ -227,6 +227,74 @@ pub fn bedrock_reads_effort(model: &str) -> bool {
     !bravebot_bedrock::refusals(model).effort
 }
 
+/// What the model in force would be served a reply by.
+///
+/// Asked once, before any work starts, so that somebody who has configured no service to answer is
+/// told what to configure rather than put in front of a session that cannot do the work. See
+/// [`Serving::NothingConfigured`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum Serving {
+    /// A configured service will answer, so work may start.
+    Configured,
+    /// No service is configured to answer, so nothing will be asked.
+    NothingConfigured {
+        /// What was wrong with a stored Leo Premium batch, where something was.
+        ///
+        /// Somebody in that case is one import away rather than a whole configuration away, and
+        /// the sentence saying what the store refused is the difference between the two.
+        subscription: Option<String>,
+        /// Whether another service is configured and only the model in force is Brave's own.
+        ///
+        /// The case a settings block copied from another tool lands in: those blocks name their
+        /// models and name no default, so the model in force stays the one this build baked in,
+        /// which Brave's endpoint answers. Worth telling apart, because what that person has to do
+        /// is name one of their own models rather than set a service up.
+        a_service_is_configured: bool,
+    },
+}
+
+/// What the model in force would be served by, reading the credential store to find out.
+///
+/// The model decides which service answers, so the model is what this is asked about rather than
+/// the configuration: a turn bound for Bedrock or for a gateway is served by the service that was
+/// set up for it whatever else is or is not configured. That is
+/// [`Backend::spends_a_subscription`]'s question, asked here for the same reason
+/// [`crate::turn::discover_subscription`] asks it.
+///
+/// The store is read only where nothing before it has answered, since it is a file in somebody's
+/// home directory and a read that cannot change the answer is a read for nothing.
+pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
+    if !Backend::select(config, egress, model).spends_a_subscription() {
+        return Serving::Configured;
+    }
+
+    // An endpoint that is not Brave's is somebody's own deployment: a local model server, a
+    // private host, a proxy in front of either. Nobody is handed a configuration pointing at one,
+    // so it is a service that was chosen rather than the one a build arrives pointed at.
+    if !crate::subscription::is_a_brave_endpoint(&config.endpoint) {
+        return Serving::Configured;
+    }
+
+    // A build with no premium host cannot spend a credential at all, so there is nothing to look
+    // for: sending one to an endpoint that did not issue it would send it where it does not belong.
+    let stored = config
+        .premium_endpoint
+        .as_deref()
+        .map(crate::ImportedSubscription::discover);
+
+    if stored.as_ref().is_some_and(crate::Discovery::holds_a_batch) {
+        return Serving::Configured;
+    }
+
+    Serving::NothingConfigured {
+        subscription: stored
+            .as_ref()
+            .and_then(|found| found.complaint())
+            .map(str::to_string),
+        a_service_is_configured: config.bedrock.is_some() || !config.providers.is_empty(),
+    }
+}
+
 impl<'a> Backend<'a> {
     /// The backend that serves `model`.
     ///
@@ -581,6 +649,123 @@ mod tests {
         };
         config.providers = bravebot_config::provider::Provider::all(&root);
         config
+    }
+
+    /// Brave's own endpoint, and no premium host, which is a build that was given none.
+    ///
+    /// No premium host means no credential can be spent, so [`serving`] answers without opening
+    /// the credential store: these tests hold the rule rather than the home directory of whoever
+    /// ran the suite. What happens when a store is there is pinned by
+    /// `bravebot_cli::running::a_first_run_with_no_service_configured_says_how_to_configure_one`,
+    /// which runs the binary against a home of its own.
+    fn braves_endpoint_without_premium() -> Config {
+        Config::from_lookup(|key| {
+            match key {
+                env_var::SIGNING_KEY => Some("test-signing-key"),
+                env_var::KEY_ID => Some("test-key-id"),
+                env_var::ENDPOINT => Some("https://ai-chat.bsg.brave.com"),
+                _ => None,
+            }
+            .map(str::to_string)
+        })
+        .expect("configured")
+    }
+
+    /// The same, with the gateways a settings block configures, so what a test varies is the block.
+    fn braves_endpoint_with_a_gateway() -> Config {
+        let mut config = braves_endpoint_without_premium();
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"openrouter": {
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {"baseURL": "https://openrouter.example.invalid/api/v1"},
+                "models": {"z-ai/glm-4.6": {}}
+            }}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        config.providers = bravebot_config::provider::Provider::all(&root);
+        config
+    }
+
+    /// What a released binary arrives pointed at: Brave's endpoint, nothing imported, and nothing
+    /// else named. Nothing there is configured to serve a turn, which is the state a first run has
+    /// to be told about rather than started in.
+    #[test]
+    fn braves_endpoint_with_nothing_beside_it_has_no_service_configured() {
+        let egress = Egress::new();
+        assert_eq!(
+            serving(&braves_endpoint_without_premium(), &egress, DEFAULT_MODEL),
+            Serving::NothingConfigured {
+                subscription: None,
+                a_service_is_configured: false,
+            }
+        );
+    }
+
+    /// A model a configured service serves has a service, whatever the aichat fields hold. The
+    /// model is what decides where a request goes, so it is what this is asked about.
+    #[test]
+    fn a_model_a_configured_service_serves_has_one() {
+        let egress = Egress::new();
+        assert_eq!(
+            serving(&both_backends(), &egress, "opus-arn"),
+            Serving::Configured
+        );
+        assert_eq!(
+            serving(&braves_endpoint_with_a_gateway(), &egress, "z-ai/glm-4.6"),
+            Serving::Configured
+        );
+    }
+
+    /// And a service configured while the model in force is still Brave's own is the case a block
+    /// copied out of another tool lands in: those blocks name their models and name no default, so
+    /// the model stays the one this build baked in, which no configured service serves.
+    ///
+    /// Told apart from having configured nothing at all, because what this person has to do is name
+    /// one of their own models rather than set a service up. Read as "nothing is configured" they
+    /// were sent to write a block they had already written.
+    #[test]
+    fn a_service_configured_while_the_model_is_braves_own_has_none_for_that_model() {
+        let egress = Egress::new();
+        assert_eq!(
+            serving(&braves_endpoint_with_a_gateway(), &egress, DEFAULT_MODEL),
+            Serving::NothingConfigured {
+                subscription: None,
+                a_service_is_configured: true,
+            }
+        );
+    }
+
+    /// An endpoint that is not Brave's is somebody's own deployment: a local model server, a
+    /// private host, a proxy in front of either. Nobody is handed a configuration pointing at one,
+    /// so it is a service that was chosen and not the endpoint a build arrives pointed at. Refusing
+    /// it would take the agent away from every development build and every local backend.
+    #[test]
+    fn an_endpoint_that_is_not_braves_is_a_service_that_was_chosen() {
+        let egress = Egress::new();
+        for endpoint in [
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:8080",
+            "https://ai.example.internal/v1",
+        ] {
+            let config = Config::from_lookup(|key| {
+                match key {
+                    env_var::SIGNING_KEY => Some("test-signing-key"),
+                    env_var::KEY_ID => Some("test-key-id"),
+                    env_var::ENDPOINT => Some(endpoint),
+                    _ => None,
+                }
+                .map(str::to_string)
+            })
+            .expect("configured");
+
+            assert_eq!(
+                serving(&config, &egress, DEFAULT_MODEL),
+                Serving::Configured,
+                "{endpoint}"
+            );
+        }
     }
 
     /// The model names the service. A gateway slug means nothing to Brave's endpoint or to Bedrock,

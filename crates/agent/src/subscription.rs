@@ -4,9 +4,9 @@
 //! because a credential is single-use: the client has to ask for one per request, and the store
 //! has to record each as spent, so something has to sit between them and hold the channel.
 //!
-//! A failure here fails the turn rather than reverting to the free tier. That is deliberate: a
-//! subscription that silently stops being used looks like the model got worse for no reason, and
-//! the error names the fix (re-import, or unset the premium endpoint).
+//! A failure here fails the turn rather than sending the request with no credential. That is
+//! deliberate: a subscription that silently stops being used looks like the model got worse for no
+//! reason, and the error names the fix (re-import, or unset the premium endpoint).
 
 use bravebot_aichat::{Subscription, SubscriptionCredential};
 use bravebot_skus::{DeviceError, Registration, StoreError};
@@ -14,9 +14,10 @@ use bravebot_skus::{DeviceError, Registration, StoreError};
 /// What looking for an imported subscription found.
 ///
 /// Three answers rather than an `Option`, because the two ways of coming back empty want different
-/// treatment. Nothing imported is the free tier working as intended and deserves no words. A batch
-/// that exists and could not be read is a paid subscription not being spent, and the only symptom is
-/// a worse model, which nobody would think to attribute to the credential store.
+/// treatment. Nothing imported is not a fault and deserves no words: it is where a machine that
+/// never subscribed sits. A batch that exists and could not be read is a paid subscription not
+/// being spent, and the only symptom is a worse model, which nobody would think to attribute to the
+/// credential store.
 ///
 /// No `Debug`, deliberately. One variant holds a wallet of live credentials, and the obvious
 /// debugging reflex of printing this would put them in a log. The same reasoning as
@@ -24,7 +25,8 @@ use bravebot_skus::{DeviceError, Registration, StoreError};
 pub enum Discovery {
     /// A batch is in hand and will be spent on this turn's requests.
     Found(ImportedSubscription),
-    /// Nothing has been imported for this endpoint's environment. The ordinary free-tier case.
+    /// Nothing has been imported for this endpoint's environment, which is the ordinary case on a
+    /// machine that has never subscribed.
     NothingImported,
     /// Something is stored and could not be used, with a sentence saying why and what to do.
     ///
@@ -42,10 +44,19 @@ impl Discovery {
         }
     }
 
+    /// Whether a batch is in hand, without taking it.
+    ///
+    /// For a caller deciding whether any configured service could answer, which is asked before
+    /// there is a turn to spend a credential on. [`Discovery::found`] consumes, and a caller that
+    /// used it to ask the question would be holding a wallet it has no use for yet.
+    pub fn holds_a_batch(&self) -> bool {
+        matches!(self, Self::Found(_))
+    }
+
     /// What to tell the person watching, where there is anything worth saying.
     ///
     /// `None` for both of the cases that are working as intended: a subscription being spent needs
-    /// no explanation, and neither does a free-tier session that never had one.
+    /// no explanation, and neither does a session that never had one.
     pub fn complaint(&self) -> Option<&str> {
         match self {
             Self::Refused(detail) => Some(detail),
@@ -121,9 +132,19 @@ impl ImportedSubscription {
             return Discovery::NothingImported;
         };
 
+        // A machine with nowhere to keep credentials has none imported rather than one that could
+        // not be read. STATE-2 makes an absent profile directory a state this program supports, so
+        // a container that has none of it wanted none of it, and the store answers that with the
+        // same error it uses for a file it could not read. Asked separately because those two are
+        // indistinguishable once the store has answered, and reporting the second would send
+        // somebody to re-import a subscription they never had.
+        if bravebot_skus::store::path().is_err() {
+            return Discovery::NothingImported;
+        }
+
         let wallet = match bravebot_skus::store::Wallet::open() {
             Ok(wallet) => wallet,
-            // The ordinary free-tier case: nothing has been imported.
+            // The ordinary case: nothing has been imported.
             Err(StoreError::NotFound) => return Discovery::NothingImported,
             Err(e) => return Discovery::Refused(e.to_string()),
         };
@@ -224,11 +245,20 @@ impl ImportedSubscription {
 /// `None` for a host in neither camp, such as a local endpoint, so no credential is sent somewhere
 /// its issuer is unknown.
 fn is_production_endpoint(endpoint: &str) -> Option<bool> {
-    let host = endpoint
+    let authority = endpoint
         .split_once("://")
         .map_or(endpoint, |(_, rest)| rest)
         .split('/')
         .next()?;
+
+    // The authority carries a port where one was written, and a port is not part of the name: a
+    // host written with one is the same deployment as the same host written without, so a suffix
+    // test against the whole authority reads `ai-chat.bsg.brave.com:443` as somebody else's host.
+    // Only a trailing run of digits is taken, so nothing is cut off an address that has no port.
+    let host = match authority.rsplit_once(':') {
+        Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => name,
+        _ => authority,
+    };
 
     // Checked before brave.com, since a careless suffix test would read brave.software as
     // production and send a live credential to a development host.
@@ -239,6 +269,19 @@ fn is_production_endpoint(endpoint: &str) -> Option<bool> {
     } else {
         None
     }
+}
+
+/// Whether an aichat endpoint is one of Brave's own deployments.
+///
+/// Here rather than beside the rule that asks it, because the host suffixes that answer it are
+/// already in this file: a second list of them is the two lists going out of step, and the one
+/// that decides where a credential may be sent is the one worth having only once.
+///
+/// False for a host in neither camp, which is somebody's own deployment: a local service, a
+/// private one, a proxy in front of either. Nobody is handed a configuration pointing at one, so
+/// it is a destination that was chosen.
+pub fn is_a_brave_endpoint(endpoint: &str) -> bool {
+    is_production_endpoint(endpoint).is_some()
 }
 
 /// Register against the real service, over what this process trusts and goes through.
@@ -304,16 +347,19 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 mod tests {
     use super::*;
 
-    /// The distinction the type exists for. Nothing imported is the free tier working as intended;
-    /// a batch that cannot be read is a paid subscription going unspent, and collapsing the two into
-    /// one empty answer is what made the downgrade silent.
+    /// The distinction the type exists for. Nothing imported is not a fault; a batch that cannot be
+    /// read is a paid subscription going unspent, and collapsing the two into one empty answer is
+    /// what made the downgrade silent.
     ///
     /// Stated over the two empty variants rather than by calling `discover`, which would read the
     /// real store of whoever ran the suite. See [`ImportedSubscription::detached`].
     #[test]
     fn an_unreadable_batch_is_reported_and_an_absent_one_is_not() {
         let absent = Discovery::NothingImported;
-        assert!(absent.complaint().is_none(), "the free tier is not a fault");
+        assert!(
+            absent.complaint().is_none(),
+            "having imported nothing is not a fault"
+        );
         assert!(absent.found().is_none());
 
         let refused =
@@ -421,6 +467,51 @@ mod tests {
     fn a_local_endpoint_matches_no_environment() {
         assert_eq!(is_production_endpoint("http://127.0.0.1:8000"), None);
         assert_eq!(is_production_endpoint("https://example.invalid"), None);
+    }
+
+    /// A port is not part of a host's name, so a deployment written with one is the same
+    /// deployment. Read against the whole authority, every Brave host with a port in it came back
+    /// as somebody else's, which is a credential withheld from the host that issued it and a
+    /// configuration that names Brave's own endpoint read as a service the person chose.
+    #[test]
+    fn a_port_is_not_part_of_the_host() {
+        assert_eq!(
+            is_production_endpoint("https://ai-chat.bsg.brave.com:443"),
+            Some(true)
+        );
+        assert_eq!(
+            is_production_endpoint("https://ai-chat.bsg.brave.software:8443/v1"),
+            Some(false)
+        );
+        assert!(is_a_brave_endpoint("https://ai-chat.bsg.brave.com:443"));
+
+        // And nothing is cut off an authority whose last colon starts no port.
+        assert_eq!(is_production_endpoint("https://example.invalid:"), None);
+        assert!(!is_a_brave_endpoint("http://[::1]:8080"));
+    }
+
+    /// Brave's own deployments are Brave's, whichever channel they are, and everything else is a
+    /// host somebody chose. The question the refusal turns on, so it is pinned apart from the
+    /// production split above: a local service read as Brave's would be refused as having no service
+    /// configured, which is every development build.
+    #[test]
+    fn braves_own_deployments_are_told_from_a_host_somebody_chose() {
+        for braves in [
+            "https://ai-chat.bsg.brave.com",
+            "https://ai-chat-premium.bsg.brave.com/v1/chat/completions",
+            "https://ai-chat.bsg.bravesoftware.com",
+            "https://ai-chat.bsg.brave.software",
+        ] {
+            assert!(is_a_brave_endpoint(braves), "{braves}");
+        }
+        for theirs in [
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:8000",
+            "https://ai.example.internal/v1",
+            "https://notbrave.com",
+        ] {
+            assert!(!is_a_brave_endpoint(theirs), "{theirs}");
+        }
     }
 
     /// A batch that stops working must be replaced automatically. The subscription is still paid

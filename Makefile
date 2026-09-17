@@ -117,10 +117,15 @@ check-toolchain:
 # is involved, so this is deterministic and belongs in CI. Whether the code actually does
 # what a clause says needs a reading of the governed source: run the check-spec skill for
 # that half.
+#
+# The screenshot renderer rides along because it is the other half's tool: the skill pastes what
+# it prints into issue bodies, it is standard library Python like everything else here, and a
+# renderer that is quietly wrong sends a plausible and untrue screen to whoever has to fix the bug.
 .PHONY: check-spec
 check-spec:
 	python3 agents/skills/check-spec/selftest.py
 	python3 agents/skills/check-spec/check-spec.py --mechanical-only
+	@python3 contrib/terminal-screenshot.py --selftest
 
 # unverified-clauses.txt, written from the specs. It is the list of clauses nothing pins, and
 # check-spec fails while it and the specs disagree, so this is what to run after giving a clause

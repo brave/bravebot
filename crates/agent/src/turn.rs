@@ -944,7 +944,7 @@ pub struct Outcome {
     ///
     /// A fact about what happened rather than about the configuration. Every build that knows a
     /// premium host used to report itself as premium, so a session whose credentials could not be
-    /// read said "premium" while being answered by whatever the free tier serves.
+    /// read said "premium" while being answered by a weaker model.
     pub premium: bool,
     /// When the planner asked to be asked again, whether or not this turn was a tick of a loop.
     ///
@@ -1338,15 +1338,15 @@ pub fn goal<S: Sink, R: Reporter>(
 /// the same in both and a mode that skipped the line would be the silent downgrade again in one
 /// place.
 ///
-/// A batch that exists and cannot be read is worth a line of its own. The request goes out on the
-/// free tier, the endpoint answers a premium model name with a weaker model rather than an error,
+/// A batch that exists and cannot be read is worth a line of its own. The request goes out with no
+/// credential, the endpoint answers a premium model name with a weaker model rather than an error,
 /// and the only visible symptom is a worse answer. Nothing about that points at the credential
 /// store, so it has to be said outright.
 ///
 /// Asked of the model rather than of the configuration, because the model is what decides the
 /// backend. A turn on Bedrock or on a gateway cannot spend a Leo credential at all, so the store is
-/// not read for one: the line it would produce says the turn fell back to the free tier, which is
-/// not where such a turn went, and it sends somebody to re-import a subscription that would have
+/// not read for one: the line it would produce says the turn spent no subscription, which is not
+/// what happened to such a turn, and it sends somebody to re-import a subscription that would have
 /// changed nothing.
 pub fn discover_subscription<R: Reporter>(
     config: &Config,

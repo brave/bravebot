@@ -135,11 +135,86 @@ task calls for it. Your own `~/.bravebot` is trusted for being yours; a project'
 and `.bravebot/skills` are read through the trust map, so they load when you vouched for the
 directory and are left out when you did not. See [specs/skills.md](specs/skills.md).
 
-## Configuration
+## Choosing a model service
 
-Configuration is built into the released binary, so there is nothing to set up. `bravebot doctor`
-reports what it will use. To point it at a different backend, see
-[development/configuration.md](development/configuration.md).
+There is one thing to set up before the first session, and it is which service answers. A released
+binary arrives with none configured, so rather than open a session with nothing set up to answer it,
+a first run says what to configure and stops.
+
+Configure one of these three. `bravebot doctor` reports what it will use once you have.
+
+Each block below sets a top-level `model` key as well. A block on its own leaves the model in force
+the one the build came with, which is Brave's own, so the first run says the same thing again and
+names the key to set. `/model` in a session picks from every model any configured service offers,
+and remembers what you picked.
+
+### AWS Bedrock, through your own account
+
+Put a `provider` block named `amazon-bedrock` in `~/.bravebot/settings.json`, with the region and
+the models to offer. Models are keyed by the name Bedrock knows them by, which may be an
+inference-profile ARN:
+
+```json
+{
+  "provider": {
+    "amazon-bedrock": {
+      "options": { "region": "us-west-2", "profile": "my-bedrock-sso" },
+      "models": {
+        "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abcdef": {
+          "name": "Claude Opus (Bedrock)"
+        }
+      }
+    }
+  },
+  "model": "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abcdef"
+}
+```
+
+The credential is the AWS chain rather than a token, so nothing here names one. `profile` is
+optional and names a credential profile to sign with; without it the ambient credentials are used.
+A profile configured for SSO is signed in to before work starts, and the sign-in prints a URL and a
+code to type into it.
+
+### OpenRouter, or another OpenAI-compatible gateway
+
+Put a `provider` block named for the gateway, with the environment variable that holds its API key
+and the models to offer:
+
+```json
+{
+  "provider": {
+    "openrouter": {
+      "env": ["OPENROUTER_API_KEY"],
+      "models": { "z-ai/glm-4.6": {} }
+    }
+  },
+  "model": "openrouter/z-ai/glm-4.6"
+}
+```
+
+`openrouter` needs no endpoint written down, its own being compiled in. Any other gateway names one
+in `options.baseURL`, and a gateway naming no models at all is asked what it serves. The block is
+read in the shape another tool already reads, so one copied out of that tool's configuration works
+here unedited.
+
+### Brave Leo Premium, if you already subscribe
+
+```sh
+bravebot import-leo-creds        # or `import-leo-creds development` for a development channel
+```
+
+This registers as an additional device rather than taking the browser's credentials, so Brave keeps
+its own and nothing it holds is spent. Run it on a machine where Brave is signed in to the
+subscription.
+
+These models are reached through Brave's AI gateway, which has problems of its own still being
+worked on, so prefer one of the two above for now. It is the shortest route if you already
+subscribe.
+
+### Pointing it somewhere else entirely
+
+An endpoint of your own is configuration too, and a build pointed at one is not asked to configure
+anything further. See [development/configuration.md](development/configuration.md).
 
 ## On a corporate network
 

@@ -171,9 +171,22 @@ impl Delegate {
         self.note.is_none()
     }
 
-    /// The last few of its lines, which is what the block where it started draws.
-    pub fn latest(&self) -> &[Entry] {
-        &self.lines[self.lines.len().saturating_sub(DELEGATE_SHOWN)..]
+    /// The last few of its calls, which is what the block where it started draws.
+    ///
+    /// Its calls rather than the last of its lines, because the two are not the same sequence: a
+    /// preview released for the person to read is held among them and carries no call, so the
+    /// last three lines of a delegate that has made three calls can hold one of them. The rows
+    /// the block draws are calls, and so is the number it counts them against.
+    pub fn latest(&self) -> Vec<&Entry> {
+        let mut latest: Vec<&Entry> = self
+            .lines
+            .iter()
+            .rev()
+            .filter(|entry| entry.activity.is_some())
+            .take(DELEGATE_SHOWN)
+            .collect();
+        latest.reverse();
+        latest
     }
 
     /// Keep one more of its lines, dropping the oldest where there are already enough.
@@ -566,10 +579,14 @@ pub struct Laid {
     /// Empty unless the scroller is open, since working it out costs a wrap of every line and
     /// nothing at rest asks the question.
     pub prompts: Vec<u16>,
-    /// The rows holding a search match, top to bottom.
+    /// The row each search match is reached at, top to bottom.
     ///
-    /// One entry per row rather than per match: the view moves to a row, and two hits on one row
-    /// are one place to go.
+    /// One entry per match rather than per row, so two hits on one row are two entries holding
+    /// that row. The view has one place to go for both of them, but they are two matches: the
+    /// footer counts them and `n` steps through each one.
+    ///
+    /// A match is reached at the row the line holding it begins at, as a prompt is: a line the
+    /// width wraps is several rows of the screen and one entry here.
     pub matches: Vec<u16>,
 }
 
@@ -641,7 +658,9 @@ pub struct Watching {
     /// spawned, then the commands in the order they ran.
     ///
     /// A position rather than a name, because it is also where the highlight sits in the list, and
-    /// the two must not be able to disagree.
+    /// the two must not be able to disagree. What that costs is that a row arriving ahead of this
+    /// one moves it, so whatever inserts the row moves this with it: a position left where it was
+    /// is a different row from the one somebody opened.
     pub at: usize,
     /// Whether the list is what is on the screen, rather than the row at `at`.
     pub listing: bool,
@@ -910,11 +929,16 @@ pub struct Session {
     pub turns: usize,
     /// Tokens spent across the whole session.
     pub tokens: u64,
-    /// What each turn cost, by turn number.
+    /// What each turn cost, by turn number, and what was spent before the first turn under zero.
     ///
     /// The session total answers "what has this cost me"; this answers "where did it go", which is
     /// the question when one turn spent most of it. A total alone cannot distinguish a session of
     /// twenty even turns from one turn that ran away, and those want different fixes.
+    ///
+    /// Zero is the leading entry, and holds what an aside or a run asked for as the first thing a
+    /// session did cost. Those are charged somewhere rather than nowhere because they are in the
+    /// total either way, and a breakdown that does not add up to the total answers neither
+    /// question. See [`Session::end_aside`].
     spend: std::collections::BTreeMap<usize, u64>,
     /// Where each turn's wall clock went, by turn number.
     ///
@@ -1218,9 +1242,9 @@ impl Session {
             // the only thing that can: the flag is the record that somebody accepted the cost.
             permission_mode: bravebot_agent::PermissionMode::default(),
             bypass_available: false,
-            // The free tier until a caller says otherwise, which is what a build with no premium
+            // No subscription until a caller says otherwise, which is what a build with no premium
             // host has and what a test that does not care about tiers should see.
-            tier: t!(status_free_tier).to_string(),
+            tier: t!(status_no_subscription).to_string(),
             turns: 0,
             tokens: 0,
             spend: std::collections::BTreeMap::new(),
@@ -1737,7 +1761,19 @@ impl Session {
             return;
         }
         self.streaming.push_str(text);
-        self.scroll = 0;
+        self.back_to_the_tail();
+    }
+
+    /// Put the turn's own view back at its tail for something the turn has just done.
+    ///
+    /// Nothing while the delegate view is open, because `scroll` is that view's position then and
+    /// the turn's own is held aside until it closes. A person who went to read a delegate or what
+    /// a command printed asked for that screen, and a row arriving under the turn is not them
+    /// asking for another.
+    fn back_to_the_tail(&mut self) {
+        if self.watching.is_none() {
+            self.scroll = 0;
+        }
     }
 
     /// The part of the reply taking shape that is meant for the person watching.
@@ -1806,8 +1842,19 @@ impl Session {
     }
 
     /// A delegate has begun, drawn where the call that started it happened.
+    ///
+    /// Nothing about the view moves for it. Where the view is open, the row it is on is a place
+    /// in a list this inserts a row into, so a place at or after the new delegate's moves with
+    /// it: without that, a delegate starting takes the screen from somebody reading a command,
+    /// since the commands are listed after the delegates.
     pub fn delegate_started(&mut self, delegation: bravebot_agent::report::Delegation) {
-        self.scroll = 0;
+        let inserted = self.asides.len() + self.delegates().len();
+        if let Some(watching) = &mut self.watching
+            && watching.at >= inserted
+        {
+            watching.at += 1;
+        }
+        self.back_to_the_tail();
         let mut entry = Entry::system("");
         entry.speaker = Speaker::Delegate;
         entry.delegate = Some(Delegate {
@@ -2137,7 +2184,7 @@ impl Session {
     /// on its own rather than being dropped: content released for a screen and then not drawn is
     /// the worst of both.
     pub fn show(&mut self, shown: Shown) {
-        self.scroll = 0;
+        self.back_to_the_tail();
         match self.working_lines().last_mut() {
             Some(entry) if entry.speaker == Speaker::Tool && entry.shown.is_none() => {
                 entry.shown = Some(shown);
@@ -5413,6 +5460,11 @@ impl Session {
     /// Charged to the turn in flight, since `/compact` is asked for in the middle of one and its
     /// cost is part of what that turn spent. Attributing it to no turn would lose it from the
     /// per-turn figures while still counting it in the total, so the two would not add up.
+    ///
+    /// An aside asked before the session's first turn has no turn in flight to charge, and is
+    /// charged to a leading entry instead: the breakdown is keyed by turn number, and the number
+    /// before the first turn is one nothing else ever writes to. Skipping the breakdown there
+    /// would be the same disagreement by another route, since the total is added to either way.
     pub fn end_aside(&mut self, tokens: u64) {
         self.status = Status::Idle;
         // An aside that wrote something as it went has been drawing it at the tail, where the
@@ -5429,12 +5481,12 @@ impl Session {
         self.phase = None;
         self.running = None;
         self.tokens += tokens;
-        if self.turns > 0 {
-            *self.spend.entry(self.turns).or_insert(0) += tokens;
-            let entry = self.timing.entry(self.turns).or_default();
-            entry.wall_ms += took;
-            entry.inference_ms += took;
-        }
+        // Zero before the first turn, which is the leading entry: whatever is spent there is spent
+        // outside every turn, and that is what the number says.
+        *self.spend.entry(self.turns).or_insert(0) += tokens;
+        let entry = self.timing.entry(self.turns).or_default();
+        entry.wall_ms += took;
+        entry.inference_ms += took;
     }
 
     /// Leave a manifest run the session started, adding what it cost to the session's total.
@@ -5458,15 +5510,14 @@ impl Session {
         self.phase = None;
         self.running = None;
         self.tokens += tokens;
-        if self.turns > 0 {
-            *self.spend.entry(self.turns).or_insert(0) += tokens;
-            let entry = self.timing.entry(self.turns).or_default();
-            entry.wall_ms += took;
-            if let Some(spent) = spent {
-                entry.inference_ms += spent.inference_ms;
-                entry.tools_ms += spent.tools_ms;
-                entry.stalled_ms += spent.stalled_ms;
-            }
+        // To the leading entry before the first turn, for the reason an aside is.
+        *self.spend.entry(self.turns).or_insert(0) += tokens;
+        let entry = self.timing.entry(self.turns).or_default();
+        entry.wall_ms += took;
+        if let Some(spent) = spent {
+            entry.inference_ms += spent.inference_ms;
+            entry.tools_ms += spent.tools_ms;
+            entry.stalled_ms += spent.stalled_ms;
         }
     }
 
@@ -5896,18 +5947,41 @@ impl Session {
     }
 
     /// Walk to the next match or the previous one, wrapping at either end.
+    ///
+    /// `rows` holds the row each match was drawn on, one entry per match, so two matches on one
+    /// row are two presses: the view stays where it is for the second and the footer says which
+    /// of the two it is on. That is what makes the count reachable, since a step that moved the
+    /// view would have nowhere to go.
+    ///
+    /// Counting from the match the view last landed on where it is still there, and from the view
+    /// otherwise: somebody who has scrolled away means the next match from what they are looking
+    /// at rather than from where the key last took them.
     pub fn to_a_match(&mut self, rows: &[u16], forwards: bool) {
         let top = self.top_row();
-        let landing = if forwards {
-            rows.iter()
+        let landing = match self.on_a_match(rows) {
+            Some(at) if forwards => Some((at + 1) % rows.len()),
+            Some(at) => Some(at.checked_sub(1).unwrap_or(rows.len() - 1)),
+            None if forwards => rows
+                .iter()
                 .position(|row| *row > top)
-                .or(if rows.is_empty() { None } else { Some(0) })
-        } else {
-            rows.iter()
+                .or(if rows.is_empty() { None } else { Some(0) }),
+            None => rows
+                .iter()
                 .rposition(|row| *row < top)
-                .or(rows.len().checked_sub(1))
+                .or(rows.len().checked_sub(1)),
         };
         self.land_at(rows, landing);
+    }
+
+    /// Which match the view is on, where it is still on the one it last landed on.
+    ///
+    /// Landing on a row nearer the end than a screen leaves the view a screen short of it, so
+    /// what the view is on is the row landing there would have reached rather than the row
+    /// itself.
+    fn on_a_match(&self, rows: &[u16]) -> Option<usize> {
+        let at = self.scroller.as_ref()?.at;
+        let row = *rows.get(at)?;
+        (row.min(self.furthest()) == self.top_row()).then_some(at)
     }
 
     fn land_at(&mut self, rows: &[u16], landing: Option<usize>) {
@@ -6210,6 +6284,86 @@ mod tests {
                 session.watched_delegate().map(|delegate| delegate.kind),
                 Some("reader"),
                 "a delegate starting took the screen from the one being read"
+            );
+        }
+
+        /// The rows are grouped by kind, so a delegate starting arrives ahead of every command in
+        /// the list. A person reading what a command printed was moved onto that delegate by an
+        /// event they did not ask for.
+        #[test]
+        fn a_new_delegate_does_not_take_the_screen_from_a_command_being_read() {
+            let mut session = Session::new("none");
+            ran(&mut session, "cargo test", false);
+            assert!(session.watch(), "a command was not something to look at");
+
+            spawn(&mut session, "reader", "find the parser");
+            assert_eq!(
+                session
+                    .watched_output()
+                    .map(|output| output.command.as_str()),
+                Some("cargo test"),
+                "a delegate starting took the screen from the command being read"
+            );
+        }
+
+        /// The same shift under the list: the highlight is the row somebody moved it to, and a
+        /// delegate arriving above it must not leave them pointed at a different row.
+        #[test]
+        fn a_new_delegate_does_not_move_the_lists_highlight() {
+            let mut session = Session::new("none");
+            ran(&mut session, "cargo test", false);
+            ran(&mut session, "cargo build", false);
+            session.watch();
+            session.watch_previous();
+
+            spawn(&mut session, "reader", "find the parser");
+            assert_eq!(
+                session
+                    .watched_output()
+                    .map(|output| output.command.as_str()),
+                Some("cargo test"),
+                "a delegate starting moved the list's highlight to another row"
+            );
+        }
+
+        /// Somebody reading back up an open view is reading; a delegate they did not ask for
+        /// starting must not drop them at its tail.
+        #[test]
+        fn a_new_delegate_leaves_an_open_view_where_its_reader_put_it() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.watch();
+            session.scroll_up(6);
+
+            spawn(&mut session, "checker", "run the build");
+            assert_eq!(
+                session.scroll, 6,
+                "a delegate starting pulled the open view back to its tail"
+            );
+        }
+
+        /// The same rule for everything else the turn reports while the view is open: content
+        /// released for the person to read, and the reply taking shape under it. Both land
+        /// several times a second during a turn, so either one moving the view is the run
+        /// somebody opened being the run they cannot keep on the screen.
+        #[test]
+        fn nothing_the_turn_reports_moves_an_open_view() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.watch();
+            session.scroll_up(6);
+
+            session.show(quarantined("notes0.md"));
+            assert_eq!(
+                session.scroll, 6,
+                "a released preview pulled the open view back to its tail"
+            );
+
+            session.reporting_for(None);
+            session.streaming("the turn is thinking");
+            assert_eq!(
+                session.scroll, 6,
+                "the reply taking shape pulled the open view back to its tail"
             );
         }
 
@@ -6639,6 +6793,54 @@ mod tests {
             );
         }
 
+        /// Content released for the person to read is held among the delegate's lines and is not
+        /// a call. A block drawing the last three lines therefore drew one call row for a
+        /// delegate that had made three calls, and read as a delegate doing nearly nothing.
+        #[test]
+        fn a_preview_does_not_take_a_calls_place_in_the_block() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "worker", "summarise the notes");
+            for round in 0..4 {
+                let call = Activity::running("Isolated processor", format!("notes{round}.md"));
+                session.start_activity(call.clone());
+                session.finish_activity(call.done("wrote 1 line"));
+                // What the processor said about the file, and then the file it wrote: two
+                // released previews for the one call, as a spawn_processor result reports.
+                session.show(quarantined("what the isolated processor said"));
+                session.show(quarantined(&format!("notes{round}.md")));
+            }
+
+            let held = session.delegates();
+            assert_eq!(held[0].calls, 4, "the delegate forgot the calls it made");
+            let latest = held[0].latest();
+            assert_eq!(
+                latest.len(),
+                DELEGATE_SHOWN,
+                "a preview took the row one of the delegate's calls is drawn on"
+            );
+            assert!(
+                latest.iter().all(|entry| entry.activity.is_some()),
+                "the block was given a row that is not a call to draw"
+            );
+            assert_eq!(
+                latest.last().unwrap().activity.as_ref().unwrap().target,
+                "notes3.md",
+                "the block drew the oldest of its calls rather than the newest"
+            );
+        }
+
+        /// Quarantined content as the driver reports it, for the tests about where a preview of
+        /// it lands.
+        fn quarantined(origin: &str) -> Shown {
+            Shown {
+                origin: origin.to_string(),
+                reach: bravebot_agent::report::Reach::NoModel,
+                label: "(U,priv)".to_string(),
+                preview: vec!["a line nobody vouched for".to_string()],
+                lines: 1,
+            }
+        }
+
         /// What the block draws is a window on what is kept. Keeping only the three drawn is what
         /// left the mode that opens over a delegate with three rows to show for an hour's work.
         #[test]
@@ -6814,6 +7016,51 @@ mod tests {
         assert_eq!(session.top_row(), 80, "walking back did not wrap round");
         session.to_a_match(&rows, false);
         assert_eq!(session.top_row(), 50);
+    }
+
+    /// The footer counts matches, so the walk has to have that many places to stop. A row holding
+    /// two of them is two presses: the second leaves the view where it is and moves which match
+    /// the footer says the view is on. A walk that stepped by row would leave the second match
+    /// unreachable and the count a number nothing answers.
+    #[test]
+    fn two_matches_on_one_row_are_two_steps_of_the_walk() {
+        let mut session = Session::new("kernel-enforced");
+        session.open_scroller();
+        session.note_layout(Laid {
+            width: 80,
+            height: 10,
+            rows: 100,
+            ..Laid::default()
+        });
+        // Two matches drawn on row 20, one on row 50.
+        let rows = [20u16, 20, 50];
+        let walked = |session: &Session| {
+            (
+                session.top_row(),
+                session.scroller().expect("the scroller is open").at,
+            )
+        };
+
+        session.scroller_to_first_row();
+        session.to_a_match(&rows, true);
+        assert_eq!(walked(&session), (20, 0));
+        session.to_a_match(&rows, true);
+        assert_eq!(
+            walked(&session),
+            (20, 1),
+            "the second match on the row was stepped over"
+        );
+        session.to_a_match(&rows, true);
+        assert_eq!(walked(&session), (50, 2));
+        session.to_a_match(&rows, true);
+        assert_eq!(walked(&session), (20, 0), "the walk did not wrap round");
+
+        session.to_a_match(&rows, false);
+        assert_eq!(walked(&session), (50, 2), "walking back did not wrap round");
+        session.to_a_match(&rows, false);
+        assert_eq!(walked(&session), (20, 1));
+        session.to_a_match(&rows, false);
+        assert_eq!(walked(&session), (20, 0));
     }
 
     /// A search run while a match is already at the top of the view has found that one, and
@@ -10479,6 +10726,61 @@ mod tests {
             assert_eq!(s.tokens, 650, "the breakdown and the total disagreed");
         }
 
+        /// An aside asked as the first thing a session does sends a request like any other, and a
+        /// total the breakdown cannot account for makes the record unreadable as an account of what
+        /// each turn spent: the two figures disagree and neither of them says which is wrong.
+        #[test]
+        fn an_aside_before_the_first_turn_is_charged_to_a_leading_entry() {
+            let mut s = session();
+
+            s.begin_aside();
+            s.end_aside(250);
+
+            assert_eq!(
+                s.spend_by_turn(),
+                &std::collections::BTreeMap::from([(0, 250)]),
+                "a cost incurred before the first turn was charged to no turn at all"
+            );
+
+            s.type_char('a');
+            s.submit();
+            s.complete("reply", Vec::new(), 1_000);
+
+            assert_eq!(s.tokens, 1_250);
+            assert_eq!(
+                s.spend_by_turn(),
+                &std::collections::BTreeMap::from([(0, 250), (1, 1_000)]),
+                "the first turn absorbed what was spent before it, or lost it"
+            );
+            assert_eq!(
+                s.spend_by_turn().values().sum::<u64>(),
+                s.tokens,
+                "the breakdown and the total disagreed"
+            );
+        }
+
+        /// A manifest run started as the first thing a session does is the same case as an aside
+        /// asked then: it spends tokens with no turn to charge them to, and the breakdown has to
+        /// hold them or it stops adding up to the total.
+        #[test]
+        fn a_run_before_the_first_turn_is_charged_to_a_leading_entry() {
+            let mut s = session();
+
+            s.begin_aside();
+            s.end_run(250, None);
+
+            assert_eq!(
+                s.spend_by_turn(),
+                &std::collections::BTreeMap::from([(0, 250)]),
+                "a cost incurred before the first turn was charged to no turn at all"
+            );
+            assert_eq!(
+                s.spend_by_turn().values().sum::<u64>(),
+                s.tokens,
+                "the breakdown and the total disagreed"
+            );
+        }
+
         /// The whole point of keeping the split: a turn's wall clock alone cannot say whether it was
         /// slow because the model was, or because it stopped and waited for a person.
         #[test]
@@ -10536,6 +10838,37 @@ mod tests {
             assert_eq!(
                 turn.inference_ms, turn.wall_ms,
                 "an aside's wait was not counted as time spent on the model"
+            );
+        }
+
+        /// An aside asked before the first turn waits on the model exactly as one asked during a
+        /// turn does. Charged to no turn, that wait is in none of the figures the session adds up,
+        /// so a session that sat for a minute on its first question reports having taken no time.
+        ///
+        /// The entry is what this asserts rather than the figure in it, as
+        /// `a_failed_turn_still_accounts_for_its_wall_clock` does and for the same reason: the
+        /// clock is the real one, so a test's aside is over in well under the millisecond every
+        /// figure here is measured in.
+        #[test]
+        fn an_aside_before_the_first_turn_records_its_wait_ahead_of_that_turn() {
+            let mut s = session();
+
+            s.begin_aside();
+            s.end_aside(250);
+
+            let leading = s
+                .timing_by_turn()
+                .get(&0)
+                .copied()
+                .expect("the wait was recorded ahead of the first turn");
+            assert_eq!(
+                leading.inference_ms, leading.wall_ms,
+                "an aside's wait was not counted as time spent on the model"
+            );
+            assert_eq!(
+                s.timing_total().wall_ms,
+                leading.wall_ms,
+                "the wait is not in what the session adds up"
             );
         }
 

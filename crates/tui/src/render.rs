@@ -277,7 +277,7 @@ fn delegate_lines(delegate: &Delegate, width: usize) -> Vec<Line<'static>> {
         // says which of them a row belongs to.
         None => {
             let latest = delegate.latest();
-            for entry in latest {
+            for entry in &latest {
                 if let Some(activity) = &entry.activity {
                     for line in activity_lines(activity, entry.landing, width.saturating_sub(2)) {
                         lines.push(indented(line));
@@ -285,7 +285,9 @@ fn delegate_lines(delegate: &Delegate, width: usize) -> Vec<Line<'static>> {
                 }
             }
             // Said only where there were more than are drawn, since "3 calls" over three rows is
-            // a row spent saying what the reader can already see.
+            // a row spent saying what the reader can already see. Against the calls drawn rather
+            // than the lines held, so a delegate whose lines also hold a preview still says how
+            // many calls the block left out.
             if delegate.calls > latest.len() {
                 lines.push(Line::from(Span::styled(
                     format!(
@@ -1807,7 +1809,11 @@ fn marked() -> Style {
     Style::default().add_modifier(Modifier::REVERSED)
 }
 
-/// Highlight every occurrence of `needle`, and say which lines held one.
+/// Highlight every occurrence of `needle`, and say which line each one was found on.
+///
+/// One entry per occurrence rather than per line, repeating the line where it held several, so
+/// that what comes back is the matches and not the rows: a line holding two of them is counted
+/// twice and walked twice, which is what the footer says and what `n` steps through.
 ///
 /// The spans are split where a match begins and ends and the pieces restyled. Nothing on the
 /// screen moves and nothing leaves the block it was drawn in: a match inside a quarantined
@@ -1829,7 +1835,7 @@ fn highlight(lines: &mut [Line<'static>], needle: &str) -> Vec<usize> {
         if found.is_empty() {
             continue;
         }
-        held.push(index);
+        held.extend(std::iter::repeat_n(index, found.len()));
 
         let mut rebuilt: Vec<Span<'static>> = Vec::new();
         let mut at = 0;
@@ -1915,7 +1921,7 @@ fn lay_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, L
             laid.prompts.push(at);
             prompts.next();
         }
-        if held.peek() == Some(&index) {
+        while held.peek() == Some(&index) {
             laid.matches.push(at);
             held.next();
         }
@@ -2664,6 +2670,14 @@ fn command_lines(session: &Session, offered: &[crate::app::Command]) -> Vec<Line
 /// How the hint line says where the rest of the bindings went.
 const SHORTCUTS_HINT: &str = "? for shortcuts";
 
+/// What the context reading says where the session has none to give.
+///
+/// Two states reach it: nothing measured yet, and a count that arrived with no budget to divide it
+/// by. Said rather than left blank, because a blank is also the other state with no reading, a
+/// line with no room for the figure, and a reading that has stopped working, and nothing on the
+/// line tells those apart.
+const UNMEASURED_CONTEXT: &str = "context not yet measured";
+
 /// Every key and marker, and what it does, in the order they are listed.
 ///
 /// The one place they are written down, so a binding that changes cannot leave the list advertising
@@ -2891,16 +2905,21 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         return;
     }
 
-    // How the context currently stands: unmeasured, compacted, or measured as a percentage.
+    // How the context currently stands: unmeasured, compacted, or measured as a percentage. Each of
+    // them says which it is, and none of them is drawn as nothing: a reading that comes and goes is
+    // one people stop reading, and this is the only account of the size of a conversation there is.
     let context = match session.occupancy() {
-        crate::state::Occupancy::Unmeasured => String::new(),
+        crate::state::Occupancy::Unmeasured => UNMEASURED_CONTEXT.to_string(),
         crate::state::Occupancy::Compacted => "context compacted".to_string(),
         crate::state::Occupancy::Measured { guessed, .. } => match session.fullness() {
             Some(percent) if guessed => format!("context ~{percent}%"),
             Some(percent) => format!("context {percent}%"),
-            None => String::new(),
+            // A count with no budget to divide it by is no reading of how full the context is, so
+            // the session knows no more here than one that has measured nothing and says the same.
+            None => UNMEASURED_CONTEXT.to_string(),
         },
     };
+    let context_is_unmeasured = context == UNMEASURED_CONTEXT;
 
     // The way into the view, for as long as it holds anything. The row that reports what the turn
     // is doing names the key too, but that row goes when the turn ends, and what the view holds is
@@ -2957,7 +2976,24 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // Indices into `parts`, in the order they are given up: the way to the bindings first, then the
     // trail toggle, both being things somebody learns once. Then the figures. Neither mode is ever
     // listed, because of everything here they are what changes what the next keystroke does.
-    let kept = fitted(&parts, &[5, 2, 3, 4], area.width);
+    //
+    // A reading with no figure in it goes before any of them. The readings are kept late because a
+    // figure is the one thing on this line nothing else can tell somebody, and a sentence saying
+    // there is no figure yet is not one: it would be holding the room against two working bindings.
+    let expendable: &[usize] = if context_is_unmeasured {
+        &[3, 5, 2, 4]
+    } else {
+        &[5, 2, 3, 4]
+    };
+    // A note is drawn over the right of this same row, so what the parts may occupy is the width
+    // less that note. Fitted against the whole width instead, the last part that fits is one the
+    // note then writes over the middle of, which is the half a word that dropping a part whole
+    // exists to avoid.
+    let note = note_at_the_right(session);
+    let reserved = note.as_deref().map_or(0, |note| {
+        u16::try_from(note.chars().count()).unwrap_or(u16::MAX)
+    });
+    let kept = fitted(&parts, expendable, area.width.saturating_sub(reserved));
 
     // The modes lead the line and are the only coloured part of it, so what is marked is exactly what
     // changes the meaning of a keystroke. Drawn from `kept` like everything else, so a terminal with
@@ -2985,34 +3021,38 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 
-    // The line the person was writing has just gone, so the press that took it is the one thing
-    // worth explaining: without this, a key they pressed to stop something emptied the box and
-    // said nothing, and the next press of it ends the session.
-    if session.cleared_by_interrupt {
+    if let Some(note) = note {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "ctrl-c again to exit  ",
+                note,
                 Style::default().fg(theme::brand_primary()),
             )))
             .alignment(Alignment::Right),
             area,
         );
-        return;
+    }
+}
+
+/// What a press just did, drawn at the right of the hint row, where there is anything to say.
+///
+/// One note at a time, in this order, since they share the room: the parts of the line are fitted
+/// against the width this leaves.
+fn note_at_the_right(session: &Session) -> Option<String> {
+    // The line the person was writing has just gone, so the press that took it is the one thing
+    // worth explaining: without this, a key they pressed to stop something emptied the box and
+    // said nothing, and the next press of it ends the session.
+    if session.cleared_by_interrupt {
+        return Some("ctrl-c again to exit  ".to_string());
     }
 
     // A copy is silent otherwise, and a clipboard that may or may not have taken something is
     // worse than no clipboard: the user pastes to find out. Right-aligned, out of the way of the
     // hints, where the answer to "did that work" belongs.
     if let Some(characters) = session.copied {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!("{} to clipboard  ", tally(characters, "char", "chars")),
-                Style::default().fg(theme::brand_primary()),
-            )))
-            .alignment(Alignment::Right),
-            area,
-        );
-        return;
+        return Some(format!(
+            "{} to clipboard  ",
+            tally(characters, "char", "chars")
+        ));
     }
 
     // Command-V cannot carry a picture and cannot say so: the chord never reaches this process, and
@@ -3020,18 +3060,13 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // has none. So the only way anyone finds out which key does work is being told before they try
     // the one that does not.
     if session.image_on_clipboard {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!(
-                    "image on clipboard  ·  {} to paste  ",
-                    session.bindings().paste_name()
-                ),
-                Style::default().fg(theme::brand_primary()),
-            )))
-            .alignment(Alignment::Right),
-            area,
-        );
+        return Some(format!(
+            "image on clipboard  ·  {} to paste  ",
+            session.bindings().paste_name()
+        ));
     }
+
+    None
 }
 
 /// A count with the right noun, so a line does not read "1 chars".
@@ -3867,6 +3902,49 @@ mod tests {
                 "the block did not say how much it had done: {screen}"
             );
         }
+
+        /// A delegate reading untrusted files has a preview of each held among its lines, and a
+        /// preview is not a call. Counting lines rather than calls drew one row for a delegate
+        /// that had made four, and left the count off too, since the count is said only where
+        /// there are more calls than rows drawn.
+        #[test]
+        fn a_delegates_previews_do_not_cost_its_block_the_rows_and_the_count() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "worker", "summarise the notes");
+            for round in 0..4 {
+                let call = Activity::running("Isolated processor", format!("notes{round}.md"));
+                session.start_activity(call.clone());
+                session.finish_activity(call.done("wrote 1 line"));
+                // The two previews one spawn_processor result releases: what the processor said
+                // about the file, and the file it wrote.
+                session.show(Shown {
+                    origin: "what the isolated processor said".to_string(),
+                    reach: bravebot_agent::report::Reach::NoModel,
+                    label: "(U,priv)".to_string(),
+                    preview: vec!["a line nobody vouched for".to_string()],
+                    lines: 1,
+                });
+                session.show(Shown {
+                    origin: format!("notes{round}.md"),
+                    reach: bravebot_agent::report::Reach::NoModel,
+                    label: "(U,priv)".to_string(),
+                    preview: vec!["a line nobody vouched for".to_string()],
+                    lines: 1,
+                });
+            }
+
+            let screen = rendered(&session);
+            for drawn in ["notes1.md", "notes2.md", "notes3.md"] {
+                assert!(
+                    screen.contains(drawn),
+                    "the block left out the call on {drawn}: {screen}"
+                );
+            }
+            assert!(
+                screen.contains("4 calls"),
+                "the block did not say how many calls it had made: {screen}"
+            );
+        }
     }
 
     /// Render into a test backend and return the visible text.
@@ -3987,14 +4065,42 @@ mod tests {
             (drawn, marked)
         }
 
-        /// Search a session for `needle`, the way the keys do it.
-        fn searching(needle: &str) -> Session {
-            let mut session = reading();
+        /// A session reading back over a quarantined block whose one preview line is `preview`,
+        /// with the scroller open over it.
+        fn reading_a_block(preview: &str) -> Session {
+            let mut session = Session::new("kernel-enforced");
+            let mut read = Entry::tool(Activity::running("read", "notes.md").done("40 lines"));
+            read.shown = Some(Shown {
+                origin: "notes.md".to_string(),
+                reach: bravebot_agent::report::Reach::NotThePlanner,
+                label: "(U,priv)".to_string(),
+                preview: vec![preview.to_string()],
+                lines: 40,
+            });
+            session.transcript.push(read);
+            session.note_layout(Laid {
+                width: 90,
+                height: 24,
+                rows: 24,
+                ..Laid::default()
+            });
+            session.open_scroller();
+            session
+        }
+
+        /// Search `session` for `needle`, the way the keys do it.
+        fn search(session: &mut Session, needle: &str) {
             session.begin_search();
             for c in needle.chars() {
                 session.type_into_search(c);
             }
             session.run_search();
+        }
+
+        /// The session [`reading`] gives back, searched for `needle`.
+        fn searching(needle: &str) -> Session {
+            let mut session = reading();
+            search(&mut session, needle);
             session
         }
 
@@ -4194,6 +4300,45 @@ mod tests {
             assert!(
                 drawn.contains("1 of 3"),
                 "the footer does not say where in the matches the view is: {drawn}"
+            );
+        }
+
+        /// What is counted is matches, not the lines holding one. A person shown `1 of 1` beside
+        /// two highlighted words has been told a number the screen contradicts, and `n` has
+        /// nowhere to take them for the second.
+        #[test]
+        fn a_line_holding_two_matches_is_counted_as_two() {
+            let (drawn, marked) = screen(&searching("there"));
+
+            assert_eq!(
+                marked.matches("there").count(),
+                2,
+                "not every occurrence on the line was marked: {marked:?}"
+            );
+            assert!(
+                drawn.contains("1 of 2"),
+                "the footer counted the line rather than the matches: {drawn}"
+            );
+        }
+
+        /// A count that said `1 of 1` over two highlighted words inside a quarantined block would
+        /// be the interface under-reporting what the content holds, which is the whole of what
+        /// bounds the cost of a search over untrusted bytes: `n` reaches every match and the
+        /// footer says how many there are.
+        #[test]
+        fn two_matches_in_one_quarantined_row_are_counted_as_two() {
+            let mut session = reading_a_block("the haystack holds a haystack");
+            search(&mut session, "haystack");
+            let (drawn, marked) = screen(&session);
+
+            assert_eq!(
+                marked.matches("haystack").count(),
+                2,
+                "not every occurrence in the block was marked: {marked:?}"
+            );
+            assert!(
+                drawn.contains("1 of 2"),
+                "the footer counted the row rather than the matches: {drawn}"
             );
         }
 
@@ -5472,6 +5617,7 @@ mod tests {
                 assert!(
                     part == "⏵⏵ bypass permissions on"
                         || part == "ctrl-t show trail"
+                        || part == UNMEASURED_CONTEXT
                         || part == SHORTCUTS_HINT,
                     "at width {width} a part was cut: {part:?} in {drawn:?}"
                 );
@@ -5815,12 +5961,73 @@ mod tests {
         assert!(output.contains("context ~62%"), "{output}");
     }
 
-    /// Before anything has been measured there is no figure, and a gauge at zero would be a claim
-    /// about a context nobody counted.
+    /// A session that has measured nothing says so rather than drawing nothing. A blank is also
+    /// what a terminal with no room for the figure looks like and what the reading looks like once
+    /// it has stopped working, so an absence leaves a person guessing which of the three it is. No
+    /// figure is claimed either: a gauge at zero would be a claim about a context nobody counted.
     #[test]
-    fn the_hint_line_says_nothing_about_an_unmeasured_context() {
-        let output = rendered_at(&Session::new("none"), 120, 24);
-        assert!(!output.contains("context"), "{output}");
+    fn the_hint_line_says_an_unmeasured_context_has_not_been_measured() {
+        let hint = hint_row_at(&Session::new("none"), 120, 24);
+        assert!(hint.contains(UNMEASURED_CONTEXT), "{hint}");
+        assert!(
+            !hint.contains('%'),
+            "a figure was drawn for a context nobody counted: {hint}"
+        );
+    }
+
+    /// A count that arrived with no budget to divide it by yields no percentage, which left the
+    /// line blank for a second reason and gave a person no way to tell the two apart. The session
+    /// knows no more about how full the context is than one that has measured nothing, so it reads
+    /// the same.
+    #[test]
+    fn a_measurement_with_no_budget_to_state_it_against_reads_as_unmeasured() {
+        let mut session = Session::new("none");
+        session.measured(62_000, 0, false);
+        assert_eq!(
+            session.fullness(),
+            None,
+            "a percentage was formed after all"
+        );
+
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains(UNMEASURED_CONTEXT), "{hint}");
+        assert!(
+            !hint.contains('%'),
+            "a figure was drawn against no budget: {hint}"
+        );
+    }
+
+    /// The readings are given up after the bindings because a figure is the one thing on this line
+    /// nothing else can tell somebody. A sentence saying there is no figure yet is not that, so it
+    /// goes first: holding the room against two working keys is the trade the wrong way round.
+    #[test]
+    fn a_reading_with_no_figure_in_it_is_given_up_before_a_binding() {
+        let session = turn_that_left_a_trail();
+        assert_eq!(session.occupancy(), crate::state::Occupancy::Unmeasured);
+
+        // Narrow enough that the reading and the two bindings cannot all fit, which is the case
+        // worth pinning.
+        let hint = hint_row_at(&session, 45, 24);
+        assert!(hint.contains("ctrl-t show trail"), "{hint}");
+        assert!(hint.contains(SHORTCUTS_HINT), "{hint}");
+        assert!(
+            !hint.contains(UNMEASURED_CONTEXT),
+            "the reading was kept over a working key: {hint}"
+        );
+    }
+
+    /// A note about what a press just did is drawn over the right of the hint row, so the parts are
+    /// fitted against the width it leaves rather than the whole of it. Fitted against the whole,
+    /// the last part that fits is one the note writes over the middle of, and half a word under the
+    /// box reads as a rendering fault.
+    #[test]
+    fn a_note_at_the_right_takes_its_room_from_the_parts_rather_than_over_them() {
+        let mut session = turn_that_left_a_trail();
+        session.copied = Some(12);
+
+        let hint = hint_row_at(&session, 80, 24);
+        assert!(hint.contains("12 chars to clipboard"), "{hint}");
+        assert!(hint.contains(SHORTCUTS_HINT), "the line was cut: {hint}");
     }
 
     /// After compaction the line reports that the context was compacted.
