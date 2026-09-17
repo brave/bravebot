@@ -361,6 +361,8 @@ write-tally = +{ $added } -{ $removed }
 write-too-large-to-show =
     the change is too large to show: { $added } lines replace { $removed }
 write-untrusted = untrusted: nobody has read this, and the model never saw it
+write-remark =
+    what the isolated processor said about this change, which nothing has checked against it
 write-unchanged = { $count ->
     [one] … { $count } unchanged line
    *[other] … { $count } unchanged lines

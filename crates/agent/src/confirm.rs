@@ -60,6 +60,33 @@ pub struct WriteRequest {
     /// model never saw is a different act from reviewing the model's own work, and the screen
     /// should not make the two look alike.
     pub untrusted: bool,
+    /// What the isolated processor that produced the body said about it, where one produced it.
+    ///
+    /// The claim, drawn beside the evidence. A remark is free text a processor authors, nothing
+    /// checks it against the document it accompanies and nothing could, so it used to reach the
+    /// transcript when the processor returned and be some way up the screen by the time this
+    /// question arrived. A person then read the diff with no claim to check it against. Here the
+    /// two are one screen: a remark saying a typo was fixed sits above the lines that changed.
+    ///
+    /// It decides nothing. No gate reads it, the approval is given from the diff, and a write
+    /// goes the same way with it as without it.
+    pub remark: Option<Remark>,
+}
+
+/// What a processor said about the document it produced, released for the screen an approval is
+/// read on.
+///
+/// The same three things [`crate::report::Shown`] carries about any quarantined preview, and
+/// drawn the same way: the words are the interface's, since the only fixed parts of this are
+/// that it is untrusted and that no model may be sent to read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Remark {
+    /// The first lines of it, each already trimmed to a sensible width.
+    pub preview: Vec<String>,
+    /// How many lines there are altogether, so the drawing can say what it left out.
+    pub lines: usize,
+    /// The label it carries, in the same short form the trail uses.
+    pub label: String,
 }
 
 impl WriteRequest {
@@ -1233,6 +1260,7 @@ mod tests {
             existing: None,
             intent: Intent::Overwrite,
             untrusted: false,
+            remark: None,
         }
     }
 
@@ -1522,6 +1550,7 @@ mod tests {
             existing: None,
             intent: Intent::Create,
             untrusted: false,
+            remark: None,
         }
     }
 

@@ -19,7 +19,7 @@ guards:
       - crates/agent/src/workspace.rs: 2
       - crates/agent/tests/workspace.rs: 39
       - crates/aichat/tests/client.rs: 2
-      - crates/core/src/policy.rs: 47
+      - crates/core/src/policy.rs: 48
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 1
       - crates/mcp/tests/stdio.rs: 1
@@ -339,14 +339,15 @@ what catches it.
     of a file the planner named and a person approved from a diff, and its contents were already
     coming from the attacker's file. They gain nothing they did not already have.
   - **Put their words in the remark.** It reaches a person's screen and stops there. It is drawn as
-    untrusted content, inside a margin it cannot forge, and no model is given it. It can still
-    *lie*: the remark is free text attributed to the processor, so it can claim the document only
-    fixes a typo when it does something else. Nothing checks a remark against the document it
-    accompanies, and nothing could. What keeps that from mattering is that the remark is not the
-    decision. The write is approved later, from a diff of the actual bytes, so a person who reads
-    the diff sees what happens whatever the remark said. The residue is that a plausible remark
-    might persuade somebody to skim, which is
-    [issue #23](https://github.com/brave/bravebot/issues/23).
+    untrusted content, inside a margin it cannot forge, and no model is given it
+    ([PROC-11](processors.md#PROC-11)). It can still *lie*: the remark is free text attributed to
+    the processor, so it can claim the document only fixes a typo when it does something else.
+    Nothing checks a remark against the document it accompanies, and nothing could. What keeps
+    that from mattering is that the remark is not the decision. The write is approved later, from
+    a diff of the actual bytes, so a person who reads the diff sees what happens whatever the
+    remark said, and the remark is drawn beside that diff so the two are read in one place
+    ([PROC-12](processors.md#PROC-12)). The residue is that a plausible remark might still
+    persuade somebody to skim the diff it sits above.
   - **Add or drop a trailing newline.**
 
   What is not on the list is the thing that would matter: choosing *which* file is written. That

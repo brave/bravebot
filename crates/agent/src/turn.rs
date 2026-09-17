@@ -2938,6 +2938,18 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     conversation.quarantine(),
                                 );
                             }
+                            // And what the processor said about that document, kept beside it
+                            // rather than only reported. The remark enters the transcript here,
+                            // where the processor returns, and the question about writing the
+                            // document comes rounds later: a person was reading the diff with
+                            // the claim about it some way up the screen.
+                            if let Some(said) = &output.said {
+                                policy.came_with_a_remark(
+                                    &reference.slot,
+                                    said,
+                                    conversation.quarantine(),
+                                );
+                            }
                             // The bytes exist here, unlike a deferred read, so the person watching
                             // is shown what the planner is not. It is their workspace; they are the
                             // only party who can tell whether this is the right file at all.

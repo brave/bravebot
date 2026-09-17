@@ -6780,6 +6780,15 @@ fn what_a_processor_says_reaches_the_person_and_no_model() {
         said.preview
     );
 
+    // And told the one thing that decides how it is drawn. The reach is what the renderer's
+    // margin and control-character replacement hang off, so a remark reported with anything
+    // else is a remark drawn as though a processor could be sent to read it.
+    assert_eq!(
+        said.reach,
+        bravebot_agent::report::Reach::NoModel,
+        "the remark was not reported as content no model may reach"
+    );
+
     // The file got the document and none of the remark.
     assert_eq!(
         std::fs::read_to_string(scratch.path.join("server.py")).unwrap(),
@@ -6794,6 +6803,134 @@ fn what_a_processor_says_reaches_the_person_and_no_model() {
             "the remark reached a model: {body}"
         );
     }
+}
+
+/// A remark is a claim about a document, and it reaches the transcript when the processor
+/// returns, which is rounds before the question about writing that document. A person was
+/// reading the diff with the claim some way up the screen, and the diff is the only thing that
+/// can catch a remark out: "I only fixed the typo" beside three hundred changed lines is
+/// visibly a lie, and remembered from earlier it is not.
+///
+/// It decides nothing either way. The approval is given from the bytes, and this is the claim
+/// drawn next to them.
+#[test]
+fn what_a_processor_said_is_put_beside_the_write_it_describes() {
+    let scratch = Scratch::new("processor-note-at-the-prompt");
+    std::fs::write(scratch.path.join("server.py"), "print('serving')\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("list_files", r#"{"directory":"."}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"fix the speed bug"}"#,
+        ),
+        reply_with(&format!(
+            "I only fixed the typo.\n{}\nprint('serving faster')\n",
+            bravebot_core::processor::ProcessorSpec::NOTE_MARKER
+        )),
+        tool_request(
+            "write_file",
+            r#"{"path_ref":"ref:1","contents_ref":"ref:3"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("fix the speed bug"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::IgnoreReports,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let asked = confirmer
+        .seen
+        .iter()
+        .find(|request| request.path.ends_with("server.py"))
+        .expect("nobody was asked about the write");
+    let remark = asked
+        .remark
+        .as_ref()
+        .expect("the question carried no claim about the document it was asking about");
+    assert!(
+        remark.preview.join("\n").contains("only fixed the typo"),
+        "the claim was not the one the processor made: {:?}",
+        remark.preview
+    );
+
+    // Beside the bytes, not instead of them: the diff of the real file is what the answer is
+    // given from, and it is in the same request.
+    assert!(
+        asked.contents.contains("serving faster"),
+        "the question did not carry the bytes the claim is about: {}",
+        asked.contents
+    );
+
+    // And still nothing a model may read. The remark is on this screen and in no context.
+    assert!(
+        !remark.preview.is_empty() && remark.lines > 0,
+        "the claim was released as nothing at all: {remark:?}"
+    );
+}
+
+/// A write of the planner's own words has no processor behind it, so there is no claim to draw.
+/// Worth pinning because the field is an `Option` and the tempting fill for it is the last thing
+/// anybody said.
+#[test]
+fn a_write_the_planner_wrote_itself_carries_no_claim() {
+    let scratch = Scratch::new("no-claim-to-make");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"notes.md","contents":"one line"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    // A rule is what makes this write ask at all: the point is what the question carries, and
+    // an unasked write carries nothing anywhere.
+    let task = Task::new("write a note").with_permissions(rules(&[], &["Edit(notes.md)"], &[]));
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::IgnoreReports,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let asked = confirmer
+        .seen
+        .first()
+        .expect("nobody was asked about the write");
+    assert!(
+        asked.remark.is_none(),
+        "a write nothing was said about carried a claim anyway: {:?}",
+        asked.remark
+    );
 }
 
 /// A processor produces one document however many it was given, and that document is for one
