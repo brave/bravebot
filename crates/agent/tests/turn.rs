@@ -10235,6 +10235,23 @@ fn a_branch_that_does_not_run_leaves_its_destination_as_it_was() {
     );
 }
 
+/// A vouched entry for `program` under `args`, given in `tree`.
+///
+/// `tree`'s canonical spelling, because that is the one a run's directory comes back in: an entry
+/// spelled any other way names a tree no run is ever in, so it would cover nothing and a test
+/// resting on it would pass for the wrong reason.
+fn vouched_in(
+    program: &std::path::Path,
+    args: &[&str],
+    tree: &std::path::Path,
+) -> bravebot_core::programs::Command {
+    bravebot_core::programs::Command::new(
+        program.display().to_string(),
+        args.iter().map(|a| a.to_string()).collect(),
+        tree.canonicalize().expect("the tree exists"),
+    )
+}
+
 /// The point of the list: a session that already vouched for the program is not asked again, and
 /// the run still happens.
 #[test]
@@ -10249,12 +10266,11 @@ fn a_vouched_program_runs_without_asking() {
         &scratch,
         r#"{"command":"touch quiet.txt"}"#,
         &mut confirmer,
-        bravebot_core::programs::TrustedPrograms::from_iter([
-            bravebot_core::programs::Command::new(
-                touch.display().to_string(),
-                vec!["quiet.txt".to_string()],
-            ),
-        ]),
+        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
+            &touch,
+            &["quiet.txt"],
+            &scratch.path,
+        )]),
     )
     .expect("the turn runs");
 
@@ -10629,12 +10645,11 @@ fn a_vouched_commands_output_reaches_the_planner() {
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         trusting_the_workspace(),
-        bravebot_core::programs::TrustedPrograms::from_iter([
-            bravebot_core::programs::Command::new(
-                cat.display().to_string(),
-                vec!["secret.txt".to_string()],
-            ),
-        ]),
+        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
+            &cat,
+            &["secret.txt"],
+            &scratch.path,
+        )]),
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -10678,9 +10693,11 @@ fn the_planner_is_told_how_a_run_it_may_read_ended() {
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         trusting_the_workspace(),
-        bravebot_core::programs::TrustedPrograms::from_iter([
-            bravebot_core::programs::Command::new(program.display().to_string(), Vec::new()),
-        ]),
+        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
+            &program,
+            &[],
+            &scratch.path,
+        )]),
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -10767,12 +10784,11 @@ fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
         &mut sink,
         trusting_the_workspace(),
         // A different argument list, so this entry does not cover the call above.
-        bravebot_core::programs::TrustedPrograms::from_iter([
-            bravebot_core::programs::Command::new(
-                cat.display().to_string(),
-                vec!["secret.txt".to_string()],
-            ),
-        ]),
+        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
+            &cat,
+            &["secret.txt"],
+            &scratch.path,
+        )]),
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -16639,6 +16655,146 @@ fn a_vouched_line_is_asked_about_again_when_a_directory_is_named() {
         asked[1].plan.directory.canonicalize().unwrap(),
         expected_sub,
         "the second question was about the named directory"
+    );
+}
+
+/// RUN-8: an entry covers the tree it was given in, and a script at the root is not that tree.
+///
+/// The reported failure, end to end. `sub/check.sh` and `check.sh` are two different files, and a
+/// person asked about `sh check.sh` in `sub/` read the one in `sub/`. The same line at the root is a
+/// question they have not been asked, so it is put to them, and refused here, which leaves the
+/// root script's marker unwritten. Without the tree in the entry the second call is not asked about
+/// at all and the root script runs.
+///
+/// The second call names `"."` explicitly because `run`'s directory persists across calls: omit it
+/// and the call reruns in `sub/`, which is a different test that passes for the wrong reason.
+#[test]
+fn a_line_vouched_for_outside_the_root_is_asked_about_again_at_the_root() {
+    let scratch = Scratch::new("run-8-vouch-names-the-tree");
+    let subdir = scratch.path.join("sub");
+    std::fs::create_dir_all(&subdir).unwrap();
+    // Two files of the same name in two trees, each announcing itself by writing a marker in the
+    // directory it ran in. The redirection is inside the script rather than on the command line:
+    // a line that names a file to write is asked about every time whatever is vouched for, which
+    // would make the second prompt prove nothing.
+    std::fs::write(subdir.join("check.sh"), "echo ran > sub-marker.txt\n").unwrap();
+    std::fs::write(
+        scratch.path.join("check.sh"),
+        "echo ran > root-marker.txt\n",
+    )
+    .unwrap();
+
+    let mut confirmer = AskedAboutRuns::answering_in_turn(vec![
+        // `a` in `sub/`: the tree the person was shown.
+        bravebot_agent::RunDecision::approve_always(),
+        // And the root is a question of its own, refused so the script cannot run by being
+        // approved here either.
+        bravebot_agent::RunDecision::reject(),
+    ]);
+    let seen = confirmer.seen.clone();
+
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sh check.sh","directory":"sub"}"#),
+        tool_request("run", r#"{"command":"sh check.sh","directory":"."}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("test a vouch given in a subdirectory does not reach the root"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn completes");
+
+    assert!(
+        subdir.join("sub-marker.txt").exists(),
+        "the script the person actually approved did not run"
+    );
+    assert!(
+        !scratch.path.join("root-marker.txt").exists(),
+        "a script at the root ran without being approved, behind an answer given about a \
+         different file in a subdirectory"
+    );
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        2,
+        "the root was not put to the person as a question of its own"
+    );
+    assert_eq!(
+        asked[0].plan.directory.canonicalize().unwrap(),
+        subdir.canonicalize().unwrap(),
+        "the vouch was given in the subdirectory"
+    );
+    assert_eq!(
+        asked[1].plan.directory.canonicalize().unwrap(),
+        scratch.path.canonicalize().unwrap(),
+        "the second question was about the root"
+    );
+}
+
+/// RUN-8: one tree is one tree however it is spelled. `sub` and a symlink pointing at it name the
+/// same directory, so a vouch given through one covers a line spelled with the other: a key per
+/// spelling would be a prompt a person answered and still sees.
+///
+/// Unix only, because making the second spelling is: a directory symlink needs a privilege on
+/// Windows that a test run cannot assume, and a test that skipped itself there would report a
+/// spelling it never tried.
+#[test]
+#[cfg(unix)]
+fn a_symlinked_spelling_of_the_vouched_tree_is_the_same_entry() {
+    let scratch = Scratch::new("run-8-vouch-tree-symlink");
+    let subdir = scratch.path.join("sub");
+    std::fs::create_dir_all(&subdir).unwrap();
+    std::os::unix::fs::symlink("sub", scratch.path.join("link")).unwrap();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    let seen = confirmer.seen.clone();
+
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cargo --version","directory":"sub"}"#),
+        tool_request("run", r#"{"command":"cargo --version","directory":"link"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("test a vouched tree is one tree however it is spelled"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn completes");
+
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        1,
+        "a second spelling of the tree the person vouched in was put to them again"
     );
 }
 

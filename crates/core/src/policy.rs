@@ -796,20 +796,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         true
     }
 
-    /// Record that the user vouched for this exact command, its side effects and its output.
+    /// Record that the user vouched for this exact command, in this exact tree, its side effects
+    /// and its output.
     ///
-    /// Only ever called because a person, looking at the argv and the resolved path, asked for it
-    /// in those terms. Nothing derives membership from what a program did or from what it printed:
-    /// the assertion is the user's and the system does not check it, exactly as it does not check
-    /// a directory the user vouched for.
+    /// Only ever called because a person, looking at the argv, the resolved path and the directory,
+    /// asked for it in those terms. Nothing derives membership from what a program did or from what
+    /// it printed: the assertion is the user's and the system does not check it, exactly as it does
+    /// not check a directory the user vouched for.
+    ///
+    /// The tree is in the trail as well as in the entry, because an entry that covers one tree and
+    /// a trail that says which command was vouched for would leave a reader unable to tell which
+    /// of two entries for one command a later run spent.
     pub fn remember_command(&mut self, command: crate::programs::Command) {
         let shown = command.display();
+        let tree = command.directory.display().to_string();
         self.programs.trust(command);
         self.allow(
             "approval",
             format!(
-                "{shown}: the user vouched for this command and its output, so it runs unasked \
-                 and what it prints is trusted"
+                "{shown}: the user vouched for this command and its output in {tree}, so it runs \
+                 unasked there and what it prints is trusted"
             ),
         );
     }
@@ -2346,7 +2352,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         let mut vouched = 0;
         for command in ended.programs.iter() {
-            if since.programs.contains(&command.program, &command.args) {
+            if since
+                .programs
+                .contains(&command.program, &command.args, &command.directory)
+            {
                 continue;
             }
             self.programs.trust(command.clone());
@@ -3449,22 +3458,43 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// reads, so one such step makes the whole line's output untrusted however familiar the steps
     /// either side of it are.
     ///
-    /// An entry holds a resolved program and its arguments and nothing else, so this answers about
-    /// argv alone: [`crate::command::Plan::carries_an_assignment`] is the separate question, and
-    /// every gate that consults this one has to ask that one too.
+    /// An entry holds a resolved program, its arguments and the tree it was given in, so this
+    /// answers about all three: the plan's directory has to be the entry's directory exactly, and
+    /// an entry given in `sub/` covers neither the root above it nor a `nested/` below it
+    /// ([RUN-8]). `sh check.sh` names a different file in every tree it is read in, which is why
+    /// the tree is part of the key rather than beside it.
+    ///
+    /// [`crate::command::Plan::carries_an_assignment`] is still the separate question, and every
+    /// gate that consults this one has to ask that one too.
+    ///
+    /// False when no root is known, like [`Policy::read_proven`] and for a reason of its own: an
+    /// entry read back from a session record may have been written before entries held a tree, and
+    /// such an entry is restored as one given at the workspace root, which is what it meant when it
+    /// was written. A policy that was never told where the root is cannot tell those entries from
+    /// ones that named a tree themselves, so it refuses rather than guessing, and the gate is
+    /// strongest exactly where it was told least.
+    ///
+    /// [RUN-8]: ../../../docs/specs/tools/run.md
     fn every_step_vouched(&self, plan: &crate::command::Plan) -> bool {
-        plan.steps().iter().all(|step| {
-            self.programs
-                .contains(&step.resolved.to_string_lossy(), &step.args)
-        })
+        self.root.is_some()
+            && plan.steps().iter().all(|step| {
+                self.programs.contains(
+                    &step.resolved.to_string_lossy(),
+                    &step.args,
+                    &plan.directory,
+                )
+            })
     }
 
     /// Whether the plan runs where the person's standing answers were given.
     ///
     /// The workspace root, and only it. Everything a person settled in advance is spelled against
-    /// it: the trust map's relative rules, and a vouched entry, which records a program and its
-    /// exact arguments and says nothing whatever about where they run ([RUN-8]). So an answer given
-    /// once cannot be checked against a tree it was never about.
+    /// it: the trust map's relative rules, a rule in the settings file, and a line somebody asked
+    /// to be remembered past the session. So an answer given once cannot be checked against a tree
+    /// it was never about.
+    ///
+    /// Not a vouched entry, which names the tree it was given in and is checked against that
+    /// ([RUN-8]); [`Policy::every_step_vouched`] is that question.
     ///
     /// False when no root is known, like [`Policy::read_proven`] and for the same reason: an answer
     /// about a directory cannot be matched against a directory nothing named, and a gate that let
@@ -3582,7 +3612,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// asked about, however innocuous it looks.
     ///
     /// Four things may answer the question and nothing else: a person having answered it before, in
-    /// this session, for this program with these exact arguments; that person having asked, at a
+    /// this session, for this program with these exact arguments in this exact tree; that person
+    /// having asked, at a
     /// prompt, for their answer to one exact line to last past the session, which
     /// [`crate::remembered`] holds; a rule the person wrote in advance,
     /// which stops the asking without raising any label; and the audited table in [`crate::pure`]
@@ -3619,17 +3650,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return true;
         }
 
-        // A plan that runs outside the root has a tree as well as a program, and vouching for a
-        // command is not vouching for where it runs: `git clean -fd` is a different proposition in
-        // two different trees, and `git log` prints whatever commit messages the repository it is
-        // pointed at happens to hold. Asked every time, for the same reason a write is, and before
-        // the rules for the same reason private input is: a rule saying which commands may run
-        // answers the question about running one, not the one about which tree it lands in.
-        if !self.runs_at_the_root(plan) {
+        // A plan that runs outside the root has a tree as well as a program, and the only standing
+        // answer that can cover one is an entry that names that tree: `git clean -fd` is a
+        // different proposition in two different trees, and `git log` prints whatever commit
+        // messages the repository it is pointed at happens to hold. Everything else a person
+        // settled in advance is spelled against the root (a rule in the settings file, a line
+        // remembered past the session), so none of it reaches a tree of its own, and the question
+        // is put before the rules for the reason private input is: a rule saying which commands
+        // may run answers the question about running one, not the one about which tree it lands in.
+        if !self.runs_at_the_root(plan) && !self.every_step_vouched(plan) {
             self.allow(
                 "approval",
-                "the line runs outside the workspace root, which is a tree of its own that no \
-                 standing answer covers, asking"
+                "the line runs outside the workspace root, in a tree no vouched entry names and \
+                 no answer spelled against the root covers, asking"
                     .to_string(),
             );
             return true;
@@ -3681,7 +3714,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         if self.every_step_vouched(plan) {
             self.allow(
                 "approval",
-                "every step is a command the user vouched for this session, no prompt".to_string(),
+                "every step is a command the user vouched for in this tree this session, no prompt"
+                    .to_string(),
             );
             return false;
         }
@@ -3713,18 +3747,25 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Whether a prompt for this plan may offer to record its answer past the session.
     ///
     /// The same refusals the record itself is read past, asked before the prompt is drawn so
-    /// that a key is never offered where it would stop no prompt. A line releasing private data is
-    /// asked about every time, as is one naming a file to write, one running anywhere but the
-    /// workspace root, and one writing an assignment in front of a program, and a rule the person
-    /// wrote in advance decides ahead of any keypress: an `ask` rule is a standing instruction to be
-    /// asked, and a key must not overturn it.
+    /// that a key is never offered where it would stop no prompt. A record holds a line and nothing
+    /// else, so a line releasing private data is covered by none, as is one naming a file to write,
+    /// one running anywhere but the workspace root, and one writing an assignment in front of a
+    /// program, and a rule the person wrote in advance decides ahead of any keypress: an `ask` rule
+    /// is a standing instruction to be asked, and a key must not overturn it.
     ///
-    /// The assignment is the one refusal an entry's key could have accounted for, since it holds
-    /// every assignment in a field of its own, and it is refused anyway: RUN-8 asks about such a
-    /// line before this record is reached, so the key would record an entry that stopped no later
-    /// prompt. Keeping the assignment in the key and out of what may be written is deliberate, so
-    /// that an entry arriving from anywhere else cannot cover a line with something put in front of
-    /// it.
+    /// The root is the refusal a vouched entry no longer makes, since an entry names the tree it was
+    /// given in ([RUN-8]) and a record names none. So a line outside the root is one this key must
+    /// not be offered for even where the same line, vouched for in that tree, would run unasked: the
+    /// record would come back in a later session holding a line whose tree it cannot represent.
+    ///
+    /// The assignment is refused for the same shape of reason, and it is one an entry's key could
+    /// have accounted for since it holds every assignment in a field of its own: RUN-8 asks about
+    /// such a line before this record is reached, so the key would record an entry that stopped no
+    /// later prompt. Keeping the assignment in the key and out of what may be written is
+    /// deliberate, so that an entry arriving from anywhere else cannot cover a line with something
+    /// put in front of it.
+    ///
+    /// [RUN-8]: ../../../docs/specs/tools/run.md
     ///
     /// Read-only, and it writes no audit entry: it is a question about what to draw rather than a
     /// gate anything passes, and the gate is [`Policy::plan_needs_approval`] above.
@@ -3739,12 +3780,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Whether a rule the person writes in the settings file would decide this line.
     ///
     /// The same question [`Policy::may_remember`] asks, because the answer is the same one: the
-    /// four refusals above are each made in [`Policy::plan_needs_approval`] before the rules are
-    /// read, and the record is consulted after them, so whatever stops a rule from deciding a line
-    /// stops a record from deciding it too. Two names rather than one because the two call sites
-    /// are asking different things: one is whether a key may be offered, and this is whether the
-    /// prompt may say that editing a file ends the asking. Saying so of a line the rules never
-    /// reach would send somebody to write a pattern that stops no prompt.
+    /// record is consulted last in [`Policy::plan_needs_approval`], past every refusal and past the
+    /// rules, so whatever stops a rule from deciding a line stops a record from deciding it too.
+    /// Two names rather than one because the two call sites are asking different things: one is
+    /// whether a key may be offered, and this is whether the prompt may say that editing a file ends
+    /// the asking. Saying so of a line the rules never reach would send somebody to write a pattern
+    /// that stops no prompt.
+    ///
+    /// The root among them, which is stricter than the gate is: a vouched entry naming this tree
+    /// lets a line outside the root reach the rules. Advice about a pattern is wasted there anyway,
+    /// since such a line is not asked about at all, and a line outside the root that *is* asked
+    /// about was refused before any rule was read.
     ///
     /// False as well where a rule already matches the line, which is not a refusal but an answer:
     /// the person has found the file, and what their rule says is what happens.
@@ -3767,7 +3813,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// cost nothing else.
     pub fn asked_about(&mut self, plan: &crate::command::Plan) {
         for step in plan.steps() {
-            self.asked.record(step.command());
+            self.asked.record(step.command(&plan.directory));
         }
     }
 
@@ -3783,7 +3829,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Read-only, and it writes no audit entry: it decides what a prompt says, not what runs.
     pub fn arguments_have_varied(&self, plan: &crate::command::Plan) -> bool {
-        let line: Vec<_> = plan.steps().iter().map(|step| step.command()).collect();
+        let line: Vec<_> = plan
+            .steps()
+            .iter()
+            .map(|step| step.command(&plan.directory))
+            .collect();
         self.asked.arguments_have_varied(&line)
     }
 
@@ -3861,13 +3911,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "every step is an audited call whose output is a function of paths the user \
                  vouched for",
             )
-        } else if self.every_step_vouched(plan)
-            && self.runs_at_the_root(plan)
-            && !plan.carries_an_assignment()
-        {
+        } else if self.every_step_vouched(plan) && !plan.carries_an_assignment() {
             (
                 Label::trusted_private(),
-                "every step is a command the user vouched for, output and all",
+                "every step is a command the user vouched for in this tree, output and all",
             )
         } else {
             (
@@ -6465,6 +6512,126 @@ five
         assert!(!label.is_public());
     }
 
+    /// RUN-8, the other direction: an entry is minted where the person read it, and the tree they
+    /// read is part of what they answered. The reported failure is exactly this. Somebody is asked
+    /// about `sh check.sh` *because* it runs in `sub/`, presses `a`, and a `check.sh` that appears
+    /// at the root later is a different file the same entry must not cover.
+    #[test]
+    fn an_entry_given_outside_the_root_does_not_cover_the_same_line_at_the_root() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched_in("/usr/bin/sh", &["check.sh"], "/work/sub"));
+
+        let in_sub = crate::command::Plan {
+            directory: std::path::PathBuf::from("/work/sub"),
+            ..plan_of(vec![step_named("sh", &["check.sh"])])
+        };
+        assert!(
+            !policy.plan_needs_approval(&in_sub),
+            "the entry did not cover the tree it was given in"
+        );
+
+        let at_the_root = plan_of(vec![step_named("sh", &["check.sh"])]);
+        assert!(
+            policy.plan_needs_approval(&at_the_root),
+            "a script at the root ran unasked behind an answer given about a different file in a \
+             subdirectory"
+        );
+    }
+
+    /// The label half of the same failure, and the half that reaches the planner. `check.sh` at the
+    /// root is a file nobody was shown, so what it printed is whatever whoever added it wrote, and
+    /// labelling that trusted would put it into the context this design keeps content out of.
+    #[test]
+    fn output_at_the_root_of_a_line_vouched_for_outside_it_is_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched_in("/usr/bin/sh", &["check.sh"], "/work/sub"));
+
+        let at_the_root = plan_of(vec![step_named("sh", &["check.sh"])]);
+        policy.endorse_plan(&at_the_root);
+        let label = policy.before_plan(&at_the_root).expect("endorsed");
+        assert!(
+            !label.is_trusted(),
+            "output of a script at the root was labelled trusted by an entry given in a \
+             subdirectory"
+        );
+        assert!(!label.is_public());
+    }
+
+    /// What the entry does grant: both of RUN-7's things, in the one tree it names. This is the
+    /// standing cost the repair exists to avoid paying (`make check` in a subdirectory asked about
+    /// once rather than every time), so it is pinned rather than assumed.
+    #[test]
+    fn an_entry_given_outside_the_root_grants_both_things_in_that_tree() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched_in("/usr/bin/make", &["check"], "/work/sub"));
+
+        let in_sub = crate::command::Plan {
+            directory: std::path::PathBuf::from("/work/sub"),
+            ..plan_of(vec![step_named("make", &["check"])])
+        };
+        assert!(
+            !policy.plan_needs_approval(&in_sub),
+            "a line vouched for in this very tree was asked about again"
+        );
+        policy.endorse_plan(&in_sub);
+        let label = policy.before_plan(&in_sub).expect("endorsed");
+        assert!(
+            label.is_trusted(),
+            "the output half of the grant did not follow the entry into its own tree"
+        );
+        assert!(!label.is_public(), "trusting output is not releasing it");
+    }
+
+    /// One directory, not the tree under it. Matching a prefix would put this same hole one level
+    /// down: a `check.sh` appearing later in `sub/nested/` would run behind an answer given about
+    /// the one in `sub/`, by the identical relative-argument trick.
+    #[test]
+    fn an_entry_does_not_cover_a_directory_below_the_one_it_names() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched_in("/usr/bin/sh", &["check.sh"], "/work/sub"));
+
+        let deeper = crate::command::Plan {
+            directory: std::path::PathBuf::from("/work/sub/nested"),
+            ..plan_of(vec![step_named("sh", &["check.sh"])])
+        };
+        assert!(
+            policy.plan_needs_approval(&deeper),
+            "an entry about one tree answered for a tree below it"
+        );
+        policy.endorse_plan(&deeper);
+        assert!(
+            !policy.before_plan(&deeper).expect("endorsed").is_trusted(),
+            "output from a tree below the vouched one was labelled trusted"
+        );
+    }
+
+    /// RUN-19's record holds a line and no tree, so the root stays one of its refusals however an
+    /// entry is keyed. A repair that let the tree in an entry relax this would have a line recorded
+    /// in a session last week running unasked in a tree nobody named.
+    #[test]
+    fn a_remembered_line_is_still_asked_about_outside_the_root_when_nothing_is_vouched_for() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&a_plan()));
+        assert!(
+            !policy.plan_needs_approval(&a_plan()),
+            "the record did not cover the line it holds"
+        );
+
+        let elsewhere = crate::command::Plan {
+            directory: std::path::PathBuf::from("/work/vendor/dependency"),
+            ..a_plan()
+        };
+        assert!(
+            policy.plan_needs_approval(&elsewhere),
+            "a remembered line ran unasked in a tree no entry names"
+        );
+    }
+
     /// An assignment decides what a program loads and reads before its own arguments are looked at,
     /// so `LD_PRELOAD=./evil.so git log` is a different proposition from the `git log` somebody read
     /// at a prompt. An entry records no assignment, so there is nothing in it that could answer for
@@ -6529,8 +6696,14 @@ five
         );
     }
 
+    /// An entry given at `/work`, the root every test here opens with, so a test about a tree has
+    /// to name one and the rest read as a vouch given where the session is.
     fn vouched(program: &str, args: &[&str]) -> crate::programs::Command {
-        crate::programs::Command::new(program, args.iter().map(|a| a.to_string()).collect())
+        vouched_in(program, args, "/work")
+    }
+
+    fn vouched_in(program: &str, args: &[&str], tree: &str) -> crate::programs::Command {
+        crate::programs::Command::new(program, args.iter().map(|a| a.to_string()).collect(), tree)
     }
 
     /// A record holding exactly one line, as reading the file would produce.
@@ -7251,7 +7424,11 @@ five
             "/bin/ls",
             &["-la"],
         )]));
-        assert!(policy.programs().contains("/bin/ls", &["-la".to_string()]));
+        assert!(policy.programs().contains(
+            "/bin/ls",
+            &["-la".to_string()],
+            std::path::Path::new("/work")
+        ));
     }
 
     /// A slot holding a fetched page, as `fetch_url` leaves one: quarantined, from no path and no

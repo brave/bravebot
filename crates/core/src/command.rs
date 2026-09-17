@@ -283,11 +283,16 @@ impl Step {
         out
     }
 
-    /// The command an endorsement for this step would be recorded against.
-    pub fn command(&self) -> crate::programs::Command {
+    /// The command an endorsement for this step would be recorded against, in `directory`.
+    ///
+    /// The tree comes from the plan rather than the step, because every step of a plan runs in one
+    /// directory and that is the one the prompt showed. An entry covers that tree and no other, so
+    /// passing a tree the person was not shown would record a grant nobody gave.
+    pub fn command(&self, directory: &std::path::Path) -> crate::programs::Command {
         crate::programs::Command::new(
             self.resolved.to_string_lossy().to_string(),
             self.args.clone(),
+            directory,
         )
     }
 }
@@ -424,13 +429,19 @@ impl Plan {
 
     /// Whether an entry could record this line as the person read it.
     ///
-    /// An entry holds a resolved program and its arguments, so a line whose behaviour turns on
-    /// anything else cannot be put in one: the entry would come out covering a line nobody was
-    /// shown. The reasons are kept in one place because two layers refuse independently, the prompt
-    /// where it is drawn and the tool where an answer is acted on, and a reason added to one of them
-    /// alone is a prompt offering a key the other honours.
+    /// An entry holds a resolved program, its arguments and the tree it was given in, so a line
+    /// whose behaviour turns on anything else cannot be put in one: the entry would come out
+    /// covering a line nobody was shown. The reasons are kept in one place because two layers
+    /// refuse independently, the prompt where it is drawn and the tool where an answer is acted
+    /// on, and a reason added to one of them alone is a prompt offering a key the other honours.
+    ///
+    /// The directory is not among them, and that is what [RUN-8] settles rather than an omission:
+    /// the entry records the tree, so a line running outside the workspace root is a line an entry
+    /// can hold exactly as written.
     ///
     /// Which reason it is belongs to whoever explains the refusal, not here.
+    ///
+    /// [RUN-8]: ../../../docs/specs/tools/run.md
     pub fn can_be_remembered(&self) -> bool {
         !self.releases_private() && !self.carries_an_assignment()
     }

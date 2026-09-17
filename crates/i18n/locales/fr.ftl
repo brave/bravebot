@@ -427,6 +427,7 @@ run-always-means-both = ce qui veut dire les deux :
 run-always-runs-again = elle s'exécute de nouveau sans rien demander, effets de bord compris
 run-always-output-trusted = ce qu'elle affiche est fiable, et le modèle le lit
 run-always-exact-arguments = ces arguments seulement : git log ne couvrirait pas git push
+run-always-this-directory = ce répertoire seulement : la même ligne ailleurs est redemandée
 run-private-not-remembered =
     une entrée privée est soumise à chaque fois, celle-ci ne peut donc pas être retenue
 run-assignment-not-remembered =
@@ -651,6 +652,7 @@ status-nothing-vouched-this-session =
     rien n'a été approuvé pour cette session ; les lignes ci-dessous s'exécutent sans rien demander
 status-trusted-commands = Commandes fiables
 status-trusted-commands-note = exécutées sans rien demander, et leur sortie est fiable
+status-command-in = dans { $directory }
 status-remembered = Lignes mémorisées
 status-remembered-note =
     exécutées sans rien demander dans ce répertoire, et leur sortie reste en quarantaine

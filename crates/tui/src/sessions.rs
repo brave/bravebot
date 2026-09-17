@@ -373,9 +373,7 @@ impl StoredRewind {
                 timing: self.timing,
                 cached: self.cached,
                 trust,
-                programs: TrustedPrograms::from_iter(self.programs.iter().map(|c| {
-                    bravebot_core::programs::Command::new(c.program.clone(), c.args.clone())
-                })),
+                programs: restored_programs(&self.programs, root),
                 transcript_len: 0,
                 title: self.title,
                 was_wrote: self.wrote,
@@ -451,8 +449,26 @@ fn stored_programs(programs: &TrustedPrograms) -> Vec<StoredCommand> {
         .map(|c| StoredCommand {
             program: c.program.clone(),
             args: c.args.clone(),
+            directory: Some(c.directory.display().to_string()),
         })
         .collect()
+}
+
+/// A list of vouched-for commands read back, for a session working in `root`.
+///
+/// The one place a missing tree is filled in, so the reading that predates the field lives here
+/// rather than at each caller. A tree that no longer exists is written down as it was and comes
+/// back as it was: it matches no run, so every run asks, which is the direction to fail in.
+fn restored_programs(programs: &[StoredCommand], root: &Path) -> TrustedPrograms {
+    TrustedPrograms::from_iter(programs.iter().map(|c| {
+        bravebot_core::programs::Command::new(
+            c.program.clone(),
+            c.args.clone(),
+            c.directory
+                .as_deref()
+                .map_or_else(|| root.to_path_buf(), std::path::PathBuf::from),
+        )
+    }))
 }
 
 impl StoredAside {
@@ -628,6 +644,14 @@ pub struct StoredCommand {
     pub program: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// The tree the vouch was given in, absolute, or absent in a record written before entries
+    /// held one.
+    ///
+    /// Absent reads as the workspace root, which is what such an entry meant when it was written:
+    /// a vouch could only be spent at the root then, so restoring one as root-scoped resumes the
+    /// session with exactly the grant it recorded rather than a wider one.
+    #[serde(default)]
+    pub directory: Option<String>,
 }
 
 /// One task as it is written down.
@@ -685,12 +709,11 @@ impl Record {
     ///
     /// An empty list where a record predates this being kept, which is the safe direction: every
     /// run asks, rather than a resumed session inheriting a permission nobody recorded.
-    pub fn trusted_programs(&self) -> TrustedPrograms {
-        TrustedPrograms::from_iter(
-            self.programs
-                .iter()
-                .map(|c| bravebot_core::programs::Command::new(c.program.clone(), c.args.clone())),
-        )
+    ///
+    /// `root` is the directory the resumed session works in, and it stands for the tree of an entry
+    /// written before entries held one: see [`StoredCommand::directory`].
+    pub fn trusted_programs(&self, root: &Path) -> TrustedPrograms {
+        restored_programs(&self.programs, root)
     }
 
     /// Open again the directories this session added, and say which could not be opened.
@@ -1706,11 +1729,11 @@ mod tests {
     #[test]
     fn a_record_without_a_program_list_vouches_for_nothing() {
         let record = a_record();
-        assert!(record.trusted_programs().is_empty());
+        assert!(record.trusted_programs(Path::new("/work")).is_empty());
     }
 
-    /// What was written down comes back, by resolved path, so a resumed session stops asking about
-    /// exactly the programs its own user vouched for.
+    /// What was written down comes back, by resolved path and by tree, so a resumed session stops
+    /// asking about exactly the programs its own user vouched for and exactly where they did.
     #[test]
     fn the_programs_a_session_vouched_for_come_back() {
         let mut record = a_record();
@@ -1718,22 +1741,51 @@ mod tests {
             StoredCommand {
                 program: "/usr/bin/git".to_string(),
                 args: vec!["log".to_string()],
+                directory: Some("/work".to_string()),
             },
             StoredCommand {
                 program: "/bin/ls".to_string(),
                 args: Vec::new(),
+                directory: Some("/work/sub".to_string()),
             },
         ];
-        let vouched = record.trusted_programs();
-        assert!(vouched.contains("/usr/bin/git", &["log".to_string()]));
-        assert!(vouched.contains("/bin/ls", &[]));
+        let vouched = record.trusted_programs(Path::new("/work"));
+        assert!(vouched.contains("/usr/bin/git", &["log".to_string()], Path::new("/work")));
+        assert!(vouched.contains("/bin/ls", &[], Path::new("/work/sub")));
         assert!(
-            !vouched.contains("/usr/bin/git", &["push".to_string()]),
+            !vouched.contains("/bin/ls", &[], Path::new("/work")),
+            "an entry recorded in a subdirectory came back covering the workspace root"
+        );
+        assert!(
+            !vouched.contains("/usr/bin/git", &["push".to_string()], Path::new("/work")),
             "a record vouched for a command it never named"
         );
         assert!(
-            !vouched.contains("/opt/homebrew/bin/git", &["log".to_string()]),
+            !vouched.contains(
+                "/opt/homebrew/bin/git",
+                &["log".to_string()],
+                Path::new("/work")
+            ),
             "a record vouched for a binary it never named"
+        );
+    }
+
+    /// A record written before an entry held a tree resumes as the grant it recorded, which could
+    /// only ever be spent at the workspace root. Reading it any other way would either widen a
+    /// permission nobody gave, or drop one they did.
+    #[test]
+    fn an_entry_recorded_without_a_tree_comes_back_scoped_to_the_root() {
+        let mut record = a_record();
+        record.programs = serde_json::from_value(serde_json::json!([
+            {"program": "/usr/bin/git", "args": ["log"]}
+        ]))
+        .expect("a record from before entries held a tree");
+
+        let vouched = record.trusted_programs(Path::new("/work"));
+        assert!(vouched.contains("/usr/bin/git", &["log".to_string()], Path::new("/work")));
+        assert!(
+            !vouched.contains("/usr/bin/git", &["log".to_string()], Path::new("/work/sub")),
+            "an entry with no recorded tree came back covering one it never named"
         );
     }
 
@@ -1890,7 +1942,11 @@ mod tests {
         // Nothing on a record answers the question, so nothing can restore an answer to it. The
         // trust map and the programs are the two grants that do come back, and they are separate.
         assert!(record.trust_map(&record.directory).is_none());
-        assert!(record.trusted_programs().is_empty());
+        assert!(
+            record
+                .trusted_programs(Path::new(&record.directory))
+                .is_empty()
+        );
     }
 
     /// The picker offers the top entry, so a reversed comparator would silently hand someone

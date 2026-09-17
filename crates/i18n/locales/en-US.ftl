@@ -474,6 +474,7 @@ run-always-means-both = which means both:
 run-always-runs-again = it runs again unasked, side effects and all
 run-always-output-trusted = what it prints is trusted, and the model reads it
 run-always-exact-arguments = these arguments only: git log would not cover git push
+run-always-this-directory = this directory only: the same line elsewhere is asked about again
 run-private-not-remembered =
     private input is asked about every time, so this one cannot be remembered
 run-assignment-not-remembered =
@@ -707,6 +708,7 @@ status-every-run-is-asked = every run is put to you
 status-nothing-vouched-this-session = nothing vouched for this session; the lines below run unasked
 status-trusted-commands = Trusted commands
 status-trusted-commands-note = run unasked, and their output is trusted
+status-command-in = in { $directory }
 status-remembered = Remembered lines
 status-remembered-note = run unasked in this directory, and their output stays quarantined
 status-remembered-this-session = remembered in this session
