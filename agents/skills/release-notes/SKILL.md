@@ -1,8 +1,8 @@
 ---
 name: release-notes
 description:
-  'Write the release notes for a version: one section per version, new features
-  first, then changes, then fixes, and only the things a person using bravebot
+  'Write the release notes for a version: one section per version, always added
+  first, then changed, then fixed, and only the things a person using bravebot
   would notice. Reads the commits since the last release tag, or since the last
   version bump when there is no tag. Triggers on: release notes, changelog,
   notes for v1.2.3, what changed since the last release, /release-notes.'
@@ -47,8 +47,11 @@ Exactly that, clause by clause:
   does not do. A reader skimming the first half of every bullet should come away with the
   release. Prefer the ordinary word to the precise one, and cut any clause that would not
   change what somebody does next.
-- Order is new features first, then changes, then fixes. Inside each group, most impactful
-  first: what most people will use, or what they will find most interesting, leads. A new
+- Order is `Added`, then `Changed`, then `Fixed`, in that order every time and whatever the
+  release holds. A reader opens these notes to find out what they get, so the group order is
+  a fixed shape they can skim rather than one they work out per release. Inside each group,
+  most impactful first: in `Added`, the feature the release would be announced with leads;
+  elsewhere, what most people will use, or what they will find most interesting. A new
   capability outranks a preference panel; a preference panel outranks a message that got
   clearer. The opening verb is what tells a reader which group a bullet is in, so there is
   nothing to label.
@@ -116,7 +119,9 @@ Two rules that decide most of the hard cases:
 - **A fix is only news if the thing it fixes shipped.** Check whether the broken behaviour
   is reachable from `$base`. If it is not, there is nothing to tell anyone.
 
-A breaking change is always in, however small, and it leads the list.
+A breaking change is always in, however small, and it leads its own group: a renamed flag, a
+dropped option or a raised requirement is a `Changed` bullet at the top of the changes. It
+does not move ahead of the features, which is what a reader came for.
 
 ## Step 4: write the bullets
 
@@ -165,8 +170,9 @@ a code change staged alongside them is a change they do not cover.
 - Every bullet traces to a commit in the range, and every user-visible commit in the range
   is in a bullet or was deliberately dropped.
 - No bullet describes a fix to something that never shipped.
-- Reading only the first clause of every bullet still gives a reader the release, and the
-  bullet a reader would care about most is the first one.
+- The bullets run `Added`, then `Changed`, then `Fixed`, with none of one group among
+  another's, and the first bullet is the feature the release would be announced with.
+- Reading only the first clause of every bullet still gives a reader the release.
 - No em-dash, anywhere. A comma, a colon, or two sentences does the job.
 - The heading version matches `Cargo.toml` and `package.json`. `make github-release` refuses
   when those two disagree, and names the tag from `Cargo.toml`, so a mismatch here is a
