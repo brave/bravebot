@@ -5,7 +5,7 @@ status: normative
 governs:
   - crates/tui/src/app.rs
 guards:
-  - symbol: COMMANDS
+  - symbol: commands
 ---
 
 ## Scope

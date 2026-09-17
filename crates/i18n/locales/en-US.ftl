@@ -657,7 +657,6 @@ status-every-run-is-asked = every run is put to you
 status-nothing-vouched-this-session = nothing vouched for this session; the lines below run unasked
 status-trusted-commands = Trusted commands
 status-trusted-commands-note = run unasked, and their output is trusted
-status-and-more = … and { $count } more
 status-remembered = Remembered lines
 status-remembered-note = run unasked in this directory, and their output stays quarantined
 status-remembered-this-session = remembered in this session
