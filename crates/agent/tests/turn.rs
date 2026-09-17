@@ -5005,7 +5005,10 @@ fn a_cancelled_turn_stops_before_the_first_request() {
     )
     .expect_err("a cancelled turn must not succeed");
 
-    assert!(matches!(error, turn::TurnError::Cancelled), "got {error:?}");
+    assert!(
+        matches!(error, turn::TurnError::Cancelled { .. }),
+        "got {error:?}"
+    );
 }
 
 /// Cancelling mid-round must stop the loop before the remaining tool calls run, since a tool
@@ -5125,7 +5128,10 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
     )
     .expect_err("a cancelled turn must not succeed");
 
-    assert!(matches!(error, turn::TurnError::Cancelled), "got {error:?}");
+    assert!(
+        matches!(error, turn::TurnError::Cancelled { .. }),
+        "got {error:?}"
+    );
     assert_eq!(
         asked.load(std::sync::atomic::Ordering::Relaxed),
         1,
@@ -15699,5 +15705,602 @@ fn a_vouched_line_is_asked_about_again_when_a_directory_is_named() {
         asked[1].plan.directory.canonicalize().unwrap(),
         expected_sub,
         "the second question was about the named directory"
+    );
+}
+
+enum Served {
+    /// A complete reply, streamed the way a real one arrives.
+    Reply(String),
+    /// A status and a short body, which is how a service refuses.
+    Status(u16),
+    DiagnosticStatus(u16),
+    /// A stream that starts and stops without saying the reply is over.
+    Unfinished,
+}
+
+fn serve_script(script: Vec<Served>) -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let mut script = script.into_iter();
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+
+            let mut content_length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 {
+                    break;
+                }
+                if header == "\r\n" || header == "\n" {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            let _ = reader.read_exact(&mut body);
+            let _ = sender.send(String::from_utf8_lossy(&body).to_string());
+
+            let answer = match script.next() {
+                Some(Served::Reply(reply)) => {
+                    let frames = as_sse(&reply);
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                        frames.len()
+                    )
+                }
+                Some(Served::DiagnosticStatus(status)) => {
+                    let body = "PRIVATE_RESPONSE_SENTINEL";
+                    format!(
+                        "HTTP/1.1 {status} Refused\r\nX-Diagnostic: PRIVATE_HEADER_SENTINEL\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                }
+                Some(Served::Status(status)) => {
+                    let body = "the service is not answering this one\n";
+                    format!(
+                        "HTTP/1.1 {status} Refused\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                }
+                Some(Served::Unfinished) => {
+                    // Frames that begin a reply and stop: no finish reason and no end marker, so
+                    // the connection closing is all the client has to go on.
+                    let frames = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n\
+                                  data: {\"choices\":[{\"delta\":{\"content\":\"half an ans\"}}]}\n\n";
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                        frames.len()
+                    )
+                }
+                // A dropped connection, and the same for a script that has run out: a test whose
+                // script was short fails on the ending it asked for rather than on a reply it
+                // never described.
+                None => {
+                    drop(stream);
+                    continue;
+                }
+            };
+
+            let _ = stream.write_all(answer.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+fn take_a_turn_reporting(
+    config: &Config,
+    workspace: &Workspace,
+    conversation: &mut bravebot_agent::Conversation,
+    task: Task,
+    reporter: &mut bravebot_agent::report::RecordingReporter,
+    cancel: &bravebot_core::cancel::Cancel,
+) -> Result<turn::Outcome, turn::TurnError> {
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        config,
+        &egress,
+        workspace,
+        &task,
+        conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        cancel,
+    )
+}
+
+fn why_it_failed(error: &turn::TurnError) -> bravebot_agent::Diagnosis {
+    match error.ending() {
+        bravebot_agent::Ending::Failed(diagnosis) => diagnosis,
+        other => panic!("the turn did not fail: {other:?}"),
+    }
+}
+
+#[test]
+fn a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_made() {
+    let scratch = Scratch::new("outcome-exhausted");
+    std::fs::write(scratch.path.join("target.txt"), "the file body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_script(vec![
+        Served::Reply(tool_request_with_usage(
+            "read_file",
+            r#"{"path":"target.txt"}"#,
+            100,
+            20,
+        )),
+        Served::Status(503),
+        Served::Status(503),
+        Served::Status(503),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("what does target.txt say?"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    let why = why_it_failed(&outcome.expect_err("the service refused every request"));
+    assert_eq!(
+        why.category,
+        bravebot_agent::Category::Unavailable,
+        "a service that could not answer was not reported as one: {why:?}"
+    );
+    assert_eq!(why.status, Some(503), "the status was not kept: {why:?}");
+    assert_eq!(
+        why.attempts,
+        Some(3),
+        "the requests actually sent were not counted: {why:?}"
+    );
+
+    // The round that answered is still there to be sent again, which is what makes the next turn a
+    // retry rather than a restart.
+    let held = serde_json::to_string(&conversation.snapshot()).expect("it serialises");
+    assert!(
+        held.contains("the file body"),
+        "the completed round was dropped with the failure"
+    );
+}
+
+#[test]
+fn a_reply_that_stopped_early_is_reported_as_unfinished_with_no_status() {
+    let scratch = Scratch::new("outcome-unfinished");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_script(vec![
+        Served::Unfinished,
+        Served::Unfinished,
+        Served::Unfinished,
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("answer something"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    let why = why_it_failed(&outcome.expect_err("no reply ever finished"));
+    assert_eq!(
+        why.category,
+        bravebot_agent::Category::Incomplete,
+        "a reply that stopped early was reported as something else: {why:?}"
+    );
+    assert_eq!(
+        why.status, None,
+        "a status was reported for a reply that arrived with none: {why:?}"
+    );
+    assert_eq!(
+        why.attempts,
+        Some(3),
+        "the requests actually sent were not counted: {why:?}"
+    );
+}
+
+#[test]
+fn a_refusal_counts_the_cache_probe_as_a_second_request() {
+    let scratch = Scratch::new("outcome-refused");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // Twice, because a refusal on a request's contents is asked once more without its cache
+    // breakpoints before the client gives up.
+    let (endpoint, received) = serve_script(vec![Served::Status(400), Served::Status(400)]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("answer something"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    let why = why_it_failed(&outcome.expect_err("the service refused the request"));
+    assert_eq!(
+        why.category,
+        bravebot_agent::Category::Refused,
+        "a refusal was reported as something else: {why:?}"
+    );
+    assert_eq!(why.status, Some(400), "the status was not kept: {why:?}");
+    let requests = received.try_iter().count();
+    assert_eq!(requests, 2);
+    assert_eq!(
+        why.attempts,
+        Some(requests as u32),
+        "the cache probe was not counted: {why:?}"
+    );
+}
+
+#[test]
+fn a_stop_between_attempts_is_a_stop_rather_than_a_failure() {
+    let scratch = Scratch::new("outcome-stopped");
+    std::fs::write(scratch.path.join("target.txt"), "the file body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_script(vec![
+        Served::Reply(tool_request_with_usage(
+            "read_file",
+            r#"{"path":"target.txt"}"#,
+            100,
+            20,
+        )),
+        Served::Status(503),
+        Served::Status(503),
+        Served::Status(503),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let cancel = bravebot_core::cancel::Cancel::new();
+
+    let outcome = thread::scope(|scope| {
+        scope.spawn(|| {
+            thread::sleep(std::time::Duration::from_millis(1_200));
+            cancel.cancel();
+        });
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            Task::new("what does target.txt say?"),
+            &mut reporter,
+            &cancel,
+        )
+    });
+
+    let error = outcome.expect_err("the turn was stopped");
+    assert_eq!(
+        error.ending(),
+        bravebot_agent::Ending::Stopped {
+            attempts: Some(received.try_iter().count() as u32 - 1)
+        },
+        "a stop was reported as a failure"
+    );
+    assert_eq!(
+        error.ending().diagnosis(),
+        None,
+        "a stop was given a reason it failed"
+    );
+}
+
+/// A credential is ordinarily in the URL a person configured, so a trail that kept the URL kept
+/// their token in a file they wrote deliberately to share.
+#[test]
+fn nothing_recorded_about_a_request_carries_the_credential_in_its_url() {
+    let scratch = Scratch::new("review-audit-secret");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (url, _) = serve_script(vec![Served::Status(401)]);
+    let mut sink = RecordingSink::new();
+    turn::run(
+        &config_for(&format!("{url}/?api_key=REVIEW_SECRET")),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("work"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .unwrap_err();
+    assert!(!format!("{sink:?}").contains("REVIEW_SECRET"), "{sink:?}");
+}
+
+/// A delegate's failure is written into the parent's conversation, which is the planner's context:
+/// the endpoint that failed is the one thing about it the planner may not be told.
+#[test]
+fn what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpoint() {
+    let scratch = Scratch::new("review-delegate-leak");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (url, _) = serve_by_marker(vec![(
+        "REVIEW-PARENT-LEAK",
+        vec![
+            tool_request_with_usage(
+                "spawn_agent",
+                r#"{"kind":"reader","task":"REVIEW-CHILD-LEAK"}"#,
+                10,
+                7,
+            ),
+            reply_with_usage("waiting", 10, 1),
+            reply_with_usage("done", 10, 1),
+        ],
+    )]);
+    let mut c = bravebot_agent::Conversation::new();
+    let mut r = bravebot_agent::report::RecordingReporter::default();
+    let _ = take_a_turn_reporting(
+        &config_for(&format!("{url}/REVIEW_DIAGNOSTIC_SECRET")),
+        &workspace,
+        &mut c,
+        Task::new("REVIEW-PARENT-LEAK"),
+        &mut r,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    let saved = serde_json::to_string(&c.snapshot()).unwrap();
+    assert!(!saved.contains("REVIEW_DIAGNOSTIC_SECRET"), "{saved}");
+}
+
+#[test]
+fn compaction_failure_narration_keeps_credentials_out() {
+    let scratch = Scratch::new("compaction-diagnostic");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (url, _) = serve_script(vec![
+        Served::Status(401),
+        Served::Reply(reply_with_usage("done", 20, 2)),
+    ]);
+    let config = config_with_budget(&format!("{url}/SECRET_PATH?token=SECRET_QUERY"), 1000);
+    let mut conversation = a_long_conversation();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("finish"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .unwrap();
+    let narration = reporter.narration.join("\n");
+    assert!(narration.contains("unauthorized"), "{narration}");
+    assert!(!narration.contains("SECRET"), "{narration}");
+}
+
+#[test]
+fn gateway_failure_keeps_status_and_real_request_count() {
+    use bravebot_agent::backend::Backend;
+    for streaming in [false, true] {
+        let (url, requests) = serve_script(vec![Served::Status(401)]);
+        let mut config = config_for(&url);
+        let root = serde_json::json!({"provider": {"test-gateway": {
+            "options": {"baseURL": url, "apiKey": "SYNTHETIC_TOKEN"},
+            "models": {"test-model": {}}
+        }}});
+        config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+        let egress = bravebot_net::Egress::new();
+        let mut backend = Backend::select(&config, &egress, "test-gateway/test-model");
+        assert!(matches!(backend, Backend::Gateway { .. }));
+        let mut sink = RecordingSink::new();
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .unwrap();
+        let request =
+            bravebot_aichat::protocol::ChatRequest::new("test-gateway/test-model", vec![]);
+        let result = if streaming {
+            backend.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            backend.complete(&mut policy, &request)
+        };
+        let why = result.unwrap_err().diagnosis();
+        assert_eq!(why.category, bravebot_agent::Category::Unauthorized);
+        assert_eq!(why.status, Some(401));
+        assert_eq!(why.attempts, Some(1));
+        assert_eq!(requests.try_iter().count(), 1);
+    }
+}
+
+/// A processor's failure is a tool result, and a tool result is context. The category is enough to
+/// act on; the body, the headers, and the URL are the service talking into the planner.
+#[test]
+fn a_failed_processor_reports_a_category_and_nothing_the_service_or_the_setting_said() {
+    let scratch = Scratch::new("review-processor-error");
+    std::fs::write(scratch.path.join("input.txt"), "private input").unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (endpoint, received) = serve_script(vec![
+        Served::Reply(tool_request("read_file", r#"{"path":"input.txt"}"#)),
+        Served::Reply(tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"summarise this"}"#,
+        )),
+        Served::DiagnosticStatus(418),
+        Served::Reply(reply_with("finished")),
+    ]);
+    let config = config_for(&format!("{endpoint}/?api_key=PRIVATE_ENDPOINT_SENTINEL"));
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut audit = RecordingSink::new();
+    turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("inspect input.txt"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut audit,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .unwrap();
+    let requests: Vec<_> = received.try_iter().collect();
+    assert_eq!(
+        requests.len(),
+        4,
+        "the processor request must actually fail"
+    );
+    let next_request = requests.last().unwrap();
+    let snapshot = serde_json::to_string(&conversation.snapshot()).unwrap();
+    let audit = format!("{audit:?}");
+    assert!(next_request.contains("processor request refused"));
+    for secret in [
+        "PRIVATE_ENDPOINT_SENTINEL",
+        "PRIVATE_RESPONSE_SENTINEL",
+        "PRIVATE_HEADER_SENTINEL",
+    ] {
+        assert!(
+            !next_request.contains(secret),
+            "next planner request leaked {secret}"
+        );
+        assert!(
+            !snapshot.contains(secret),
+            "saved conversation leaked {secret}"
+        );
+        assert!(!audit.contains(secret), "audit leaked {secret}");
+    }
+}
+
+/// What a stop cost is the requests that went, so a count taken from the retry ordinal reports one
+/// a person paid for and a stop before anything was sent reports none.
+#[test]
+fn a_stop_counts_the_requests_that_were_sent_and_no_others() {
+    let scratch = Scratch::new("review-cancel-attempts");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (endpoint, received) = serve_script(vec![Served::Status(503)]);
+    let cancel = bravebot_core::cancel::Cancel::new();
+    struct StopOnRetry(bravebot_core::cancel::Cancel);
+    impl bravebot_agent::report::Reporter for StopOnRetry {
+        fn todos(&mut self, _: Vec<bravebot_core::todo::Row>) {}
+        fn phase(&mut self, phase: bravebot_agent::report::Phase) {
+            if phase == bravebot_agent::report::Phase::Reconnecting {
+                self.0.cancel();
+            }
+        }
+    }
+    let mut reporter = StopOnRetry(cancel.clone());
+    let error = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("test"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .unwrap_err();
+    assert_eq!(received.try_iter().count(), 1);
+    let ending = error.ending();
+    let cancelled_before_request = bravebot_core::cancel::Cancel::new();
+    cancelled_before_request.cancel();
+    let before = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("test"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancelled_before_request,
+    )
+    .unwrap_err();
+    assert_eq!(received.try_iter().count(), 0);
+    let before_ending = before.ending();
+    assert_eq!(
+        ending,
+        bravebot_agent::Ending::Stopped { attempts: Some(1) }
+    );
+    assert_eq!(
+        before_ending,
+        bravebot_agent::Ending::Stopped { attempts: Some(0) }
+    );
+}
+
+/// A processor carries its stop separately from its text, so the turn that spawned it reports a stop
+/// rather than reading a failure out of a tool result.
+#[test]
+fn a_stop_while_a_processor_runs_is_reported_as_a_stop_with_what_it_sent() {
+    let scratch = Scratch::new("processor-stop-count");
+    std::fs::write(scratch.path.join("input.txt"), "private input").unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (endpoint, received) = serve_script(vec![
+        Served::Reply(tool_request("read_file", r#"{"path":"input.txt"}"#)),
+        Served::Reply(tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"summarise this"}"#,
+        )),
+        Served::Status(503),
+    ]);
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let stopping = cancel.clone();
+    let waiter = std::thread::spawn(move || {
+        for _ in 0..3 {
+            received
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        stopping.cancel();
+    });
+    let error = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("inspect input.txt"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .unwrap_err();
+    waiter.join().unwrap();
+    assert_eq!(
+        error.ending(),
+        bravebot_agent::Ending::Stopped { attempts: Some(1) }
     );
 }

@@ -553,7 +553,7 @@ pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
 
     // What is running sits above the box rather than in place of it, so the two are measured
     // together: whatever the indicator takes is height the input no longer has.
-    let status_height = status_height(session, frame.area().height);
+    let status_height = status_height(session, frame.area().width, frame.area().height);
 
     // The input's height depends on how far the text wraps, so it is measured before the layout
     // rather than fixed: a fixed height is what made typing past the edge disappear.
@@ -1631,6 +1631,20 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
                     )));
                 }
             }
+            // In the same column as a note and in the colour of a failure, wrapped rather than
+            // clipped: a reason is the one line in the transcript somebody reads to the end.
+            Speaker::Failure | Speaker::Stopped => {
+                for text in entry.text.lines() {
+                    for row in
+                        wrap::wrap(text, (width as usize).saturating_sub(LEAD).max(8), 0).rows
+                    {
+                        lines.push(Line::from(Span::styled(
+                            format!("{:LEAD$}{row}", ""),
+                            Style::default().fg(theme::fail()),
+                        )));
+                    }
+                }
+            }
             // Echoed with the marker the user typed it behind, so the scrollback reads back the way
             // the session happened.
             Speaker::Shell => {
@@ -1968,7 +1982,18 @@ pub fn as_markdown(session: &Session, title: &str) -> String {
                     }
                 }
             }
+            // Notes are left out: they are this program talking about itself, and an export is a
+            // record of the exchange.
             crate::state::Speaker::System => {}
+            // Include outcomes so an unanswered prompt has an explanation in the export.
+            crate::state::Speaker::Failure | Speaker::Stopped => {
+                out.push_str(if entry.speaker == crate::state::Speaker::Stopped {
+                    "## Cancelled\n\n"
+                } else {
+                    "## Failed\n\n"
+                });
+                out.push_str(&format!("{}\n\n", entry.text.trim()));
+            }
         }
 
         if let Some(shown) = &entry.shown {
@@ -2003,16 +2028,16 @@ fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) -> Laid {
     let total = paragraph.line_count(area.width) as u16;
     let max_offset = total.saturating_sub(area.height);
 
-    // While the scroller is open the view is drawn from the row it is holding, counted from the
+    // Any view scrolled away from the tail is drawn from the row it is holding, counted from the
     // top, and not from the offset the last frame left behind. The end of the transcript moves
     // with every token a turn writes, so a frame drawn by counting back from it puts the view
     // wherever the rows that arrived since the last frame have pushed it: the anchor is correct
     // and the arithmetic reaching it is a frame out of date. Read from the top, nothing a turn
     // appends below can move what is above it.
-    let offset = if session.scrolling() {
+    let offset = if session.scrolling() || session.scroll > 0 {
         session.top_row().min(max_offset)
     } else {
-        max_offset.saturating_sub(session.scroll.min(max_offset))
+        max_offset
     };
 
     frame.render_widget(paragraph.scroll((offset, 0)), area);
@@ -2057,7 +2082,7 @@ fn input_text_width(total: u16) -> usize {
 /// Zero when nothing is running. Bounded so a long list cannot take the transcript and the box
 /// with it: the point of showing what is happening is lost if the box it is happening above has
 /// been squeezed off the screen.
-fn status_height(session: &Session, height: u16) -> u16 {
+fn status_height(session: &Session, width: u16, height: u16) -> u16 {
     // A row of transcript, three of box, and the hint line are what has to survive this.
     let ceiling = (height as usize).saturating_sub(5).max(1);
 
@@ -2066,11 +2091,27 @@ fn status_height(session: &Session, height: u16) -> u16 {
         Status::Working => (1 + session.todos.len()).min(ceiling) as u16,
         // A command spends no tokens and keeps no task list, so one line says everything.
         Status::Running => 1,
-        // Idle, but with a turn just finished to report. One line, and only until the next turn
-        // starts: the row is what says a turn ended, which the indicator going out does not.
-        Status::Idle if session.finished.is_some() => 1,
+        // Keep the failure reason visible even when its transcript entry is off screen.
+        Status::Idle if session.finished.is_some() => {
+            (1 + failure_rows(session, width).len()).min(ceiling) as u16
+        }
         Status::Idle | Status::Quitting => 0,
     }
+}
+
+/// Limit the reason's height so the turn status and input remain visible.
+const REASON_ROWS: usize = 3;
+
+/// Why the turn that just ended failed, wrapped for the status area, or nothing.
+fn failure_rows(session: &Session, width: u16) -> Vec<String> {
+    let Some(reason) = session.failure_said() else {
+        return Vec::new();
+    };
+    // Indented to the width the row above it starts at, so the reason reads as belonging to it.
+    let room = (width as usize).saturating_sub(4).max(8);
+    let mut rows = wrap::wrap(reason, room, 0).rows;
+    rows.truncate(REASON_ROWS);
+    rows
 }
 
 /// Rows the input box needs, borders included.
@@ -2200,18 +2241,20 @@ fn draw_status(frame: &mut Frame, area: Rect, session: &Session) {
         // words were "now let me look at the dispatch code" is over, and nothing on the screen
         // used to say so: the indicator was simply gone, and a user reads that as a session that
         // has stopped responding rather than one waiting for them.
-        let (glyph, colour, word) = if finished.failed {
-            ("✗", theme::fail(), t!(turn_failed, turn = finished.turn))
-        } else {
-            ("✓", theme::ok(), t!(turn_done, turn = finished.turn))
+        let (glyph, colour, word) = match finished.ending {
+            bravebot_agent::Ending::Failed(_) => {
+                ("✗", theme::fail(), t!(turn_failed, turn = finished.turn))
+            }
+            bravebot_agent::Ending::Stopped { .. } => {
+                ("■", theme::fail(), t!(turn_cancelled, turn = finished.turn))
+            }
+            bravebot_agent::Ending::Done => ("✓", theme::ok(), t!(turn_done, turn = finished.turn)),
         };
         let mut spans = vec![
             Span::styled(format!("  {glyph} "), Style::default().fg(colour)),
             Span::styled(format!("{word} "), Style::default().fg(colour)),
         ];
-        // Cost is worth reporting, and a failed turn's is not: it is counted as the turn is
-        // abandoned rather than as it finishes, so the figure would be a guess.
-        if !finished.failed {
+        if matches!(finished.ending, bravebot_agent::Ending::Done) {
             spans.push(Span::styled(
                 format!(
                     "({}, {})",
@@ -2233,6 +2276,13 @@ fn draw_status(frame: &mut Frame, area: Rect, session: &Session) {
     if working {
         lines.extend(todo_lines(&session.todos).into_iter().take(room));
     }
+    // Fit the reason below the status; the transcript and export retain the full text.
+    lines.extend(
+        failure_rows(session, area.width)
+            .into_iter()
+            .take(room)
+            .map(|row| Line::from(Span::styled(format!("    {row}"), dim()))),
+    );
 
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -5910,11 +5960,16 @@ mod tests {
         let mut session = Session::new("partial");
         session.type_char('a');
         session.submit();
-        session.fail("the model could not be reached");
+        session.fail(
+            "the model could not be reached",
+            bravebot_agent::Ending::Failed(bravebot_agent::Diagnosis::of(
+                bravebot_agent::Category::Transport,
+            )),
+        );
 
         let output = rendered(&session);
         assert!(
-            output.contains("turn 1 stopped"),
+            output.contains("turn 1 failed"),
             "the failure was not reported: {output}"
         );
         assert!(
@@ -6803,7 +6858,7 @@ mod tests {
     /// Nothing is running, so nothing is said about it and the whole height goes to the rest.
     #[test]
     fn an_idle_session_shows_no_indicator_row() {
-        assert_eq!(status_height(&typed("hi"), 24), 0);
+        assert_eq!(status_height(&typed("hi"), 80, 24), 0);
     }
     /// The position belongs in the border, where it labels the box without costing a row.
     #[test]
@@ -6878,8 +6933,8 @@ mod tests {
         /// away.
         #[test]
         fn the_indicator_area_grows_to_hold_the_list() {
-            let bare = status_height(&working_with(Vec::new()), 24);
-            let with_list = status_height(&working_with(three()), 24);
+            let bare = status_height(&working_with(Vec::new()), 80, 24);
+            let with_list = status_height(&working_with(three()), 80, 24);
             assert_eq!(
                 with_list as usize,
                 bare as usize + 3,
@@ -6897,7 +6952,7 @@ mod tests {
             let borrowed: Vec<_> = many.iter().map(|(t, s)| (t.as_str(), *s)).collect();
             let session = working_with(list(&borrowed));
             let height = 10;
-            let status = status_height(&session, height);
+            let status = status_height(&session, 80, height);
             let input = input_height(&session, 60, height - status);
             assert!(
                 status + input < height - 1,

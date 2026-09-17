@@ -44,6 +44,10 @@ pub enum Speaker {
     Assistant,
     /// A note from the program itself: an error, a refusal, a status.
     System,
+    /// A failure reason shown in the transcript and included in exports.
+    Failure,
+    /// A deliberate stop shown in the transcript and included in exports.
+    Stopped,
     /// A tool call the turn made. Shown as it happens, and kept afterwards.
     Tool,
     /// A command the user typed in shell mode. Trusted input, like their prompts.
@@ -249,6 +253,21 @@ impl Entry {
         }
     }
 
+    /// Why a turn failed, in words composed from what was known about the failure.
+    pub fn failure(text: impl Into<String>) -> Self {
+        Self {
+            speaker: Speaker::Failure,
+            ..Self::system(text)
+        }
+    }
+
+    pub fn stopped(text: impl Into<String>) -> Self {
+        Self {
+            speaker: Speaker::Stopped,
+            ..Self::system(text)
+        }
+    }
+
     pub fn system(text: impl Into<String>) -> Self {
         Self {
             speaker: Speaker::System,
@@ -386,8 +405,44 @@ pub struct Finished {
     pub tokens: u64,
     /// How long it took, wall clock.
     pub took: Duration,
-    /// Whether it ended by failing, which is a different thing to report.
-    pub failed: bool,
+    /// Selects the success, cancellation, or failure status.
+    pub ending: bravebot_agent::Ending,
+}
+
+impl Finished {
+    /// Whether the turn ended by failing, as opposed to answering or being stopped.
+    pub fn failed(self) -> bool {
+        matches!(self.ending, bravebot_agent::Ending::Failed(_))
+    }
+}
+
+/// Compose a localized failure reason from safe fields, without raw backend error text.
+pub fn failure_reason(diagnosis: bravebot_agent::Diagnosis) -> String {
+    use bravebot_agent::Category;
+    let what = match diagnosis.category {
+        Category::Unauthorized => t!(failure_unauthorized),
+        Category::RateLimited => t!(failure_rate_limited),
+        Category::Unavailable => t!(failure_unavailable),
+        Category::Refused => t!(failure_refused),
+        Category::Transport => t!(failure_transport),
+        Category::Incomplete => t!(failure_incomplete),
+        Category::Undecodable => t!(failure_undecodable),
+        Category::TooLong => t!(failure_too_long),
+        Category::Unconfigured => t!(failure_unconfigured),
+        Category::Blocked => t!(failure_blocked),
+        Category::Workspace => t!(failure_workspace),
+        Category::Internal => t!(failure_internal),
+    };
+    let mut said = what.to_string();
+    if let Some(status) = diagnosis.status {
+        said = t!(failure_with_status, what = said, status = status);
+    }
+    // Said only where there was more than one, since "after 1 attempts" is a worse sentence than
+    // the silence it replaces, and one attempt is what an unremarkable failure took.
+    if let Some(attempts) = diagnosis.attempts.filter(|count| *count > 1) {
+        said = t!(failure_with_attempts, what = said, attempts = attempts);
+    }
+    t!(session_error, problem = said)
 }
 
 /// What a half-typed line could still become.
@@ -4136,7 +4191,6 @@ impl Session {
         self.started = None;
         self.phase = None;
         self.running = None;
-        self.scroll = 0;
         // A prompt is English and a command line is not, so the line coming back must not land
         // behind a marker that would run it. Belt and braces with the guard in
         // [`Session::type_char`]: this is the state the returning text lands in, and it has to be
@@ -4169,7 +4223,7 @@ impl Session {
             // and no box, with nothing left to ask for it back with.
             let todos = std::mem::take(&mut self.todos);
             self.transcript
-                .push(Entry::system("stopped").with_todos(todos));
+                .push(Entry::stopped(t!(turn_cancelled, turn = self.turns)).with_todos(todos));
             return;
         }
 
@@ -4346,6 +4400,16 @@ impl Session {
             true => None,
             false => Some(self.workspace.display().to_string()),
         }
+    }
+
+    /// Reuse the latest failed turn's transcript reason in the fixed status area.
+    pub fn failure_said(&self) -> Option<&str> {
+        self.finished.filter(|finished| finished.failed())?;
+        self.transcript
+            .iter()
+            .rev()
+            .find(|entry| entry.speaker == Speaker::Failure)
+            .map(|entry| entry.text.as_str())
     }
 
     /// The spinner glyph for this moment, for a command in flight.
@@ -5123,12 +5187,11 @@ impl Session {
         self.transcript
             .push(Entry::assistant(crate::reasoning::spoken(&reply), trail).with_todos(todos));
         self.status = Status::Idle;
-        self.scroll = 0;
         self.finished = Some(Finished {
             turn: self.turns,
             tokens,
             took: self.elapsed(),
-            failed: false,
+            ending: bravebot_agent::Ending::Done,
         });
         self.started = None;
         self.phase = None;
@@ -5168,23 +5231,43 @@ impl Session {
         entry.stalled_ms += timing.stalled_ms;
     }
 
+    /// Mark a deliberate stop before returning its prompt to the editor.
+    pub fn stopped(&mut self, attempts: Option<u32>) {
+        self.finished = Some(Finished {
+            turn: self.turns,
+            tokens: 0,
+            took: self.elapsed(),
+            ending: bravebot_agent::Ending::Stopped { attempts },
+        });
+        if self.is_quitting() {
+            let todos = std::mem::take(&mut self.todos);
+            self.transcript
+                .push(Entry::stopped(t!(turn_cancelled, turn = self.turns)).with_todos(todos));
+        } else {
+            self.status = Status::Idle;
+        }
+        self.started = None;
+        self.phase = None;
+        self.running = None;
+        self.streaming.clear();
+    }
+
     /// Record a failure. The turn is over either way, so the session returns to idle.
     ///
     /// The list is kept on the entry as it stood, unfinished. A failed turn that had got three of
     /// five tasks done is more useful shown that way than blank.
-    pub fn fail(&mut self, message: impl Into<String>) {
+    pub fn fail(&mut self, message: impl Into<String>, ending: bravebot_agent::Ending) {
         let todos = std::mem::take(&mut self.todos);
         self.transcript
-            .push(Entry::system(message).with_todos(todos));
+            .push(Entry::failure(message).with_todos(todos));
         self.status = Status::Idle;
-        self.scroll = 0;
         // Reported as a failure rather than left to the success line, which would put a tick
         // beside a turn that did not finish.
         self.finished = Some(Finished {
             turn: self.turns,
             tokens: 0,
             took: self.elapsed(),
-            failed: true,
+            ending,
         });
         // A turn that failed after ten minutes still spent them, and it is the turn most worth
         // reading afterwards. Recorded on the same footing as a turn that succeeded, so a session
@@ -5871,6 +5954,14 @@ fn along(line: &str, column: usize) -> usize {
 mod tests {
     use super::*;
     use bravebot_core::ask::Answer;
+
+    /// A failure with nothing interesting known about it, for the tests that care that a turn
+    /// failed rather than what it failed of.
+    fn went_wrong() -> bravebot_agent::Ending {
+        bravebot_agent::Ending::Failed(bravebot_agent::Diagnosis::of(
+            bravebot_agent::Category::Internal,
+        ))
+    }
 
     mod delegates {
         use super::*;
@@ -7669,7 +7760,7 @@ mod tests {
         let finished = s.finished.expect("a finished turn");
         assert_eq!(finished.turn, 1);
         assert_eq!(finished.tokens, 4_200);
-        assert!(!finished.failed);
+        assert!(!finished.failed());
     }
 
     /// A tick beside a turn that did not finish would be the wrong thing to say about it.
@@ -7678,10 +7769,10 @@ mod tests {
         let mut s = Session::new("none");
         s.set_input("do the thing".to_string());
         s.submit();
-        s.fail("the model could not be reached");
+        s.fail("the model could not be reached", went_wrong());
 
         let finished = s.finished.expect("a finished turn");
-        assert!(finished.failed);
+        assert!(finished.failed());
     }
 
     /// A line reporting a finished turn while the next one runs is a line about the wrong turn.
@@ -8454,7 +8545,7 @@ mod tests {
         );
         assert_eq!(
             s.transcript.last().map(|entry| entry.text.as_str()),
-            Some("stopped"),
+            Some("turn 1 cancelled"),
             "the prompt that stayed sent was not marked stopped"
         );
         assert_eq!(
@@ -8485,10 +8576,10 @@ mod tests {
         let mut s = session();
         s.type_char('a');
         s.submit();
-        s.fail("something went wrong");
+        s.fail("something went wrong", went_wrong());
 
         assert_eq!(s.status, Status::Idle);
-        assert_eq!(s.transcript[1].speaker, Speaker::System);
+        assert_eq!(s.transcript[1].speaker, Speaker::Failure);
     }
 
     #[test]
@@ -9062,7 +9153,7 @@ mod tests {
         let mut s = session();
         s.type_char('a');
         s.submit();
-        s.fail("error");
+        s.fail("error", went_wrong());
         assert_eq!(s.elapsed(), Duration::ZERO);
         assert!(s.indicator().is_none());
     }
@@ -9283,7 +9374,7 @@ mod tests {
         assert!(
             s.transcript
                 .last()
-                .is_some_and(|entry| entry.text == "stopped"),
+                .is_some_and(|entry| entry.speaker == Speaker::Stopped),
             "nothing recorded that it stopped"
         );
     }
@@ -9605,7 +9696,7 @@ mod tests {
                 ("done", Status::Done),
                 ("not done", Status::Active),
             ]));
-            s.fail("the model call failed");
+            s.fail("the model call failed", went_wrong());
 
             let entry = s.transcript.last().expect("an entry");
             assert_eq!(entry.todos.len(), 2);
@@ -9839,7 +9930,7 @@ mod tests {
             assert!(s.streaming.is_empty(), "a finished turn left its tail up");
 
             s.streaming("half a thought");
-            s.fail("error: something went wrong");
+            s.fail("error: something went wrong", went_wrong());
             assert!(s.streaming.is_empty(), "a failed turn left its tail up");
 
             // A session of its own for the stop, because the tail matters most where the prompt
@@ -10522,7 +10613,7 @@ mod tests {
 
             s.type_char('a');
             s.submit();
-            s.fail("it went wrong");
+            s.fail("it went wrong", went_wrong());
 
             assert!(
                 s.timing_by_turn().contains_key(&1),

@@ -266,12 +266,12 @@ fn crc32(bytes: &[u8]) -> u32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Build a frame the way the service does, so the decoder is tested against the format rather
     /// than against itself.
-    fn frame(name: &str, payload: &[u8]) -> Vec<u8> {
+    pub(crate) fn frame(name: &str, payload: &[u8]) -> Vec<u8> {
         frame_with_headers(payload, &string_header(EVENT_TYPE_HEADER, name.as_bytes()))
     }
 
@@ -290,7 +290,7 @@ mod tests {
 
     /// A frame the way the service reports a mid-reply failure: named by `:exception-type`, with
     /// no `:event-type` at all.
-    fn failure(kind: &str) -> Vec<u8> {
+    pub(crate) fn failure(kind: &str) -> Vec<u8> {
         let mut headers = string_header(b":message-type", b"exception");
         headers.extend(string_header(EXCEPTION_TYPE_HEADER, kind.as_bytes()));
         frame_with_headers(br#"{"message":"the service said why"}"#, &headers)

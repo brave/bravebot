@@ -914,6 +914,8 @@ pub struct Entries {
 /// What a dispatched call produced, ready to send back as a tool message.
 #[derive(Debug)]
 pub struct Output {
+    /// Structured cancellation from a processor, never reconstructed from tool-result text.
+    pub cancelled: Option<crate::outcome::Cancellation>,
     pub call_id: Option<String>,
     pub tool: String,
     /// The rendered result, still labelled.
@@ -1267,6 +1269,7 @@ fn how_it_ended(codes: &[Option<i32>]) -> crate::report::Outcome {
 /// decides whether the planner may see it. `note` and `changes` go to a screen and are already
 /// released, because a person is allowed to read what a planner is not.
 struct Produced {
+    cancelled: Option<crate::outcome::Cancellation>,
     text: Labelled<String>,
     origin: String,
     /// What to tell the person watching. A few words, never the result itself.
@@ -1358,6 +1361,7 @@ impl Produced {
             origin: origin.into(),
             note: note.into(),
             failed: false,
+            cancelled: None,
             deferred: None,
             entries: None,
             incomplete: false,
@@ -1762,6 +1766,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             reporter.tool_started(Activity::running(verb, ""));
             reporter.tool_finished(Activity::running(verb, "").failed(produced.note.clone()));
             return Output {
+                cancelled: produced.cancelled,
                 call_id: call.id.clone(),
                 tool: name,
                 text: produced.text,
@@ -1854,6 +1859,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
     });
 
     Output {
+        cancelled: produced.cancelled,
         call_id: call.id.clone(),
         tool: name,
         text: produced.text,
@@ -1888,6 +1894,7 @@ fn problem(text: impl Into<String>) -> Produced {
         origin: String::new(),
         note: text,
         failed: true,
+        cancelled: None,
         deferred: None,
         entries: None,
         incomplete: false,
@@ -4119,7 +4126,27 @@ fn spawn_processor<S: Sink>(
             produced.said = done.note;
             produced
         }
-        Err(error) => problem(format!("error: {error}")).waiting(waited),
+        Err(crate::processor::ProcessorError::Chat(error)) => {
+            // Tool problems are trusted driver text. Backend display strings can contain secrets.
+            let cancelled = error.is_cancelled();
+            let diagnosis = error.diagnosis();
+            let reason = if cancelled {
+                "cancelled"
+            } else {
+                diagnosis.category.name()
+            };
+            let mut produced =
+                problem(format!("error: processor request {reason}")).waiting(waited);
+            if cancelled {
+                produced.cancelled = Some(crate::outcome::Cancellation {
+                    attempts: diagnosis.attempts,
+                });
+            }
+            produced
+        }
+        Err(crate::processor::ProcessorError::Denied(error)) => {
+            problem(format!("error: {error}")).waiting(waited)
+        }
     }
 }
 

@@ -37,11 +37,12 @@ asked", which is most of what anyone asks it.
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content
 
-Every field is a gate name, a capability, a label, a path or a slot id. That is why it can be shown
+Every field is a gate name, a capability, a label, a path, a destination host or a slot id.
+Network decisions omit URL userinfo, paths, queries and fragments. That is why it can be shown
 on a screen and written to a file without any release, and it is what makes the record safe to keep
 for a workspace nobody vouched for.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::nothing_recorded_about_a_request_carries_the_credential_in_its_url`
 
 <a id="TRACE-3"></a>
 ### TRACE-3: an assertion a person made is recorded as one

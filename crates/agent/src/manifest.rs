@@ -614,7 +614,7 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
 /// report of a half-run they interrupted on purpose is noise.
 fn stopped(attempt: Attempt, error: TurnError) -> TurnError {
     match error {
-        TurnError::Cancelled => TurnError::Cancelled,
+        TurnError::Cancelled { attempts } => TurnError::Cancelled { attempts },
         other => TurnError::Manifest {
             attempt: Box::new(attempt),
             detail: other.to_string(),
@@ -721,7 +721,7 @@ fn plan<S: Sink, R: Reporter>(
     attempt: &mut Attempt,
 ) -> Result<Planned, TurnError> {
     if cancel.is_cancelled() {
-        return Err(TurnError::Cancelled);
+        return Err(TurnError::Cancelled { attempts: Some(0) });
     }
 
     let mut routing = Routing::new();
@@ -870,7 +870,7 @@ fn ask<S: Sink, R: Reporter>(
     model: &mut String,
 ) -> Result<String, TurnError> {
     if cancel.is_cancelled() {
-        return Err(TurnError::Cancelled);
+        return Err(TurnError::Cancelled { attempts: Some(0) });
     }
 
     policy
@@ -1033,7 +1033,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
 
     for (index, step) in plan.steps().iter().enumerate() {
         if cancel.is_cancelled() {
-            return Err(TurnError::Cancelled);
+            return Err(TurnError::Cancelled { attempts: Some(0) });
         }
 
         let Some(entry) = registered_tool(step.tool()) else {

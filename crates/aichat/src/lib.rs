@@ -149,6 +149,7 @@ impl fmt::Debug for SubscriptionCredential {
 }
 
 pub struct AichatClient<'a> {
+    attempts: u32,
     config: &'a Config,
     egress: &'a Egress,
     subscription: Option<&'a mut dyn Subscription>,
@@ -190,8 +191,14 @@ struct Gateway<'a> {
 }
 
 impl<'a> AichatClient<'a> {
+    /// Requests handed to egress in the last call, including capability probes.
+    pub fn attempts(&self) -> u32 {
+        self.attempts
+    }
+
     pub fn new(config: &'a Config, egress: &'a Egress) -> Self {
         Self {
+            attempts: 0,
             config,
             egress,
             subscription: None,
@@ -429,6 +436,7 @@ impl<'a> AichatClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
+        self.attempts = 0;
         let refusal_key = self.refusal_key(request);
         self.recall(&refusal_key);
         let mut probed = false;
@@ -447,7 +455,9 @@ impl<'a> AichatClient<'a> {
                     probed = true;
                 }
                 Err(error) if worth_another_attempt(attempt, &error) => {
-                    std::thread::sleep(backoff(attempt));
+                    if !self.wait(backoff(attempt)) {
+                        return Err(ChatError::Cancelled);
+                    }
                     attempt += 1;
                 }
                 result => {
@@ -464,8 +474,12 @@ impl<'a> AichatClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
+        if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
+            return Err(ChatError::Cancelled);
+        }
         let http = self.prepare(request)?;
 
+        self.attempts += 1;
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // Decoding the transport envelope needs the raw bytes, so the kernel releases them
@@ -515,6 +529,7 @@ impl<'a> AichatClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
+        self.attempts = 0;
         let request = request.clone().streamed();
         let refusal_key = self.refusal_key(&request);
         self.recall(&refusal_key);
@@ -600,6 +615,7 @@ impl<'a> AichatClient<'a> {
 
         let http = self.prepare(request)?.header("accept", "text/event-stream");
 
+        self.attempts += 1;
         let stream = self.egress.fetch_streaming(
             policy,
             http,

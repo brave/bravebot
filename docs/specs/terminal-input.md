@@ -110,9 +110,10 @@ offer lives for exactly one press, since it answers the press just made and the 
 answer to it. Nothing is said where the box was already empty: that press leaves, and a press that
 leaves is not one to explain.
 
-**Stopping is silent, and the prompt comes back.** Neither key says that it is stopping. A reply
-still arriving stops arriving, the prompt that was sent returns to the box for editing, and that
-is the whole of the answer. There is nothing to wait through and so nothing to report waiting on.
+**Stopping shows a cancelled status, and the prompt comes back when the box can take it.**
+The reply stops arriving. When no work followed the prompt, no prompts are queued, and the box is
+empty, the prompt returns for editing. The status identifies a deliberate cancellation rather than
+a failure or a completed answer.
 
 The prompt stays sent, marked stopped, where any of three things is true: the turn had already
 done something that is on the screen, there are prompts waiting behind it, or the box is not empty.

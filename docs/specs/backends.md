@@ -4,6 +4,7 @@ title: Backends
 status: normative
 governs:
   - crates/agent/src/backend.rs
+  - crates/agent/src/outcome.rs
   - crates/bedrock/src/credentials.rs
   - crates/tui/src/app.rs
   - crates/tui/src/status.rs
@@ -1194,6 +1195,46 @@ file in a checkout.
 `verified-by: bravebot_config::lib::a_name_nothing_consults_changes_nothing`
 `verified-by: bravebot_config::settings::a_name_this_crate_does_not_know_is_still_read`
 `verified-by: bravebot_config::settings::the_names_are_reportable_and_the_values_are_not`
+
+<a id="BACKEND-37"></a>
+### BACKEND-37: failures carry safe reasons and measured request counts
+
+Backend failures report a fixed category, an HTTP status when known, and the number of requests
+handed to egress. The count includes retries and capability probes for streamed and whole replies.
+A failure before egress has zero attempts; an uncounted error has an unknown count. A retry announced
+before backoff does not count until it starts. Cancelling that wait retains the requests already sent.
+
+Categories come from structured errors. Error bodies, headers, credentials, URLs, and raw transport
+messages do not enter these details. Processor failures use a fixed category in their tool results;
+delegate failures tell the planner only that the delegate did not finish. Compaction failure
+messages also use the category. These paths do not copy raw backend errors into the conversation.
+
+Cancellation is distinct from failure. A processor carries cancellation and its attempt count
+separately from its tool-result text, so the parent can report the stop without parsing that text.
+
+Known Bedrock stream exceptions map to fixed categories: validation to refused, throttling to
+rate-limited, and service-unavailable or internal-server errors to unavailable. Other exception
+names map to incomplete. Retry eligibility is unchanged.
+
+`verified-by: bravebot_agent::backend::each_status_a_service_answers_with_is_reported_as_what_it_means`
+`verified-by: bravebot_agent::backend::a_gateway_with_nothing_holding_a_token_is_reported_as_unconfigured`
+`verified-by: bravebot_agent::backend::aws_refusing_the_credentials_it_was_signed_with_is_reported_as_unauthorized`
+`verified-by: bravebot_agent::backend::what_is_kept_about_a_failure_carries_nothing_the_service_or_the_setting_said`
+`verified-by: bravebot_agent::turn::a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_made`
+`verified-by: bravebot_agent::turn::a_reply_that_stopped_early_is_reported_as_unfinished_with_no_status`
+`verified-by: bravebot_agent::turn::a_refusal_counts_the_cache_probe_as_a_second_request`
+`verified-by: bravebot_bedrock::lib::request_counts_include_capability_probes`
+`verified-by: bravebot_bedrock::lib::cancellation_in_backoff_counts_only_sent_requests`
+`verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_between_attempts`
+`verified-by: bravebot_aichat::client::a_stop_between_attempts_at_a_whole_reply_does_not_wait_out_the_pause`
+`verified-by: bravebot_bedrock::lib::a_stop_between_attempts_at_a_whole_reply_does_not_wait_out_the_pause`
+`verified-by: bravebot_bedrock::lib::framed_service_exceptions_keep_their_kind_and_request_count`
+`verified-by: bravebot_agent::failure_categories::service_exception_keeps_its_actionable_category`
+`verified-by: bravebot_agent::turn::compaction_failure_narration_keeps_credentials_out`
+`verified-by: bravebot_agent::turn::what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpoint`
+`verified-by: bravebot_agent::turn::a_failed_processor_reports_a_category_and_nothing_the_service_or_the_setting_said`
+`verified-by: bravebot_agent::turn::a_stop_counts_the_requests_that_were_sent_and_no_others`
+`verified-by: bravebot_agent::turn::a_stop_while_a_processor_runs_is_reported_as_a_stop_with_what_it_sent`
 
 ## Known costs
 

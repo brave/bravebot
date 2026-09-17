@@ -1434,7 +1434,10 @@ fn a_cancelled_run_is_not_reported_as_a_failed_attempt() {
     )
     .expect_err("a cancelled run does not finish");
 
-    assert!(matches!(failure, bravebot_agent::TurnError::Cancelled));
+    assert!(matches!(
+        failure,
+        bravebot_agent::TurnError::Cancelled { .. }
+    ));
 }
 
 /// The first planning call must know that something downstream will read the workspace, or it

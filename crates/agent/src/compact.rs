@@ -101,6 +101,16 @@ pub enum CompactError {
     Chat(crate::backend::BackendError),
 }
 
+impl CompactError {
+    /// A safe category for the caller's failure message.
+    pub fn category(&self) -> crate::outcome::Category {
+        match self {
+            Self::Chat(error) => error.diagnosis().category,
+            Self::Denied(_) => crate::outcome::Category::Blocked,
+        }
+    }
+}
+
 impl fmt::Display for CompactError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

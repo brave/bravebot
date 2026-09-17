@@ -2316,7 +2316,7 @@ mod tests {
     fn a_cancelled_run_leaves_no_record() {
         let root = an_empty_project("bravebot-session-manifest-cancelled");
 
-        let cancelled = Err(bravebot_agent::TurnError::Cancelled);
+        let cancelled = Err(bravebot_agent::TurnError::Cancelled { attempts: None });
         assert!(record_manifest_run(&root, "summarise the specs", &cancelled).is_none());
         assert!(list(&root).is_empty(), "a stopped run was written down");
 

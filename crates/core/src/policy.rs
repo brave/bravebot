@@ -448,7 +448,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             }
         }
 
-        self.allow("network", format!("egress to {url}"));
+        self.allow(
+            "network",
+            format!("egress to {}", crate::url::host_of(url).unwrap_or_default()),
+        );
         Ok(())
     }
 

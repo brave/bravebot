@@ -385,6 +385,7 @@ fn a_completion_round_trips() {
         .complete(&mut policy, &request)
         .expect("completion succeeds");
 
+    assert_eq!(client.attempts(), 1);
     assert_eq!(completion.model, "served-model");
     // Model output is untrusted, whatever it says.
     assert_eq!(completion.content.label(), Label::untrusted_public());
@@ -741,6 +742,7 @@ fn a_stream_stopped_before_it_starts_reports_nothing() {
         .complete_streaming(&mut policy, &request, |_| reports += 1)
         .expect_err("a stopped stream produced a completion");
 
+    assert_eq!(client.attempts(), 0);
     assert!(matches!(error, ChatError::Cancelled), "{error}");
     assert_eq!(reports, 0, "the reply was read anyway");
 }
@@ -1181,7 +1183,60 @@ fn a_stop_does_not_wait_out_the_pause_between_attempts() {
         })
         .expect_err("a stopped request produced a completion");
 
+    assert_eq!(client.attempts(), 1);
     assert!(matches!(error, ChatError::Cancelled), "{error}");
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "it waited out the pause: {:?}",
+        started.elapsed()
+    );
+    assert!(matches!(
+        client.complete(&mut policy, &request),
+        Err(ChatError::Cancelled)
+    ));
+    assert_eq!(client.attempts(), 0, "a new call resets the attempt count");
+}
+
+/// The same pause runs before a whole reply is asked for again, and that path has no progress
+/// callback to press a key against, so the stop arrives from elsewhere. It is pressed once the
+/// server has the first request, so the stop lands in the pause and not before anything was sent.
+#[test]
+fn a_stop_between_attempts_at_a_whole_reply_does_not_wait_out_the_pause() {
+    let (endpoint, received) = serve_attempts(vec![Attempt::Dropped, Attempt::Dropped]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let cancel = Cancel::new();
+    let mut client = AichatClient::new(&config, &egress).with_cancel(cancel.clone());
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let stopper = thread::spawn(move || {
+        received
+            .recv()
+            .expect("the first request reaches the server");
+        cancel.cancel();
+    });
+
+    let started = std::time::Instant::now();
+    let error = client
+        .complete(&mut policy, &request)
+        .expect_err("a stopped request produced a completion");
+    stopper.join().expect("the stopping thread");
+
+    assert!(matches!(error, ChatError::Cancelled), "{error}");
+    assert_eq!(
+        client.attempts(),
+        1,
+        "the request that was sent still counts"
+    );
     assert!(
         started.elapsed() < Duration::from_millis(500),
         "it waited out the pause: {:?}",
@@ -1312,6 +1367,7 @@ fn a_request_refused_on_its_contents_is_asked_again_without_the_breakpoints() {
     let completion = client
         .complete_streaming(&mut policy, &request, |_| {})
         .expect("the turn survives the refusal");
+    assert_eq!(client.attempts(), 2);
     assert_eq!(completion.model, "served-model");
 
     let first = received.recv().expect("a first request");
