@@ -577,6 +577,8 @@ started rather than approved, and for it the name is part of what the user asked
 `verified-by: bravebot_tui::editor::the_name_is_looked_for_on_the_path_not_beside_the_resolved_file`
 `verified-by: bravebot_tui::editor::an_empty_path_entry_is_not_searched`
 `verified-by: bravebot_tui::editor::a_name_that_is_no_longer_the_same_program_falls_back_to_the_resolved_path`
+`verified-by: bravebot_tui::editor::a_name_the_path_holds_under_another_spelling_still_starts_the_program`
+`verified-by: bravebot_tui::editor::a_name_is_looked_for_under_every_spelling_it_may_be_filed_under`
 
 <a id="INPUT-17"></a>
 ### INPUT-17: Ctrl-S puts the line away, and puts it back

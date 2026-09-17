@@ -286,22 +286,48 @@ fn split(command: &str, find: impl Fn(&str) -> Option<PathBuf>) -> Option<(PathB
 /// found nothing.
 fn lookup(command: &str, working: &Path) -> Option<PathBuf> {
     let resolved = bravebot_agent::programs::resolve(command, working)?;
+    let path = std::env::var_os("PATH").unwrap_or_default();
 
+    Some(started_as(
+        command,
+        resolved,
+        working,
+        std::env::split_paths(&path),
+    ))
+}
+
+/// Which path starts `command`, given the file the lookup settled on.
+///
+/// Takes the `$PATH` entries rather than reading them, so the case the lookup itself cannot
+/// produce on unix is still checkable there: a name the `$PATH` holds under a different spelling.
+///
+/// Whatever the name reaches, the program has already been found, so there is always something to
+/// start. Failing here instead reports no editor at all on a machine where one is installed:
+/// `%PATHEXT%` resolves `notepad` to `notepad.EXE`, no `$PATH` entry holds a file called
+/// `notepad`, and Ctrl-G has nothing to open.
+fn started_as(
+    command: &str,
+    resolved: PathBuf,
+    working: &Path,
+    directories: impl Iterator<Item = PathBuf>,
+) -> PathBuf {
     let named = if Path::new(command).is_absolute() {
         PathBuf::from(command)
     } else if command.contains('/') || (cfg!(windows) && command.contains('\\')) {
         working.join(command)
     } else {
-        let path = std::env::var_os("PATH")?;
-        by_name(command, &resolved, std::env::split_paths(&path))?
+        match by_name(command, &resolved, directories) {
+            Some(named) => named,
+            None => return resolved,
+        }
     };
 
     // Only where it is still the same program by another name. A link pointing somewhere else, or
     // a name that no longer resolves, is not something to run on a guess.
     if same_file(&named, &resolved) {
-        Some(named)
+        named
     } else {
-        Some(resolved)
+        resolved
     }
 }
 
@@ -310,15 +336,40 @@ fn lookup(command: &str, working: &Path) -> Option<PathBuf> {
 /// The first entry holding it, exactly as the shell would find it. An empty entry means the current
 /// directory and is skipped for the reason the shared lookup skips it: a file in the workspace has
 /// no business shadowing a program.
+///
+/// Every filename the shared lookup would have tried, since on Windows a bare name means any of
+/// the `%PATHEXT%` spellings and the file on the `$PATH` is one of those rather than the name
+/// itself.
 fn by_name(
     command: &str,
     resolved: &Path,
     directories: impl Iterator<Item = PathBuf>,
 ) -> Option<PathBuf> {
+    by_spelling(
+        &bravebot_agent::programs::candidates(command),
+        resolved,
+        directories,
+    )
+}
+
+/// The same search, over the spellings one name may be filed under.
+///
+/// Separated so the Windows case is checkable where `%PATHEXT%` is not: on unix `candidates`
+/// answers with the one name, so a search over several is unreachable through [`by_name`] and a
+/// test that went through it would pass whether the search ran or not.
+fn by_spelling(
+    names: &[String],
+    resolved: &Path,
+    directories: impl Iterator<Item = PathBuf>,
+) -> Option<PathBuf> {
     directories
         .filter(|directory| !directory.as_os_str().is_empty())
-        .map(|directory| directory.join(command))
-        .find(|candidate| same_file(candidate, resolved))
+        .find_map(|directory| {
+            names
+                .iter()
+                .map(|name| directory.join(name))
+                .find(|candidate| same_file(candidate, resolved))
+        })
 }
 
 /// Whether two paths reach one file, links and all.
@@ -596,6 +647,49 @@ mod tests {
         let found = lookup(real.to_str().unwrap(), &scratch.path).expect("the editor is found");
 
         assert_eq!(found.canonicalize().unwrap(), real.canonicalize().unwrap());
+    }
+
+    /// A bare name that the `$PATH` holds under another spelling still starts the program the
+    /// lookup found. On Windows `%PATHEXT%` resolves `notepad` to `notepad.EXE` and no `$PATH`
+    /// entry holds a file called `notepad`, so giving up here leaves Ctrl-G reporting that no
+    /// editor is configured on a machine where one is installed.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_the_path_holds_under_another_spelling_still_starts_the_program() {
+        let scratch = Scratch::new("spelling");
+        let real = scratch.program("notepad.EXE");
+
+        let started = started_as(
+            "notepad",
+            real.clone(),
+            &scratch.path,
+            [scratch.path.clone()].into_iter(),
+        );
+
+        assert_eq!(
+            started, real,
+            "an installed editor the `$PATH` spells differently was not started at all"
+        );
+    }
+
+    /// A name is looked for under every spelling it may be filed under. On Windows `%PATHEXT%`
+    /// makes `notepad` mean `notepad.EXE`, so a search for the bare spelling alone finds nothing
+    /// in the directory that holds the program, which is the second assertion here.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_is_looked_for_under_every_spelling_it_may_be_filed_under() {
+        let scratch = Scratch::new("spellings");
+        let real = scratch.program("notepad.EXE");
+        let names = ["notepad".to_string(), "notepad.EXE".to_string()];
+
+        let found = by_spelling(&names, &real, [scratch.path.clone()].into_iter())
+            .expect("the program is found under one of its spellings");
+        assert_eq!(found, real);
+
+        assert!(
+            by_spelling(&names[..1], &real, [scratch.path.clone()].into_iter()).is_none(),
+            "the bare spelling matched a file that is not there"
+        );
     }
 
     /// The four the clause names, wherever the binary ships. A platform that has a list of its
