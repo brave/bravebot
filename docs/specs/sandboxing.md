@@ -147,6 +147,23 @@ stopped being atomic.
 `verified-by: bravebot_sandbox::linux::a_kernel_that_cannot_govern_a_move_is_refused_rather_than_confining_without_it`
 `verified-by: bravebot_sandbox::macos::a_confined_process_can_rename_a_file_between_two_granted_directories`
 
+<a id="SANDBOX-8"></a>
+### SANDBOX-8: the environment a confined process receives is the caller's
+
+A confined process starts with the environment the calling process holds. Which of its own
+variables a program is trusted with is the caller's decision, and a caller that means a program to
+see none empties it before the process starts.
+
+**Why.** A variable carries what no grant over paths can withhold or hand over: a credential this
+process authenticates with sits in one, and so does the agent socket a push signs through. A
+backend deciding that for the caller decides it once per platform, so the same policy hands a
+program everything on one and nothing on the other, and which of those a consumer was written
+against is the difference between a credential withheld and a credential handed to code we did not
+write.
+
+`verified-by: bravebot_sandbox::linux::the_environment_a_confined_process_receives_is_the_callers`
+`verified-by: bravebot_sandbox::macos::the_environment_a_confined_process_receives_is_the_callers`
+
 ## Programs a person asked for
 
 A program `run` ([tools/run.md](tools/run.md)) starts is unconfined: it gets the access the user's
@@ -362,11 +379,6 @@ output trusted.
   does, since a machine carries the toolchain one list names and none of the rest, so leaving an
   absent row out is what the compiler owes a list as well: a machine with no `~/.pyenv` is not a
   machine where every `run` is refused.
-- The macOS backend clears the environment of a process it wraps. A stage receives the environment
-  this process holds, less the credentials this agent authenticates with, so a `run` profile needs a
-  backend that leaves the rest of that environment alone. The ssh half of the remote scope depends
-  on this one: a program that cannot see `$SSH_AUTH_SOCK` cannot use the socket, whatever a profile
-  allows.
 - Windows has published binaries and no backend, and [SANDBOX-1](#SANDBOX-1) refuses to run a
   process it cannot confine, so confinement there refuses every program until that platform has one
   (issue #88). Running unconfined where no backend exists is the degradation that clause forbids.
