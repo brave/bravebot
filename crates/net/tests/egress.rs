@@ -17,7 +17,15 @@ use std::time::Duration;
 /// A single-shot server that replies with a canned sequence, one response per
 /// connection, then stops.
 fn serve(responses: Vec<String>) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    serve_as("127.0.0.1", responses)
+}
+
+/// The same, reachable under `host`, so a test can tell two loopback servers apart by name.
+///
+/// Bound through the name rather than through an address resolved here, so the client and the
+/// listener agree about which loopback address it means.
+fn serve_as(host: &str, responses: Vec<String>) -> String {
+    let listener = TcpListener::bind((host, 0)).expect("bind loopback");
     let port = listener.local_addr().expect("addr").port();
 
     thread::spawn(move || {
@@ -29,7 +37,7 @@ fn serve(responses: Vec<String>) -> String {
         }
     });
 
-    format!("http://127.0.0.1:{port}")
+    format!("http://{host}:{port}")
 }
 
 fn handle(mut stream: TcpStream, response: &str) {
@@ -114,12 +122,12 @@ fn a_fetch_without_the_capability_is_refused() {
 /// sees the redirect target and not only the original URL.
 #[test]
 fn every_redirect_hop_is_revalidated() {
-    // Both responses come from the same server, since a path-absolute Location
-    // resolves against the host it was served from.
-    let first = serve(vec![
-        redirect_to("/second"),
-        ok_response("final destination"),
-    ]);
+    // Two servers, and the hop between them named absolutely, so the gate's record of the second
+    // check names a host the first request did not go to. A path-absolute Location keeps the
+    // authority it was served from, which is a redirect the record cannot tell from no redirect at
+    // all now that only the host is kept.
+    let second = serve_as("localhost", vec![ok_response("final destination")]);
+    let first = serve(vec![redirect_to(&format!("{second}/second"))]);
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -154,10 +162,11 @@ fn every_redirect_hop_is_revalidated() {
         .collect();
 
     assert_eq!(checked.len(), 2, "expected one check per hop: {checked:?}");
-    assert!(
-        checked
-            .iter()
-            .all(|detail| detail.as_str() == "egress to 127.0.0.1")
+    assert_eq!(checked[0].as_str(), "egress to 127.0.0.1");
+    assert_eq!(
+        checked[1].as_str(),
+        "egress to localhost",
+        "the redirect target was not the URL the second check saw: {checked:?}"
     );
 }
 
