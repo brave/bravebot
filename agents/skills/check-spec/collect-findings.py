@@ -87,6 +87,9 @@ def load_reviews(manifest):
                         "evidence": "; ".join(clause.get("evidence", [])) or None,
                         "failure": clause.get("failure"),
                         "fix": clause.get("fix"),
+                        # Not rendered. It is how to reach the screen this shows up on, for a
+                        # bug report that shows the wrong screen rather than describing it.
+                        "screen": clause.get("screen"),
                         "source": "review",
                     }
                 )

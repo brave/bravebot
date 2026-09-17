@@ -44,7 +44,7 @@ browser keeps its own, and nothing it holds is spent.
 ### PREM-2: a credential is never sent to the non-premium host
 
 The premium host and the credential travel together, because a credential belongs to a
-deployment. A build with no premium host stays on the free tier rather than sending one where it
+deployment. A build with no premium host sends no credential rather than sending one where it
 does not belong.
 
 `verified-by: bravebot_aichat::client::a_subscribed_request_goes_to_the_premium_host_with_the_credential`
@@ -140,7 +140,7 @@ reading the file: those are deliberately unconfined ([RUN-10](tools/run.md#RUN-1
 credentials that sign every model request are cached by the `aws` CLI in plain 0600 JSON, so anything
 that can read a file here can already take the larger secret. What it did cost was availability: the
 keychain crate builds one Linux backend, the D-Bus Secret Service, so a machine reached over SSH with
-no desktop session had no store to open and every such user was silently on the free tier.
+no desktop session had no store to open and every such user was silently spending no subscription.
 
 `verified-by: bravebot_skus::store::importing_again_replaces_the_previous_batch`
 `verified-by: bravebot_skus::store::a_batch_written_to_the_file_is_read_back`
@@ -158,16 +158,19 @@ no desktop session had no store to open and every such user was silently on the 
 <a id="PREM-8"></a>
 ### PREM-8: a stored subscription that cannot be used is reported rather than skipped
 
-Coming back empty has two causes and they are not the same fact. Nothing imported is the free tier
-working as intended and is said nothing about. A batch that **exists and cannot be spent** is reported
+Coming back empty has two causes and they are not the same fact. Nothing imported is not a fault
+and is said nothing about. A batch that **exists and cannot be spent** is reported
 to the person, with the reason and what to do about it. That covers a file that could not be read,
 one holding nothing, one another version wrote, and one imported for an environment this endpoint
 does not accept, since a credential only verifies against the deployment that signed it. An
 endpoint belonging to no environment, such as a local one, is the first case and not the second: no
-credential belongs near it by design.
+credential belongs near it by design. So is a machine with nowhere to keep credentials at all,
+which [STATE-2](state-directory.md#STATE-2) makes a state this program supports: the store answers
+that with the same error it gives a file that would not read, and reported as the second it told
+somebody who has never held a subscription that theirs could not be used.
 
-**Why.** The request then goes out on the free tier, where the endpoint answers a premium model name
-by **substituting** a weaker model rather than by failing, with a 200 and an ordinary reply. So a
+**Why.** The request then goes out with no credential, where the endpoint answers a premium model
+name by **substituting** a weaker model rather than by failing, with a 200 and an ordinary reply. So a
 request that silently lost its credential still returns something that reads like an answer, and
 nothing on screen connects that to the credential store. The downgrade has to be said out loud,
 because its only other symptom is the agent appearing to get worse for no reason.
@@ -179,14 +182,15 @@ nothing and is told nothing about it, however unusable what is stored may be.
 
 **Why.** There is no downgrade to report: such a turn ran on the model that was chosen, and the
 credential it did not spend is one that service would not have accepted. The line said otherwise on
-both halves: that the turn fell back to the free tier, which is not where a request signed for AWS
-went, and that re-importing was the remedy, which would have changed nothing about the answer. That
-is the same reasoning [BACKEND-9](backends.md#BACKEND-9) applies to a sign-in, and a turn served
-entirely by one backend has no business acting on, or reporting on, the credentials of another it
-will never call.
+both halves: that the turn had gone out without a subscription, which is not the story of a request
+signed for AWS, and that re-importing was the remedy, which would have changed nothing about the
+answer. That is the same reasoning [BACKEND-9](backends.md#BACKEND-9) applies to a sign-in, and a
+turn served entirely by one backend has no business acting on, or reporting on, the credentials of
+another it will never call.
 
 `verified-by: bravebot_agent::subscription::an_unreadable_batch_is_reported_and_an_absent_one_is_not`
 `verified-by: bravebot_agent::subscription::an_endpoint_in_no_environment_is_not_a_complaint`
+`verified-by: bravebot_cli::running::a_machine_with_no_profile_directory_has_nothing_imported`
 `verified-by: bravebot_agent::home::a_subscription_imported_for_another_environment_is_reported`
 `verified-by: bravebot_agent::home::an_empty_credentials_file_is_reported_rather_than_read_as_absent`
 `verified-by: bravebot_agent::home::a_turn_on_another_backend_is_not_told_about_an_unusable_batch`
@@ -210,8 +214,8 @@ server choosing per request, which is what the automatic entry means.
 
 **Why.** Every build that knows a premium host would otherwise report itself as premium, which is a
 fact about compilation and not about any request. A session reported "premium configured" while ten
-consecutive requests went out on the free tier and were answered by a model a third the size, which
-then announced tool calls it never emitted and stalled the turn. A panel that cannot be trusted on
+consecutive requests went out spending no subscription and were answered by a model a third the
+size, which then announced tool calls it never emitted and stalled the turn. A panel that cannot be trusted on
 this point is worse than one that omits it, and the substituted model is the half of PREM-8 a person
 is most likely to notice first.
 

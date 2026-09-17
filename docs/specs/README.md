@@ -6,7 +6,8 @@ Spec changes, additions, and removals are closely reviewed by humans.
 If a mini-spec disagrees, that is a bug in the spec that should be fixed.
 
 Specs have automation attached which verifies that there is coverage of functionality and also
-that functionality matches specs. Bugs are posted for any problems found.
+that functionality matches specs. It drafts a bug for every problem it finds, showing what went
+wrong rather than describing it, and a person reads the drafts and says which get posted.
 
 ## The specs
 
@@ -40,7 +41,7 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [mcp.md](mcp.md) | `MCP` | 8 | tools that come from outside this repository, and what they are allowed to do |
 | [hooks.md](hooks.md) | `HOOK` | 7 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 8 | every request that leaves this process, and what comes back |
-| [backends.md](backends.md) | `BACKEND` | 38 | which service answers a request, and what a person may choose between |
+| [backends.md](backends.md) | `BACKEND` | 39 | which service answers a request, and what a person may choose between |
 | [compaction.md](compaction.md) | `COMPACT` | 12 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 14 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 17 | one condition a person set, judged after every turn, until it holds |
@@ -106,7 +107,7 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
   Within one spec, either every entry pins its sites or none does: an unpinned entry beside pinned
   ones reads as though it were checked too.
 - **`verified-by:`** lines name the tests that pin a clause, as `crate::module::test_name`. The
-  coverage check reads them, fails when a name does not resolve to a test that exists, and posts a
+  coverage check reads them, fails when a name does not resolve to a test that exists, and drafts a
   bug for any clause whose value is `none`. `by-construction` is for a clause nothing can execute,
   such as a crate having no dependencies, and says in brackets what makes it hold.
 

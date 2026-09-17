@@ -277,7 +277,7 @@ fn delegate_lines(delegate: &Delegate, width: usize) -> Vec<Line<'static>> {
         // says which of them a row belongs to.
         None => {
             let latest = delegate.latest();
-            for entry in latest {
+            for entry in &latest {
                 if let Some(activity) = &entry.activity {
                     for line in activity_lines(activity, entry.landing, width.saturating_sub(2)) {
                         lines.push(indented(line));
@@ -285,7 +285,9 @@ fn delegate_lines(delegate: &Delegate, width: usize) -> Vec<Line<'static>> {
                 }
             }
             // Said only where there were more than are drawn, since "3 calls" over three rows is
-            // a row spent saying what the reader can already see.
+            // a row spent saying what the reader can already see. Against the calls drawn rather
+            // than the lines held, so a delegate whose lines also hold a preview still says how
+            // many calls the block left out.
             if delegate.calls > latest.len() {
                 lines.push(Line::from(Span::styled(
                     format!(
@@ -1807,7 +1809,11 @@ fn marked() -> Style {
     Style::default().add_modifier(Modifier::REVERSED)
 }
 
-/// Highlight every occurrence of `needle`, and say which lines held one.
+/// Highlight every occurrence of `needle`, and say which line each one was found on.
+///
+/// One entry per occurrence rather than per line, repeating the line where it held several, so
+/// that what comes back is the matches and not the rows: a line holding two of them is counted
+/// twice and walked twice, which is what the footer says and what `n` steps through.
 ///
 /// The spans are split where a match begins and ends and the pieces restyled. Nothing on the
 /// screen moves and nothing leaves the block it was drawn in: a match inside a quarantined
@@ -1829,7 +1835,7 @@ fn highlight(lines: &mut [Line<'static>], needle: &str) -> Vec<usize> {
         if found.is_empty() {
             continue;
         }
-        held.push(index);
+        held.extend(std::iter::repeat_n(index, found.len()));
 
         let mut rebuilt: Vec<Span<'static>> = Vec::new();
         let mut at = 0;
@@ -1915,7 +1921,7 @@ fn lay_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, L
             laid.prompts.push(at);
             prompts.next();
         }
-        if held.peek() == Some(&index) {
+        while held.peek() == Some(&index) {
             laid.matches.push(at);
             held.next();
         }
@@ -3867,6 +3873,49 @@ mod tests {
                 "the block did not say how much it had done: {screen}"
             );
         }
+
+        /// A delegate reading untrusted files has a preview of each held among its lines, and a
+        /// preview is not a call. Counting lines rather than calls drew one row for a delegate
+        /// that had made four, and left the count off too, since the count is said only where
+        /// there are more calls than rows drawn.
+        #[test]
+        fn a_delegates_previews_do_not_cost_its_block_the_rows_and_the_count() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "worker", "summarise the notes");
+            for round in 0..4 {
+                let call = Activity::running("Isolated processor", format!("notes{round}.md"));
+                session.start_activity(call.clone());
+                session.finish_activity(call.done("wrote 1 line"));
+                // The two previews one spawn_processor result releases: what the processor said
+                // about the file, and the file it wrote.
+                session.show(Shown {
+                    origin: "what the isolated processor said".to_string(),
+                    reach: bravebot_agent::report::Reach::NoModel,
+                    label: "(U,priv)".to_string(),
+                    preview: vec!["a line nobody vouched for".to_string()],
+                    lines: 1,
+                });
+                session.show(Shown {
+                    origin: format!("notes{round}.md"),
+                    reach: bravebot_agent::report::Reach::NoModel,
+                    label: "(U,priv)".to_string(),
+                    preview: vec!["a line nobody vouched for".to_string()],
+                    lines: 1,
+                });
+            }
+
+            let screen = rendered(&session);
+            for drawn in ["notes1.md", "notes2.md", "notes3.md"] {
+                assert!(
+                    screen.contains(drawn),
+                    "the block left out the call on {drawn}: {screen}"
+                );
+            }
+            assert!(
+                screen.contains("4 calls"),
+                "the block did not say how many calls it had made: {screen}"
+            );
+        }
     }
 
     /// Render into a test backend and return the visible text.
@@ -3987,14 +4036,42 @@ mod tests {
             (drawn, marked)
         }
 
-        /// Search a session for `needle`, the way the keys do it.
-        fn searching(needle: &str) -> Session {
-            let mut session = reading();
+        /// A session reading back over a quarantined block whose one preview line is `preview`,
+        /// with the scroller open over it.
+        fn reading_a_block(preview: &str) -> Session {
+            let mut session = Session::new("kernel-enforced");
+            let mut read = Entry::tool(Activity::running("read", "notes.md").done("40 lines"));
+            read.shown = Some(Shown {
+                origin: "notes.md".to_string(),
+                reach: bravebot_agent::report::Reach::NotThePlanner,
+                label: "(U,priv)".to_string(),
+                preview: vec![preview.to_string()],
+                lines: 40,
+            });
+            session.transcript.push(read);
+            session.note_layout(Laid {
+                width: 90,
+                height: 24,
+                rows: 24,
+                ..Laid::default()
+            });
+            session.open_scroller();
+            session
+        }
+
+        /// Search `session` for `needle`, the way the keys do it.
+        fn search(session: &mut Session, needle: &str) {
             session.begin_search();
             for c in needle.chars() {
                 session.type_into_search(c);
             }
             session.run_search();
+        }
+
+        /// The session [`reading`] gives back, searched for `needle`.
+        fn searching(needle: &str) -> Session {
+            let mut session = reading();
+            search(&mut session, needle);
             session
         }
 
@@ -4194,6 +4271,45 @@ mod tests {
             assert!(
                 drawn.contains("1 of 3"),
                 "the footer does not say where in the matches the view is: {drawn}"
+            );
+        }
+
+        /// What is counted is matches, not the lines holding one. A person shown `1 of 1` beside
+        /// two highlighted words has been told a number the screen contradicts, and `n` has
+        /// nowhere to take them for the second.
+        #[test]
+        fn a_line_holding_two_matches_is_counted_as_two() {
+            let (drawn, marked) = screen(&searching("there"));
+
+            assert_eq!(
+                marked.matches("there").count(),
+                2,
+                "not every occurrence on the line was marked: {marked:?}"
+            );
+            assert!(
+                drawn.contains("1 of 2"),
+                "the footer counted the line rather than the matches: {drawn}"
+            );
+        }
+
+        /// A count that said `1 of 1` over two highlighted words inside a quarantined block would
+        /// be the interface under-reporting what the content holds, which is the whole of what
+        /// bounds the cost of a search over untrusted bytes: `n` reaches every match and the
+        /// footer says how many there are.
+        #[test]
+        fn two_matches_in_one_quarantined_row_are_counted_as_two() {
+            let mut session = reading_a_block("the haystack holds a haystack");
+            search(&mut session, "haystack");
+            let (drawn, marked) = screen(&session);
+
+            assert_eq!(
+                marked.matches("haystack").count(),
+                2,
+                "not every occurrence in the block was marked: {marked:?}"
+            );
+            assert!(
+                drawn.contains("1 of 2"),
+                "the footer counted the row rather than the matches: {drawn}"
             );
         }
 

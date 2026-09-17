@@ -88,6 +88,8 @@ doing very little, which is what the count answers.
 
 `verified-by: bravebot_tui::state::a_delegates_block_draws_the_last_of_its_work_and_counts_the_rest`
 `verified-by: bravebot_tui::render::a_delegate_that_has_done_more_than_is_drawn_says_so`
+`verified-by: bravebot_tui::state::a_preview_does_not_take_a_calls_place_in_the_block`
+`verified-by: bravebot_tui::render::a_delegates_previews_do_not_cost_its_block_the_rows_and_the_count`
 
 <a id="WATCH-4"></a>
 ### WATCH-4: what the block has no room for is kept, up to a bound
@@ -239,6 +241,10 @@ could not keep on the screen.
 
 `verified-by: bravebot_tui::state::a_delegate_that_finishes_is_still_the_one_being_watched`
 `verified-by: bravebot_tui::state::a_new_delegate_does_not_take_the_screen_from_the_one_being_read`
+`verified-by: bravebot_tui::state::a_new_delegate_does_not_take_the_screen_from_a_command_being_read`
+`verified-by: bravebot_tui::state::a_new_delegate_does_not_move_the_lists_highlight`
+`verified-by: bravebot_tui::state::a_new_delegate_leaves_an_open_view_where_its_reader_put_it`
+`verified-by: bravebot_tui::state::nothing_the_turn_reports_moves_an_open_view`
 
 <a id="WATCH-11"></a>
 ### WATCH-11: the footer speaks in the interface's own words, and the turn's own row names the key

@@ -5258,8 +5258,8 @@ fn fold_outcome(
             session.measured(outcome.context_tokens, occupied.budget, occupied.guessed);
 
             // What was asked for against what answered. The endpoint substitutes rather than
-            // refusing: a premium model requested without a credential comes back as whatever the
-            // free tier serves, with a 200 and a perfectly ordinary reply. So the only trace is
+            // refusing: a premium model requested without a credential comes back answered by a
+            // weaker model, with a 200 and a perfectly ordinary reply. So the only trace is
             // this field, and a session that never compares them cannot tell a model it chose from
             // one chosen for it.
             //
