@@ -218,7 +218,10 @@ still refused, since a fork continues a conversation and there is none to contin
 
 The model the server reported answering with is written down, along with what each turn spent as
 well as the total. The breakdown adds up to the total, and a turn that compacted part way through
-is charged for that too, since it was asked for in the middle of that turn's work.
+is charged for that too, since it was asked for in the middle of that turn's work. Something asked
+for before the first turn, an aside or a run as the first thing a session does, is charged to a
+leading entry ahead of that turn rather than to no turn at all, so the breakdown still adds up to
+the total there as well.
 
 The name recorded is the one that answered, not the one asked for: an endpoint may serve something
 other than the name it was given, and the record is an account of what happened. A record written
@@ -234,6 +237,8 @@ than the one in force at the time.
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
 `verified-by: bravebot_tui::state::each_turn_records_what_it_cost_on_its_own`
 `verified-by: bravebot_tui::state::an_aside_is_charged_to_the_turn_it_interrupted`
+`verified-by: bravebot_tui::state::an_aside_before_the_first_turn_is_charged_to_a_leading_entry`
+`verified-by: bravebot_tui::state::a_run_before_the_first_turn_is_charged_to_a_leading_entry`
 `verified-by: bravebot_tui::state::clearing_forgets_what_each_turn_cost`
 
 <a id="SESSION-12"></a>
@@ -246,10 +251,11 @@ whole and the remainder is meaningful. An approval prompt is drawn from inside a
 was spent waiting for a person is taken off the tool figure rather than counted in both.
 
 A turn that failed is recorded on the same footing as one that succeeded, and a `/compact` asked for
-mid-turn is charged to the turn it interrupted, as its tokens are. `/status` reports the session
-total and each part that actually happened; a part that did not happen is left out rather than shown
-as zero. A record written before this was kept reads as an empty breakdown, which is not the same as
-a session that took no time.
+mid-turn is charged to the turn it interrupted, as its tokens are; one asked for before the first
+turn is charged to the leading entry its tokens go to. `/status` reports the session total and each
+part that actually happened; a part that did not happen is left out rather than shown as zero. A
+record written before this was kept reads as an empty breakdown, which is not the same as a session
+that took no time.
 
 **Why.** A duration alone is unactionable, and the three things it conflates want three different
 fixes. A turn that took four minutes on the model, one that took four minutes running a test suite,
@@ -260,6 +266,7 @@ harness's own overhead.
 
 `verified-by: bravebot_tui::state::each_turn_records_where_its_time_went`
 `verified-by: bravebot_tui::state::an_aside_charges_its_wait_to_the_turn_it_interrupted`
+`verified-by: bravebot_tui::state::an_aside_before_the_first_turn_records_its_wait_ahead_of_that_turn`
 `verified-by: bravebot_tui::state::a_failed_turn_still_accounts_for_its_wall_clock`
 `verified-by: bravebot_tui::state::a_resumed_session_carries_on_from_the_time_it_had_spent`
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`

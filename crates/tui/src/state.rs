@@ -910,11 +910,16 @@ pub struct Session {
     pub turns: usize,
     /// Tokens spent across the whole session.
     pub tokens: u64,
-    /// What each turn cost, by turn number.
+    /// What each turn cost, by turn number, and what was spent before the first turn under zero.
     ///
     /// The session total answers "what has this cost me"; this answers "where did it go", which is
     /// the question when one turn spent most of it. A total alone cannot distinguish a session of
     /// twenty even turns from one turn that ran away, and those want different fixes.
+    ///
+    /// Zero is the leading entry, and holds what an aside or a run asked for as the first thing a
+    /// session did cost. Those are charged somewhere rather than nowhere because they are in the
+    /// total either way, and a breakdown that does not add up to the total answers neither
+    /// question. See [`Session::end_aside`].
     spend: std::collections::BTreeMap<usize, u64>,
     /// Where each turn's wall clock went, by turn number.
     ///
@@ -5413,6 +5418,11 @@ impl Session {
     /// Charged to the turn in flight, since `/compact` is asked for in the middle of one and its
     /// cost is part of what that turn spent. Attributing it to no turn would lose it from the
     /// per-turn figures while still counting it in the total, so the two would not add up.
+    ///
+    /// An aside asked before the session's first turn has no turn in flight to charge, and is
+    /// charged to a leading entry instead: the breakdown is keyed by turn number, and the number
+    /// before the first turn is one nothing else ever writes to. Skipping the breakdown there
+    /// would be the same disagreement by another route, since the total is added to either way.
     pub fn end_aside(&mut self, tokens: u64) {
         self.status = Status::Idle;
         // An aside that wrote something as it went has been drawing it at the tail, where the
@@ -5429,12 +5439,12 @@ impl Session {
         self.phase = None;
         self.running = None;
         self.tokens += tokens;
-        if self.turns > 0 {
-            *self.spend.entry(self.turns).or_insert(0) += tokens;
-            let entry = self.timing.entry(self.turns).or_default();
-            entry.wall_ms += took;
-            entry.inference_ms += took;
-        }
+        // Zero before the first turn, which is the leading entry: whatever is spent there is spent
+        // outside every turn, and that is what the number says.
+        *self.spend.entry(self.turns).or_insert(0) += tokens;
+        let entry = self.timing.entry(self.turns).or_default();
+        entry.wall_ms += took;
+        entry.inference_ms += took;
     }
 
     /// Leave a manifest run the session started, adding what it cost to the session's total.
@@ -5458,15 +5468,14 @@ impl Session {
         self.phase = None;
         self.running = None;
         self.tokens += tokens;
-        if self.turns > 0 {
-            *self.spend.entry(self.turns).or_insert(0) += tokens;
-            let entry = self.timing.entry(self.turns).or_default();
-            entry.wall_ms += took;
-            if let Some(spent) = spent {
-                entry.inference_ms += spent.inference_ms;
-                entry.tools_ms += spent.tools_ms;
-                entry.stalled_ms += spent.stalled_ms;
-            }
+        // To the leading entry before the first turn, for the reason an aside is.
+        *self.spend.entry(self.turns).or_insert(0) += tokens;
+        let entry = self.timing.entry(self.turns).or_default();
+        entry.wall_ms += took;
+        if let Some(spent) = spent {
+            entry.inference_ms += spent.inference_ms;
+            entry.tools_ms += spent.tools_ms;
+            entry.stalled_ms += spent.stalled_ms;
         }
     }
 
@@ -10479,6 +10488,61 @@ mod tests {
             assert_eq!(s.tokens, 650, "the breakdown and the total disagreed");
         }
 
+        /// An aside asked as the first thing a session does sends a request like any other, and a
+        /// total the breakdown cannot account for makes the record unreadable as an account of what
+        /// each turn spent: the two figures disagree and neither of them says which is wrong.
+        #[test]
+        fn an_aside_before_the_first_turn_is_charged_to_a_leading_entry() {
+            let mut s = session();
+
+            s.begin_aside();
+            s.end_aside(250);
+
+            assert_eq!(
+                s.spend_by_turn(),
+                &std::collections::BTreeMap::from([(0, 250)]),
+                "a cost incurred before the first turn was charged to no turn at all"
+            );
+
+            s.type_char('a');
+            s.submit();
+            s.complete("reply", Vec::new(), 1_000);
+
+            assert_eq!(s.tokens, 1_250);
+            assert_eq!(
+                s.spend_by_turn(),
+                &std::collections::BTreeMap::from([(0, 250), (1, 1_000)]),
+                "the first turn absorbed what was spent before it, or lost it"
+            );
+            assert_eq!(
+                s.spend_by_turn().values().sum::<u64>(),
+                s.tokens,
+                "the breakdown and the total disagreed"
+            );
+        }
+
+        /// A manifest run started as the first thing a session does is the same case as an aside
+        /// asked then: it spends tokens with no turn to charge them to, and the breakdown has to
+        /// hold them or it stops adding up to the total.
+        #[test]
+        fn a_run_before_the_first_turn_is_charged_to_a_leading_entry() {
+            let mut s = session();
+
+            s.begin_aside();
+            s.end_run(250, None);
+
+            assert_eq!(
+                s.spend_by_turn(),
+                &std::collections::BTreeMap::from([(0, 250)]),
+                "a cost incurred before the first turn was charged to no turn at all"
+            );
+            assert_eq!(
+                s.spend_by_turn().values().sum::<u64>(),
+                s.tokens,
+                "the breakdown and the total disagreed"
+            );
+        }
+
         /// The whole point of keeping the split: a turn's wall clock alone cannot say whether it was
         /// slow because the model was, or because it stopped and waited for a person.
         #[test]
@@ -10536,6 +10600,37 @@ mod tests {
             assert_eq!(
                 turn.inference_ms, turn.wall_ms,
                 "an aside's wait was not counted as time spent on the model"
+            );
+        }
+
+        /// An aside asked before the first turn waits on the model exactly as one asked during a
+        /// turn does. Charged to no turn, that wait is in none of the figures the session adds up,
+        /// so a session that sat for a minute on its first question reports having taken no time.
+        ///
+        /// The entry is what this asserts rather than the figure in it, as
+        /// `a_failed_turn_still_accounts_for_its_wall_clock` does and for the same reason: the
+        /// clock is the real one, so a test's aside is over in well under the millisecond every
+        /// figure here is measured in.
+        #[test]
+        fn an_aside_before_the_first_turn_records_its_wait_ahead_of_that_turn() {
+            let mut s = session();
+
+            s.begin_aside();
+            s.end_aside(250);
+
+            let leading = s
+                .timing_by_turn()
+                .get(&0)
+                .copied()
+                .expect("the wait was recorded ahead of the first turn");
+            assert_eq!(
+                leading.inference_ms, leading.wall_ms,
+                "an aside's wait was not counted as time spent on the model"
+            );
+            assert_eq!(
+                s.timing_total().wall_ms,
+                leading.wall_ms,
+                "the wait is not in what the session adds up"
             );
         }
 

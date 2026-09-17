@@ -89,11 +89,13 @@ pub struct Record {
     /// server.
     #[serde(default)]
     pub model: Option<String>,
-    /// What each turn cost, by turn number.
+    /// What each turn cost, by turn number, and what was spent before the first turn under zero.
     ///
     /// The total says what the session cost; this says which turn cost it. Reading a session back
     /// to find out why it was expensive, a total cannot tell twenty even turns from one that ran
-    /// away, and those are different problems.
+    /// away, and those are different problems. A key of zero is what an aside or a run asked for
+    /// as the first thing the session did cost, which belongs to no turn and is in the total all
+    /// the same.
     ///
     /// Empty for a record written before this was kept, which needs no question: the total is
     /// still there and only the breakdown is missing.
