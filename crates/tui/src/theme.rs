@@ -48,6 +48,19 @@ pub const MUTED_ON_DARK: Rgb = (0xA0, 0xA0, 0xA0);
 /// The same ink on a light background, deeper for the reason brand primary is.
 pub const MUTED_ON_LIGHT: Rgb = (0x50, 0x50, 0x50);
 
+/// What accent draws on a dark terminal background: a line bound for a shell rather than for the
+/// model, and a directory rather than a file.
+///
+/// Magenta is the slot this took, and none of what it distinguishes is a meaning the terminal
+/// owns, so it is not one of the three that stay named. Slot 5 is also the slot a scheme is free
+/// to paint anywhere, including next to its own brand primary, which is the ink accent is read
+/// against in the `@` list and in the input box. A shade holds the distinction where it was put.
+pub const ACCENT_ON_DARK: Rgb = (0xC9, 0x7B, 0xE0);
+
+/// The same ink on a light background, deeper for the reason brand primary is: the
+/// dark-background shade washes out against a pale page.
+pub const ACCENT_ON_LIGHT: Rgb = (0x8A, 0x2B, 0xA5);
+
 /// What the session says in its own voice under `brave`: the trust answer, an unavailable
 /// confinement, a status report.
 ///
@@ -332,7 +345,7 @@ pub fn brave_palette(light: bool) -> Palette {
         ok: Color::Green,
         fail: Color::Red,
         running: Color::Yellow,
-        accent: Color::Magenta,
+        accent: accent_on(light),
         note: NOTE,
         primary: brand_primary_on(light),
         paints_background: false,
@@ -348,6 +361,14 @@ fn brand_primary_on(light: bool) -> Color {
         BRAND_PRIMARY_LIGHT
     } else {
         BRAND_PRIMARY_DARK
+    })
+}
+
+fn accent_on(light: bool) -> Color {
+    rgb(if light {
+        ACCENT_ON_LIGHT
+    } else {
+        ACCENT_ON_DARK
     })
 }
 
@@ -1262,6 +1283,26 @@ mod tests {
             );
         }
         assert_ne!(muted_on(false), muted_on(true));
+    }
+
+    /// Magenta is the slot accent took, and it is not one of the three whose meaning belongs to
+    /// the terminal. What accent tells apart is this interface's own: a line bound for a shell
+    /// rather than for the model, and a directory rather than a file. A scheme that paints slot 5
+    /// near its brand primary or near the background collapses that distinction, so the shade is
+    /// mixed here and picked for the background, the way brand primary and an aside are.
+    #[test]
+    fn an_accent_is_a_shade_picked_for_the_background_rather_than_a_slot() {
+        let _held = exclusive();
+        for sensed in [false, true] {
+            let _background = Background::sensed_as_light(sensed);
+            apply_brave();
+            assert!(
+                matches!(accent(), Color::Rgb(..)),
+                "accent took a named colour, which the terminal chooses: {:?}",
+                accent()
+            );
+        }
+        assert_ne!(accent_on(false), accent_on(true));
     }
 
     /// A named theme mixes every role, including the background, so a remapped ANSI slot cannot

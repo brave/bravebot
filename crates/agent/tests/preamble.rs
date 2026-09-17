@@ -388,6 +388,9 @@ fn the_working_directory_is_stated_so_nothing_has_to_run_pwd() {
 /// A project with no AGENTS.md and no skills still gets the block. These are facts about the
 /// machine rather than anything read out of the tree, so there is nothing for an empty project to
 /// be missing.
+///
+/// Every fact the clause names, since the two it did not name were the two that went missing: the
+/// OS version was dropped on every non-unix build and nothing failed.
 #[test]
 fn the_environment_is_stated_even_with_no_instructions_to_read() {
     let scratch = Scratch::new("bare");
@@ -407,7 +410,14 @@ fn the_environment_is_stated_even_with_no_instructions_to_read() {
         )
     };
 
-    for fact in ["Working directory:", "Platform:", "Today's date:"] {
+    for fact in [
+        "Working directory:",
+        "Is a git repository:",
+        "Platform:",
+        "OS version:",
+        "Shell:",
+        "Today's date:",
+    ] {
         assert!(
             preamble.text.contains(fact),
             "`{fact}` is missing from a preamble with no instructions: {}",

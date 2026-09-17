@@ -61,7 +61,10 @@ fn has_separator(program: &str) -> bool {
 ///
 /// One on unix. On Windows a bare name may mean any of the extensions in `%PATHEXT%`, and the name
 /// as given is tried first so an extension already written out is not doubled.
-fn candidates(program: &str) -> Vec<String> {
+///
+/// Public because anything that has to find the same file under the name it was asked for has to
+/// try the same spellings: a second list would answer differently for the name that matters.
+pub fn candidates(program: &str) -> Vec<String> {
     if !cfg!(windows) {
         return vec![program.to_string()];
     }

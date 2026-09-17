@@ -172,7 +172,8 @@ Where a colour is what tells one thing on the screen from another, and the theme
 repaints, so they are used only where the meaning is the terminal's own and the slot is one
 schemes agree about: green for finished, red for failed, yellow for a call still running, which
 are read against whatever palette the user chose rather than against each other. An aside is not
-one of those and is mixed. A mixed shade that has to stay legible against the background is picked
+one of those and is mixed, and neither is the ink that tells shell mode from ordinary mode and a
+directory from a file. A mixed shade that has to stay legible against the background is picked
 for the background sensed at startup, and a terminal that will not say gets the shade for a dark
 one.
 
@@ -192,7 +193,9 @@ scheme's own foreground in roughly nine schemes out of ten.
 `verified-by: bravebot_tui::theme::an_osc_reply_with_a_pale_background_is_light`
 `verified-by: bravebot_tui::theme::brave_keeps_named_slots_for_the_terminals_own_meanings`
 `verified-by: bravebot_tui::theme::an_aside_is_a_shade_picked_for_the_background_rather_than_a_slot`
+`verified-by: bravebot_tui::theme::an_accent_is_a_shade_picked_for_the_background_rather_than_a_slot`
 `verified-by: bravebot_tui::render::the_scroller_names_the_mode_in_a_shade_and_not_a_slot`
+`verified-by: bravebot_tui::render::shell_mode_is_marked_in_a_shade_and_not_a_slot`
 
 <a id="VIEW-10"></a>
 ### VIEW-10: a palette a person chose paints every role from that table

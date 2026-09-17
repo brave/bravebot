@@ -1353,17 +1353,56 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
 /// screenshot it is about. Without this the path was written out as prose, so the line said
 /// nothing about a file and the attachment was never staged.
 ///
-/// Nothing comes back, since both loops redraw every frame regardless of what the event was.
-pub fn handle_paste_while_working(session: &mut Session, text: &str) {
+/// What comes back is what [`act_while_working`] carries out, which is the clipboard read an empty
+/// paste asks for and nothing else.
+pub fn handle_paste_while_working(session: &mut Session, text: &str) -> Action {
     // The line is the scroller's to leave alone, and a paste is not a key: it arrives from the
     // terminal whatever mode is open, so the guard that holds the box still for a keystroke never
     // sees it. Nothing is said about it, because the scroller has the whole screen but its footer
     // and a sentence drawn nowhere is no answer.
     if session.scrolling() {
-        return;
+        return Action::None;
+    }
+    // A picture the terminal could not carry arrives as a paste of nothing, mid-turn exactly as at
+    // rest, and the answer is the same one: go and read the clipboard. Before the drop check, for
+    // the reason the idle path says it before anything looks at the text, since an empty paste is
+    // no more a drop than it is a prompt.
+    //
+    // Without this arm the empty paste reached `paste_text`, which writes nothing and says
+    // nothing, so a screenshot pasted while the turn it was about was running went nowhere and
+    // the key that would have carried it was never named.
+    if text.is_empty() {
+        let chord = session.bindings().paste_name();
+        session.note_once(t!(paste_arrived_empty, chord = chord));
+        return Action::Paste;
     }
     if !session.drop_files(text) {
         session.paste_text(text);
+    }
+    Action::Redraw
+}
+
+/// Carry out what a key or a paste answered with while a turn is running.
+///
+/// [`Action::Paste`] is the only answer either of the mid-turn handlers gives that the session
+/// cannot carry out itself, since reading the clipboard runs the platform's own tools. Everything
+/// else they return is a redraw the loops do every frame regardless.
+///
+/// Every working loop goes through here rather than answering the event and dropping what came
+/// back. Four of them did exactly that, so Ctrl-V mid-turn reached its arm, produced the right
+/// answer, and had it thrown away: the clipboard was never read and the picture never staged, on a
+/// key the idle path has always answered (INPUT-9, PASTE-7).
+///
+/// The read arrives as an argument for the reason [`take_from_clipboard`] takes one: a test can
+/// then say what the clipboard held and watch the picture land in the box, rather than assert only
+/// that the answer came back, which is what left the discard invisible.
+fn act_while_working(
+    session: &mut Session,
+    action: Action,
+    read: impl FnOnce() -> crate::clipboard::Pasted,
+) {
+    if action == Action::Paste {
+        take_from_clipboard(session, read());
     }
 }
 
@@ -3751,7 +3790,8 @@ fn one_request_key(session: &mut Session, key: KeyEvent, uninterruptible: &str) 
     }
 
     if !stops_the_turn(session, key) {
-        handle_key_while_working(session, key);
+        let action = handle_key_while_working(session, key);
+        act_while_working(session, action, crate::clipboard::paste);
         return;
     }
 
@@ -3825,7 +3865,10 @@ fn compact_animated(
                     TermEvent::Key(key) => {
                         one_request_key(session, key, t!(compact_uninterruptible));
                     }
-                    TermEvent::Paste(text) => handle_paste_while_working(session, &text),
+                    TermEvent::Paste(text) => {
+                        let action = handle_paste_while_working(session, &text);
+                        act_while_working(session, action, crate::clipboard::paste);
+                    }
                     TermEvent::Mouse(mouse) => {
                         let action = handle_mouse(session, mouse);
                         if action == Action::Copy {
@@ -3957,7 +4000,10 @@ fn aside_animated(
                     TermEvent::Key(key) => {
                         one_request_key(session, key, t!(btw_uninterruptible));
                     }
-                    TermEvent::Paste(text) => handle_paste_while_working(session, &text),
+                    TermEvent::Paste(text) => {
+                        let action = handle_paste_while_working(session, &text);
+                        act_while_working(session, action, crate::clipboard::paste);
+                    }
                     TermEvent::Mouse(mouse) => {
                         let action = handle_mouse(session, mouse);
                         if action == Action::Copy {
@@ -4127,9 +4173,13 @@ fn manifest_animated(
                         cancel.cancel();
                     }
                     TermEvent::Key(key) => {
-                        handle_key_while_working(session, key);
+                        let action = handle_key_while_working(session, key);
+                        act_while_working(session, action, crate::clipboard::paste);
                     }
-                    TermEvent::Paste(text) => handle_paste_while_working(session, &text),
+                    TermEvent::Paste(text) => {
+                        let action = handle_paste_while_working(session, &text);
+                        act_while_working(session, action, crate::clipboard::paste);
+                    }
                     TermEvent::Mouse(mouse) => {
                         let action = handle_mouse(session, mouse);
                         if action == Action::Copy {
@@ -4326,7 +4376,8 @@ fn goal_check_key(session: &mut Session, key: KeyEvent) {
     }
 
     if !stops_the_turn(session, key) {
-        handle_key_while_working(session, key);
+        let action = handle_key_while_working(session, key);
+        act_while_working(session, action, crate::clipboard::paste);
         return;
     }
 
@@ -4420,7 +4471,10 @@ fn goal_check_animated(
                     // Which of the goal, a mode over the session, and the session itself a stop
                     // key is asking about is that function's to say.
                     TermEvent::Key(key) => goal_check_key(session, key),
-                    TermEvent::Paste(text) => handle_paste_while_working(session, &text),
+                    TermEvent::Paste(text) => {
+                        let action = handle_paste_while_working(session, &text);
+                        act_while_working(session, action, crate::clipboard::paste);
+                    }
                     TermEvent::Mouse(mouse) => {
                         let action = handle_mouse(session, mouse);
                         if action == Action::Copy {
@@ -4731,9 +4785,13 @@ fn run_turn_animated(
                         cancel.cancel();
                     }
                     TermEvent::Key(key) => {
-                        handle_key_while_working(session, key);
+                        let action = handle_key_while_working(session, key);
+                        act_while_working(session, action, crate::clipboard::paste);
                     }
-                    TermEvent::Paste(text) => handle_paste_while_working(session, &text),
+                    TermEvent::Paste(text) => {
+                        let action = handle_paste_while_working(session, &text);
+                        act_while_working(session, action, crate::clipboard::paste);
+                    }
                     TermEvent::Mouse(mouse) => {
                         // Bound rather than tested inline, because handling the event scrolls and
                         // moves the selection whatever it returns. A match guard would hide that.
@@ -6847,14 +6905,64 @@ mod tests {
 
         /// A line can be typed while a turn runs, so it can be pasted into while a turn runs. What
         /// is refused mid-turn is sending, never writing.
+        ///
+        /// The picture rather than the answer, because the answer was right all along and every
+        /// working loop threw it away: the key reached its arm, produced `Action::Paste`, and the
+        /// clipboard was never read.
         #[test]
         fn ctrl_v_reads_the_clipboard_during_a_turn_too() {
             let mut session = Session::new("kernel-enforced");
             session.status = Status::Working;
+
+            let action = handle_key_while_working(&mut session, ctrl('v'));
+            assert_eq!(action, Action::Paste);
+            act_while_working(&mut session, action, || picture(b"pixels".to_vec()));
+
             assert_eq!(
-                handle_key_while_working(&mut session, ctrl('v')),
-                Action::Paste
+                session.input(),
+                "[Image #1]",
+                "the picture the key asked for was not staged"
             );
+        }
+
+        /// A picture pasted with the terminal's own chord arrives as a paste of nothing, and mid-turn
+        /// is when one is pasted: the person is watching the reply the screenshot is about. The empty
+        /// paste went into the box instead, which writes nothing and says nothing, so the picture was
+        /// dropped and the key that would have carried it was never named.
+        #[test]
+        fn an_empty_paste_mid_turn_goes_and_reads_the_clipboard_too() {
+            let mut session = Session::new("kernel-enforced");
+            session.status = Status::Working;
+
+            let action = handle_paste_while_working(&mut session, "");
+            assert!(
+                session.transcript[0].text.contains("ctrl-v"),
+                "the note did not name the key that works"
+            );
+            act_while_working(&mut session, action, || picture(b"pixels".to_vec()));
+
+            assert_eq!(
+                session.input(),
+                "[Image #1]",
+                "the picture the empty paste stood for was not staged"
+            );
+        }
+
+        /// Nothing is read for a paste that carried text, mid-turn as at rest: every Command-V of a
+        /// paragraph would otherwise spawn the platform's clipboard tools for an answer the paste
+        /// already had.
+        #[test]
+        fn a_paste_that_carried_text_mid_turn_is_left_alone() {
+            let mut session = Session::new("kernel-enforced");
+            session.status = Status::Working;
+
+            let action = handle_paste_while_working(&mut session, "some words");
+            assert_eq!(action, Action::Redraw);
+            act_while_working(&mut session, action, || {
+                panic!("the clipboard was read for a paste that carried text")
+            });
+
+            assert_eq!(session.input(), "some words");
         }
 
         /// A paste that arrives carrying nothing is a Command-V the terminal could not answer: it
