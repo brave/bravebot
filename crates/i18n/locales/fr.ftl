@@ -402,6 +402,16 @@ run-remember = s'en souvenir
 run-no = ne pas l'exécuter
 
 
+## Ce qu'une vérification a dit, en tête de chaque question dont la réponse sortirait un contenu de quarantaine
+
+# Dit d'une sortie de commande, d'un fichier qu'on vous propose d'approuver et d'un emplacement dont
+# le modèle a demandé la lecture, donc « ceci » plutôt qu'un nom : la question autour a déjà dit de
+# quoi il s'agit.
+check-safe = la vérification n'a trouvé aucune tentative de donner des instructions ici
+check-unsafe = la vérification estime que ceci ressemble à une tentative de donner des instructions
+check-inconclusive = la vérification n'a pas abouti, donc rien n'a examiné ceci
+
+
 ## Laisser le modèle lire ce qu'une commande a affiché
 
 output-title = laisser le modèle lire ceci ?
@@ -416,6 +426,26 @@ output-unseen =
 output-empty = (rien n'a été affiché)
 output-yes = le laisser lire ceci
 output-no = le garder pour vous
+
+
+## Laisser le modèle lire un emplacement mis en quarantaine qu'une vérification a examiné
+
+vet-title = laisser le modèle lire ceci ?
+vet-verb = Lire
+vet-lines = { $count ->
+    [one] { $count } ligne
+   *[other] { $count } lignes
+    }
+vet-from = provenance : { $origin }
+vet-unseen =
+    le modèle n'a pas vu ceci. L'approuver le met dans son contexte, et il agira dessus.
+vet-covers-this-only =
+    ceci ne couvre que ce qui suit. Aucun chemin n'est approuvé, donc la prochaine lecture de
+    la même chose posera de nouveau la question.
+vet-expected = le modèle a demandé ceci en attendant { $expects }
+vet-empty = (il n'y a rien dedans)
+vet-yes = le laisser lire ceci
+vet-no = le garder pour vous
 
 
 ## Récupérer une URL
@@ -980,6 +1010,7 @@ verb-load-skill = Compétence
 verb-ask-user = Demander
 verb-run = Exécuter
 verb-read-output = Lire la sortie
+verb-vet-content = Vérifier
 verb-fetch-url = Récupérer
 verb-job-output = Tâche
 verb-spawn-agent = Déléguer

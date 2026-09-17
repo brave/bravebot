@@ -176,6 +176,15 @@ enum Entry {
         /// taken from a filename and never from anything read, so it decides nothing an attacker
         /// steers: a slot cannot become a picture by containing something that looks like one.
         picture: Option<String>,
+        /// Where these bytes came from, as the driver described them when it quarantined them:
+        /// a path, a URL, a command, a processor.
+        ///
+        /// Kept because the reference carrying it is handed to the planner and gone, while a
+        /// prompt drawn later still has to be able to say what the person is looking at. `ref:1`
+        /// means something to the planner and nothing at all to somebody being asked about it.
+        ///
+        /// The driver's own sentence, never anything read.
+        origin: Option<String>,
     },
     Unread(Deferred),
 }
@@ -224,6 +233,14 @@ impl Entry {
             Self::Read { picture, .. } => picture.as_deref(),
             // Nothing has been read, so nothing is known about what it holds.
             Self::Unread(_) => None,
+        }
+    }
+
+    fn origin(&self) -> Option<&str> {
+        match self {
+            Self::Read { origin, .. } => origin.as_deref(),
+            // Nothing has been read, so the path is the whole of what there is to say.
+            Self::Unread(deferred) => Some(&deferred.path),
         }
     }
 }
@@ -281,6 +298,22 @@ impl SlotStore {
         if let Some(Entry::Read { home: slot, .. }) = self.slots.get_mut(id) {
             *slot = home;
         }
+    }
+
+    /// Record where a slot's bytes came from, in the driver's own words.
+    pub(crate) fn set_origin(&mut self, id: &SlotId, origin: &str) {
+        if let Some(Entry::Read { origin: slot, .. }) = self.slots.get_mut(id) {
+            *slot = Some(origin.to_string());
+        }
+    }
+
+    /// Where a slot's bytes came from, where the driver said.
+    ///
+    /// Metadata, like everything else a caller may ask a slot store, and the driver's own sentence
+    /// rather than anything read. Only the policy layer may ask, because what it is for is putting
+    /// a line in front of a person, which is a release.
+    pub(crate) fn origin_of(&self, id: &SlotId) -> Option<&str> {
+        self.slots.get(id).and_then(Entry::origin)
     }
 
     /// Record that a slot holds what this command printed.
@@ -423,6 +456,7 @@ impl SlotStore {
                 home: Home::Anywhere,
                 from_command: None,
                 picture: None,
+                origin: None,
             },
         );
         Ok(measured)
@@ -511,6 +545,7 @@ impl SlotWriter<'_> {
                 home: Home::Anywhere,
                 from_command: None,
                 picture: None,
+                origin: None,
             },
         );
         Ok(())
@@ -544,6 +579,7 @@ impl SlotWriter<'_> {
                 home: Home::Anywhere,
                 from_command: None,
                 picture: None,
+                origin: None,
             },
         );
         Ok(measured)
@@ -559,7 +595,7 @@ pub struct Measured {
 
 impl Measured {
     /// Measure content without reading it.
-    fn of(content: &Labelled<String>) -> Self {
+    pub(crate) fn of(content: &Labelled<String>) -> Self {
         let shape = content.shape();
         Self {
             lines: shape.lines,

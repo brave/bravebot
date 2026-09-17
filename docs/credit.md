@@ -13,4 +13,6 @@ concept behind the product, bravebot, this repository.
 
 The model backend is [brave/aichat](https://github.com/brave/aichat). The client-side handling
 it builds on comes from [brave/brave-core](https://github.com/brave/brave-core). The dockerized
-reproducible build setup is from [bbondy/guardrails](https://github.com/bbondy/guardrails).
+reproducible build setup is from [bbondy/guardrails](https://github.com/bbondy/guardrails), as are
+the classifier prompt and the two-block marker strategy behind
+[vetting](specs/vetting.md).

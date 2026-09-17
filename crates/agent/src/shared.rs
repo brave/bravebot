@@ -21,7 +21,8 @@
 //! label is the label it arrived with.
 
 use crate::confirm::{
-    Confirmer, Decision, OutputRequest, RunDecision, RunRequest, VouchRequest, WriteRequest,
+    Confirmer, Decision, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
+    WriteRequest,
 };
 use crate::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Shown,
@@ -180,6 +181,10 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
         self.lent.hold().confirm_read_output(request)
+    }
+
+    fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+        self.lent.hold().confirm_vetted_read(request)
     }
 
     fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {

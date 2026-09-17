@@ -149,6 +149,21 @@ processor in a subprocess would confine the wrong thing.
 
 `verified-by: none`
 
+<a id="PROC-10"></a>
+### PROC-10: a check over one slot is not put in a subprocess either, and for the same reason
+
+Asking a second model whether one quarantined slot looks like an injection attempt is a call of
+the same shape as a processor's, so PROC-9 settles it: the code making the call is ours, and a
+subprocess would hold the wrong thing. What such a check holds is narrower still, since it can
+write nothing at all; [vetting.md](vetting.md) is where that is set out.
+
+Recorded here so that the next person to ask finds the answer rather than reopening PROC-9. The
+technique this is ported from does use a subprocess, and what it is containing there is an agent
+with tools, a filesystem and a network, which can *act* when it is injected rather than merely
+answer wrongly. Nothing here has any of those to begin with.
+
+`verified-by: none`
+
 ## Known costs
 
 - **An untrusted file's contents reach the backend.** A processor is a model call, so working on

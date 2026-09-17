@@ -15,9 +15,9 @@ answer grants, and what one answer must never be taken for. `ask_user`, where th
 a question, is [tools/ask-user.md](tools/ask-user.md) and is a different thing: these prompts are the system asking
 permission.
 
-There are seven: the startup trust question, a directory a settings file asked for, a read of a file
-nobody vouched for, a write or edit, a run, reading what a run printed, and the plan a manifest run
-is about to walk.
+There are eight: the startup trust question, a directory a settings file asked for, a read of a file
+nobody vouched for, a write or edit, a run, reading what a run printed, being shown one quarantined
+slot a check has read, and the plan a manifest run is about to walk.
 
 The last is the only one about a whole run rather than about one thing at the moment it is due. It
 can be, because that mode fixes every step while the task string is still the only input
@@ -30,8 +30,13 @@ can be, because that mode fixes every step while the task string is still the on
 
 A write prompt shows the path and the body; an overwrite shows what it replaces; a run prompt
 shows the argv, the resolved binary and the directory; an output prompt shows the bytes and the
-command that printed them; the prompt about a directory a settings file asked for shows the path it
-would open. A person cannot endorse a routing field they were not shown.
+command that printed them; a vetting prompt shows the bytes, where they came from, and what the
+check said about them rather than the word alone; the prompt about a directory a settings file
+asked for shows the path it would open. A person cannot endorse a routing field they were not shown.
+
+Every prompt a check was run for shows what it said, and the three are drawn out of one row builder
+rather than three, so a prompt cannot carry a verdict and forget to say what it was. Which prompts
+those are is [CHECK-10](vetting.md#CHECK-10).
 
 The plan prompt shows the task in the person's own words and then every step, in order, each naming
 its tier, what it would do, and every routing field the step fixes rather than the headline one
@@ -42,6 +47,9 @@ step below the fold is as binding as the first.
 `verified-by: bravebot_tui::confirm::an_overwrite_prompt_shows_what_it_replaces`
 `verified-by: bravebot_tui::confirm::a_run_prompt_shows_the_argv_the_binary_and_the_directory`
 `verified-by: bravebot_tui::confirm::the_output_prompt_shows_the_bytes_and_the_command`
+`verified-by: bravebot_tui::confirm::the_vet_prompt_shows_the_bytes_and_where_they_came_from`
+`verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`
+`verified-by: bravebot_tui::confirm::the_vouch_prompt_says_what_a_check_found`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_shows_the_directory_it_would_open`
 `verified-by: bravebot_tui::confirm::the_plan_prompt_shows_the_task_and_every_step`
 `verified-by: bravebot_core::manifest::a_described_step_names_every_routing_field_it_fixes`
@@ -51,7 +59,8 @@ step below the fold is as binding as the first.
 
 The run prompt says it is not sandboxed, asks for the side effects and the output together, and
 names the exact command it would vouch for. The output prompt says
-what approving does. The trust prompt explains the consequence and names both answers. The prompt
+what approving does. The vetting prompt says what approving does and, because nothing else on the
+screen would, what it does not: no path is vouched for, so the same thing read again asks again. The trust prompt explains the consequence and names both answers. The prompt
 about a directory a settings file asked for says that opening it grants reach and trust, and that a
 file asked for it. The plan prompt says that nothing the run reads can add a step, drop one, or send
 anything anywhere the plan does not already name; that approving the plan is not approving its
@@ -68,6 +77,7 @@ run one keypress settles.
 `verified-by: bravebot_tui::confirm::a_run_prompt_asks_for_the_side_effects_and_the_output_together`
 `verified-by: bravebot_tui::confirm::a_run_prompt_names_the_exact_command_it_would_vouch_for`
 `verified-by: bravebot_tui::confirm::the_output_prompt_says_what_approving_does`
+`verified-by: bravebot_tui::confirm::the_vet_prompt_says_what_approving_does_and_does_not_do`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_explains_the_consequence`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_names_the_directory_and_both_answers`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_explains_what_opening_does`
@@ -77,7 +87,11 @@ run one keypress settles.
 ### PROMPT-3: what a prompt shows is drawn inside a margin it cannot forge
 
 Content in a prompt is untrusted like any other. An untrusted body is marked as such,
-and command output is drawn inside the margin.
+and command output is drawn inside the margin. So is the content a vetting prompt shows, and so is
+the sentence the check wrote about it, on whichever of the three prompts it was written for: that
+sentence is free text about bytes an attacker may own, and it is the one line on such a screen a
+reader might otherwise take for the program's. The verdict word is the driver's and sits outside the
+margin; the sentence is not, and sits inside it.
 
 A manifest plan's steps are the one body here drawn without a bar, and the reason for the rule is
 what says so: they are the driver's own rendering of a plan that came from a context holding the task
@@ -94,16 +108,19 @@ than dropped, as it is for any long body.
 
 `verified-by: bravebot_tui::confirm::an_untrusted_body_is_marked_in_the_prompt`
 `verified-by: bravebot_tui::confirm::output_is_drawn_inside_the_margin_it_cannot_forge`
+`verified-by: bravebot_tui::confirm::vetted_content_is_drawn_inside_the_margin_it_cannot_forge`
+`verified-by: bravebot_tui::confirm::what_the_check_said_is_drawn_inside_the_margin_too`
 `verified-by: bravebot_tui::confirm::a_wrapped_output_line_is_marked_on_every_row_it_reaches`
 `verified-by: bravebot_tui::confirm::a_wrapped_untrusted_hunk_is_marked_on_every_row_it_reaches`
 `verified-by: bravebot_tui::confirm::a_wrapped_vouch_preview_is_marked_on_every_row_it_reaches`
+`verified-by: bravebot_tui::confirm::a_wrapped_vetted_line_is_marked_on_every_row_it_reaches`
 
 <a id="PROMPT-4"></a>
 ### PROMPT-4: a review stays legible, or says it could not
 
 A long body keeps the question on screen and offers the rest, which can be scrolled to. A small
-edit in a large file shows only the change. An empty output says so, and so does a file with
-nothing to preview. A diff that cannot be computed says so rather than showing nothing. A plan longer
+edit in a large file shows only the change. An empty output says so, and so does a slot with nothing in it
+and a file with nothing to preview. A diff that cannot be computed says so rather than showing nothing. A plan longer
 than the box is scrolled to rather than cut short, and the question stays on screen while it is.
 
 **Why.** Reviewing a whole file body on a terminal is not review, which is why `edit_file` exists
@@ -113,6 +130,7 @@ on a passage rather than a whole body. A prompt that scrolled the question away 
 `verified-by: bravebot_tui::confirm::the_rest_of_a_long_body_can_be_scrolled_to`
 `verified-by: bravebot_tui::confirm::a_small_edit_in_a_large_file_shows_only_the_change`
 `verified-by: bravebot_tui::confirm::output_that_is_empty_says_so`
+`verified-by: bravebot_tui::confirm::vetted_content_that_is_empty_says_so`
 `verified-by: bravebot_tui::confirm::a_preview_with_nothing_in_it_says_so`
 `verified-by: bravebot_tui::confirm::an_uncomputable_diff_says_so`
 `verified-by: bravebot_tui::confirm::a_long_plan_keeps_the_question_on_screen_and_offers_the_rest`
@@ -123,7 +141,8 @@ on a passage rather than a whole body. A prompt that scrolled the question away 
 ### PROMPT-5: one answer is never taken for another
 
 An approved write does not approve a run, and does not approve the plan a write is in. A write
-approval is not an answer to a question, and an answer to a question is not consent to a write. Each
+approval is not an answer to a question, and an answer to a question is not consent to a write. An
+approval to read what a program printed does not promote a slot, which covers more. Each
 endorsement is single-use and bound to the exact value it was given for.
 
 **Why.** These are separate grants that happen to use the same keyboard. The plan is the widest of
@@ -133,6 +152,7 @@ them, so it is the one where taking another answer for it would run the most tha
 `verified-by: bravebot_tui::remote_confirm::an_approved_write_does_not_approve_a_plan`
 `verified-by: bravebot_tui::remote_confirm::a_write_approval_is_not_taken_as_an_answer_to_a_question`
 `verified-by: bravebot_tui::remote_confirm::an_answer_to_a_question_is_not_taken_as_consent_to_a_write`
+`verified-by: bravebot_tui::remote_confirm::an_approved_output_read_does_not_approve_a_vetted_read`
 
 <a id="PROMPT-6"></a>
 ### PROMPT-6: standing permission needs its own key, and is never the default
@@ -149,7 +169,9 @@ as either.
 
 The plan prompt offers no standing form at all, and Enter does not approve a plan either. A plan is
 written afresh for each run, so remembering an answer to one would be approving steps nobody has
-seen.
+seen. The vetting prompt offers none either, and Enter does not reach it: what it asks about is one
+slot's bytes, so there is nothing a standing answer could be about, and a second model saying the
+content looked fine is not a reason to stop asking.
 
 `verified-by: bravebot_tui::confirm::the_run_keys_separate_running_once_from_running_always`
 `verified-by: bravebot_tui::confirm::the_run_keys_separate_this_session_from_every_session`
@@ -159,6 +181,8 @@ seen.
 `verified-by: bravebot_tui::confirm::refusing_a_run_records_nothing_past_the_session`
 `verified-by: bravebot_tui::confirm::a_prompt_that_offers_no_record_binds_no_key_to_one`
 `verified-by: bravebot_tui::confirm::enter_does_not_approve_a_plan`
+`verified-by: bravebot_tui::confirm::enter_does_not_approve_a_vetted_read`
+`verified-by: bravebot_tui::confirm::a_safe_verdict_does_not_change_which_keys_the_vet_prompt_offers`
 `verified-by: bravebot_tui::confirm::a_run_that_releases_private_data_offers_no_standing_permission`
 `verified-by: bravebot_tui::confirm::pressing_always_at_a_private_input_prompt_grants_nothing`
 `verified-by: bravebot_tui::confirm::a_private_input_run_can_still_be_approved_once_or_refused`
@@ -213,15 +237,17 @@ approving something nobody looked at.
 
 A one-shot run refuses effects rather than applying them unseen, and declines every question
 rather than inventing an answer. A closed channel refuses a run and answers no
-question. A plan is refused too, so a manifest run with nobody to ask stops before its first step
+question, and it refuses to promote a slot however the check that read it answered: a word from a
+model is not a person having read something. A plan is refused too, so a manifest run with nobody to ask stops before its first step
 rather than walking a program nobody read.
 
-A person may answer these seven in advance, for a session or for a run, by choosing a mode:
+A person may answer these eight in advance, for a session or for a run, by choosing a mode:
 [permission-modes.md](permission-modes.md) is what each mode answers and what asking for one costs.
 That is somebody's own standing answer rather than a default, and no mode answers a question the
 planner posed, since that asks for information rather than consent.
 
 `verified-by: bravebot_tui::remote_confirm::a_closed_channel_refuses_a_run`
+`verified-by: bravebot_tui::remote_confirm::a_closed_channel_refuses_a_vetted_read`
 `verified-by: bravebot_tui::remote_confirm::a_closed_channel_answers_no_question`
 `verified-by: bravebot_tui::remote_confirm::a_dropped_answer_channel_answers_no_question`
 `verified-by: bravebot_tui::remote_confirm::a_refusal_travels_back_too`

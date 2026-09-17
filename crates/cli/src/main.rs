@@ -6,7 +6,7 @@ mod progress;
 
 use bravebot_agent::confirm::{
     Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RunDecision, RunRequest,
-    ServerRequest, VouchRequest, WriteRequest,
+    ServerRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{Mode, Workspace};
@@ -810,6 +810,10 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
 
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
         self.refusing.confirm_read_output(request)
+    }
+
+    fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+        self.refusing.confirm_vetted_read(request)
     }
 
     fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
@@ -2638,6 +2642,8 @@ mod tests {
             path: "notes.md".to_string(),
             preview: "text".to_string(),
             truncated: false,
+            verdict: bravebot_core::vetting::Verdict::Safe,
+            reason: None,
         };
 
         assert_eq!(one_shot.confirm_write(&write), Decision::Reject);

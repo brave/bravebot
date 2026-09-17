@@ -36,6 +36,7 @@ pub mod todo;
 pub mod trust;
 pub mod url;
 pub mod value;
+pub mod vetting;
 
 pub use ask::{Answer, Choice, Prompt, Question};
 pub use cancel::Cancel;

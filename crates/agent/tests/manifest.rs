@@ -830,6 +830,13 @@ impl bravebot_agent::confirm::Confirmer for ApprovesThePlanOnly {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_fetch(
         &mut self,
         _request: &bravebot_agent::confirm::FetchRequest,

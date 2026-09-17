@@ -16,7 +16,8 @@ that functionality matches specs. Bugs are posted for any problems found.
 | [routing.md](routing.md) | `ROUTE` | 8 | where an effect may land and what may decide it |
 | [trust-map.md](trust-map.md) | `TRUST` | 18 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
 | [permissions.md](permissions.md) | `PERM` | 13 | rules written in advance about what to ask about and what to refuse |
-| [processors.md](processors.md) | `PROC` | 9 | the one component that reads untrusted content, and what it may do with it |
+| [processors.md](processors.md) | `PROC` | 10 | the one component that reads untrusted content, and what it may do with it |
+| [vetting.md](vetting.md) | `CHECK` | 10 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
 | [delegation.md](delegation.md) | `DELEGATE` | 17 | a second planner, narrower than the first, and what crosses back from one |
 | [turns.md](turns.md) | `TURN` | 4 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing or checks nothing |
 | [prompting.md](prompting.md) | `PROMPT` | 10 | every moment the system stops and puts something to a human, and what an answer grants |
@@ -70,7 +71,8 @@ the routing-versus-content split they share.
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 5 | `spawn_agent` |
 | [tools/run.md](tools/run.md) | `RUN` | 20 | `run` |
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
-| [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 2 | `read_output` |
+| [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 3 | `read_output` |
+| [tools/vet-content.md](tools/vet-content.md) | `VET` | 3 | `vet_content` |
 | [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 5 | `fetch_url` |
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 3 | `load_skill` |
 | [tools/todo-write.md](tools/todo-write.md) | `TODO` | 2 | `todo_write` |

@@ -699,6 +699,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "ask_user" => t!(verb_ask_user),
         "run" => t!(verb_run),
         "read_output" => t!(verb_read_output),
+        "vet_content" => t!(verb_vet_content),
         "fetch_url" => t!(verb_fetch_url),
         "job_output" => t!(verb_job_output),
         // Named for what it is rather than for what it does, exactly as a processor is: a person

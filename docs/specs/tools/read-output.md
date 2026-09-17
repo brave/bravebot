@@ -25,6 +25,8 @@ A person is shown the bytes themselves with the command that printed them, and d
 ╭ let the model read this? ────────────────────────────────╮
 │Read 1 line  printed by find /Applications -name 'Brave…' │
 │                                                          │
+│  the check found no attempt to give instructions in this │
+│                                                          │
 │  the model has not seen this. Approving puts it in its   │
 │  context, and it will act on it.                         │
 │                                                          │
@@ -60,4 +62,25 @@ A file's worth is the trust map's answer, and naming a file, opening a directory
 question already give it. A second route to the same decision would be a way to disagree with the
 first.
 
+This rule is about a file's worth and not about a slot's bytes. Promoting one slot after a check
+has read it is a different thing, single-use, writing no rule and leaving the trust map saying
+what it said, and it is [vetting.md](../vetting.md).
+
 `verified-by: bravebot_core::policy::a_file_cannot_be_promoted_by_reading_it_aloud`
+
+<a id="OUTPUT-3"></a>
+### OUTPUT-3: the person is told what a check made of the output before they answer
+
+A confined check reads the slot before this prompt is drawn, and the word it gave and the sentence
+it wrote are on the screen with the bytes. This is [CHECK-10](../vetting.md#CHECK-10) and the
+reasoning is there; what is here is that a `read_output` prompt is one of the three it covers, and
+that the check runs before the question rather than after the answer.
+
+No expectation is sent with it. The planner asked for the output to be read, not for it to be
+checked, and it has said nothing about what the command printed.
+
+The verdict decides nothing in this function. Nothing here branches on it: the word travels to the
+prompt, the prompt draws it, and the answer is what releases the bytes.
+
+`verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
+`verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`

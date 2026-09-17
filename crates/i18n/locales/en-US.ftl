@@ -425,6 +425,16 @@ run-remember = remember it
 run-no = don't
 
 
+## What a check said, at the head of every prompt whose answer would promote content
+
+# Said of a command's output, of a file somebody is being asked to vouch for, and of one slot the
+# model asked about, so it says "this" rather than naming what was read: the prompt around it has
+# already said which thing that is.
+check-safe = the check found no attempt to give instructions in this
+check-unsafe = the check says this looks like an attempt to give instructions
+check-inconclusive = the check did not complete, so nothing has looked at this
+
+
 ## Letting the model read what a command printed
 
 output-title = let the model read this?
@@ -439,6 +449,26 @@ output-unseen =
 output-empty = (it printed nothing)
 output-yes = let it read this
 output-no = keep it back
+
+
+## Letting the model read one quarantined slot a check has looked at
+
+vet-title = let the model read this?
+vet-verb = Read
+vet-lines = { $count ->
+    [one] { $count } line
+   *[other] { $count } lines
+    }
+vet-from = from { $origin }
+vet-unseen =
+    the model has not seen this. Approving puts it in its context, and it will act on it.
+vet-covers-this-only =
+    this covers what is below and nothing else. No path is vouched for, so the next read of
+    the same thing asks again.
+vet-expected = the model asked for this expecting { $expects }
+vet-empty = (there is nothing in it)
+vet-yes = let it read this
+vet-no = keep it back
 
 
 ## Fetching a URL
@@ -1072,6 +1102,7 @@ verb-load-skill = Skill
 verb-ask-user = Ask
 verb-run = Run
 verb-read-output = Read output
+verb-vet-content = Vet
 verb-fetch-url = Fetch
 verb-job-output = Job
 verb-spawn-agent = Delegate

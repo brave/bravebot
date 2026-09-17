@@ -126,6 +126,12 @@ A run approved this way vouches for no program. The list of commands a person sa
 about is written into the session record and outlives the mode, and a record claiming somebody
 approved programs they were never shown would be a standing permission nobody granted.
 
+**No check is made for a prompt that is not drawn.** [CHECK-10](vetting.md#CHECK-10) puts a confined
+check in front of every prompt that would promote quarantined content, and this is the one mode
+where those prompts are answered without being shown to anybody. A check there would be a model call
+whose word nobody reads, so it is not made, and the verdict recorded is the one that claims nothing.
+This is the only exemption from that clause.
+
 **Why.** The mode is for a place where the blast radius is bounded by something other than these
 prompts, which in practice means a container with no network and nothing in it worth losing. It is
 the wrong mode everywhere else, and it is named `--dangerously-skip-permissions` for that reason.

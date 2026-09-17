@@ -150,12 +150,14 @@ impl Reference {
             Kind::File => format!(
                 "Quarantined: you will not be shown what this file holds, and read_file has \
                  nothing to add: {} already is the file. Give it to spawn_processor to work on, \
-                 and name it as write_file's path_ref to put the result back.",
+                 and name it as write_file's path_ref to put the result back. Where you have to \
+                 read it yourself, vet_content asks the user to show it to you.",
                 self.slot
             ),
             Kind::Content => format!(
                 "Quarantined: you will not be shown it. Give {} to spawn_processor to work on, \
-                 or write it into a file as contents_ref.",
+                 or write it into a file as contents_ref. Where you have to read it yourself, \
+                 vet_content asks the user to show it to you.",
                 self.slot
             ),
         };
