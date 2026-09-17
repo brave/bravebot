@@ -289,6 +289,7 @@ attached to no press.
 `verified-by: bravebot_tui::app::a_long_paste_folds_while_a_turn_is_running`
 `verified-by: bravebot_tui::app::a_file_dropped_while_a_turn_is_running_is_attached`
 `verified-by: bravebot_tui::app::ctrl_j_is_not_swallowed_while_a_turn_runs`
+`verified-by: bravebot_tui::app::ctrl_v_reads_the_clipboard_during_a_turn_too`
 
 <a id="INPUT-10"></a>
 ### INPUT-10: a prompt sent while a turn runs goes into that turn, at its next round boundary
