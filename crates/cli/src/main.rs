@@ -2709,7 +2709,7 @@ mod tests {
         let source = development_fixture("doctor-source-tree");
         std::fs::write(source.path.join(".git"), "gitdir: elsewhere").unwrap();
         for windows in [false, true] {
-            assert!(agent_discovery(&source.path, windows).starts_with("🔴 missing;"));
+            assert!(agent_discovery(&source.path, windows).starts_with("missing;"));
         }
         let nested = source.directory("crates/cli/src");
         let report = development(&nested, None, false).join("\n");
