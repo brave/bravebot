@@ -15,23 +15,30 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-include!("src/catalog.rs");
+// The catalog format and the code generator, in the modules the crate has them in: a path
+// written in one of them has to mean the same thing here as it does there.
+mod catalog {
+    include!("src/catalog.rs");
+}
+mod generate {
+    include!("src/generate.rs");
+}
+
+use crate::catalog::*;
+use crate::generate::*;
+
+// Flat, because the plural rules are called by the code this writes rather than by this, and a
+// module of its own would make the one function the build script does call look unused.
 include!("src/plural.rs");
 
 /// The locale every other one is checked against and falls back to.
 const REFERENCE: &str = "en-US";
 
-struct Locale {
-    tag: String,
-    language: String,
-    variant: String,
-    messages: BTreeMap<String, Message>,
-}
-
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/catalog.rs");
     println!("cargo:rerun-if-changed=src/plural.rs");
+    println!("cargo:rerun-if-changed=src/generate.rs");
     println!("cargo:rerun-if-changed=locales");
 
     let locales = load();
@@ -54,9 +61,9 @@ fn main() {
 }
 
 /// Every catalog in `locales/`, reference first so generated indices are stable.
-fn load() -> Vec<Locale> {
+fn load() -> Vec<Catalog> {
     let dir = Path::new("locales");
-    let mut found: Vec<Locale> = Vec::new();
+    let mut found: Vec<Catalog> = Vec::new();
 
     let entries = fs::read_dir(dir).expect("locales/ exists");
     let mut paths: Vec<_> = entries
@@ -93,7 +100,7 @@ fn load() -> Vec<Locale> {
             messages.insert(message.id.clone(), message);
         }
 
-        found.push(Locale {
+        found.push(Catalog {
             tag: tag.clone(),
             language: language.to_string(),
             variant: camel_case(&tag.to_lowercase()),
@@ -108,7 +115,7 @@ fn load() -> Vec<Locale> {
 }
 
 /// Everything a translation is not allowed to do, checked before a line is generated.
-fn check(locales: &[Locale], reference: &Locale) {
+fn check(locales: &[Catalog], reference: &Catalog) {
     for locale in locales {
         for (id, message) in &locale.messages {
             let Some(source) = reference.messages.get(id) else {
@@ -167,7 +174,7 @@ fn check(locales: &[Locale], reference: &Locale) {
     }
 }
 
-fn locale_enum(locales: &[Locale]) -> String {
+fn locale_enum(locales: &[Catalog]) -> String {
     let mut out = String::from(
         "\n/// A catalog that shipped with this build.\n\
          #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]\n\
@@ -215,187 +222,12 @@ fn locale_enum(locales: &[Locale]) -> String {
     out
 }
 
-fn messages(locales: &[Locale], reference: &Locale) -> String {
-    let mut out = String::new();
-    for (id, source) in &reference.messages {
-        let args = arguments(&source.value);
-        let per_locale: Vec<&Message> = locales
-            .iter()
-            .map(|l| l.messages.get(id).unwrap_or(source))
-            .collect();
-
-        if args.is_empty() {
-            out.push_str(&constant(id, locales, &per_locale));
-        } else {
-            out.push_str(&structure(id, locales, &per_locale, &args));
-        }
-    }
-    out
-}
-
-/// A message with no arguments: one table, indexed by locale.
-fn constant(id: &str, locales: &[Locale], per_locale: &[&Message]) -> String {
-    let table = per_locale
-        .iter()
-        .map(|m| match &m.value {
-            Value::Pattern(parts) => literal(parts),
-            Value::Select { .. } => unreachable!("a select takes the argument it selects on"),
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    format!(
-        "\n#[allow(dead_code)]\npub fn {}() -> &'static str {{\n    \
-         const TEXT: [&str; {}] = [{table}];\n    TEXT[crate::locale() as usize]\n}}\n",
-        snake_case(id),
-        locales.len()
-    )
-}
-
-/// A message with arguments: a struct whose fields are those arguments, by name.
-///
-/// A struct rather than a function so the call site names what it passes, in any order, and so a
-/// forgotten argument is a missing-field error naming the field rather than a count mismatch.
-fn structure(
-    id: &str,
-    locales: &[Locale],
-    per_locale: &[&Message],
-    args: &[(String, bool)],
-) -> String {
-    let name = camel_case(id);
-    let parameters = args
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("T{i}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let bounds = args
-        .iter()
-        .enumerate()
-        .map(|(i, (_, selects))| {
-            if *selects {
-                format!("T{i}: Into<crate::Count>")
-            } else {
-                format!("T{i}: ::std::fmt::Display")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let fields = args
-        .iter()
-        .enumerate()
-        .map(|(i, (arg, _))| format!("    pub {arg}: T{i},\n"))
-        .collect::<String>();
-
-    let mut out = format!(
-        "\n#[allow(dead_code)]\npub struct {name}<{parameters}> {{\n{fields}}}\n\n\
-         #[allow(dead_code)]\nimpl<{bounds}> {name}<{parameters}> {{\n    \
-         // A locale that says the same thing without one of the arguments leaves it unread.\n    \
-         #[allow(unused_variables)]\n    \
-         pub fn render(self) -> String {{\n        let mut out = String::new();\n"
-    );
-    for (arg, selects) in args {
-        if *selects {
-            out.push_str(&format!(
-                "        let {arg}: crate::Count = self.{arg}.into();\n"
-            ));
-        } else {
-            out.push_str(&format!("        let {arg} = self.{arg};\n"));
-        }
-    }
-
-    out.push_str("        match crate::locale() {\n");
-    for (locale, message) in locales.iter().zip(per_locale) {
-        out.push_str(&format!("            Locale::{} => {{\n", locale.variant));
-        out.push_str(&render(&message.value, &locale.language, 16));
-        out.push_str("            }\n");
-    }
-    out.push_str("        }\n        out\n    }\n}\n");
-    out
-}
-
-/// The body that appends one locale's text to `out`.
-fn render(value: &Value, language: &str, indent: usize) -> String {
-    let pad = " ".repeat(indent);
-    let Value::Select {
-        arg,
-        variants,
-        default,
-    } = value
-    else {
-        let Value::Pattern(parts) = value else {
-            unreachable!("a value is a pattern or a select")
-        };
-        return append(parts, &pad);
-    };
-
-    let others: Vec<&Variant> = variants
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| index != default)
-        .map(|(_, variant)| variant)
-        .collect();
-
-    // A select whose only variant is the default decides nothing, so it reads the count for
-    // display and never asks which category it is in.
-    if others.is_empty() {
-        return append(&variants[*default].parts, &pad);
-    }
-
-    let mut out = String::new();
-    if others.iter().any(|v| matches!(v.key, Key::Exact(_))) {
-        out.push_str(&format!("{pad}let exact = {arg}.get();\n"));
-    }
-    if others.iter().any(|v| matches!(v.key, Key::Category(_))) {
-        out.push_str(&format!(
-            "{pad}let category = crate::plural::category({language:?}, {arg}.get());\n"
-        ));
-    }
-
-    for (position, variant) in others.iter().enumerate() {
-        let condition = match &variant.key {
-            Key::Exact(n) => format!("exact == {n}"),
-            Key::Category(c) => format!("category == {c:?}"),
-        };
-        let keyword = if position == 0 { "if" } else { "} else if" };
-        out.push_str(&format!("{pad}{keyword} {condition} {{\n"));
-        out.push_str(&append(&variant.parts, &format!("{pad}    ")));
-    }
-    out.push_str(&format!("{pad}}} else {{\n"));
-    out.push_str(&append(&variants[*default].parts, &format!("{pad}    ")));
-    out.push_str(&format!("{pad}}}\n"));
-    out
-}
-
-fn append(parts: &[Part], pad: &str) -> String {
-    let mut out = String::new();
-    for part in parts {
-        match part {
-            // A one-character run becomes a `push`, because clippy is right that it should and
-            // because clippy reads what is generated here as readily as what is written by hand.
-            Part::Text(text) => {
-                let mut chars = text.chars();
-                match (chars.next(), chars.next()) {
-                    (Some(only), None) => {
-                        out.push_str(&format!("{pad}out.push({only:?});\n"));
-                    }
-                    _ => out.push_str(&format!("{pad}out.push_str({text:?});\n")),
-                }
-            }
-            Part::Arg(name) => {
-                out.push_str(&format!("{pad}out.push_str(&{name}.to_string());\n"));
-            }
-        }
-    }
-    out
-}
-
 /// One `t!` arm per message, which is what makes an unknown key fail to compile.
 ///
 /// There is deliberately no arm taking a runtime key. A message chosen by a value rather than by
 /// a name written in the source would be a decision, and content the agent was handed is exactly
 /// what must never make one.
-fn macro_arms(reference: &Locale) -> String {
+fn macro_arms(reference: &Catalog) -> String {
     let mut out = String::from(
         "\n/// Look up a message by the name it has in the catalog.\n\
          ///\n\
@@ -421,16 +253,4 @@ fn macro_arms(reference: &Locale) -> String {
     }
     out.push_str("}\n");
     out
-}
-
-/// A message with no arguments is one run of text, written back out as a Rust literal.
-fn literal(parts: &[Part]) -> String {
-    let text: String = parts
-        .iter()
-        .map(|part| match part {
-            Part::Text(text) => text.as_str(),
-            Part::Arg(_) => unreachable!("a message with an argument is not a constant"),
-        })
-        .collect();
-    format!("{text:?}")
 }
