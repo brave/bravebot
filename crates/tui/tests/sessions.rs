@@ -120,11 +120,20 @@ fn a_trust_map() -> TrustStore {
     trust
 }
 
-/// Two programs the user vouched for, by resolved path.
+/// Two programs the user vouched for, by resolved path, one at the workspace root and one in a
+/// tree of its own.
+///
+/// Two different trees rather than one, so the round trip is tested on the thing it could silently
+/// drop: a list whose entries all named the same directory would come back correct even from a
+/// reader that filled every tree in with the root.
 fn a_program_list() -> TrustedPrograms {
     TrustedPrograms::from_iter([
-        bravebot_core::programs::Command::new("/usr/bin/git", vec!["log".to_string()]),
-        bravebot_core::programs::Command::new("/usr/bin/make", vec!["check".to_string()]),
+        bravebot_core::programs::Command::new("/usr/bin/git", vec!["log".to_string()], "/work"),
+        bravebot_core::programs::Command::new(
+            "/usr/bin/make",
+            vec!["check".to_string()],
+            "/work/sub",
+        ),
     ])
 }
 
@@ -415,11 +424,33 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
 
     // The programs go with the session too, and for the same reason: the person resuming is the
     // person who vouched for them, so they are not asked about the same program again.
-    let vouched = record.trusted_programs();
-    assert!(vouched.contains("/usr/bin/git", &["log".to_string()]));
-    assert!(vouched.contains("/usr/bin/make", &["check".to_string()]));
+    let vouched = record.trusted_programs(std::path::Path::new(&record.directory));
+    assert!(vouched.contains(
+        "/usr/bin/git",
+        &["log".to_string()],
+        std::path::Path::new("/work")
+    ));
+    // The tree each entry was given in comes back with it, so the one vouched for in `sub/` is
+    // still an entry about `sub/` and not one the root inherited.
+    assert!(vouched.contains(
+        "/usr/bin/make",
+        &["check".to_string()],
+        std::path::Path::new("/work/sub")
+    ));
     assert!(
-        !vouched.contains("/usr/bin/git", &["push".to_string()]),
+        !vouched.contains(
+            "/usr/bin/make",
+            &["check".to_string()],
+            std::path::Path::new("/work")
+        ),
+        "an entry given in a subdirectory came back covering the workspace root"
+    );
+    assert!(
+        !vouched.contains(
+            "/usr/bin/git",
+            &["push".to_string()],
+            std::path::Path::new("/work")
+        ),
         "a resumed session vouched for a command it was never given"
     );
     assert_eq!(vouched.len(), 2, "the list came back with something extra");

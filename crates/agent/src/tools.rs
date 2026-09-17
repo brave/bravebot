@@ -3778,8 +3778,9 @@ fn run<S: Sink, C: Confirmer>(
             // Offered only where it would stop a later prompt, which the policy decides: not for a
             // line releasing private data, not for one naming a file to write, not for one running
             // outside the workspace root, and not where a rule the person wrote in advance already
-            // says to ask. The path is what the prompt shows, since a person cannot endorse a
-            // record they were not shown.
+            // says to ask. A remembered line holds no tree, unlike a vouched entry, so the root is
+            // still one of its refusals. The path is what the prompt shows, since a person cannot
+            // endorse a record they were not shown.
             record: record
                 .as_ref()
                 .filter(|_| policy.may_remember(&plan))
@@ -3812,10 +3813,14 @@ fn run<S: Sink, C: Confirmer>(
         // Not for a line an entry could not record: one that feeds a file to a program, and one that
         // writes an assignment in front of a program. The prompt offers `a` for neither, and this is
         // the same refusal at the layer that would act on it, asked of the same predicate so the two
-        // cannot drift. What an entry records is a program and its exact argv, and a `<` redirection
-        // and an assignment are in neither, so an entry made here would cover the same program fed
-        // any other file, or run under no assignment at all. A front end answering `always` anyway
-        // must not be able to widen the list that way.
+        // cannot drift. What an entry records is a program, its exact argv and the tree the line
+        // runs in, and a `<` redirection and an assignment are in none of the three, so an entry
+        // made here would cover the same program fed any other file, or run under no assignment at
+        // all. A front end answering `always` anyway must not be able to widen the list that way.
+        //
+        // The tree is not among the refusals, and that is RUN-8's own answer rather than an
+        // omission: an entry names the directory it was given in, so a line outside the workspace
+        // root is one an entry can hold as written, and it grants there and nowhere else.
         if answer.remember && plan.can_be_remembered() {
             for command in request.would_vouch_for() {
                 policy.remember_command(command);

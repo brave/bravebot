@@ -537,10 +537,11 @@ needs it.
 plan, so carrying it is visible. An environment that accumulated invisibly across calls would change
 what a later plan does without appearing in that plan.
 
-A directory that is not the workspace root is asked about every time, and what the line prints is
-`(U,priv)` whatever the session vouched for. [RUN-8](run.md#RUN-8) is where that is settled: a
-vouched entry records a program and its arguments and names no tree, so it cannot answer the
-question a named directory asks. The carrying is what this clause grants; a standing answer is not.
+A directory that is not the workspace root is asked about unless a vouched entry names that exact
+tree, and what the line prints is `(U,priv)` unless one does. [RUN-8](run.md#RUN-8) is where that is
+settled: an entry records the tree the answer was given in, so an answer given about `sub/` answers
+for `sub/` and for no other directory, including the root. The carrying is what this clause grants;
+a standing answer is not.
 
 The carrying lasts a turn. It is not written into the session record, so the next turn starts at the
 root again. That is short of what this clause describes, and is left to the change that gives a

@@ -192,7 +192,7 @@ and do not let anything else mint an entry.
 `verified-by: bravebot_core::policy::a_turn_inherits_what_the_session_vouched_for`
 
 <a id="RUN-8"></a>
-### RUN-8: an entry is keyed by resolved path and exact arguments
+### RUN-8: an entry is keyed by resolved path, exact arguments, and the tree it was given in
 
 `git log` says nothing about `git push`, and nothing about `git log --all`. `$PATH` and aliases
 decide what a name means, so an assertion must not follow a name onto a different binary. Never
@@ -200,13 +200,29 @@ widen an entry to a program alone. In a pipeline **every** stage must be vouched
 output is untrusted, since an unvouched stage in the middle is a transformation nobody answered
 for and its output is what the next stage read.
 
-An entry also says nothing about **where** the command runs, because nothing in it records a
-directory. So it grants neither of RUN-7's two things outside the workspace root: a line naming a
-directory ([CMDLINE-12](command-line.md#CMDLINE-12)) is asked about however often it was vouched
-for, and what it prints is `(U,priv)`. `git log` pointed at a vendored dependency prints commit
-messages from a repository the person never answered a question about. Widening the key to include
-the directory would grant the shortcut there, and it is not done: it would put a tree into an entry
-the session record and `/status` (RUN-9) describe as a program and its arguments.
+An entry also records **where** the command runs, and grants RUN-7's two things in that one
+directory and nowhere else. The tree is the third thing a run prompt shows, beside the resolved
+binary and the argv ([CMDLINE-12](command-line.md#CMDLINE-12)), and an entry holding two of the
+three would record less than the question asked: `sh check.sh` designates a different file in every
+tree it is read in, so an answer given about the one in `sub/` is not an answer about a `check.sh`
+that appears at the root afterwards, and `git clean -fd` is a different proposition in two different
+trees. `git log` pointed at a vendored dependency is asked about however often `git log` was vouched
+for at the root, and what it prints is `(U,priv)`, because no entry names `vendor/dependency`.
+
+**One directory, and not the tree beneath it.** An entry given in `sub/` grants nothing in
+`sub/nested/`. Matching a prefix would put this same hole one level down, since the relative
+argument that designates a different file at the root designates a different file in a subdirectory
+too.
+
+**The canonical absolute path, as the only spelling.** `sub`, `./sub` and a symlink pointing at
+`sub` are one tree, and three keys for it would be three chances for a prompt somebody has already
+answered to appear again. Resolution happens where the I/O does, before a plan exists, for the
+reason the program is the resolved path.
+
+Nothing else a person settled in advance reaches a tree of its own: the trust map's relative rules,
+a rule in a settings file, and a line remembered past the session ([RUN-19](#RUN-19)) are spelled
+against the workspace root, and a remembered line records no tree at all. So a line running outside
+the root is asked about unless an entry names the tree it runs in.
 
 An entry says nothing about the **environment** either, because nothing in it records a `NAME=value`
 assignment written in front of a program. So it grants neither of RUN-7's two things for a line
@@ -216,9 +232,9 @@ arguments are looked at, so the line is a different proposition from the one the
 what it printed was written by whatever that assignment brought in. `a` is not offered for such a
 line at all, and the refusal is made twice, once where the prompt is drawn and again where an answer
 is acted on: an entry made there would be a bare entry, covering the same program under no
-assignment, so the list would end up holding something nobody was shown. Widening the key to include
-the environment is not done for the reason the directory is not: it would put a set of assignments
-into an entry the session record and `/status` (RUN-9) describe as a program and its arguments. The
+assignment, so the list would end up holding something nobody was shown. The directory is not the
+precedent for widening the key here: a tree has no other spelling, and an assignment has one
+already, which is the paragraph below. The
 question is put before a rule in a settings file is consulted, as
 [permissions.md](../permissions.md) requires: a rule is matched against the program and its arguments
 run together, a rendering an assignment is not in, so no rule anybody could write tells the two lines
@@ -237,6 +253,15 @@ meaning is not in its argv, not the setting of a variable.
 `verified-by: bravebot_core::policy::output_of_a_vouched_line_run_outside_the_root_is_untrusted`
 `verified-by: bravebot_core::policy::a_vouched_line_is_asked_about_when_no_root_is_known`
 `verified-by: bravebot_agent::turn::a_vouched_line_is_asked_about_again_when_a_directory_is_named`
+`verified-by: bravebot_core::policy::an_entry_given_outside_the_root_does_not_cover_the_same_line_at_the_root`
+`verified-by: bravebot_core::policy::output_at_the_root_of_a_line_vouched_for_outside_it_is_untrusted`
+`verified-by: bravebot_core::policy::an_entry_given_outside_the_root_grants_both_things_in_that_tree`
+`verified-by: bravebot_core::policy::an_entry_does_not_cover_a_directory_below_the_one_it_names`
+`verified-by: bravebot_core::policy::a_remembered_line_is_still_asked_about_outside_the_root_when_nothing_is_vouched_for`
+`verified-by: bravebot_core::programs::vouching_in_one_tree_says_nothing_about_the_same_command_in_another`
+`verified-by: bravebot_agent::turn::a_line_vouched_for_outside_the_root_is_asked_about_again_at_the_root`
+`verified-by: bravebot_agent::turn::a_symlinked_spelling_of_the_vouched_tree_is_the_same_entry`
+`verified-by: bravebot_tui::confirm::a_run_prompt_names_the_tree_the_entry_would_be_given_in`
 `verified-by: bravebot_core::policy::a_vouched_line_carrying_an_environment_assignment_is_asked_about`
 `verified-by: bravebot_core::policy::output_of_a_vouched_line_carrying_an_environment_assignment_is_untrusted`
 `verified-by: bravebot_tui::confirm::a_run_carrying_an_environment_assignment_offers_no_standing_permission`
@@ -248,8 +273,14 @@ meaning is not in its argv, not the setting of a variable.
 
 Empty at the start of every session, written into the session record, restored by `--resume`,
 never inherited by a fresh session in the same directory. `/status` lists every entry it holds
-rather than a count of them. A line somebody asked to be remembered past the session is a separate
-record holding less, which [RUN-19](#RUN-19) governs, and it puts no entry in this list.
+rather than a count of them, and names the tree each one covers ([RUN-8](#RUN-8)): two entries for
+one command in two directories are two grants, and a report drawing them as one line twice says
+nothing about which of the two is held. A line somebody asked to be remembered past the session is a
+separate record holding less, which [RUN-19](#RUN-19) governs, and it puts no entry in this list.
+
+A record written before an entry held a tree restores as one given at the workspace root, which is
+the only place such an entry could ever have been spent. Nothing else is migrated: reading it any
+other way would either widen a permission nobody gave or drop one they did.
 
 **Why.** The same reason the trust map belongs to a session. Its effect is invisible until a prompt
 does not appear, so it has to be readable back.
@@ -257,6 +288,8 @@ does not appear, so it has to be readable back.
 `verified-by: bravebot_core::policy::a_fresh_policy_vouches_for_no_command`
 `verified-by: bravebot_core::policy::a_line_remembered_past_the_session_vouches_for_nothing`
 `verified-by: bravebot_tui::status::every_vouched_command_is_listed_however_many_there_are`
+`verified-by: bravebot_tui::status::the_report_names_the_tree_each_vouched_command_runs_unasked_in`
+`verified-by: bravebot_tui::sessions::an_entry_recorded_without_a_tree_comes_back_scoped_to_the_root`
 
 <a id="RUN-10"></a>
 ### RUN-10: the vouched-for list is not an allowlist and must never become one

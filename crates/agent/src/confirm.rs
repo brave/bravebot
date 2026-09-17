@@ -211,9 +211,9 @@ impl RunRequest {
 
     /// Whether the line writes an environment assignment in front of one of its programs.
     ///
-    /// The second reason the prompt cannot offer to stop asking: an entry records a program and its
-    /// exact arguments, and an assignment is in neither, so [`RunRequest::would_vouch_for`] cannot
-    /// represent one. An entry made here would be a bare entry covering the same program under no
+    /// The second reason the prompt cannot offer to stop asking: an entry records a program, its
+    /// exact arguments and the tree they run in, and an assignment is in none of the three, so
+    /// [`RunRequest::would_vouch_for`] cannot represent one. An entry made here would be a bare entry covering the same program under no
     /// assignment at all, and the screen would be claiming a grant nothing recorded.
     ///
     /// Asked apart from [`RunRequest::can_be_remembered`] because that one decides whether to offer
@@ -255,14 +255,16 @@ impl RunRequest {
     /// vouches for both, since a run that still had to ask about one of them would not have
     /// stopped asking, and its output would still be untrusted.
     ///
-    /// Each entry is a program **and its exact arguments**. Vouching for `git log` says nothing
-    /// about `git push`, and an entry can hold nothing else: an assignment written in front of a
-    /// step is not in it, which is why [`RunRequest::carries_an_assignment`] is asked separately
-    /// rather than answered from this list.
+    /// Each entry is a program, **its exact arguments**, and the tree this line runs in. Vouching
+    /// for `git log` says nothing about `git push`, and vouching for it in `sub/` says nothing
+    /// about it at the root, which is the third thing the prompt shows and so the third thing an
+    /// entry holds. An assignment written in front of a step is still not in it, which is why
+    /// [`RunRequest::carries_an_assignment`] is asked separately rather than answered from this
+    /// list.
     pub fn would_vouch_for(&self) -> Vec<bravebot_core::programs::Command> {
         let mut named: Vec<bravebot_core::programs::Command> = Vec::new();
         for step in self.plan.steps() {
-            let command = step.command();
+            let command = step.command(&self.plan.directory);
             if !named.contains(&command) {
                 named.push(command);
             }

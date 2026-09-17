@@ -660,9 +660,21 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         )));
         // The command first, then what trusting it means. The claims are about this, so a reader
         // should have it in front of them before reading them.
+        //
+        // With the tree, because the entry holds one (RUN-8) and this line is the entry: the header
+        // above says where the line runs, and saying it again here is what makes the drawing and
+        // the entry agree about what `a` covers. Rendered from the entry's own directory rather
+        // than the plan's, so a drawing cannot claim a tree the record would not hold.
         for command in request.would_vouch_for() {
             lines.push(Line::from(Span::styled(
-                format!("       {}", command.display()),
+                format!(
+                    "       {}  {}",
+                    command.display(),
+                    t!(
+                        run_in_directory,
+                        directory = command.directory.display().to_string()
+                    )
+                ),
                 Style::default().add_modifier(Modifier::BOLD),
             )));
         }
@@ -682,6 +694,14 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         // Exact arguments, so the narrowness is visible rather than assumed the other way.
         lines.push(Line::from(Span::styled(
             format!("     {}", t!(run_always_exact_arguments)),
+            Style::default().fg(theme::muted()),
+        )));
+        // The narrowness of the tree, in the same breath as the narrowness of the arguments, since
+        // the two are one claim about one entry. No path in it: the entry above names the tree, and
+        // a sentence repeating it would be a third copy of a path already on the screen twice and
+        // long enough to overflow the panel.
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_always_this_directory)),
             Style::default().fg(theme::muted()),
         )));
     } else {
@@ -2000,6 +2020,28 @@ mod tests {
         assert!(
             drawn.contains("would not cover git push"),
             "the prompt does not say the entry is one command: {drawn}"
+        );
+    }
+
+    /// RUN-8: an entry records the tree it was given in, so the sentence saying what `a` covers has
+    /// to name that tree. The header above already shows where the line runs; this is the claim
+    /// about the grant, and a claim that named the command and its arguments alone would be telling
+    /// the person the entry covers more than it does.
+    #[test]
+    fn a_run_prompt_names_the_tree_the_entry_would_be_given_in() {
+        let request = a_run(false);
+        let drawn = rendered_run(&request);
+        // Once for the header, which says where the line runs, and once for each entry `a` would
+        // make, which says where that entry would hold. The header alone is a screen that shows
+        // the tree and still claims a grant that does not name it.
+        assert_eq!(
+            drawn.matches("/home/someone/project").count(),
+            request.would_vouch_for().len() + 1,
+            "the entries the prompt offers to make do not name the tree they would cover: {drawn}"
+        );
+        assert!(
+            drawn.contains("this directory only"),
+            "the prompt does not say the entry stops at that tree: {drawn}"
         );
     }
 

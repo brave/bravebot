@@ -2256,7 +2256,7 @@ fn event_loop(
             // The programs go the way the map does and for the same reason: the person resuming
             // is the person who vouched for them. Unlike the map there is nothing to ask about an
             // absent list, since an empty one simply means every run asks.
-            let vouched = record.trusted_programs();
+            let vouched = record.trusted_programs(workspace.root());
             // The other half of `/add-dir`, which the map cannot carry: a directory has to be
             // open for an absolute path in it to resolve at all. Restored here so the rule and
             // the reach come back together, rather than the rule alone.

@@ -446,8 +446,17 @@ pub fn report(facts: &Facts<'_>) -> Report {
         // Every one of them, however many there are: a vouched command that the report will not
         // show is a permission with nothing anywhere to say it is held, since the prompt it
         // answers is the thing that has stopped appearing.
+        //
+        // With the tree it was given in, because that is part of what the entry covers (RUN-8) and
+        // the entry is what this report exists to read back: two entries for one command in two
+        // directories would otherwise draw as one line twice, and a reader could not tell which
+        // grant they hold. Relative to the workspace where it is inside it, the way every other
+        // path on this screen is written.
         for command in vouched.iter() {
-            lines.push(Line::new("", command.display()));
+            lines.push(Line::new("", command.display()).with_note(t!(
+                status_command_in,
+                directory = within(facts.directory, &command.directory)
+            )));
         }
     }
 
@@ -531,6 +540,21 @@ fn environment(endpoint: &str) -> &'static str {
         t!(environment_prod)
     } else {
         t!(environment_custom)
+    }
+}
+
+/// `path` as this screen writes it: relative to `root` where it is inside it, abbreviated
+/// otherwise.
+///
+/// The root itself reads as `.`, which is how the trust map's rules above are written, so a vouched
+/// entry given at the root and a rule about the root are spelled the same way. A directory the
+/// person opened by name is not under the root and has no relative spelling, so it keeps its
+/// absolute one.
+fn within(root: &Path, path: &Path) -> String {
+    match path.strip_prefix(root) {
+        Ok(rest) if rest.as_os_str().is_empty() => ".".to_string(),
+        Ok(rest) => rest.display().to_string(),
+        Err(_) => abbreviate(path),
     }
 }
 
@@ -826,8 +850,16 @@ mod tests {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
         let vouched = TrustedPrograms::from_iter([
-            bravebot_core::programs::Command::new("/usr/bin/git", vec!["log".to_string()]),
-            bravebot_core::programs::Command::new("/usr/bin/make", vec!["check".to_string()]),
+            bravebot_core::programs::Command::new(
+                "/usr/bin/git",
+                vec!["log".to_string()],
+                "/tmp/project",
+            ),
+            bravebot_core::programs::Command::new(
+                "/usr/bin/make",
+                vec!["check".to_string()],
+                "/tmp/project/crates",
+            ),
         ]);
         let mut facts = facts(&config, &trust);
         facts.programs = &vouched;
@@ -837,6 +869,12 @@ mod tests {
         // "git" alone would not tell a reader which command they trusted.
         assert!(shown.contains("/usr/bin/git log"), "{shown}");
         assert!(shown.contains("/usr/bin/make check"), "{shown}");
+        // And the tree, which is the other part (RUN-8): an entry given in `crates/` runs unasked
+        // there and nowhere else, so a report naming only the command would have a reader believing
+        // they hold a grant at the root as well. The root itself reads as ".", the way the trust
+        // map's rules above it are written.
+        assert!(shown.contains("in ."), "{shown}");
+        assert!(shown.contains("in crates"), "{shown}");
         // Both halves of the grant, said where the user can see them.
         assert!(shown.contains("output is trusted"), "{shown}");
     }
@@ -849,7 +887,11 @@ mod tests {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
         let vouched = TrustedPrograms::from_iter((0..12).map(|nth| {
-            bravebot_core::programs::Command::new("/usr/bin/make", vec![format!("check-{nth:02}")])
+            bravebot_core::programs::Command::new(
+                "/usr/bin/make",
+                vec![format!("check-{nth:02}")],
+                "/tmp/project",
+            )
         }));
         let mut facts = facts(&config, &trust);
         facts.programs = &vouched;
@@ -861,6 +903,42 @@ mod tests {
                 "{shown}"
             );
         }
+    }
+
+    /// RUN-8, RUN-9: the tree is part of the entry, so it is part of what the report reads back.
+    /// Two entries for one command in two directories draw as two lines saying where each holds;
+    /// a report naming the command alone would draw them as one line twice and leave a reader
+    /// unable to tell which grant they have.
+    #[test]
+    fn the_report_names_the_tree_each_vouched_command_runs_unasked_in() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let vouched = TrustedPrograms::from_iter([
+            bravebot_core::programs::Command::new(
+                "/usr/bin/make",
+                vec!["check".to_string()],
+                "/tmp/project",
+            ),
+            bravebot_core::programs::Command::new(
+                "/usr/bin/make",
+                vec!["check".to_string()],
+                "/tmp/project/crates/tui",
+            ),
+        ]);
+        let mut facts = facts(&config, &trust);
+        facts.programs = &vouched;
+
+        let shown = rendered(&report(&facts));
+        assert_eq!(
+            shown.matches("/usr/bin/make check").count(),
+            2,
+            "two entries for one command in two trees did not read back as two: {shown}"
+        );
+        // The root reads as ".", the way the trust map's own rules on this screen are written, and
+        // a tree inside the workspace reads relative to it rather than as an absolute path a reader
+        // has to compare by eye.
+        assert!(shown.contains("in ."), "{shown}");
+        assert!(shown.contains("in crates/tui"), "{shown}");
     }
 
     /// The ordinary case has to say so rather than say nothing, or a user reading the report
