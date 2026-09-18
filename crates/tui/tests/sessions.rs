@@ -3414,36 +3414,6 @@ mod preserved_history {
         assert!(export.contains("- [ ] unfinished work"));
     }
 
-    /// The first explicit-history format omitted the prompt offset and treated the first entry as it.
-    #[test]
-    fn history_without_prompt_offsets_keeps_its_existing_interpretation() {
-        let scratch = Scratch::new("history-without-offsets");
-        let (session, conversation) = fixture();
-        let mut value =
-            serde_json::to_value(save(&scratch.project, &session, &conversation)).unwrap();
-        for turn in value["history"].as_array_mut().unwrap() {
-            turn.as_object_mut().unwrap().remove("prompt_offset");
-        }
-        let record: sessions::Record = serde_json::from_value(value).unwrap();
-        let resumed = reopen(&scratch.project, &record);
-        assert_eq!(
-            resumed
-                .transcript
-                .iter()
-                .filter(|e| e.speaker == Speaker::User)
-                .map(|e| e.text.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "successful prompt",
-                "failed prompt",
-                "cancelled prompt",
-                "no plan prompt"
-            ]
-        );
-        assert_eq!(resumed.todos_by_turn(), session.todos_by_turn());
-        assert_eq!(resumed.spend_by_turn(), session.spend_by_turn());
-    }
-
     /// A generated loop tick did not enter recall and must not remove the last human submission.
     #[test]
     fn cancelling_a_generated_tick_leaves_input_recall_unchanged() {

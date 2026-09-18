@@ -97,11 +97,6 @@ their own conversations and cannot replace the parent turn's position.
 `verified-by: bravebot_tui::sessions::a_request_after_resume_excludes_the_display_failure`
 `verified-by: bravebot_tui::sessions::processor_cancellation_preserves_its_plan_and_measurements_on_resume`
 
-Records from the first explicit-history format, without prompt offsets, retain that format's
-interpretation of the first message as the submitted prompt.
-
-`verified-by: bravebot_tui::sessions::history_without_prompt_offsets_keeps_its_existing_interpretation`
-
 If a worker loses its conversation, earlier turns keep their prompts and metadata. Their old
 message ranges cannot refer to later work in the new context. Rewinding across that failure
 restores the earlier context and its ranges together.

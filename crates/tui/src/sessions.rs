@@ -217,18 +217,12 @@ pub struct StoredTurn {
     pub start: usize,
     pub end: usize,
     /// The submitted prompt's offset in this span, or absent if it never entered the context.
-    /// The first history format assumed offset zero; retain that interpretation for those records.
-    #[serde(default = "first_prompt_offset")]
     pub prompt_offset: Option<usize>,
     /// The worker lost its conversation. Earlier ranges belong to the context before this reset.
     #[serde(default)]
     pub reset_context: bool,
-    /// Absent for old history whose outcome was not recorded.
+    /// Absent when the turn ended with no recorded ending.
     pub outcome: Option<StoredOutcome>,
-}
-
-fn first_prompt_offset() -> Option<usize> {
-    Some(0)
 }
 
 /// A recorded ending, with only the safe explanation already composed by the interface.
