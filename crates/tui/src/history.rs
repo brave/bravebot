@@ -143,17 +143,20 @@ impl History {
         self.claims.last().expect("a submitted prompt").0
     }
 
-    /// Cancel one submission without removing other submissions that share its words.
-    pub(crate) fn withdraw(&mut self, ticket: Ticket) {
+    /// Cancel one submission without removing other submissions that share its words. Reports
+    /// whether an entry left the list.
+    pub(crate) fn withdraw(&mut self, ticket: Ticket) -> bool {
         self.leave();
         let Some(at) = self.claims.iter().position(|(id, _)| *id == ticket) else {
-            return;
+            return false;
         };
         self.claims[at].1 -= 1;
         if self.claims[at].1 == 0 {
             self.claims.remove(at);
             self.entries.remove(at);
+            return true;
         }
+        false
     }
 
     /// How many prompts are stored.

@@ -3460,4 +3460,30 @@ mod preserved_history {
         assert_eq!(session.history.entries(), before);
         assert_eq!(bravebot_tui::store::load_history(), before);
     }
+
+    /// A cancellation that removed nothing must leave the file alone, because a second session
+    /// has been appending to it since this one loaded and holds prompts this one has never seen.
+    #[test]
+    fn cancelling_a_generated_tick_keeps_what_another_session_recorded() {
+        let _scratch = Scratch::new("generated-recall-elsewhere");
+        let mut session = Session::new("test").with_stored_history();
+        submit(&mut session, "earlier prompt");
+        session.complete("done", vec![], 0);
+        bravebot_tui::store::append_history(&bravebot_tui::history::Entry::sent(
+            "prompt from a second session",
+            None,
+        ));
+        let prompt = session
+            .start_loop(bravebot_tui::loops::parse("1m check again").unwrap())
+            .unwrap();
+        session.stopped(Some(0));
+        session.restore(prompt);
+        assert_eq!(
+            bravebot_tui::store::load_history()
+                .iter()
+                .map(|entry| entry.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["earlier prompt", "prompt from a second session"]
+        );
+    }
 }

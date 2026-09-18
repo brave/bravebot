@@ -166,13 +166,16 @@ work already shown stays in the transcript even though its prompt leaves input r
 Cancellation removes the running submission's claim on its recall entry, including when quitting.
 Queued submissions keep their entries. Where consecutive duplicates share an entry, it remains
 while any submission it represents has not been cancelled. Cancelling a generated turn removes no
-input-recall entry, since that turn did not submit one.
+input-recall entry, since that turn did not submit one. A cancellation that removes no entry leaves
+the stored history as it stands, because another session may have added to it since this one read it
+and writing this session's list back would take those prompts away.
 
 `verified-by: bravebot_tui::sessions::cancelling_removes_only_the_running_prompt_from_recall`
 `verified-by: bravebot_tui::sessions::quitting_removes_only_the_running_prompt_from_recall`
 `verified-by: bravebot_tui::sessions::cancelling_a_duplicate_keeps_the_earlier_submission_in_recall`
 `verified-by: bravebot_tui::sessions::cancelling_queued_duplicates_keeps_recall_until_the_last_submission`
 `verified-by: bravebot_tui::sessions::cancelling_a_generated_tick_leaves_input_recall_unchanged`
+`verified-by: bravebot_tui::sessions::cancelling_a_generated_tick_keeps_what_another_session_recorded`
 
 `verified-by: bravebot_tui::sessions::cancelled_work_survives_resume_but_leaves_input_recall`
 

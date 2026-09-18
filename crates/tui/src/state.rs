@@ -5503,10 +5503,10 @@ impl Session {
     }
 
     fn forget_cancelled_prompt(&mut self) {
-        if let Some(ticket) = self.recall.take() {
-            self.history.withdraw(ticket);
-        }
-        if self.persist {
+        let Some(ticket) = self.recall.take() else {
+            return;
+        };
+        if self.history.withdraw(ticket) && self.persist {
             crate::store::save_history(self.history.entries());
         }
     }
