@@ -527,6 +527,14 @@ granted one or be absent. `From:` is the mailbox the grant is for, or absent: a 
 is a different principal. Unknown fields in `perform` args are refused. Without that, one approved
 recipient is a channel to anyone.
 
+**A field that becomes a header is refused if it could close one.** Comparing addresses is not
+enough on its own: a value carrying a carriage return or a line feed ends the header it sits in and
+begins another, so a subject of `hi\r\nBcc: quiet@example.com` adds a recipient no grant named and
+no comparison saw. The subject is the field that matters, because it is the one nothing else checks.
+Refused rather than stripped, since removing the break would send something other than what was
+approved. Found by building this: the equality rule above is satisfied by a message that carries a
+second recipient inside a field it does not look at.
+
 **The recipient is bounded and the body is not**, which is the part that is easy to miss. One
 address says nothing about what may be written to it, so an approved `send_mail` is a channel of
 unlimited capacity. The body is content carried to an effect and takes the release rule, but that
@@ -599,6 +607,13 @@ redirect returns a code to the helper, which relays it over the control socket, 
 exchanges code and verifier for the tokens, which land in its store under `_bravevault`. bravebot
 is on none of these legs, and a code intercepted in the person's account is worthless without the
 verifier.
+
+**Which mailbox consented is its own question, and a send scope cannot answer it.** The item has to
+record the account it acts as, so an approval can name a sender and the item can be told from a
+second one for the same provider. Reading that from the mail API is a read, which is exactly what
+this consent does not carry, so it is asked for separately: a scope that discloses the address and
+nothing about any message. Found by building this — the obvious call is refused by the scope the
+flow has just been granted.
 
 **Per message.**
 
@@ -917,12 +932,14 @@ enforceable consequence is test 9.
     receives no client secret. The helper relays a code and nothing else.
 24. Every envelope address matches the granted recipient or is absent, `Cc`, `Bcc`, `Reply-To`
     and `From` included. Unknown fields in `perform` args are refused.
-25. A standing grant is refused when no helper session is connected for that uid. A process that
+25. A recipient or subject carrying a carriage return or a line feed is refused before the
+    credential is exchanged, so no field that becomes a header can open another.
+26. A standing grant is refused when no helper session is connected for that uid. A process that
     is not the helper binary cannot create one. A helper session for one uid does not redeem
     another uid's grants.
-26. No permission mode answers a credential approval, bypass included, and a delegate spawned
+27. No permission mode answers a credential approval, bypass included, and a delegate spawned
     under bypass inherits no credential capability from it.
-27. An unattended run with no standing grant refuses, and never prompts.
+28. An unattended run with no standing grant refuses, and never prompts.
 
 **Blocked, not a gate.** A `send_mail` body above the releasable level should be refused without a
 per-call lowering, and that test cannot fail while the planner's output is labelled releasable
@@ -931,19 +948,19 @@ confidentiality propagates through the planner. Test 16 is what bounds the body 
 
 **Phase 4, substitution**
 
-28. A placeholder appearing anywhere other than the position the grant names fails the request.
-29. A redirect is not followed by the proxy on the client's behalf, and a hop that is followed
+29. A placeholder appearing anywhere other than the position the grant names fails the request.
+30. A redirect is not followed by the proxy on the client's behalf, and a hop that is followed
     revalidates the destination against the grant first.
-30. Of `CONNECT`, the TLS server name and the inner `Host` or `:authority`, every field present
+31. Of `CONNECT`, the TLS server name and the inner `Host` or `:authority`, every field present
     on the connection matches the grant and the others; a mismatch between any two fails the
     request. Cleartext HTTP is matched on `Host` alone. Matching is on the exact name, never a
     suffix or a literal address.
-31. A child that ignores its proxy configuration cannot authenticate with a broker token, and the
+32. A child that ignores its proxy configuration cannot authenticate with a broker token, and the
     token does not leave the machine.
-32. A request with an unsigned payload, a missing date, or a signing scheme the boundary does not
+33. A request with an unsigned payload, a missing date, or a signing scheme the boundary does not
     implement is refused rather than forwarded.
-33. The local certificate authority is absent from the person's login keychain.
-34. A pinned server and a runtime whose trust store we cannot configure produce distinct errors,
+34. The local certificate authority is absent from the person's login keychain.
+35. A pinned server and a runtime whose trust store we cannot configure produce distinct errors,
     each naming its own cause.
 
 **Phases 5 and 6 have no tests here.** Neither is specified to the level that would make one

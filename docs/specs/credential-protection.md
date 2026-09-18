@@ -668,5 +668,7 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
 - **Held is where most credentials live today**, and its obligations are the cost of that being
   true rather than a promise that it is rare.
 
-- **Nothing is implemented.** No authority, no performer, no scan, so the walk has nowhere to run.
-  Every clause here is a target.
+- **Almost nothing is implemented.** There is no scan, and no authority at the tier these clauses
+  describe. What exists is one performer: a credential a vault obtained itself, and a mail send
+  carried out against it so that the asking agent never holds the token. That much of the walk runs;
+  the rest of every clause here is a target.
