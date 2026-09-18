@@ -159,11 +159,22 @@ honest about what it covers, and the refusal is made twice: once where the promp
 again where an answer is acted on, since an invariant about what the trusted list may hold does
 not rest on a drawing.
 
+**A `>` redirection is withheld on the same grounds.** An entry records no destination any more
+than it records a source, so an entry made at a write prompt would cover this program and these
+arguments with the redirection gone, which is a line the person never read. The two directions are
+one rule, and this is the direction where the cost of offering the key is plainest: a line that
+writes is asked about every time whatever is recorded ([RUN-19](#RUN-19)), so `a` cannot stop the
+next prompt for *this* line, and the only thing it could ever grant is the bare one. The person did
+read the program and the arguments the entry would hold, which is what makes this narrower than a
+source; what they did not read is the line that entry covers. The refusal is made twice, as above.
+
 `verified-by: bravebot_core::policy::private_input_asks_even_for_a_vouched_line`
 `verified-by: bravebot_agent::cmdline::an_input_redirection_is_private_input`
 `verified-by: bravebot_agent::turn::a_line_that_reads_a_file_is_not_remembered_however_it_is_answered`
+`verified-by: bravebot_agent::turn::a_line_that_writes_is_not_remembered_however_it_is_answered`
 `verified-by: bravebot_tui::confirm::a_run_reading_a_file_offers_no_standing_permission`
 `verified-by: bravebot_tui::confirm::a_run_that_releases_private_data_offers_no_standing_permission`
+`verified-by: bravebot_tui::confirm::a_run_writing_a_file_offers_no_standing_permission`
 `verified-by: bravebot_tui::confirm::pressing_always_at_a_private_input_prompt_grants_nothing`
 
 <a id="RUN-7"></a>
@@ -784,9 +795,9 @@ anywhere but the workspace root, which takes in a line naming a directory
 ([CMDLINE-12](command-line.md#CMDLINE-12)) and a session with no root known: those are asked about
 whatever is recorded, so the key would stop no prompt. Where the line writes an assignment in front of
 a program, which is asked about whatever is recorded for the same reason and which `a` is not offered
-for either ([RUN-8](#RUN-8)). `a` stays on a prompt for a line that writes
-because it still decides the label of what that line prints, which is the half this key does not
-grant. In a session that adds
+for either ([RUN-8](#RUN-8)). `a` is not offered for a line that writes either, and
+[RUN-6](#RUN-6) gives the reason: the entry would hold no destination, so the only line it could
+cover is this one with the redirection gone. In a session that adds
 nothing to `~/.bravebot`, which keeps a closed list of
 what still reaches the filesystem and this is not on it ([incognito.md](../incognito.md)). In a
 session answering every permission question without asking anybody, which draws no run prompt for a

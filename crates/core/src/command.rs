@@ -439,11 +439,17 @@ impl Plan {
     /// the entry records the tree, so a line running outside the workspace root is a line an entry
     /// can hold exactly as written.
     ///
+    /// A redirection is among them, in both directions. An entry holds no destination any more than
+    /// it holds a source, so an entry made while output was redirected would cover the same program
+    /// with the redirection gone, which is a line nobody read. A line that writes is asked about
+    /// every time whatever is recorded, so the key stops no prompt for the line it was pressed on:
+    /// the only thing it could ever grant is the bare one.
+    ///
     /// Which reason it is belongs to whoever explains the refusal, not here.
     ///
     /// [RUN-8]: ../../../docs/specs/tools/run.md
     pub fn can_be_remembered(&self) -> bool {
-        !self.releases_private() && !self.carries_an_assignment()
+        !self.releases_private() && !self.carries_an_assignment() && self.writes.is_empty()
     }
 
     /// The plan as a person should read it before approving.

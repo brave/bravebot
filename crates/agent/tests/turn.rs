@@ -10116,6 +10116,45 @@ fn a_line_carrying_an_environment_assignment_is_not_remembered_however_it_is_ans
     );
 }
 
+/// A line naming a file to write is asked about every time, so nothing it is answered with may put
+/// the program on the session's list. Pressing `a` here could never stop the next prompt for this
+/// line; the entry it would make holds no redirection, so the only line it could cover is the bare
+/// one. Recorded, that entry runs `sh check.sh` unasked on the next call and labels what it prints
+/// trusted, which is a line nobody read reaching the planner's context.
+///
+/// The prompt is asserted to have happened, because an empty list is also what a line nobody was
+/// asked about leaves behind: without that the test would pass on the bug it exists to catch.
+#[test]
+fn a_line_that_writes_is_not_remembered_however_it_is_answered() {
+    let scratch = Scratch::new("run-always-write");
+    std::fs::write(scratch.path.join("check.sh"), "echo checked\n").unwrap();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    let seen = confirmer.seen.clone();
+
+    let outcome = a_run_turn(
+        &scratch,
+        r#"{"command":"sh check.sh > out.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "the line ran without anybody being asked, so nothing here is about an answer"
+    );
+    assert!(
+        scratch.path.join("out.txt").exists(),
+        "the approved line did not run"
+    );
+    assert!(
+        outcome.programs.is_empty(),
+        "a line naming a file to write was recorded as vouched for, so the same line without its \
+         redirection would run unasked"
+    );
+}
+
 /// Approving once is not approving always: a run approved for this call alone leaves the session
 /// vouching for nothing.
 #[test]
