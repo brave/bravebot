@@ -222,6 +222,19 @@ impl RunRequest {
         self.plan.carries_an_assignment()
     }
 
+    /// Whether the line names a file to write.
+    ///
+    /// The third reason, and the one where the key would grant only what nobody asked for: a line
+    /// that writes is asked about every time whatever is recorded, so `a` cannot stop the next
+    /// prompt for this line. The entry it would make holds no redirection, so the line it covers is
+    /// this one with the destination gone.
+    ///
+    /// Asked apart from [`RunRequest::can_be_remembered`] for the reason
+    /// [`RunRequest::carries_an_assignment`] is.
+    pub fn writes_a_file(&self) -> bool {
+        !self.plan.writes.is_empty()
+    }
+
     /// Whether an entry could record this line at all, which is what `a` would make.
     ///
     /// One question rather than a list of reasons repeated at each place that asks, so a reason

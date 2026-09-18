@@ -717,6 +717,9 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         if request.carries_an_assignment() {
             why.push(t!(run_assignment_not_remembered));
         }
+        if request.writes_a_file() {
+            why.push(t!(run_write_not_remembered));
+        }
         for reason in why {
             lines.push(Line::from(Span::styled(
                 format!("  {reason}"),
@@ -2363,6 +2366,68 @@ mod tests {
             },
             // What the driver hands over for such a line: it is asked about whatever is recorded,
             // so there is nowhere an answer to it would be written.
+            record: None,
+            pattern: None,
+        }
+    }
+
+    /// A line naming a file to write asks every time whatever is remembered, so `a` cannot stop the
+    /// next prompt for it. What the key could do instead is the whole of the problem: an entry holds
+    /// no redirection, so it would come out covering this program and these arguments with the
+    /// destination gone, granting a bare line the person never read. Both layers withhold the key,
+    /// and the sentence has to name this reason rather than one of the other two.
+    #[test]
+    fn a_run_writing_a_file_offers_no_standing_permission() {
+        let drawn = rendered_run(&a_run_writing_a_file());
+        assert!(
+            drawn.contains("cannot be remembered"),
+            "the prompt offered to remember a run that will always ask: {drawn}"
+        );
+        assert!(
+            drawn.contains("a line naming a file to write"),
+            "the prompt did not say which of the reasons this is: {drawn}"
+        );
+
+        let pressed = run_answer_for(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            &a_run_writing_a_file(),
+        );
+        assert_eq!(
+            pressed, None,
+            "`a` answered a prompt that does not offer it"
+        );
+
+        let shouted = run_answer_for(
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE),
+            &a_run_writing_a_file(),
+        );
+        assert_eq!(shouted, None, "the shifted spelling still answered");
+    }
+
+    /// A compiled plan that redirects its output to a file, as `sh check.sh > out.txt` compiles.
+    /// The argv holds the script and not the destination, which is exactly why an entry made here
+    /// would cover `sh check.sh` on its own.
+    fn a_run_writing_a_file() -> RunRequest {
+        let destination = std::path::PathBuf::from("/home/someone/project/out.txt");
+        let step = bravebot_core::command::Step {
+            program: "sh".to_string(),
+            resolved: std::path::PathBuf::from("/bin/sh"),
+            args: vec!["check.sh".to_string()],
+            environment: Vec::new(),
+            routes: vec![bravebot_core::command::Route::Stdout {
+                path: destination.clone(),
+                append: false,
+            }],
+        };
+        RunRequest {
+            plan: bravebot_core::command::Plan {
+                line: "sh check.sh > out.txt".to_string(),
+                directory: std::path::PathBuf::from("/home/someone/project"),
+                steps: bravebot_core::command::Steps::Pipeline(vec![step]),
+                writes: vec![destination],
+                reads: Vec::new(),
+                stdin: None,
+            },
             record: None,
             pattern: None,
         }
