@@ -96,6 +96,9 @@ impl Sandbox for SeatbeltSandbox {
             level: ConfinementLevel::Kernel,
             mechanisms: vec!["seatbelt"],
             network_denial_enforced: true,
+            // A profile is text the kernel reads as the process starts, so a path that is
+            // not there yet is named in one and the file can be created afterwards.
+            grants_paths_that_do_not_exist: true,
         }
     }
 
@@ -188,6 +191,53 @@ mod tests {
         SeatbeltSandbox
             .command("/usr/bin/true", &[], &policy)
             .expect("a path that is not there yet is a grant, not a refusal");
+    }
+
+    /// A caller reads this to decide whether an absent path in a policy needs creating
+    /// first or the directory holding it named instead, and a report disagreeing with the
+    /// backend costs it one of those on a platform where neither was necessary. Both
+    /// directions of disagreement cost that, which is why the assertion ties the report to
+    /// what the backend does rather than pinning a value.
+    ///
+    /// What the kernel installs rather than what the profile text holds: a rule the profile
+    /// compiler refuses is a grant this backend cannot make however the policy named it,
+    /// and a capability claiming otherwise is the overstatement SANDBOX-5 exists to stop.
+    #[test]
+    fn a_path_that_does_not_exist_is_granted_exactly_where_the_capability_says_so() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-absent-path-capability");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let absent = dir.join("not-created-yet");
+        assert!(
+            !absent.exists(),
+            "the path has to be absent for this to say anything"
+        );
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_write(&absent);
+        let granted = sandbox
+            .command("/usr/bin/true", &[], &policy)
+            .ok()
+            .and_then(|mut command| {
+                command
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .ok()
+            })
+            .is_some_and(|status| status.success());
+
+        assert_eq!(
+            granted,
+            sandbox.capabilities().grants_paths_that_do_not_exist,
+            "what this backend reports about a path that does not exist is not what it does"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

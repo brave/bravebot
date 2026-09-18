@@ -103,6 +103,16 @@ pub struct Capabilities {
     pub mechanisms: Vec<&'static str>,
     /// Whether network denial is enforced by the kernel rather than by convention.
     pub network_denial_enforced: bool,
+    /// Whether a grant may name a path that does not exist yet.
+    ///
+    /// A caller assembling a policy out of paths whose existence is not its own to decide
+    /// has three answers for one that is absent, and each costs something: creating the
+    /// file writes where nothing was asked for, naming the directory holding it grants
+    /// wider than the path, and leaving the grant out refuses the program a path somebody
+    /// meant it to have. Which of the three is necessary is what this reports, asked of the
+    /// backend rather than of the platform the build targets: a caller reading the platform
+    /// instead pays one of those costs on the platform where neither was necessary.
+    pub grants_paths_that_do_not_exist: bool,
 }
 
 #[cfg(test)]
