@@ -2511,6 +2511,8 @@ mod tests {
             level,
             mechanisms: vec!["a mechanism"],
             network_denial_enforced,
+            // Nothing `doctor` prints depends on this, so the report reads the same either way.
+            grants_paths_that_do_not_exist: false,
         }))
         .lines
     }

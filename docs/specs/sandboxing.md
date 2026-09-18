@@ -93,13 +93,18 @@ the sandbox permits.
 ### SANDBOX-5: capabilities report what the kernel actually enforces, and never more
 
 A backend says what it can enforce rather than what it was asked for, and a policy demanding
-something the backend cannot deliver is refused. `bravebot doctor` reports the level in force.
+something the backend cannot deliver is refused. Which paths it can name is reported the same way.
+`bravebot doctor` reports the level in force.
 
 **Why.** An overstated capability is the same failure as a silent fallback, reached by a different
-road.
+road. An understated one costs the caller a grant it did not mean: a caller that cannot ask whether
+a path missing from the disk is nameable reads the platform instead, and then creates a file nothing
+asked for, or names the directory holding it, on the platform where neither was necessary.
 
 `verified-by: bravebot_sandbox::macos::capabilities_report_kernel_enforcement`
 `verified-by: bravebot_sandbox::linux::capabilities_do_not_overstate_network_denial`
+`verified-by: bravebot_sandbox::linux::a_path_that_does_not_exist_is_granted_exactly_where_the_capability_says_so`
+`verified-by: bravebot_sandbox::macos::a_path_that_does_not_exist_is_granted_exactly_where_the_capability_says_so`
 `verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused`
 `verified-by: bravebot_sandbox::linux::a_policy_requiring_subprocess_denial_is_refused`
 `verified-by: bravebot_sandbox::lib::an_unavailable_backend_reports_no_confinement`
@@ -115,7 +120,8 @@ A policy is granted as written. A backend that cannot install a grant for one of
 the policy and names that path, rather than confining the process to the rest of them. Where a
 backend can grant a path that does not exist yet, the profile carries that grant as named; where it
 cannot, the refusal arrives before the process starts, and again where a path goes away between
-that refusal and the exec.
+that refusal and the exec. Which of the two a backend does is in its capabilities
+([SANDBOX-5](#SANDBOX-5)).
 
 **Why.** A policy is the list a caller decided a program may reach, so a process running under
 fewer of those paths than the policy names is the silent degradation [SANDBOX-1](#SANDBOX-1)
@@ -375,10 +381,11 @@ output trusted.
   all and the policy is refused ([SANDBOX-6](#SANDBOX-6)). A scope naming `~/.ssh/known_hosts` on a
   fresh account is therefore a `run` that does not start rather than a push that fails for no stated
   reason, and what the compiler owes the profile is to create the file, name the directory holding
-  it, or leave the scope out. The program lists name more such paths than the base or any scope
-  does, since a machine carries the toolchain one list names and none of the rest, so leaving an
-  absent row out is what the compiler owes a list as well: a machine with no `~/.pyenv` is not a
-  machine where every `run` is refused.
+  it, or leave the scope out, and which of those is necessary is what the backend reports about
+  naming a path that does not exist rather than the platform the build targets. The program lists
+  name more such paths than the base or any scope does, since a machine carries the toolchain one
+  list names and none of the rest, so leaving an absent row out is what the compiler owes a list as
+  well: a machine with no `~/.pyenv` is not a machine where every `run` is refused.
 - Windows has published binaries and no backend, and [SANDBOX-1](#SANDBOX-1) refuses to run a
   process it cannot confine, so confinement there refuses every program until that platform has one
   (issue #88). Running unconfined where no backend exists is the degradation that clause forbids.

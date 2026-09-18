@@ -144,6 +144,9 @@ impl Sandbox for Unavailable {
             level: ConfinementLevel::None,
             mechanisms: Vec::new(),
             network_denial_enforced: false,
+            // Nothing is granted here at all, so claiming a kind of grant it installs
+            // would be a claim about a process this backend never starts.
+            grants_paths_that_do_not_exist: false,
         }
     }
 
@@ -187,6 +190,7 @@ mod tests {
         let caps = Unavailable.capabilities();
         assert_eq!(caps.level, ConfinementLevel::None);
         assert!(!caps.network_denial_enforced);
+        assert!(!caps.grants_paths_that_do_not_exist);
     }
 
     /// Either a real backend is returned, or the lookup refuses. It must never hand

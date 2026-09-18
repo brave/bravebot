@@ -166,6 +166,9 @@ impl Sandbox for LandlockSandbox {
             level: ConfinementLevel::Partial,
             mechanisms: vec!["landlock"],
             network_denial_enforced: false,
+            // A rule is a right attached to an open descriptor, so a path nothing can
+            // open cannot be named in one and a policy naming one is refused.
+            grants_paths_that_do_not_exist: false,
         }
     }
 
@@ -596,6 +599,38 @@ mod tests {
                 other => panic!("expected SetupFailed naming the path, got: {other:?}"),
             }
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A caller reads this to decide whether an absent path in a policy needs creating
+    /// first or the directory holding it named instead, and a report disagreeing with the
+    /// backend costs it one of those on a platform where neither was necessary. Both
+    /// directions of disagreement cost that, which is why the assertion ties the report to
+    /// what the backend does rather than pinning a value.
+    #[test]
+    fn a_path_that_does_not_exist_is_granted_exactly_where_the_capability_says_so() {
+        let dir = crate::testutil::scratch_dir("bravebot-landlock-absent-path-capability");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let absent = dir.join("not-created-yet");
+
+        // The same grant over a path that is there, so a backend refusing every policy
+        // handed to it does not read as one refusing this path.
+        LandlockSandbox
+            .command("/bin/true", &[], &loadable_policy().allow_write(&dir))
+            .expect("a grant naming a path that is there is one this backend installs");
+
+        let granted = LandlockSandbox
+            .command("/bin/true", &[], &loadable_policy().allow_write(&absent))
+            .is_ok();
+        assert_eq!(
+            granted,
+            LandlockSandbox
+                .capabilities()
+                .grants_paths_that_do_not_exist,
+            "what this backend reports about a path that does not exist is not what it does"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
