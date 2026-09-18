@@ -31,8 +31,3 @@ docs/specs/credential-protection.md:CRED-23: credential buffers are cleared, and
 docs/specs/credential-protection.md:CRED-24: a credential never travels as a command-line argument
 docs/specs/credential-protection.md:CRED-25: every held credential names what would end it
 docs/specs/credential-protection.md:CRED-26: where a credential can be bound to its presenter, that is the form asked for
-docs/specs/layering.md:LAYER-2: `bravebot-core` and `bravebot-agent` are both the driver
-docs/specs/processors.md:PROC-9: the confinement is the capability set, not an operating system boundary
-docs/specs/processors.md:PROC-10: a check over one slot is not put in a subprocess either, and for the same reason
-docs/specs/routing.md:ROUTE-7: before adding a tool, ask what its routing field is
-docs/specs/tools/tool-surface.md:TOOL-2: before adding a tool, ask what its routing field is
