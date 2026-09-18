@@ -2133,6 +2133,7 @@ fn rewind(
     *programs = snapshot.programs;
 
     session.transcript.truncate(snapshot.transcript_len);
+    session.rewind_history();
     stored.truncate_audit(session.turns + 1);
 
     if snapshot.turns == 0 && !snapshot.was_wrote {
@@ -2141,7 +2142,7 @@ fn rewind(
         stored.save(
             &snapshot.title,
             crate::sessions::Standing {
-                history: None,
+                history: Some(session.turn_history()),
                 conversation: &conversation.snapshot(),
                 turns: session.turns,
                 tokens: session.tokens,
@@ -2525,7 +2526,7 @@ fn event_loop(
                     stored.move_to(
                         workspace.root(),
                         crate::sessions::Standing {
-                            history: None,
+                            history: Some(session.turn_history()),
                             conversation: &conversation.snapshot(),
                             turns: session.turns,
                             tokens: session.tokens,
@@ -2608,7 +2609,7 @@ fn event_loop(
                 stored.save(
                     &title,
                     crate::sessions::Standing {
-                        history: None,
+                        history: Some(session.turn_history()),
                         conversation: &conversation.snapshot(),
                         turns: session.turns,
                         tokens: session.tokens,
@@ -2656,7 +2657,7 @@ fn event_loop(
                         stored.save(
                             &title,
                             crate::sessions::Standing {
-                                history: None,
+                                history: Some(session.turn_history()),
                                 conversation: &conversation.snapshot(),
                                 turns: session.turns,
                                 tokens: session.tokens,
@@ -2713,7 +2714,7 @@ fn event_loop(
                         stored.save(
                             &title,
                             crate::sessions::Standing {
-                                history: None,
+                                history: Some(session.turn_history()),
                                 conversation: &conversation.snapshot(),
                                 turns: session.turns,
                                 tokens: session.tokens,
@@ -2793,6 +2794,7 @@ fn event_loop(
                 };
                 let mut sending = Some((prompt, whose));
                 while let Some((prompt, wrote)) = sending {
+                    let history_start = conversation.recounted().len();
                     let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
                     session.open_rewind_point(point, prompt.clone());
                     let _ = workspace.take_backups();
@@ -2825,6 +2827,7 @@ fn event_loop(
                     servers = continued.servers;
                     asked_about = continued.asked_about;
 
+                    session.record_turn(history_start, &conversation);
                     session.keep_backups(workspace.take_backups());
 
                     // Written after each turn rather than at the end, because the end may never
@@ -2833,7 +2836,7 @@ fn event_loop(
                     stored.save(
                         &prompt,
                         crate::sessions::Standing {
-                            history: None,
+                            history: Some(session.turn_history()),
                             conversation: &conversation.snapshot(),
                             turns: session.turns,
                             tokens: session.tokens,
@@ -2886,7 +2889,7 @@ fn event_loop(
                 stored.save(
                     &line,
                     crate::sessions::Standing {
-                        history: None,
+                        history: Some(session.turn_history()),
                         conversation: &conversation.snapshot(),
                         turns: session.turns,
                         tokens: session.tokens,
@@ -4988,7 +4991,7 @@ fn run_turn_animated(
             // shows it. That is what makes a long turn legible while it runs.
             crate::remote_confirm::ToMain::Todos(rows) => session.set_todos(rows),
             crate::remote_confirm::ToMain::Spent(spent) => session.progressed(spent),
-            crate::remote_confirm::ToMain::PromptRecorded(_) => {}
+            crate::remote_confirm::ToMain::PromptRecorded(at) => session.prompt_recorded(at),
             crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
             crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
             crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),

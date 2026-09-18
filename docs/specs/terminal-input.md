@@ -120,8 +120,8 @@ done something that is on the screen, there are prompts waiting behind it, or th
 The first two mean there is an order to keep, and a line put back in the box would be out of it.
 The third is a box that is taken: what is in it is the line the person is looking at, whether they
 typed it during the turn or walked back to it, so the prompt has nowhere to be put back to. Taking
-it out of the transcript and the history anyway would leave nothing to ask for those words back
-with.
+it out of the transcript would lose that record. Input recall remains separate: [sessions.md](sessions.md) removes cancelled prompts from recall
+even when their transcript entries remain.
 
 **Nothing waits out work that is only being waited on.** A reply stops whether or not it has begun
 arriving, and whether it is the planner's or a processor's; a running command is killed; a pause

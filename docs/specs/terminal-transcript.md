@@ -35,7 +35,13 @@ A wrapped reply shows its end as it lands. Scrolling back changes the view and h
 ### VIEW-2: a resumed session shows what the earlier turns did
 
 The trail, the plan worked to, the calls made, and what has been spent all come back, so reading a
-transcript back does not depend on remembering the session.
+transcript back does not depend on remembering the session. Each recorded turn keeps its prompt and
+outcome, including failures and cancellation after visible work. A task list keeps its recorded
+unfinished items and stays on its own turn; a following turn with no list does not inherit it.
+
+`verified-by: bravebot_tui::sessions::reopening_keeps_exact_prompts_and_turn_count`
+`verified-by: bravebot_tui::sessions::reopening_keeps_failure_and_cancellation_in_export`
+`verified-by: bravebot_tui::sessions::reopening_keeps_task_ownership_and_recorded_measurements`
 
 `verified-by: bravebot_tui::state::a_resumed_turn_shows_the_trail_it_left`
 `verified-by: bravebot_tui::state::a_resumed_turn_shows_the_plan_it_worked_to`

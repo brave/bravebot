@@ -2726,14 +2726,14 @@ mod preserved_history {
         let record = save(&scratch.project, &session, &conversation);
         let reopened = reopen(&scratch.project, &record);
         assert_eq!(reopened.turns, 5);
-        assert!(reopened.turn_history().get(1).is_some_and(|turn| matches!(
-            turn.outcome,
+        assert!(matches!(
+            reopened.turn_history()[1].outcome,
             Some(sessions::StoredOutcome::Failed { .. })
-        )));
-        assert!(reopened.turn_history().get(2).is_some_and(|turn| matches!(
-            turn.outcome,
+        ));
+        assert!(matches!(
+            reopened.turn_history()[2].outcome,
             Some(sessions::StoredOutcome::Cancelled { .. })
-        )));
+        ));
 
         assert_eq!(reopened.spend_by_turn().get(&5), Some(&5));
         assert_eq!(reopened.todos_by_turn(), session.todos_by_turn());

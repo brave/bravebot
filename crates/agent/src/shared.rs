@@ -138,6 +138,13 @@ macro_rules! reports {
 }
 
 impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
+    fn prompt_recorded(&mut self, at: usize) {
+        // A delegate has its own conversation; its offsets do not describe the parent turn.
+        if self.from.is_none() {
+            self.lent.hold().prompt_recorded(at);
+        }
+    }
+
     reports! {
         fn todos(&mut self, rows: Vec<Row>);
         fn output_tokens(&mut self, written: u64);

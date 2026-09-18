@@ -286,6 +286,10 @@ impl RemoteReporter {
 }
 
 impl Reporter for RemoteReporter {
+    fn prompt_recorded(&mut self, at: usize) {
+        let _ = self.outbound.send(ToMain::PromptRecorded(at));
+    }
+
     fn spent(&mut self, spent: bravebot_agent::Spent) {
         let _ = self.outbound.send(ToMain::Spent(spent));
     }
