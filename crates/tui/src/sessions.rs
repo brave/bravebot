@@ -164,6 +164,9 @@ pub struct Record {
     pub build: Option<String>,
     /// The conversation, which is what resuming restores.
     pub conversation: Snapshot,
+    /// Explicit display history; absent in older records.
+    #[serde(default)]
+    pub history: Option<Vec<StoredTurn>>,
     /// Questions asked beside the work, and their answers, oldest first.
     ///
     /// Beside the conversation and never in it. A resume puts these back into the view a person
@@ -201,6 +204,40 @@ pub struct Record {
     /// a rewind may reach.
     #[serde(default)]
     pub rewind: Vec<StoredRewind>,
+}
+
+/// Display-only turn boundaries in the recounted conversation. These never enter planner context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredTurn {
+    pub number: usize,
+    /// Absent when cancellation returned the prompt to the editor.
+    pub prompt: Option<String>,
+    /// Inclusive start and exclusive end in `Conversation::recounted`, including its archive.
+    /// Messages are kept in the conversation alone, not copied from display-only output.
+    pub start: usize,
+    pub end: usize,
+    /// The submitted prompt's offset in this span, or absent if it never entered the context.
+    /// The first history format assumed offset zero; retain that interpretation for those records.
+    #[serde(default = "first_prompt_offset")]
+    pub prompt_offset: Option<usize>,
+    /// The worker lost its conversation. Earlier ranges belong to the context before this reset.
+    #[serde(default)]
+    pub reset_context: bool,
+    /// Absent for old history whose outcome was not recorded.
+    pub outcome: Option<StoredOutcome>,
+}
+
+fn first_prompt_offset() -> Option<usize> {
+    Some(0)
+}
+
+/// A recorded ending, with only the safe explanation already composed by the interface.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StoredOutcome {
+    Completed,
+    Failed { reason: String },
+    Cancelled { reason: String },
 }
 
 /// One point a rewind can go back to, as it is written down.
@@ -612,6 +649,7 @@ pub fn record_manifest_run(
     handle.save(
         prompt,
         Standing {
+            history: None,
             // Empty, and it has to be: a manifest run has no conversation, which is the same
             // fact that makes it unresumable. Filling this with something conversation-shaped
             // would make the picker offer to continue a run that cannot be continued.
@@ -817,6 +855,7 @@ pub struct Summary {
 #[derive(Debug, Clone, Copy)]
 pub struct Standing<'a> {
     pub conversation: &'a Snapshot,
+    pub history: Option<&'a [StoredTurn]>,
     pub turns: usize,
     pub tokens: u64,
     /// What each turn cost, by turn number.
@@ -1038,6 +1077,7 @@ impl Handle {
                 .collect(),
             build: Some(crate::BUILD.to_string()),
             conversation: standing.conversation.clone(),
+            history: standing.history.map(<[StoredTurn]>::to_vec),
             asides: standing.asides.iter().map(StoredAside::of).collect(),
             manifest: standing.manifest.cloned(),
             rewind: standing
@@ -1211,6 +1251,8 @@ pub fn load(project: &Path, id: &str) -> Option<Record> {
 /// beside it. The transcript wants them together, since both hang off the same entry.
 #[derive(Debug, Default)]
 pub struct Recalled {
+    pub history: Option<Vec<StoredTurn>>,
+    pub turns: Option<usize>,
     pub trails: BTreeMap<usize, Vec<crate::audit::TrailLine>>,
     pub todos: BTreeMap<usize, Vec<Row>>,
     /// Questions asked beside the work, oldest first, for the view rather than the transcript.
@@ -1220,6 +1262,8 @@ pub struct Recalled {
 /// Everything a resumed transcript needs beyond the conversation itself.
 pub fn recall(project: &Path, record: &Record) -> Recalled {
     Recalled {
+        history: record.history.clone(),
+        turns: Some(record.turns),
         trails: audit_of(project, &record.id),
         todos: record.todo_rows(),
         asides: record
@@ -2190,6 +2234,7 @@ mod tests {
 
     fn a_record() -> Record {
         Record {
+            history: None,
             id: "1-2".to_string(),
             directory: "/tmp/x".to_string(),
             branch: None,
@@ -2392,6 +2437,7 @@ mod tests {
         handle.save(
             "what do the specs say",
             Standing {
+                history: None,
                 conversation: &snapshot,
                 turns: 1,
                 tokens: 0,
@@ -2581,6 +2627,7 @@ mod tests {
         handle.save(
             "delete the tests",
             Standing {
+                history: None,
                 conversation: &empty,
                 turns: 1,
                 tokens: 0,

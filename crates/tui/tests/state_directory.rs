@@ -178,6 +178,7 @@ fn writing_a_session_narrows_the_state_directory() {
     handle.save(
         "a prompt worth keeping private",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,

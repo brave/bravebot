@@ -202,6 +202,7 @@ fn no_session_record_is_written() {
     handle.save(
         "something private",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,

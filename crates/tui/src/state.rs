@@ -933,6 +933,8 @@ pub struct Session {
     pub tier: String,
     /// How many turns have been submitted, which picks the indicator's word.
     pub turns: usize,
+    turn_history: Vec<crate::sessions::StoredTurn>,
+    prompt_at: Option<usize>,
     /// Tokens spent across the whole session.
     pub tokens: u64,
     /// What each turn cost, by turn number, and what was spent before the first turn under zero.
@@ -1257,6 +1259,8 @@ impl Session {
             // host has and what a test that does not care about tiers should see.
             tier: t!(status_no_subscription).to_string(),
             turns: 0,
+            turn_history: Vec::new(),
+            prompt_at: None,
             tokens: 0,
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
@@ -3879,6 +3883,57 @@ impl Session {
             Offered::Nothing | Offered::Shortcuts => return,
         }
         self.completion = 0;
+    }
+
+    /// The worker appended the submitted prompt at this recounted position.
+    pub fn prompt_recorded(&mut self, at: usize) {
+        self.prompt_at = Some(at);
+    }
+
+    /// Record one ended turn without copying model output out of the display.
+    /// Conversation offsets refer to the archive plus current messages, so compaction keeps them.
+    pub fn record_turn(&mut self, start: usize, conversation: &bravebot_agent::Conversation) {
+        use crate::sessions::{StoredOutcome, StoredTurn};
+        let entries = &self.transcript[self.turn_start.transcript_len.min(self.transcript.len())..];
+        let prompt = entries
+            .first()
+            .filter(|e| e.speaker == Speaker::User)
+            .map(|e| e.text.clone());
+        let outcome = self.finished.map(|finished| match finished.ending {
+            bravebot_agent::Ending::Done => StoredOutcome::Completed,
+            bravebot_agent::Ending::Failed(diagnosis) => StoredOutcome::Failed {
+                reason: entries
+                    .iter()
+                    .find(|e| e.speaker == Speaker::Failure)
+                    .map_or_else(|| failure_reason(diagnosis), |e| e.text.clone()),
+            },
+            bravebot_agent::Ending::Stopped { .. } => StoredOutcome::Cancelled {
+                reason: t!(turn_cancelled, turn = self.turns),
+            },
+        });
+        let end = conversation.recounted().len();
+        let reset_context = end < start;
+        self.turn_history.push(StoredTurn {
+            number: self.turns,
+            prompt,
+            start: if reset_context { 0 } else { start },
+            end,
+            reset_context,
+            prompt_offset: self
+                .prompt_at
+                .filter(|at| !reset_context && *at >= start && *at < end)
+                .map(|at| at - start),
+            outcome,
+        });
+    }
+
+    pub fn turn_history(&self) -> &[crate::sessions::StoredTurn] {
+        &self.turn_history
+    }
+
+    /// Remove display metadata with the turns a rewind removed.
+    pub fn rewind_history(&mut self) {
+        self.turn_history.retain(|turn| turn.number <= self.turns);
     }
 
     /// Fill the transcript from a conversation resumed off disk.
@@ -8835,14 +8890,9 @@ mod tests {
             Some("turn 1 cancelled"),
             "the prompt that stayed sent was not marked stopped"
         );
-        assert_eq!(
-            s.history
-                .entries()
-                .iter()
-                .map(|entry| entry.prompt.as_str())
-                .collect::<Vec<_>>(),
-            ["first"],
-            "the prompt was dropped from history with nowhere to go"
+        assert!(
+            s.history.entries().is_empty(),
+            "cancelled input stays out of recall"
         );
     }
 
@@ -9090,6 +9140,8 @@ mod tests {
             &conversation,
             "a title",
             &crate::sessions::Recalled {
+                history: None,
+                turns: None,
                 trails: Default::default(),
                 todos: Default::default(),
                 asides: Vec::new(),
@@ -9143,6 +9195,8 @@ mod tests {
             &conversation,
             "a title",
             &crate::sessions::Recalled {
+                history: None,
+                turns: None,
                 trails: Default::default(),
                 todos: Default::default(),
                 asides: Vec::new(),
@@ -10447,6 +10501,8 @@ mod tests {
             replayed(
                 messages,
                 crate::sessions::Recalled {
+                    history: None,
+                    turns: None,
                     trails: trails.clone(),
                     todos: BTreeMap::new(),
                     asides: Vec::new(),
@@ -10454,11 +10510,33 @@ mod tests {
             )
         }
 
-        fn replayed(messages: Vec<Message>, recalled: crate::sessions::Recalled) -> Vec<Entry> {
+        fn replayed(messages: Vec<Message>, mut recalled: crate::sessions::Recalled) -> Vec<Entry> {
             let mut conversation = Conversation::new();
+            let mut recorded = session();
+            let mut start = None;
+            // These fixtures contain only submitted prompts and their replies or calls.
+            // Record their known submissions instead of asking replay to infer boundaries.
             for message in messages {
+                if message.role == bravebot_aichat::protocol::Role::User {
+                    if let Some(start) = start {
+                        recorded.record_turn(start, &conversation);
+                    }
+                    let at = conversation.recounted().len();
+                    start = Some(at);
+                    for ch in message.content.text().chars() {
+                        recorded.type_char(ch);
+                    }
+                    recorded.submit().unwrap();
+                    recorded.prompt_recorded(at);
+                    recorded.complete("", Vec::new(), 0);
+                }
                 conversation.push(message);
             }
+            if let Some(start) = start {
+                recorded.record_turn(start, &conversation);
+            }
+            recalled.history = Some(recorded.turn_history().to_vec());
+            recalled.turns = Some(recorded.turns);
             let mut s = session();
             s.replay(&conversation, "a title", &recalled);
             s.transcript
@@ -10559,6 +10637,8 @@ mod tests {
                     Message::assistant("second reply"),
                 ],
                 crate::sessions::Recalled {
+                    history: None,
+                    turns: None,
                     trails: BTreeMap::new(),
                     todos: BTreeMap::from([(2, plan.clone())]),
                     asides: Vec::new(),
@@ -10609,6 +10689,8 @@ mod tests {
                     Message::assistant("second reply"),
                 ],
                 crate::sessions::Recalled {
+                    history: None,
+                    turns: None,
                     trails: BTreeMap::new(),
                     todos: written,
                     asides: Vec::new(),

@@ -273,4 +273,18 @@ mod tests {
             "a delegate's own total was reported as the turn's"
         );
     }
+
+    /// Nested delegates cannot replace the parent prompt's position with their own offset.
+    #[test]
+    fn only_the_parent_reports_its_prompt_position() {
+        let mut recording = RecordingReporter::default();
+        {
+            let lent = Lent::new(&mut recording);
+            lent.turn().prompt_recorded(7);
+            let mut delegate = lent.delegate(DelegateId::nth(1));
+            let nested = Lent::new(&mut delegate);
+            nested.turn().prompt_recorded(2);
+        }
+        assert_eq!(recording.prompts, [7]);
+    }
 }

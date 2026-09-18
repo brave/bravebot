@@ -450,6 +450,10 @@ pub struct Delegation {
 }
 
 pub trait Reporter {
+    /// The submitted prompt was appended at this position in the recounted conversation.
+    /// Context may precede it, and a context read can fail before it is appended.
+    fn prompt_recorded(&mut self, _at: usize) {}
+
     /// Cumulative usage from completed requests. Each report replaces the previous total.
     fn spent(&mut self, _spent: crate::outcome::Spent) {}
 
@@ -595,6 +599,7 @@ pub struct RecordingReporter {
     /// Every output-token count reported, in order.
     pub written: Vec<u64>,
     pub spent: Vec<crate::outcome::Spent>,
+    pub prompts: Vec<usize>,
     /// Every tool call announced as starting, in order.
     pub started: Vec<Activity>,
     /// Every tool call announced as finished, in order.
@@ -626,6 +631,10 @@ pub struct RecordingReporter {
 }
 
 impl Reporter for RecordingReporter {
+    fn prompt_recorded(&mut self, at: usize) {
+        self.prompts.push(at);
+    }
+
     fn spent(&mut self, spent: crate::outcome::Spent) {
         self.spent.push(spent);
     }

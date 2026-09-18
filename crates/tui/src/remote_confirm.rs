@@ -80,6 +80,8 @@ impl Interjections {
 /// What a worker sends the main thread.
 #[derive(Debug)]
 pub enum ToMain {
+    /// The submitted prompt entered the conversation at this recounted position.
+    PromptRecorded(usize),
     /// A write needs approval. The main thread must reply.
     Write(WriteRequest),
     /// A pipeline needs approval before it runs. The main thread must reply.
@@ -794,6 +796,7 @@ mod tests {
                     ToMain::Manifest(_) => seen.push("manifest"),
                     ToMain::Todos(_) => seen.push("todos"),
                     ToMain::Spent(_) => seen.push("spent"),
+                    ToMain::PromptRecorded(_) => seen.push("prompt"),
                     ToMain::Written(_) => seen.push("written"),
                     ToMain::Phase(_) => seen.push("phase"),
                     ToMain::Narration(_) => seen.push("narration"),
