@@ -147,7 +147,7 @@ There is no untrusted code involved: the call is made by the same trusted driver
 other call. `bravebot-sandbox` confines processes running code we did not write, and putting a
 processor in a subprocess would confine the wrong thing.
 
-`verified-by: none`
+`verified-by: by-construction (a processor is a request this driver makes to a model, so the path holds no code of anybody else's for an operating system to contain, and what the reply may do is the set PROC-1 gives it and PROC-2 freezes before the call: none)`
 
 <a id="PROC-10"></a>
 ### PROC-10: a check over one slot is not put in a subprocess either, and for the same reason
@@ -162,7 +162,7 @@ technique this is ported from does use a subprocess, and what it is containing t
 with tools, a filesystem and a network, which can *act* when it is injected rather than merely
 answer wrongly. Nothing here has any of those to begin with.
 
-`verified-by: none`
+`verified-by: by-construction (a check is a request of the same shape, so PROC-9's reason holds unchanged, and what fixes one is narrower still: no output label, no output reference and no destination of any kind, which vetting.md sets out)`
 
 ## What the person sees
 

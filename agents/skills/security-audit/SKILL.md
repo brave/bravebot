@@ -261,7 +261,7 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 | `known-costs` | is the enumerated attacker gain still complete against the code as it stands? | each entry under `## Known costs` in `labels.md` |
 | `entry-to-planner` | can these bytes reach a model's context or steer a turn already running? | each road in from the `LABEL-8` table |
 | `clause-permits-violation` | could an implementation satisfy every clause here and still break the rule? | the normative clauses of the trust specs |
-| `unpinned-guarantee` | what holds today that nothing would fail on if it stopped? | `verified-by: none` clauses, and label-touching code no spec governs |
+| `unpinned-guarantee` | what holds today that nothing would fail on if it stopped? | `verified-by: none` clauses, the `by-construction` brackets that answered the rest, and label-touching code no spec governs |
 | `supply-chain` | what executes with this tree checked out or gets linked into the binary, and who decides what that is? | the workflows, the lock file, and the second network client |
 
 ---

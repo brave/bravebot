@@ -6000,28 +6000,56 @@ mod tests {
     /// The same ban across every tool rather than only `run`, because the tool a shell arrives in
     /// will not be the one anybody is watching. Shell mode gave the *user* a real shell, and the
     /// whole justification for that is that the planner has none: a field like this appearing
-    /// anywhere in the tool list would end the distinction quietly.
+    /// anywhere in the tool list would end the distinction quietly. A patch is the same field
+    /// under another name: it names the files it edits inside the payload, so nothing about it
+    /// can be approved on its own.
     #[test]
     fn only_run_takes_a_command_line() {
-        // Names a shell string is plausibly called, none of which is the compiled surface.
-        const FORBIDDEN: [&str; 6] = [
+        // Names a shell string is plausibly called, none of which is the compiled surface, and the
+        // two a patch arrives as.
+        const FORBIDDEN: [&str; 8] = [
             "shell",
             "script",
             "cmd",
             "command_line",
             "argv_string",
             "sh",
+            "patch",
+            "diff",
         ];
+
+        // Every field a schema declares, at whatever depth. A list of objects is how a tool
+        // arrives whose top level names nothing and whose items name everything, and a schema
+        // that is not an object at all would leave a surface with nothing read of it.
+        fn fields(schema: &Value, into: &mut Vec<String>) {
+            match schema {
+                Value::Object(map) => {
+                    for (key, value) in map {
+                        if key == "properties"
+                            && let Some(properties) = value.as_object()
+                        {
+                            into.extend(properties.keys().cloned());
+                        }
+                        fields(value, into);
+                    }
+                }
+                Value::Array(items) => items.iter().for_each(|item| fields(item, into)),
+                _ => {}
+            }
+        }
 
         for tool in available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 }) {
             let name = tool.function.name;
-            let Some(properties) = tool.function.parameters["properties"].as_object() else {
-                continue;
-            };
-            for field in properties.keys() {
+            assert!(
+                tool.function.parameters["properties"].is_object(),
+                "{name} declares no properties object, so nothing here reads its fields"
+            );
+            let mut declared = Vec::new();
+            fields(&tool.function.parameters, &mut declared);
+            for field in &declared {
                 assert!(
                     !FORBIDDEN.contains(&field.as_str()),
-                    "{name} gained a '{field}' field, which is a shell line by another name"
+                    "{name} gained a '{field}' field, which is destination and payload at once"
                 );
                 // One tool takes a line, and it is the one whose whole job is compiling one.
                 if field == "command" {

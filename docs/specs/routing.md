@@ -136,7 +136,8 @@ If a person could not approve that field alone, the tool does not get built. A s
 destination and payload at once, which is why the planner has no shell and why `apply_patch` is
 excluded. An argv vector passes the test, which is why running a pipeline of argv stages does not.
 
-`verified-by: none`
+`verified-by: bravebot_agent::tools::the_tool_set_is_reads_plus_gated_writes`
+`verified-by: bravebot_agent::tools::only_run_takes_a_command_line`
 
 <a id="ROUTE-8"></a>
 ### ROUTE-8: an endorsement authorises a destination without relabelling it

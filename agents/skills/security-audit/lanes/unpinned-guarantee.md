@@ -3,25 +3,38 @@
 A clause with no test is a sentence. It holds today because somebody wrote the code carefully, and it
 stops holding the first time somebody changes that code for a good reason, with every check green.
 
-Two kinds of gap, and both are yours.
+Three kinds of gap, and all of them are yours.
 
 **Clauses at `verified-by: none`.** The mechanical pass has already listed them for the guarantee
 specs and `unverified-clauses.txt` holds the whole set. Do not report that they are unpinned, since
 that is counted already. For each one, answer the question the count cannot: **what would a change
-that broke this look like, and would anything else catch it?**
+that broke this look like, and would anything else catch it?** Say whether a test is possible and
+what it would assert. Where a clause cannot be pinned by a test, say what does hold it: a type that
+offers no way to do the wrong thing, a visibility, a count in a spec. That answer is worth as much as
+a test, and `check-spec` has a `by-construction` form for recording it.
 
-Two to start from, because they are the load-bearing ones:
+**Clauses at `by-construction`.** Nothing mechanical reads the bracket, so the reason is worth only
+what a reader can check, and a clause answered this way has left the count above. These are the
+brackets of the guarantee specs:
+
+{bracket_clauses}
+
+Take each to the tree and ask whether the thing it names is what holds the clause. A private field,
+an authority minted in one file, or a count a check holds are answers; care taken by whoever wrote
+the code is a clause at `none` wearing one; and a bracket resting on another bracket is worth what
+that one is worth, no more. Report a bracket whose reason does not hold, and say which of the three
+it is. Two to start from, because they are the load-bearing ones:
 
 - `LAYER-2` in `docs/specs/layering.md` says core and agent are both the driver, so moving a branch
-  between them launders nothing. Nothing pins it. A test would have to catch a decision relocated into
-  the kernel, which is shape 2 and the subtlest of the four.
-- `ROUTE-7` says a shell string is destination and payload at once, which is why the planner has no
-  shell. Nothing pins it. A test would have to catch a tool arriving that takes a command line.
-
-For each, say whether a test is possible and what it would assert. Where a clause cannot be pinned by
-a test, say what does hold it: a type that offers no way to do the wrong thing, a visibility, a
-count in a spec. That answer is worth as much as a test, and `check-spec` has a `by-construction`
-form for recording it.
+  between them launders nothing. Its bracket rests on a labelled value exposing no accessor for its
+  contents and on `labels.md` pinning every use of the witness that reads one, file by file. A
+  change that broke the clause is a decision relocated into the kernel, which is shape 2 and the
+  subtlest of the four, so the question is whether that pin would move with it, and whether the
+  bytes a decision could be taken on are only reachable through the witness.
+- `PROC-9` in `docs/specs/processors.md` says the confinement is the capability set rather than an
+  operating system boundary. Its bracket rests on a processor holding no capabilities at all, which
+  tests of that spec pin, and on its spec being frozen before the call, which is a bracket of its
+  own.
 
 **Code no spec reaches.** `check-spec`'s scope is `docs/specs` plus the paths the specs list under
 `governs`. Code outside that is ordinary code reviewed as ordinary code, which is correct for most of

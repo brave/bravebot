@@ -417,6 +417,23 @@ def check_unpinned_guarantee_clauses(specs):
         )
 
 
+def bracket_clauses(specs):
+    """The clauses of the guarantee specs answered by a bracket rather than by a test.
+
+    A clause at `verified-by: none` is counted by the mechanical pass, and the moment somebody
+    answers one the debt moves here, where nothing mechanical can decide whether what the bracket
+    names is what holds the clause. So the lane is handed the list rather than asked to find it.
+    """
+    return [
+        (spec, clause)
+        for spec in specs
+        if spec.name in GUARANTEE_SPECS
+        for clause in spec.clauses
+        if not clause.withdrawn
+        and any(one.startswith("by-construction") for one in clause.verified_by)
+    ]
+
+
 def surface(sources, specs):
     """Everything the lanes are given, gathered once."""
     construction = []
@@ -504,6 +521,11 @@ def build_lane(name, found, specs, results_file, surface_file=None):
             f"- `{gate}`: {len(sites)} uses" for gate, sites in found["gates"].items()
         ),
         "ungoverned": "\n".join(f"- `{one}`" for one in found["ungoverned_label_files"])
+        or "- (none)",
+        "bracket_clauses": "\n".join(
+            f"- `{spec.rel}:{clause.line}` {clause.id}: {clause.title}"
+            for spec, clause in bracket_clauses(specs)
+        )
         or "- (none)",
         "guarantee_specs": "\n".join(
             f"- `docs/specs/{one}`" for one in GUARANTEE_SPECS if Path(f"docs/specs/{one}").is_file()
