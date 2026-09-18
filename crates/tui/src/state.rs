@@ -678,7 +678,12 @@ pub enum Occupancy {
     /// No request has been measured yet.
     Unmeasured,
     /// Compaction shortened the conversation and the next turn has not measured yet.
-    Compacted,
+    ///
+    /// `won_back` is what the compaction gave back, in tokens, and `budget` the budget it was
+    /// compacted at. The pair outlives a budget adopted later, because what a compaction won back
+    /// is a fact about the exchange it shortened rather than about the window in force now. Zero
+    /// where there is no figure to state.
+    Compacted { won_back: u64, budget: u64 },
     /// Measured token count against the budget, and whether the budget was guessed.
     Measured {
         used: u64,
@@ -693,6 +698,17 @@ impl Occupancy {
         match *self {
             Occupancy::Measured { used, budget, .. } if used > 0 && budget > 0 => {
                 Some((used.saturating_mul(100) / budget).min(100))
+            }
+            _ => None,
+        }
+    }
+
+    /// How much room a compaction won back, as a percentage of the budget, or `None` where there
+    /// is no figure to state.
+    pub fn won_back(&self) -> Option<u64> {
+        match *self {
+            Occupancy::Compacted { won_back, budget } if won_back > 0 && budget > 0 => {
+                Some((won_back.saturating_mul(100) / budget).min(100))
             }
             _ => None,
         }
@@ -5382,9 +5398,13 @@ impl Session {
         }
     }
 
-    /// Record that compaction shortened the conversation underneath the session.
-    pub fn compacted(&mut self) {
-        self.occupancy = Occupancy::Compacted;
+    /// Record that compaction shortened the conversation underneath the session, and by how much.
+    ///
+    /// `won_back` is in tokens, against the budget the conversation is compacted at. Zero stands
+    /// for no figure rather than for a compaction that gave nothing back: a summary that saved
+    /// nothing is worth no more to a reader than a server that reported nothing.
+    pub fn compacted(&mut self, won_back: u64, budget: u64) {
+        self.occupancy = Occupancy::Compacted { won_back, budget };
     }
 
     /// The occupancy state of the session context.
@@ -5479,6 +5499,12 @@ impl Session {
     /// context that is a hundred and forty per cent full.
     pub fn fullness(&self) -> Option<u64> {
         self.occupancy.percent()
+    }
+
+    /// How much room the last compaction won back, as a percentage of the budget, or `None`
+    /// where there is no figure to state.
+    pub fn won_back(&self) -> Option<u64> {
+        self.occupancy.won_back()
     }
 
     /// Enter the working state for something that is not a turn.
@@ -7983,12 +8009,55 @@ mod tests {
         assert_eq!(s.fullness(), None);
     }
 
+    /// A compaction states how much of the budget it won back, which is the question somebody
+    /// who has just shortened a conversation is asking. It is not a reading of how full the
+    /// context is: nothing has counted the shortened conversation, so there is no percentage of
+    /// occupancy to give until the next request.
     #[test]
-    fn a_compacted_session_reports_compacted_occupancy() {
+    fn a_compacted_session_reports_what_the_compaction_won_back() {
         let mut s = Session::new("none");
-        s.compacted();
-        assert_eq!(s.occupancy(), Occupancy::Compacted);
+        s.compacted(36_000, 100_000);
+        assert_eq!(
+            s.occupancy(),
+            Occupancy::Compacted {
+                won_back: 36_000,
+                budget: 100_000
+            }
+        );
+        assert_eq!(s.won_back(), Some(36));
         assert_eq!(s.fullness(), None);
+    }
+
+    /// A summary that saved nothing is worth no more to a reader than a server that reported
+    /// nothing, and a figure of zero per cent claims a compaction achieved something measurable
+    /// when the measurement is what is missing.
+    #[test]
+    fn a_compaction_that_won_no_room_back_states_no_figure() {
+        let mut s = Session::new("none");
+        s.compacted(0, 100_000);
+        assert_eq!(s.won_back(), None);
+    }
+
+    /// Room is a fraction of the budget, so a count with no budget to state it against is no
+    /// account of how much room was won back, exactly as it is no account of how full the
+    /// context is.
+    #[test]
+    fn room_won_back_with_no_budget_to_state_it_against_is_no_figure() {
+        let mut s = Session::new("none");
+        s.compacted(36_000, 0);
+        assert_eq!(s.won_back(), None);
+    }
+
+    /// What a compaction won back is a fact about the conversation it shortened, measured
+    /// against the budget it was compacted at. Restated against a window adopted afterwards it
+    /// is two unrelated numbers divided by each other: sixty thousand tokens won back on a
+    /// two-hundred-thousand window would read as the whole of a twenty-four-thousand one.
+    #[test]
+    fn a_budget_adopted_after_a_compaction_leaves_what_it_won_back_alone() {
+        let mut s = Session::new("none");
+        s.compacted(36_000, 100_000);
+        s.update_budget(24_000, true);
+        assert_eq!(s.won_back(), Some(36));
     }
 
     /// Picking a model the listing does not describe leaves the budget where it was and stops it
