@@ -28,6 +28,7 @@ help:
 	@echo "  make test                  Run all tests"
 	@echo "  make check                 Format check, clippy, tests, and toolchain age"
 	@echo "  make check-spec            Check docs/specs against the implementation"
+	@echo "  make check-security        The security audit's deterministic half"
 	@echo "  make write-unverified      Write unverified-clauses.txt, which check-spec holds it to"
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
@@ -126,6 +127,21 @@ check-spec:
 	python3 agents/skills/check-spec/selftest.py
 	python3 agents/skills/check-spec/check-spec.py --mechanical-only
 	@python3 contrib/terminal-screenshot.py --selftest
+
+# The deterministic half of the security audit. It answers the questions check-spec cannot: whether
+# two documents agree about how many exceptions to the rule are admitted, whether anything reaches
+# into a Labelled, whether a spec pins the constructors as well as the releases, and whether every
+# workflow step is on a commit rather than a tag somebody else can move. No model takes part, so it
+# belongs in CI. The lanes that read code are the skill, and a person runs those.
+#
+# Not in check-all yet, because it fails on this tree: `Labelled::new` and `Labelled::trusted` have
+# no `guards` entry in docs/specs/labels.md, and two documents disagree about how many exceptions to
+# the rule are admitted. Adding it before those land would make a red check-all the normal state,
+# which is how a check stops being read. Add it to check-all in the change that fixes them.
+.PHONY: check-security
+check-security:
+	python3 agents/skills/security-audit/selftest.py
+	python3 agents/skills/security-audit/security-audit.py --mechanical-only
 
 # unverified-clauses.txt, written from the specs. It is the list of clauses nothing pins, and
 # check-spec fails while it and the specs disagree, so this is what to run after giving a clause

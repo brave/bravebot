@@ -1,0 +1,618 @@
+#!/usr/bin/env python3
+"""Prove the mechanical half still reports what it was written to report.
+
+    python3 agents/skills/security-audit/selftest.py
+
+A check that stops firing is worse than one that was never written, because the tree it was supposed
+to hold goes on looking clean. So each check is run against a fixture that violates it and a fixture
+that does not, and the pass is that it fires on the first and stays silent on the second.
+
+Two of these run against the real tree rather than a fixture. Both are about the two halves of this
+skill agreeing with something outside it: that the counts pinned in `docs/specs/labels.md` are the
+counts this enumerator measures, and that every lane prompt still composes. A drift in either is
+invisible in a run, because a lane whose prompt failed to fill in just produces a thinner audit.
+"""
+
+import importlib.util
+import io
+import json
+import os
+import re
+import sys
+import tempfile
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+# A `.format()` placeholder that came through unfilled. An unknown key raises, so this catches the
+# other direction: a lane naming a list the enumerator no longer computes.
+SURVIVING = re.compile(r"\{[a-z][a-z_]*\}")
+
+
+def load(name):
+    spec = importlib.util.spec_from_file_location(name.replace("-", "_"), HERE / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+ROOT = Path.cwd()
+audit = load("security-audit")
+verifying = load("verify-findings")
+collect = load("collect-findings")
+drafts = load("draft-issues")
+posting = load("post-issues")
+
+FAILURES = []
+
+
+def check(name, condition, detail=""):
+    if condition:
+        print(f"  ok    {name}")
+        return True
+    print(f"  FAIL  {name}" + (f": {detail}" if detail else ""))
+    FAILURES.append(name)
+    return False
+
+
+def kinds(found):
+    return sorted(item["kind"] for item in found)
+
+
+class FakeSpec:
+    """A spec that pins the symbols named and nothing else."""
+
+    def __init__(self, pinned):
+        self.allowlists = {symbol: [] for symbol in pinned}
+
+
+def in_tree(files):
+    """Run a check with the working directory set to a tree built out of `files`."""
+    holding = tempfile.mkdtemp(prefix="security-audit-selftest-")
+    for name, body in files.items():
+        path = Path(holding) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return holding
+
+
+def with_cwd(where, work):
+    was = Path.cwd()
+    os.chdir(where)
+    try:
+        return work()
+    finally:
+        os.chdir(was)
+
+
+# The sentence each document uses to count the admitted exceptions. The check reads prose, so the
+# fixtures are prose, and a rewording that stops matching is the thing being caught.
+REVIEW_TWO = "Two places in the kernel do branch on untrusted bytes, deliberately.\n"
+REVIEW_THREE = "Three places in the kernel do branch on untrusted bytes, deliberately.\n"
+SPEC_THREE = "- **Three places in the policy layer do look at untrusted bytes to decide.**\n"
+
+
+def test_exception_counts():
+    disagreeing = in_tree(
+        {
+            "docs/development/reviewing-for-the-rule.md": REVIEW_TWO,
+            "docs/specs/labels.md": SPEC_THREE,
+        }
+    )
+    found = with_cwd(disagreeing, lambda: list(audit.check_exception_counts()))
+    check(
+        "a document naming fewer exceptions than the spec is an error",
+        kinds(found) == ["exception-count-disagreement"]
+        and found[0]["severity"] == audit.ERROR,
+        str(kinds(found)),
+    )
+
+    agreeing = in_tree(
+        {
+            "docs/development/reviewing-for-the-rule.md": REVIEW_THREE,
+            "docs/specs/labels.md": SPEC_THREE,
+        }
+    )
+    found = with_cwd(agreeing, lambda: list(audit.check_exception_counts()))
+    check("two documents naming the same number are clean", found == [], str(kinds(found)))
+
+    silent = in_tree(
+        {
+            "docs/development/reviewing-for-the-rule.md": "Read the diff carefully.\n",
+            "docs/specs/labels.md": SPEC_THREE,
+        }
+    )
+    found = with_cwd(silent, lambda: list(audit.check_exception_counts()))
+    check(
+        "a document that counts nothing is a warning, not an error",
+        kinds(found) == ["exception-count-unstated"] and found[0]["severity"] == audit.WARNING,
+        str(kinds(found)),
+    )
+
+
+def test_labelled_impls():
+    reaching = {
+        Path("crates/core/src/value.rs"): [
+            "impl std::ops::Deref for Labelled<String> {",
+            "    type Target = String;",
+            "}",
+        ]
+    }
+    found = list(audit.check_labelled_impls(reaching))
+    check(
+        "an implementation that reaches a label's content is an error",
+        kinds(found) == ["labelled-impl"] and found[0]["impact"] == "high",
+        str(kinds(found)),
+    )
+
+    allowed = {
+        Path("crates/core/src/value.rs"): ["impl fmt::Debug for Labelled<String> {", "}"]
+    }
+    check("the one recorded implementation is clean", list(audit.check_labelled_impls(allowed)) == [])
+
+    described = {
+        Path("crates/core/src/value.rs"): [
+            "// impl Deref for Labelled would let a caller read the content, so there is none.",
+            "struct Labelled<T> { inner: T }",
+        ]
+    }
+    check(
+        "an implementation named in a comment is not a use",
+        list(audit.check_labelled_impls(described)) == [],
+    )
+
+    # `impl Labelled` is the type's own block, not a trait reaching into it.
+    own = {Path("crates/core/src/value.rs"): ["impl<T> Labelled<T> {", "}"]}
+    check("the type's own impl block is not a trait", list(audit.check_labelled_impls(own)) == [])
+
+
+PINNED_STEP = "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
+
+
+def test_pinned_actions():
+    moving = in_tree({".github/workflows/ci.yml": "      - uses: actions/checkout@v7\n"})
+    found = with_cwd(moving, lambda: list(audit.check_pinned_actions()))
+    check(
+        "a step on a tag is an error",
+        kinds(found) == ["unpinned-action"] and found[0]["impact"] == "high",
+        str(kinds(found)),
+    )
+
+    fixed = in_tree({".github/workflows/ci.yml": PINNED_STEP})
+    check(
+        "a step on a commit is clean",
+        with_cwd(fixed, lambda: list(audit.check_pinned_actions())) == [],
+    )
+
+    local = in_tree({".github/workflows/ci.yml": "      - uses: ./.github/actions/setup\n"})
+    check(
+        "an action from this repository is not a third party",
+        with_cwd(local, lambda: list(audit.check_pinned_actions())) == [],
+    )
+
+    # Every step in the tree is pinned today, and this is what keeps it that way.
+    check(
+        "the tree's own workflows are pinned",
+        with_cwd(ROOT, lambda: list(audit.check_pinned_actions())) == [],
+    )
+
+
+def test_construction_pinned():
+    sources = {
+        Path("crates/agent/src/tools.rs"): [
+            "fn answer(bytes: Vec<u8>) -> Labelled<String> {",
+            "    Labelled::new(text, Label::trusted_public())",
+            "}",
+        ]
+    }
+    found = list(audit.check_construction_pinned([FakeSpec([])], sources))
+    check(
+        "a constructor no spec pins is an error",
+        kinds(found) == ["construction-unpinned"] and found[0]["impact"] == "medium",
+        str(kinds(found)),
+    )
+
+    check(
+        "a constructor a spec pins is clean",
+        list(audit.check_construction_pinned([FakeSpec(audit.CONSTRUCTORS)], sources)) == [],
+    )
+
+    core_only = {
+        Path("crates/core/src/policy.rs"): ["    Labelled::new(text, label)"],
+    }
+    check(
+        "a constructor used only inside the kernel is not the reported surface",
+        list(audit.check_construction_pinned([FakeSpec([])], core_only)) == [],
+    )
+
+    # The count is the argument for a `sites:` pin, so a count that includes an unrelated `fn new` is
+    # a check that fails on the next file to define one.
+    unrelated = {
+        Path("crates/agent/src/tools.rs"): [
+            "impl Jobs {",
+            "    pub fn new() -> Self { Self::default() }",
+            "}",
+            "fn label(text: String) -> Labelled<String> { Labelled::trusted(text) }",
+        ]
+    }
+    found = list(audit.check_construction_pinned([FakeSpec(["Labelled::trusted"])], unrelated))
+    check(
+        "an unrelated `fn new` in a file that names Labelled is not a construction",
+        found == [],
+        str([one["summary"] for one in found]),
+    )
+    check(
+        "the constructor that is there is still counted",
+        sum(
+            site["count"]
+            for site in audit.sites_for("Labelled::trusted", unrelated)
+        ) == 1,
+    )
+
+
+def test_declassify_counts_match_the_spec():
+    """The enumerator and `check-spec` have to measure the same thing.
+
+    `docs/specs/labels.md` pins `Labelled::declassify` to a count per file and `make check-spec`
+    fails when the code disagrees. This enumerator counts the same symbol its own way, and the two
+    counts being equal is what says a lane starting from its list starts from the real list.
+    """
+    def measure():
+        specs = audit.load_specs()
+        sources = audit.mechanics.load_sources()
+        pinned = {}
+        for spec in specs:
+            for item in spec.allowlists.get(audit.RELEASE, []):
+                # A `sites:` entry is written `path: count`, and the path can hold a colon of its own.
+                path, _, count = str(item).rpartition(":")
+                if path.strip() and count.strip().isdigit():
+                    pinned[path.strip()] = int(count)
+        measured = {}
+        for site in audit.sites_for(audit.RELEASE, sources):
+            measured[site["path"]] = measured.get(site["path"], 0) + site["count"]
+        return pinned, measured
+
+    pinned, measured = with_cwd(ROOT, measure)
+    check(f"`{audit.RELEASE}` is pinned somewhere", bool(pinned))
+    for path, count in sorted(pinned.items()):
+        check(
+            f"{path} releases {count} times, as the spec pins",
+            measured.get(path) == count,
+            f"the enumerator counts {measured.get(path)}",
+        )
+
+
+def test_every_lane_prompt_composes():
+    """A lane whose prompt fails to fill in produces a thinner audit and no error.
+
+    The prompts are markdown with `.format()` placeholders, so a placeholder added to a lane file
+    without a value in the enumerator raises, and one removed from the enumerator leaves the lane
+    reading about a list that is not there. Both are silent in a run.
+    """
+    def build():
+        specs = audit.load_specs()
+        sources = audit.mechanics.load_sources()
+        found = audit.surface(sources, specs)
+        for name in audit.LANES:
+            text = audit.build_lane(name, found, specs, Path("results.json"))
+            left = SURVIVING.search(text)
+            if left:
+                return name, f"{left.group(0)} was never filled in"
+            if "crates/" not in text and "docs/specs/" not in text:
+                return name, "it names no place to start from"
+            if "Untrusted content never enters" not in text:
+                return name, "the rule is not stated in it"
+            if "Write JSON to" not in text:
+                return name, "it does not say what to return"
+        return None, ""
+
+    name, why = with_cwd(ROOT, build)
+    check("every lane prompt composes with the rule and an output contract", name is None, f"{name}: {why}")
+
+
+def test_verifier_prompt_composes():
+    candidate = {
+        "summary": "a branch on a released value",
+        "place": "crates/core/src/policy.rs:100 in decide",
+        "lane": "decisions-after-release",
+    }
+    text = verifying.build_prompt(candidate, Path("results.json"))
+    check(
+        "the verifier prompt composes and starts from disbelief",
+        "start from the position that it is not" in text
+        and "a branch on a released value" in text
+        and not SURVIVING.search(text),
+    )
+    check(
+        "the verifier is told the case that calibrates a false positive",
+        "GET /v1/models" in text,
+    )
+
+
+def test_impact_sets_severity():
+    candidate = {"summary": "s", "kind": "violation", "lane": "gates", "impact": "low"}
+    merged = collect.merge(candidate, {"verdict": "CONFIRMED", "impact": "high", "reason": "r"})
+    check(
+        "the verifier's impact wins over the lane's, and sets the severity",
+        merged["impact"] == "high" and merged["severity"] == collect.ERROR,
+    )
+    merged = collect.merge(candidate, {"verdict": "CONFIRMED", "reason": "r"})
+    check(
+        "a verifier that set no impact leaves the lane's",
+        merged["impact"] == "low" and merged["severity"] == collect.WARNING,
+    )
+    merged = collect.merge(
+        candidate, {"verdict": "CONFIRMED", "reason": "r", "corrected": {"summary": "narrower"}}
+    )
+    check("a correction wins over the claim it corrects", merged["summary"] == "narrower")
+
+
+def test_labels():
+    labels = drafts.label_set(
+        {"kind": "violation", "impact": "high", "area": "trust"}
+    )
+    check(
+        "every issue carries security, the kind, the severity and the area",
+        labels == ["area/trust", "bug", "needs-security-review", "security", "severity/high"],
+        str(labels),
+    )
+    check(
+        "a workflow finding is infrastructure rather than an invented area",
+        drafts.label_set({"kind": "unpinned-action", "impact": "high", "area": "infrastructure"})
+        == ["bug", "infrastructure", "needs-security-review", "security", "severity/high"],
+    )
+    for impact in ("high", "medium", "low"):
+        labels = drafts.label_set({"kind": "violation", "impact": impact, "area": "trust"})
+        check(
+            f"severity/{impact} is the only scale a run judges",
+            not any(one.startswith(("importance/", "urgency/", "size/")) for one in labels),
+        )
+    check(
+        "an area the tracker does not have is left off rather than invented",
+        drafts.label_set({"kind": "violation", "impact": "low", "area": "kernel"})
+        == ["bug", "needs-security-review", "security", "severity/low"],
+    )
+
+
+def test_titles():
+    long = {
+        "title": "the driver decides which file to write from bytes a page it fetched supplied, so a "
+        "person approving one path gets another",
+        "area": "trust",
+        "kind": "violation",
+    }
+    title = drafts.title_for(long)
+    check(
+        "a title is under the limit, leads with the subsystem and has no backticks",
+        len(title) <= drafts.TITLE_LIMIT and title.startswith("trust: ") and "`" not in title,
+        title,
+    )
+    check(
+        "a title already leading with its subsystem is not given it twice",
+        drafts.title_for({"title": "LABEL-4: a witness is minted outside the gates", "clause": "LABEL-4"})
+        == "LABEL-4: a witness is minted outside the gates",
+    )
+    check(
+        "a title cut at the limit does not end on the word before the part that went over",
+        not drafts.DANGLING.search(title) and not title.endswith(","),
+        title,
+    )
+    check(
+        "a lane's sentence is lowercased after the colon",
+        drafts.title_for(
+            {"title": "A failed fetch reports the URL the server chose", "clause": "LABEL-3"}
+        ).startswith("LABEL-3: a failed fetch"),
+    )
+    check(
+        "a symbol keeps the case it is spelled with",
+        drafts.title_for(
+            {"title": "`Labelled` now implements `PartialEq`, so content can be compared", "area": "trust"}
+        ).startswith("trust: Labelled now implements PartialEq"),
+    )
+
+
+def test_bodies_say_where_and_why():
+    finding = {
+        "kind": "violation",
+        "impact": "high",
+        "area": "trust",
+        "summary": "the driver branches on a released value",
+        "place": "crates/core/src/policy.rs:1 in decide",
+        "gain": "the attacker picks which file is written",
+        "evidence": ["crates/core/src/policy.rs:1 the branch"],
+        "fix": "hand the value to the effect instead of comparing it",
+        "lane": "decisions-after-release",
+        "source": "audit",
+        "verified_reason": "the bytes reach the planner through the transcript",
+        "reproduce": ["cargo test -p bravebot-core policy::"],
+    }
+    body = with_cwd(ROOT, lambda: drafts.body_for(finding))
+    for wanted in (
+        "User impact:",
+        "## What happens",
+        "## Reproduce",
+        "## What this buys an attacker",
+        "## Why bug and not spec-bug",
+        "## The fix",
+        "## How this was found",
+        "cargo test -p bravebot-core policy::",
+    ):
+        check(f"a body says {wanted!r}", wanted in body)
+    check("a body says a tool filed it", "rather than by a person" in body)
+    check("no em dash reaches an issue body", "—" not in body)
+
+    local = dict(finding, reproduce=[f"grep -n problem {ROOT}/crates/agent/src/tools.rs"])
+    said = with_cwd(ROOT, lambda: drafts.body_for(local))
+    check(
+        "no path from the machine the run happened on reaches an issue body",
+        str(ROOT) not in said and "grep -n problem crates/agent/src/tools.rs" in said,
+    )
+
+    wants_screen = dict(finding, screen="the transcript after the fetch returns")
+    out = Path(tempfile.mkdtemp(prefix="security-audit-selftest-")) / "issues"
+    written = with_cwd(ROOT, lambda: drafts.draft([wants_screen], out))
+    check(
+        "a finding a person could see names the files to capture it into",
+        written[0]["screen_wanted"] and not written[0]["has_screen"],
+    )
+    check(
+        "the report says a screen is missing rather than posting without one",
+        "wants a screen" in drafts.report(written, out),
+    )
+
+
+def test_posting_skips_what_the_tracker_already_holds():
+    """Dedup, on the pair of findings that break the obvious way of doing it.
+
+    Two specs with unpinned clauses produce one sentence with one word changed. Comparing wording
+    alone calls the second a duplicate of the first, and the second never gets filed.
+    """
+    tracker = []
+
+    def fake_gh(args, repo):
+        """`gh issue list --search`, near enough: every term has to be in the title.
+
+        Returning the whole tracker whatever was asked for would pass a query that finds nothing,
+        which is the way a duplicate actually got filed: the search looked for a key that no title
+        holds, found none, and read that as nothing like this being on the tracker.
+        """
+        if args[:2] != ["issue", "list"]:
+            raise AssertionError(f"a dedup check called gh {' '.join(args[:2])}")
+        query = args[args.index("--search") + 1]
+        terms = [one.lower() for one in query.split() if ":" not in one]
+        return json.dumps(
+            [one for one in tracker if all(term in one["title"].lower() for term in terms)]
+        )
+
+    posting.gh = fake_gh
+
+    check(
+        "a run is paced to one issue every ten seconds and change",
+        posting.PACE == 10.0 and posting.JITTER == (1.0, 5.0),
+        f"{posting.PACE}, {posting.JITTER}",
+    )
+
+    # The shape the enumerator writes, including the part that makes this hard: the summary names a
+    # path and the title shortens it to the file name, so the summary's own string is not in the
+    # title and a key taken from it matches nothing on the tracker.
+    findings = [
+        {
+            "kind": "unpinned-guarantee",
+            "impact": "low",
+            "area": "trust",
+            "title": "nothing pins 1 clause of `layering.md`, so a change that breaks one passes every check",
+            "summary": "`docs/specs/layering.md` has 1 clause at `verified-by: none`",
+        },
+        {
+            "kind": "unpinned-guarantee",
+            "impact": "low",
+            "area": "trust",
+            "title": "nothing pins 2 clauses of `processors.md`, so a change that breaks one passes every check",
+            "summary": "`docs/specs/processors.md` has 2 clauses at `verified-by: none`",
+        },
+        # And the case with nothing to anchor to: everything this one names is a path its title does
+        # not keep, so the wording is the whole of what dedup has.
+        {
+            "kind": "exception-count-disagreement",
+            "impact": "low",
+            "area": "trust",
+            "title": "the review pass names fewer admitted exceptions than the spec, so an unnamed one reads as a violation",
+            "summary": "`docs/development/reviewing-for-the-rule.md` says 2 and `docs/specs/labels.md` names 3",
+        },
+    ]
+    out = Path(tempfile.mkdtemp(prefix="security-audit-selftest-")) / "issues"
+    written = with_cwd(ROOT, lambda: drafts.draft(findings, out))
+    check(
+        "a draft's key is one its own title keeps, where the finding names one at all",
+        all(one["key"].lower() in one["title"].lower() for one in written[:2]),
+        str([(one["key"], one["title"]) for one in written[:2]]),
+    )
+
+    tracker = [{"number": 11, "state": "OPEN", "url": "u", "title": written[0]["title"]}]
+    check(
+        "a finding the tracker already holds is not filed again",
+        posting.already_filed("brave/bravebot", written[0]) is not None,
+    )
+    check(
+        "a finding whose wording matches another spec's is still filed",
+        posting.already_filed("brave/bravebot", written[1]) is None,
+    )
+
+    tracker = [{"number": 12, "state": "CLOSED", "url": "u", "title": written[0]["title"]}]
+    check(
+        "an issue somebody read and closed is an answer, not a gap",
+        posting.already_filed("brave/bravebot", written[0]) is not None,
+    )
+
+    tracker = [{"number": 13, "state": "OPEN", "url": "u", "title": written[2]["title"]}]
+    check(
+        "a finding with no key its title keeps is still recognised by its wording",
+        posting.already_filed("brave/bravebot", written[2]) is not None,
+        f"key {written[2]['key']!r} is not in {written[2]['title']!r}",
+    )
+
+    tracker = []
+    check(
+        "a finding nothing on the tracker names is filed",
+        posting.already_filed("brave/bravebot", written[0]) is None,
+    )
+
+
+def test_a_run_writes_a_manifest_and_posts_nothing():
+    """The mechanical half end to end, in a work directory, with no model anywhere in it."""
+    def run():
+        work = tempfile.mkdtemp(prefix="security-audit-selftest-")
+        argv = sys.argv
+        sys.argv = ["security-audit.py", "--work-dir", work]
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                audit.main()
+        finally:
+            sys.argv = argv
+        return work, json.loads(out.getvalue())
+
+    work, said = with_cwd(ROOT, run)
+    check("a run says where its work is", said.get("work_dir") == work)
+    manifest = json.loads(Path(said["manifest"]).read_text(encoding="utf-8"))
+    check(
+        "a run writes one prompt per lane and no results",
+        len(manifest["lanes"]) == len(audit.LANES)
+        and all(Path(one["prompt_file"]).is_file() for one in manifest["lanes"])
+        and not any(Path(one["results_file"]).exists() for one in manifest["lanes"]),
+    )
+    check(
+        "a lane that returned nothing is reported rather than passed over",
+        kinds(verifying.load_candidates(manifest)[1]) == ["lane-incomplete"] * len(audit.LANES),
+    )
+
+
+def main():
+    for test in (
+        test_exception_counts,
+        test_labelled_impls,
+        test_pinned_actions,
+        test_construction_pinned,
+        test_declassify_counts_match_the_spec,
+        test_every_lane_prompt_composes,
+        test_verifier_prompt_composes,
+        test_impact_sets_severity,
+        test_labels,
+        test_titles,
+        test_bodies_say_where_and_why,
+        test_posting_skips_what_the_tracker_already_holds,
+        test_a_run_writes_a_manifest_and_posts_nothing,
+    ):
+        print(test.__name__)
+        test()
+    print("")
+    if FAILURES:
+        print(f"{len(FAILURES)} failed: {', '.join(FAILURES)}")
+        return 1
+    print("security-audit selftest passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
