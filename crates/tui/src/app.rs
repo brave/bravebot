@@ -2133,6 +2133,7 @@ fn rewind(
     *programs = snapshot.programs;
 
     session.transcript.truncate(snapshot.transcript_len);
+    session.rewind_history();
     stored.truncate_audit(session.turns + 1);
 
     if snapshot.turns == 0 && !snapshot.was_wrote {
@@ -2141,6 +2142,7 @@ fn rewind(
         stored.save(
             &snapshot.title,
             crate::sessions::Standing {
+                history: Some(session.turn_history()),
                 conversation: &conversation.snapshot(),
                 turns: session.turns,
                 tokens: session.tokens,
@@ -2524,6 +2526,7 @@ fn event_loop(
                     stored.move_to(
                         workspace.root(),
                         crate::sessions::Standing {
+                            history: Some(session.turn_history()),
                             conversation: &conversation.snapshot(),
                             turns: session.turns,
                             tokens: session.tokens,
@@ -2606,6 +2609,7 @@ fn event_loop(
                 stored.save(
                     &title,
                     crate::sessions::Standing {
+                        history: Some(session.turn_history()),
                         conversation: &conversation.snapshot(),
                         turns: session.turns,
                         tokens: session.tokens,
@@ -2653,6 +2657,7 @@ fn event_loop(
                         stored.save(
                             &title,
                             crate::sessions::Standing {
+                                history: Some(session.turn_history()),
                                 conversation: &conversation.snapshot(),
                                 turns: session.turns,
                                 tokens: session.tokens,
@@ -2709,6 +2714,7 @@ fn event_loop(
                         stored.save(
                             &title,
                             crate::sessions::Standing {
+                                history: Some(session.turn_history()),
                                 conversation: &conversation.snapshot(),
                                 turns: session.turns,
                                 tokens: session.tokens,
@@ -2788,6 +2794,7 @@ fn event_loop(
                 };
                 let mut sending = Some((prompt, whose));
                 while let Some((prompt, wrote)) = sending {
+                    let history_start = conversation.recounted().len();
                     let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
                     session.open_rewind_point(point, prompt.clone());
                     let _ = workspace.take_backups();
@@ -2820,6 +2827,7 @@ fn event_loop(
                     servers = continued.servers;
                     asked_about = continued.asked_about;
 
+                    session.record_turn(history_start, &conversation);
                     session.keep_backups(workspace.take_backups());
 
                     // Written after each turn rather than at the end, because the end may never
@@ -2828,6 +2836,7 @@ fn event_loop(
                     stored.save(
                         &prompt,
                         crate::sessions::Standing {
+                            history: Some(session.turn_history()),
                             conversation: &conversation.snapshot(),
                             turns: session.turns,
                             tokens: session.tokens,
@@ -2880,6 +2889,7 @@ fn event_loop(
                 stored.save(
                     &line,
                     crate::sessions::Standing {
+                        history: Some(session.turn_history()),
                         conversation: &conversation.snapshot(),
                         turns: session.turns,
                         tokens: session.tokens,
@@ -4275,7 +4285,8 @@ fn manifest_animated(
             // Progress, with no reply to give. The goal as the planner understood it and the frozen
             // plan both arrive as narration, and each step as an activity, so the transcript of a
             // run reads the way the transcript of a turn does.
-            crate::remote_confirm::ToMain::Spent(_) => {}
+            crate::remote_confirm::ToMain::Spent(_)
+            | crate::remote_confirm::ToMain::PromptRecorded(_) => {}
             crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
             crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
             crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
@@ -4998,6 +5009,7 @@ fn run_turn_animated(
             // shows it. That is what makes a long turn legible while it runs.
             crate::remote_confirm::ToMain::Todos(rows) => session.set_todos(rows),
             crate::remote_confirm::ToMain::Spent(spent) => session.progressed(spent),
+            crate::remote_confirm::ToMain::PromptRecorded(at) => session.prompt_recorded(at),
             crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
             crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
             crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
@@ -12655,5 +12667,160 @@ mod tests {
         assert_eq!(session.timing_total().stalled_ms, 5);
         assert_eq!(session.cached().unwrap().read_tokens, 7);
         assert!(!render::as_markdown(&session, "test").contains("PRIVATE_ERROR"));
+    }
+    /// Rewind's actual save and audit truncation must agree before a turn number is reused.
+    #[test]
+    fn rewinding_reopened_history_removes_outcomes_plans_and_audit_before_reuse() {
+        use crate::sessions::{self, Standing};
+        use bravebot_aichat::protocol::Message;
+        fn save(
+            stored: &mut sessions::Handle,
+            session: &Session,
+            conversation: &Conversation,
+            root: &std::path::Path,
+        ) {
+            stored.save(
+                "history",
+                Standing {
+                    conversation: &conversation.snapshot(),
+                    history: Some(session.turn_history()),
+                    turns: session.turns,
+                    tokens: session.tokens,
+                    spend: session.spend_by_turn(),
+                    timing: session.timing_by_turn(),
+                    model: None,
+                    todos: &session.todos_by_turn(),
+                    asides: &[],
+                    trust: &TrustStore::new(root),
+                    programs: &TrustedPrograms::new(),
+                    directories: &[],
+                    manifest: None,
+                    rewind: session.rewind_points(),
+                },
+            );
+        }
+        fn reopen(root: &std::path::Path, record: &sessions::Record) -> (Session, Conversation) {
+            let conversation = Conversation::restored(record.conversation.clone());
+            let mut session = Session::new("test");
+            session.replay(
+                &conversation,
+                &record.title,
+                &sessions::recall(root, record),
+            );
+            session.restore_spend(record.tokens, record.spend.clone());
+            session.restore_timing(record.timing.clone());
+            session.restore_rewind_points(record.rewind_points(root), &conversation);
+            (session, conversation)
+        }
+        fn audit(stored: &sessions::Handle, turn: usize, detail: &str) {
+            stored.append_audit(
+                turn,
+                &[crate::audit::Stamped {
+                    at: turn as u64,
+                    from: None,
+                    event: bravebot_core::event::Event::GatePassed {
+                        gate: "file_read",
+                        detail: detail.into(),
+                    },
+                }],
+            );
+        }
+        let root = crate::testutil::scratch_dir("reopened-history-rewind");
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let mut trust = TrustStore::new(&root);
+        let mut programs = TrustedPrograms::new();
+        let mut stored = sessions::Handle::begin(&root);
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        for (index, prompt) in ["kept", "failed", "cancelled"].into_iter().enumerate() {
+            let start = conversation.recounted().len();
+            type_line(&mut session, prompt);
+            session.submit().unwrap();
+            let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
+            session.open_rewind_point(point, prompt.into());
+            session.prompt_recorded(conversation.recounted().len());
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(format!("working {prompt}")));
+            session.narrate(format!("working {prompt}"));
+            session.set_todos(bravebot_core::todo::rows(&bravebot_core::todo::List::new(
+                vec![bravebot_core::todo::Item::new(
+                    prompt,
+                    bravebot_core::todo::Status::Active,
+                )],
+            )));
+            session.progressed(bravebot_agent::Spent {
+                tokens: (index as u64 + 1) * 10,
+                timing: bravebot_agent::timing::Timing {
+                    inference_ms: index as u64 + 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+            match index {
+                0 => session.complete("done", vec![], 10),
+                1 => session.fail(
+                    "safe failure",
+                    bravebot_agent::Ending::Failed(bravebot_agent::Diagnosis::of(
+                        bravebot_agent::Category::Transport,
+                    )),
+                ),
+                _ => finish_cancelled_turn(&mut session, prompt, Some(1)),
+            }
+            session.record_turn(start, &conversation);
+            save(&mut stored, &session, &conversation, &root);
+            audit(&stored, session.turns, prompt);
+        }
+        let record = sessions::load(&root, stored.id()).unwrap();
+        let (mut session, mut conversation) = reopen(&root, &record);
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            2,
+        );
+        let record = sessions::load(&root, stored.id()).unwrap();
+        let (mut session, mut conversation) = reopen(&root, &record);
+        assert_eq!(session.turns, 1);
+        assert_eq!(session.tokens, 10);
+        assert_eq!(
+            session.todos_by_turn().keys().copied().collect::<Vec<_>>(),
+            [1]
+        );
+        assert!(!session.transcript.iter().any(|e| matches!(
+            e.speaker,
+            crate::state::Speaker::Failure | crate::state::Speaker::Stopped
+        )));
+        let trail = sessions::audit_of(&root, stored.id());
+        assert_eq!(trail.keys().copied().collect::<Vec<_>>(), [1]);
+        let start = conversation.recounted().len();
+        type_line(&mut session, "replacement");
+        session.submit().unwrap();
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user("replacement"));
+        session.complete("new answer", vec![], 41);
+        session.record_turn(start, &conversation);
+        save(&mut stored, &session, &conversation, &root);
+        audit(&stored, 2, "replacement");
+        let record = sessions::load(&root, stored.id()).unwrap();
+        let (session, _) = reopen(&root, &record);
+        assert_eq!(session.tokens, 51);
+        assert_eq!(session.spend_by_turn()[&2], 41);
+        assert_eq!(session.timing_by_turn()[&2].inference_ms, 0);
+        assert!(!session.todos_by_turn().contains_key(&2));
+        let trail = sessions::audit_of(&root, stored.id());
+        assert_eq!(trail[&2].len(), 1);
+        assert!(trail[&2][0].text.contains("replacement"));
+        assert!(!session.transcript.iter().any(|e| matches!(
+            e.speaker,
+            crate::state::Speaker::Failure | crate::state::Speaker::Stopped
+        )));
+        if let Some(directory) = sessions::project_directory(&root) {
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

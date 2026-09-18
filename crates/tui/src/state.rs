@@ -365,6 +365,15 @@ impl Entry {
     }
 }
 
+fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Entry {
+    use bravebot_agent::conversation::Said;
+    match line {
+        Said::User(text) => Entry::user(text),
+        Said::Assistant(text) => Entry::assistant(text, Vec::new()),
+        Said::Tool(text) => Entry::recalled_tool(text),
+    }
+}
+
 /// A line typed while a turn was running, waiting for it to end.
 ///
 /// Settled when it was queued rather than when it is sent, because what it names is what the box
@@ -385,6 +394,7 @@ pub struct Queued {
     /// turn in flight, because the only thing that could do with it there is the planner, and a
     /// command is not something the planner is asked.
     command: bool,
+    recall: crate::history::Ticket,
 }
 
 /// What the session is doing.
@@ -949,6 +959,12 @@ pub struct Session {
     pub tier: String,
     /// How many turns have been submitted, which picks the indicator's word.
     pub turns: usize,
+    turn_history: Vec<crate::sessions::StoredTurn>,
+    prompt_at: Option<usize>,
+    recall: Option<crate::history::Ticket>,
+    turn_places: std::collections::BTreeMap<usize, usize>,
+    /// Task lists whose recorded turn has no known transcript boundary.
+    unplaced_todos: std::collections::BTreeMap<usize, Vec<bravebot_core::todo::Row>>,
     /// Tokens spent across the whole session.
     pub tokens: u64,
     /// What each turn cost, by turn number, and what was spent before the first turn under zero.
@@ -1273,6 +1289,11 @@ impl Session {
             // host has and what a test that does not care about tiers should see.
             tier: t!(status_no_subscription).to_string(),
             turns: 0,
+            turn_history: Vec::new(),
+            prompt_at: None,
+            recall: None,
+            turn_places: Default::default(),
+            unplaced_todos: Default::default(),
             tokens: 0,
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
@@ -1603,34 +1624,49 @@ impl Session {
     /// session draws another: it opens with a line saying it was resumed, and it carries each
     /// turn's trail where the live session carried events.
     ///
-    /// It is found by measuring the point's own conversation against the one replayed, rather
-    /// than by counting turns. The transcript holds one entry per thing the conversation
-    /// recounts, so a point whose conversation recounts that many fewer begins that many entries
-    /// from the end, whatever else is above it. Turn numbers do not answer it: a shell-mode
-    /// command puts a line in the conversation without being a turn, so a replayed transcript can
-    /// hold more prompts than the session ever counted turns.
+    /// New records use the explicit turn positions built during replay, including failed turns
+    /// with no planner messages and cancelled turns returned to the editor. Older points use
+    /// their conversation boundary, since old records did not record every turn's identity.
     pub fn restore_rewind_points(
         &mut self,
         points: Vec<RewindPoint>,
         conversation: &bravebot_agent::Conversation,
     ) {
         let whole = conversation.recounted().len();
-        let places: Vec<usize> = points
-            .iter()
-            .map(|point| {
-                let theirs =
-                    bravebot_agent::Conversation::restored(point.snapshot.conversation.clone())
-                        .recounted()
-                        .len();
-                self.transcript
-                    .len()
-                    .saturating_sub(whole.saturating_sub(theirs))
-            })
-            .collect();
-        self.rewind_points = points;
-        for (point, at) in self.rewind_points.iter_mut().zip(places) {
-            point.snapshot.transcript_len = at;
+        let mut points = points;
+        for point in &mut points {
+            let turn_number = point.snapshot.turns + 1;
+            if self
+                .turn_history
+                .iter()
+                .any(|turn| turn.number == turn_number && turn.outcome.is_some())
+                && let Some(at) = self.turn_places.get(&turn_number)
+            {
+                point.snapshot.transcript_len = *at;
+                continue;
+            }
+            let theirs =
+                bravebot_agent::Conversation::restored(point.snapshot.conversation.clone())
+                    .recounted()
+                    .len();
+            // Legacy messages precede the first explicit turn. Count back from that boundary,
+            // so outcome entries in newer turns cannot shift an old rewind point.
+            point.snapshot.transcript_len = self
+                .turn_history
+                .iter()
+                .find(|turn| turn.start >= theirs)
+                .and_then(|turn| {
+                    self.turn_places
+                        .get(&turn.number)
+                        .map(|at| at.saturating_sub(turn.start - theirs))
+                })
+                .unwrap_or_else(|| {
+                    self.transcript
+                        .len()
+                        .saturating_sub(whole.saturating_sub(theirs))
+                });
         }
+        self.rewind_points = points;
         self.hold_rewind_points();
     }
 
@@ -1690,6 +1726,11 @@ impl Session {
     pub fn clear(&mut self) {
         self.transcript.clear();
         self.turns = 0;
+        self.turn_history.clear();
+        self.prompt_at = None;
+        self.recall = None;
+        self.turn_places.clear();
+        self.unplaced_todos.clear();
         // Counts of a transcript that is gone: kept, they would rewind a later turn to a length the
         // new conversation has never reached.
         self.turn_start = TurnStart::default();
@@ -1741,21 +1782,24 @@ impl Session {
 
     /// The task list each turn finished with, by turn number, for writing the session down.
     ///
-    /// Read back off the transcript rather than kept in a second place, because the transcript is
-    /// already where a finished turn's list lives: `complete` moves it there so the scrollback
-    /// shows what each turn set out to do. Turn numbers are counted the way `replay` counts them,
-    /// so a list written under turn three comes back under turn three.
+    /// Known turns keep their lists in the transcript. Legacy lists without a known boundary
+    /// are kept separately so saving preserves them without assigning them to a guessed prompt.
     pub fn todos_by_turn(
         &self,
     ) -> std::collections::BTreeMap<usize, Vec<bravebot_core::todo::Row>> {
-        let mut by_turn = std::collections::BTreeMap::new();
-        let mut turn = 0;
-        for entry in &self.transcript {
-            if entry.speaker == Speaker::User {
-                turn += 1;
-            }
-            if turn > 0 && !entry.todos.is_empty() {
-                by_turn.insert(turn, entry.todos.clone());
+        let mut by_turn = self.unplaced_todos.clone();
+        for (&turn, &start) in &self.turn_places {
+            let end = self
+                .turn_places
+                .range((turn + 1)..)
+                .next()
+                .map_or(self.transcript.len(), |(_, at)| *at);
+            for entry in
+                &self.transcript[start.min(self.transcript.len())..end.min(self.transcript.len())]
+            {
+                if !entry.todos.is_empty() {
+                    by_turn.insert(turn, entry.todos.clone());
+                }
             }
         }
         by_turn
@@ -3897,11 +3941,80 @@ impl Session {
         self.completion = 0;
     }
 
+    /// The worker appended the submitted prompt at this recounted position.
+    pub fn prompt_recorded(&mut self, at: usize) {
+        self.prompt_at = Some(at);
+    }
+
+    /// Record one ended turn without copying model output out of the display.
+    /// Conversation offsets refer to the archive plus current messages, so compaction keeps them.
+    pub fn record_turn(&mut self, start: usize, conversation: &bravebot_agent::Conversation) {
+        use crate::sessions::{StoredOutcome, StoredTurn};
+        let entries = &self.transcript[self.turn_start.transcript_len.min(self.transcript.len())..];
+        let prompt = entries
+            .first()
+            .filter(|e| e.speaker == Speaker::User)
+            .map(|e| e.text.clone());
+        let outcome = self.finished.map(|finished| match finished.ending {
+            bravebot_agent::Ending::Done => StoredOutcome::Completed,
+            bravebot_agent::Ending::Failed(diagnosis) => StoredOutcome::Failed {
+                reason: entries
+                    .iter()
+                    .find(|e| e.speaker == Speaker::Failure)
+                    .map_or_else(|| failure_reason(diagnosis), |e| e.text.clone()),
+            },
+            bravebot_agent::Ending::Stopped { .. } => StoredOutcome::Cancelled {
+                reason: t!(turn_cancelled, turn = self.turns),
+            },
+        });
+        let end = conversation.recounted().len();
+        let reset_context = end < start;
+        self.turn_history.push(StoredTurn {
+            number: self.turns,
+            prompt,
+            start: if reset_context { 0 } else { start },
+            end,
+            reset_context,
+            prompt_offset: self
+                .prompt_at
+                .filter(|at| !reset_context && *at >= start && *at < end)
+                .map(|at| at - start),
+            outcome,
+        });
+    }
+
+    pub fn turn_history(&self) -> &[crate::sessions::StoredTurn] {
+        &self.turn_history
+    }
+
+    /// Turns keyed by display entry, excluding prompts returned to the editor.
+    pub(crate) fn transcript_turns(&self) -> std::collections::BTreeMap<usize, usize> {
+        let hidden: std::collections::BTreeSet<_> = self
+            .turn_history
+            .iter()
+            .filter(|turn| turn.prompt.is_none())
+            .map(|turn| turn.number)
+            .collect();
+        self.turn_places
+            .iter()
+            .filter(|(number, _)| !hidden.contains(number))
+            .map(|(&number, &at)| (at, number))
+            .collect()
+    }
+
+    /// Remove display metadata with the turns a rewind removed.
+    pub fn rewind_history(&mut self) {
+        self.turn_history.retain(|turn| turn.number <= self.turns);
+        self.turn_places.retain(|turn, _| *turn <= self.turns);
+        self.unplaced_todos.retain(|turn, _| *turn <= self.turns);
+        self.todos.clear();
+        self.progress = Default::default();
+    }
+
     /// Fill the transcript from a conversation resumed off disk.
     ///
-    /// What the model can see is what the user is shown, which is the honest thing to draw: a
-    /// resumed session that displayed more than it had would invite the user to refer to
-    /// something the model has no record of.
+    /// Explicit turn history belongs to the display alone. The conversation remains the only
+    /// source of planner context; a retained prompt or failure reason grants it no new content.
     ///
     /// `recalled` is what each turn left beneath it: the plan it worked to and what its gates
     /// decided, by turn number. Both go on the last thing that turn said, which is where a live
@@ -3914,38 +4027,80 @@ impl Session {
         title: &str,
         recalled: &crate::sessions::Recalled,
     ) {
-        use bravebot_agent::conversation::Said;
-
         self.note(t!(session_resumed, title = title));
+        self.unplaced_todos = recalled.todos.clone();
 
-        // The last entry of each turn, which is where that turn's trail goes. Filled as the
-        // transcript is built and applied afterwards, so a turn that spoke several times ends up
-        // with one trail on its last line rather than a copy under each of them.
-        let mut last_of_turn: std::collections::BTreeMap<usize, usize> = Default::default();
-        for said in conversation.recounted() {
-            match said {
-                Said::User(text) => {
-                    self.turns += 1;
-                    self.transcript.push(Entry::user(text));
+        if let Some(history) = &recalled.history {
+            use crate::sessions::StoredOutcome;
+            let said = conversation.recounted();
+            let mut cursor = 0;
+            let reset = history
+                .iter()
+                .rposition(|turn| turn.reset_context)
+                .unwrap_or(0);
+            for (index, turn) in history.iter().enumerate() {
+                let (start, end) = if index < reset {
+                    (0, 0)
+                } else {
+                    (turn.start, turn.end)
+                };
+                // Messages outside turns (for example shell mode) have no turn ownership.
+                for line in said.iter().take(start).skip(cursor) {
+                    self.transcript.push(recalled_entry(line));
                 }
-                Said::Assistant(text) => self.transcript.push(Entry::assistant(text, Vec::new())),
-                Said::Tool(line) => self.transcript.push(Entry::recalled_tool(line)),
+                self.turn_places.insert(turn.number, self.transcript.len());
+                if let Some(prompt) = &turn.prompt {
+                    self.unplaced_todos.remove(&turn.number);
+                    self.transcript.push(Entry::user(prompt));
+                    for (offset, line) in said.iter().enumerate().take(end).skip(start) {
+                        // Only the submitted prompt is replaced by its display copy. Context,
+                        // corrections and delegate reports can also have the user role.
+                        if turn.prompt_offset == Some(offset - start) {
+                            continue;
+                        }
+                        self.transcript.push(recalled_entry(line));
+                    }
+                    match &turn.outcome {
+                        Some(StoredOutcome::Failed { reason }) => {
+                            self.transcript.push(Entry::failure(reason))
+                        }
+                        Some(StoredOutcome::Cancelled { reason }) => {
+                            self.transcript.push(Entry::stopped(reason))
+                        }
+                        Some(StoredOutcome::Completed) | None => {}
+                    }
+                    if let Some(last) = self.transcript.last_mut() {
+                        last.trail = recalled
+                            .trails
+                            .get(&turn.number)
+                            .cloned()
+                            .unwrap_or_default();
+                        last.todos = recalled
+                            .todos
+                            .get(&turn.number)
+                            .cloned()
+                            .unwrap_or_default();
+                    }
+                }
+                cursor = end;
             }
-            // An assistant entry before any prompt belongs to no turn, so there is nothing whose
-            // trail it could be carrying.
-            if self.turns > 0 {
-                last_of_turn.insert(self.turns, self.transcript.len() - 1);
+            for line in said.iter().skip(cursor) {
+                self.transcript.push(recalled_entry(line));
             }
+            self.turn_history = history.clone();
+            self.turns = recalled
+                .turns
+                .unwrap_or_else(|| history.last().map_or(0, |t| t.number));
+            self.restore_asides(recalled.asides.clone());
+            return;
         }
 
-        for (turn, index) in last_of_turn {
-            if let Some(trail) = recalled.trails.get(&turn) {
-                self.transcript[index].trail = trail.clone();
-            }
-            if let Some(todos) = recalled.todos.get(&turn) {
-                self.transcript[index].todos = todos.clone();
-            }
-        }
+        // Legacy records contain user-role context, corrections and shell messages as well as
+        // prompts. None of those roles establish turn ownership. Keep the messages unassigned
+        // and preserve the recorded count rather than saving guessed boundaries as history.
+        self.transcript
+            .extend(conversation.recounted().iter().map(recalled_entry));
+        self.turns = recalled.turns.unwrap_or(0);
 
         // Into the view and not into the transcript, which is the whole of what an aside is: the
         // planner has read neither the question nor the answer, so a resumed transcript holding
@@ -4315,6 +4470,8 @@ impl Session {
         // Left up they are an answer drawn above a prompt that has gone back to the box.
         self.streaming.clear();
 
+        self.forget_cancelled_prompt();
+
         // Un-sent whole only where nothing was recorded after the prompt, nothing is waiting
         // behind it, and the box is free to take it. The first two mean there is something to have
         // second thoughts about; the third is the only place the line can go.
@@ -4342,13 +4499,6 @@ impl Session {
         }
 
         self.transcript.pop();
-        // Popped because the text is going back into the box: offering it from history as well
-        // would present the same line from two places. Rewritten rather than appended, since the
-        // stored copy has to go too.
-        self.history.pop();
-        if self.persist {
-            crate::store::save_history(self.history.entries());
-        }
         // Back the way it was typed. A paste that returned as its words would fill the box
         // somebody is about to edit with the stack trace they folded away in the first place.
         let returning = self.folded(&prompt.into());
@@ -4496,12 +4646,13 @@ impl Session {
     ///
     /// What is written is the line with its markers settled, because the session that recalls it
     /// staged none of them.
-    fn remember(&mut self, prompt: &str) {
+    fn remember(&mut self, prompt: &str) -> crate::history::Ticket {
         let project = self.project();
         let stored = self.history.push(self.recallable(prompt), project).cloned();
         if let (true, Some(entry)) = (self.persist, stored) {
             crate::store::append_history(&entry);
         }
+        self.history.ticket()
     }
 
     /// The workspace a prompt is recorded as having been sent from.
@@ -4578,13 +4729,13 @@ impl Session {
         // Recorded here rather than in `begin_turn`, because a queued prompt was recorded when it
         // was queued: from the person's side that is when they sent it. Before the line is taken,
         // because taking it clears what the markers in it stand for.
-        self.remember(&prompt);
+        let recall = self.remember(&prompt);
         // Settled from the line as it was typed, since that is where the markers are. Everything
         // still named goes; a marker the user deleted is an attachment they took off, and it goes
         // nowhere. Pictures settle the same way and at the same moment, since a marker rubbed out
         // means the same thing whether the thing behind it was dropped or pasted.
         let taken = self.take_line(&typed);
-        Some(self.begin_turn(prompt, taken))
+        Some(self.begin_turn(prompt, taken, Some(recall)))
     }
 
     /// Take the current line as a prompt to send when the turn in flight has finished.
@@ -4624,7 +4775,7 @@ impl Session {
         // Resolved before the line is taken, because taking it clears what the markers stand for.
         let resolved = self.resolved(&typed);
         let prompt = self.unfolded(&typed);
-        self.remember(&prompt);
+        let recall = self.remember(&prompt);
         let (attached, pasted) = self.take_line(&typed);
         // Into the turn's reach the moment it is typed, rather than when the turn next asks. The
         // turn asks between rounds and a round can be a long wait; put there now, the line is
@@ -4646,6 +4797,7 @@ impl Session {
             attached,
             pasted,
             command,
+            recall,
         });
         self.scroll = 0;
         true
@@ -4732,7 +4884,7 @@ impl Session {
         // copy still in the buffer would reach the planner a second time, as an interjection into
         // the very turn this line started.
         self.pending.take();
-        Some(self.begin_turn(next.prompt, (next.attached, next.pasted)))
+        Some(self.begin_turn(next.prompt, (next.attached, next.pasted), Some(next.recall)))
     }
 
     /// Take the command waiting longest, if the session is free to carry one out.
@@ -4944,7 +5096,7 @@ impl Session {
         // The driver's own sentence with the judge's reason quoted inside it, which is why it is
         // not a message from the catalog: it goes to a model rather than to a reader.
         let prompt = bravebot_agent::goal::carry_on(&condition, &reason);
-        Some(self.begin_turn(prompt, (Vec::new(), Vec::new())))
+        Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), None))
     }
 
     /// Every live watch, oldest first, for the report that lists them.
@@ -5034,7 +5186,7 @@ impl Session {
         self.watches.dispatched(number);
         self.note(t!(watch_fired, number = number, path = &path));
         let prompt = bravebot_agent::watch::fired(number, &path);
-        Some(self.begin_turn(prompt, (Vec::new(), Vec::new())))
+        Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), None))
     }
 
     /// Whether the turn running now is a watch's fire.
@@ -5178,7 +5330,7 @@ impl Session {
         } else {
             self.note(t!(loop_tick, count = count));
         }
-        Some(self.begin_turn(prompt, (Vec::new(), Vec::new())))
+        Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), None))
     }
 
     /// Take every waiting prompt back out of the queue and into the box.
@@ -5257,14 +5409,23 @@ impl Session {
     }
 
     /// Start a turn for a prompt, whether it was sent just now or waited for its turn.
-    fn begin_turn(&mut self, prompt: String, taken: (Vec<Attached>, Vec<AttachedImage>)) -> String {
+    fn begin_turn(
+        &mut self,
+        prompt: String,
+        taken: (Vec<Attached>, Vec<AttachedImage>),
+        recall: Option<crate::history::Ticket>,
+    ) -> String {
         // Recorded here because this is the last moment these figures exist: the prompt goes into
         // the transcript and the count goes up below, and `/undo` rewinds to what they replaced.
         self.turn_start = TurnStart {
             turns: self.turns,
             transcript_len: self.transcript.len(),
         };
+        self.prompt_at = None;
+        self.recall = recall;
         (self.sent, self.sent_pasted) = taken;
+        self.turn_places
+            .insert(self.turns + 1, self.transcript.len());
         self.transcript.push(Entry::user(prompt.clone()));
         self.status = Status::Working;
         self.scroll = 0;
@@ -5357,11 +5518,21 @@ impl Session {
         spent.tokens
     }
 
+    fn forget_cancelled_prompt(&mut self) {
+        let Some(ticket) = self.recall.take() else {
+            return;
+        };
+        if self.history.withdraw(ticket) && self.persist {
+            crate::store::save_history(self.history.entries());
+        }
+    }
+
     /// Mark a deliberate stop before returning its prompt to the editor.
     pub fn stopped(&mut self, attempts: Option<u32>) {
         let tokens = self.charge_progress();
         self.finish_turn(tokens, bravebot_agent::Ending::Stopped { attempts });
         if self.is_quitting() {
+            self.forget_cancelled_prompt();
             let todos = std::mem::take(&mut self.todos);
             self.transcript
                 .push(Entry::stopped(t!(turn_cancelled, turn = self.turns)).with_todos(todos));
@@ -8904,14 +9075,9 @@ mod tests {
             Some("turn 1 cancelled"),
             "the prompt that stayed sent was not marked stopped"
         );
-        assert_eq!(
-            s.history
-                .entries()
-                .iter()
-                .map(|entry| entry.prompt.as_str())
-                .collect::<Vec<_>>(),
-            ["first"],
-            "the prompt was dropped from history with nowhere to go"
+        assert!(
+            s.history.entries().is_empty(),
+            "cancelled input stays out of recall"
         );
     }
 
@@ -9159,6 +9325,8 @@ mod tests {
             &conversation,
             "a title",
             &crate::sessions::Recalled {
+                history: None,
+                turns: None,
                 trails: Default::default(),
                 todos: Default::default(),
                 asides: Vec::new(),
@@ -9212,6 +9380,8 @@ mod tests {
             &conversation,
             "a title",
             &crate::sessions::Recalled {
+                history: None,
+                turns: None,
                 trails: Default::default(),
                 todos: Default::default(),
                 asides: Vec::new(),
@@ -10516,6 +10686,8 @@ mod tests {
             replayed(
                 messages,
                 crate::sessions::Recalled {
+                    history: None,
+                    turns: None,
                     trails: trails.clone(),
                     todos: BTreeMap::new(),
                     asides: Vec::new(),
@@ -10523,11 +10695,33 @@ mod tests {
             )
         }
 
-        fn replayed(messages: Vec<Message>, recalled: crate::sessions::Recalled) -> Vec<Entry> {
+        fn replayed(messages: Vec<Message>, mut recalled: crate::sessions::Recalled) -> Vec<Entry> {
             let mut conversation = Conversation::new();
+            let mut recorded = session();
+            let mut start = None;
+            // These fixtures contain only submitted prompts and their replies or calls.
+            // Record their known submissions instead of asking replay to infer boundaries.
             for message in messages {
+                if message.role == bravebot_aichat::protocol::Role::User {
+                    if let Some(start) = start {
+                        recorded.record_turn(start, &conversation);
+                    }
+                    let at = conversation.recounted().len();
+                    start = Some(at);
+                    for ch in message.content.text().chars() {
+                        recorded.type_char(ch);
+                    }
+                    recorded.submit().unwrap();
+                    recorded.prompt_recorded(at);
+                    recorded.complete("", Vec::new(), 0);
+                }
                 conversation.push(message);
             }
+            if let Some(start) = start {
+                recorded.record_turn(start, &conversation);
+            }
+            recalled.history = Some(recorded.turn_history().to_vec());
+            recalled.turns = Some(recorded.turns);
             let mut s = session();
             s.replay(&conversation, "a title", &recalled);
             s.transcript
@@ -10628,6 +10822,8 @@ mod tests {
                     Message::assistant("second reply"),
                 ],
                 crate::sessions::Recalled {
+                    history: None,
+                    turns: None,
                     trails: BTreeMap::new(),
                     todos: BTreeMap::from([(2, plan.clone())]),
                     asides: Vec::new(),
@@ -10678,6 +10874,8 @@ mod tests {
                     Message::assistant("second reply"),
                 ],
                 crate::sessions::Recalled {
+                    history: None,
+                    turns: None,
                     trails: BTreeMap::new(),
                     todos: written,
                     asides: Vec::new(),

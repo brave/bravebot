@@ -179,6 +179,7 @@ fn a_session_is_named_once_there_is_a_record_to_name() {
     handle.save(
         "make a space invaders game",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
@@ -219,6 +220,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
     handle.save(
         "make a space invaders game",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
@@ -297,6 +299,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
     handle.save(
         "make a space invaders game",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 2,
             tokens: 3_400,
@@ -332,6 +335,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
     other.save(
         "something else",
         Standing {
+            history: None,
             conversation: &Conversation::new().snapshot(),
             turns: 1,
             tokens: 0,
@@ -356,6 +360,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
     resumed.save(
         "",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 3,
             tokens: 5_600,
@@ -531,6 +536,7 @@ fn the_audit_keeps_the_time_each_event_happened() {
     handle.save(
         "a task",
         Standing {
+            history: None,
             conversation: &a_conversation().snapshot(),
             turns: 1,
             tokens: 0,
@@ -597,6 +603,7 @@ fn renaming_a_session_rewrites_the_record_immediately() {
     handle.save(
         "make a space invaders game",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
@@ -643,6 +650,7 @@ fn a_chosen_name_survives_the_next_turn() {
     handle.save(
         "some later question entirely",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 10,
@@ -715,6 +723,7 @@ fn a_resumed_session_can_still_open_the_directory_it_added() {
     handle.save(
         "read my notes",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 10,
@@ -782,6 +791,7 @@ fn a_directory_that_has_gone_since_is_reported_on_resume() {
     handle.save(
         "read my notes",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 10,
@@ -835,6 +845,7 @@ fn a_manifest_run_is_recorded_and_cannot_be_resumed() {
     handle.save(
         "summarise the docs",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 0,
@@ -881,6 +892,7 @@ fn the_session_continued_is_the_one_written_here() {
     handle.save(
         "make a space invaders game",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
@@ -921,6 +933,7 @@ fn the_session_continued_is_the_one_written_here() {
     run.save(
         "summarise the docs",
         Standing {
+            history: None,
             conversation: &bravebot_agent::Conversation::new().snapshot(),
             turns: 1,
             tokens: 0,
@@ -968,6 +981,7 @@ fn a_session_that_changes_directory_is_recorded_where_it_moved_to() {
     let todos = BTreeMap::new();
     let programs = TrustedPrograms::new();
     let standing = |trust| Standing {
+        history: None,
         conversation: &snapshot,
         turns: 1,
         tokens: 0,
@@ -1043,6 +1057,7 @@ fn a_session_that_moves_before_anything_is_written_is_recorded_where_it_moved_to
     let mut moved_map = TrustStore::new("/work");
     moved_map.trust(".");
     let standing = |turns| Standing {
+        history: None,
         conversation: &snapshot,
         turns,
         tokens: 0,
@@ -1113,6 +1128,7 @@ fn a_record_written_before_the_first_turn_follows_the_session_when_it_moves() {
     let programs = TrustedPrograms::new();
     let trust = TrustStore::new("/work");
     let standing = || Standing {
+        history: None,
         conversation: &snapshot,
         turns: 0,
         tokens: 0,
@@ -1168,6 +1184,7 @@ fn session_records_and_audit_trails_are_written_mode_0600() {
     handle.save(
         "private work",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 100,
@@ -1275,6 +1292,7 @@ fn pre_existing_session_files_and_directories_are_tightened_on_write() {
     handle.save(
         "tighten work",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 100,
@@ -1361,6 +1379,7 @@ fn forking_narrows_the_session_directory_it_writes_into() {
     handle.save(
         "work to fork",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 100,
@@ -1418,6 +1437,7 @@ fn a_question_asked_beside_the_work_survives_a_resume() {
     handle.save(
         "make a space invaders game",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
@@ -1492,6 +1512,7 @@ fn a_pasted_picture_is_kept_with_the_session_and_comes_back_on_a_resume() {
     handle.save(
         "what is [Image #1]?",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
@@ -1546,6 +1567,7 @@ fn an_answer_the_planner_could_not_have_held_is_not_written_down() {
     handle.save(
         "make a space invaders game",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
@@ -1614,6 +1636,7 @@ fn a_rewind_point_survives_being_written_and_read_back() {
     handle.save(
         "add a second line to notes.md",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 2,
             tokens: 1_200,
@@ -1697,6 +1720,7 @@ fn what_a_file_nobody_vouched_for_held_is_not_written_down() {
     handle.save(
         "rewrite both files",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: 2,
             tokens: 1_200,
@@ -1833,6 +1857,7 @@ fn completed_failed_and_stopped_usage_survives_session_storage() {
     handle.save(
         "usage",
         Standing {
+            history: None,
             conversation: &conversation.snapshot(),
             turns: session.turns,
             tokens: session.tokens,
@@ -1861,13 +1886,20 @@ mod completed_usage {
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
-    fn an_endpoint(script: Vec<String>) -> (String, mpsc::Receiver<String>) {
+    pub(super) fn an_endpoint(script: Vec<String>) -> (String, mpsc::Receiver<String>) {
+        endpoint_stopping_at(script, None)
+    }
+
+    pub(super) fn endpoint_stopping_at(
+        script: Vec<String>,
+        stopping: Option<(usize, bravebot_core::cancel::Cancel)>,
+    ) -> (String, mpsc::Receiver<String>) {
         use std::io::{BufRead, Read};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let (sender, receiver) = mpsc::channel();
         thread::spawn(move || {
-            for frames in script {
+            for (index, frames) in script.into_iter().enumerate() {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut reader = std::io::BufReader::new(&mut stream);
                 let mut length = 0;
@@ -1884,6 +1916,12 @@ mod completed_usage {
                 let mut body = vec![0; length];
                 reader.read_exact(&mut body).unwrap();
                 sender.send(String::from_utf8(body).unwrap()).unwrap();
+                if let Some((at, cancel)) = &stopping
+                    && index == *at
+                {
+                    cancel.cancel();
+                    return;
+                }
                 write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}", frames.len()).unwrap();
             }
         });
@@ -1943,6 +1981,9 @@ mod completed_usage {
                 &bravebot_core::cancel::Cancel::new(),
             )
             .unwrap_err();
+            for at in reporter.prompts {
+                session.prompt_recorded(at);
+            }
             for spent in reporter.spent {
                 session.progressed(spent);
             }
@@ -1951,6 +1992,7 @@ mod completed_usage {
                 bravebot_agent::Category::Undecodable
             );
             session.fail("unusable reply", error.ending());
+            session.record_turn(0, &conversation);
             requests.recv_timeout(Duration::from_secs(2)).unwrap();
             assert!(
                 requests.try_recv().is_err(),
@@ -1963,6 +2005,7 @@ mod completed_usage {
             stored.save(
                 "work",
                 sessions::Standing {
+                    history: Some(session.turn_history()),
                     conversation: &conversation.snapshot(),
                     turns: session.turns,
                     tokens: session.tokens,
@@ -1989,8 +2032,1419 @@ mod completed_usage {
                 &recalled,
             );
             resumed.restore_spend(record.tokens, record.spend);
+            assert_eq!(resumed.turns, 1);
+            assert!(resumed.transcript.iter().any(|entry| entry.speaker
+                == bravebot_tui::state::Speaker::Failure
+                && entry.text == "unusable reply"));
+            assert!(
+                resumed
+                    .transcript
+                    .iter()
+                    .any(|entry| entry.speaker == bravebot_tui::state::Speaker::User
+                        && entry.text == "x")
+            );
             assert_eq!(resumed.tokens, 107);
             assert_eq!(resumed.spend_by_turn()[&1], 107);
         }
+    }
+}
+
+mod preserved_history {
+    use super::*;
+    use bravebot_agent::{Category, Diagnosis, Ending, Spent};
+    use bravebot_tui::state::{Session, Speaker};
+
+    fn save(
+        root: &std::path::Path,
+        session: &Session,
+        conversation: &Conversation,
+    ) -> sessions::Record {
+        let mut handle = Handle::begin(root);
+        handle.save(
+            "history",
+            Standing {
+                history: Some(session.turn_history()),
+                conversation: &conversation.snapshot(),
+                turns: session.turns,
+                tokens: session.tokens,
+                spend: session.spend_by_turn(),
+                timing: session.timing_by_turn(),
+                model: None,
+                todos: &session.todos_by_turn(),
+                asides: &[],
+                trust: &TrustStore::new(root),
+                programs: &TrustedPrograms::new(),
+                directories: &[],
+                manifest: None,
+                rewind: session.rewind_points(),
+            },
+        );
+        sessions::load(root, handle.id()).unwrap()
+    }
+
+    fn reopen(root: &std::path::Path, record: &sessions::Record) -> Session {
+        let mut session = Session::new("test");
+        let conversation = Conversation::restored(record.conversation.clone());
+        session.replay(
+            &conversation,
+            &record.title,
+            &sessions::recall(root, record),
+        );
+        session.restore_spend(record.tokens, record.spend.clone());
+        session.restore_timing(record.timing.clone());
+        session.restore_rewind_points(record.rewind_points(root), &conversation);
+        session
+    }
+
+    fn submit(session: &mut Session, prompt: &str) {
+        for c in prompt.chars() {
+            session.type_char(c);
+        }
+        assert_eq!(session.submit().as_deref(), Some(prompt));
+    }
+
+    fn fixture() -> (Session, Conversation) {
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        for (n, prompt) in [
+            "successful prompt",
+            "failed prompt",
+            "cancelled prompt",
+            "no plan prompt",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let start = conversation.recounted().len();
+            let snapshot = bravebot_tui::state::TurnSnapshot {
+                conversation: conversation.snapshot(),
+                turns: session.turns,
+                tokens: session.tokens,
+                spend: session.spend_by_turn().clone(),
+                timing: session.timing_by_turn().clone(),
+                cached: session.cached(),
+                trust: TrustStore::new("/work"),
+                programs: TrustedPrograms::new(),
+                transcript_len: session.transcript.len(),
+                title: "history".into(),
+                was_wrote: true,
+            };
+            submit(&mut session, prompt);
+            session.open_rewind_point(snapshot, prompt.into());
+            // A failure before the planner accepts a prompt leaves no conversation message.
+            if n != 1 {
+                session.prompt_recorded(conversation.recounted().len());
+                conversation.push(Message::user(prompt));
+            }
+            if n != 3 {
+                session.set_todos(rows(&List::new(vec![Item::new(
+                    format!("task {n}"),
+                    Status::Active,
+                )])));
+            }
+            if n != 1 {
+                session.narrate(format!("work {n}"));
+                use bravebot_aichat::protocol::{ToolCallRequest, ToolCallRequestFunction};
+                conversation.push(Message::assistant_calling(
+                    format!("work {n}"),
+                    vec![ToolCallRequest {
+                        id: format!("call-{n}"),
+                        kind: "function".into(),
+                        function: ToolCallRequestFunction {
+                            name: "read_file".into(),
+                            arguments: format!(r#"{{"path":"file{n}"}}"#),
+                        },
+                    }],
+                ));
+                conversation.push(Message::tool_result(format!("call-{n}"), "a result"));
+            }
+            let spent = Spent {
+                tokens: 11 * (n as u64 + 1),
+                timing: bravebot_agent::timing::Timing {
+                    inference_ms: 7 * (n as u64 + 1),
+                    tools_ms: 3 * (n as u64 + 1),
+                    stalled_ms: n as u64,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            match n {
+                1 => {
+                    session.progressed(spent);
+                    session.fail(
+                        "safe transport failure",
+                        Ending::Failed(Diagnosis::of(Category::Transport)),
+                    );
+                }
+                2 => {
+                    session.progressed(spent);
+                    session.stopped(Some(2));
+                    session.restore(prompt);
+                }
+                _ => {
+                    session.complete(format!("answer {n}"), vec![], spent.tokens);
+                    conversation.push(Message::assistant(format!("answer {n}")));
+                    session.spent_time(spent.timing);
+                }
+            }
+            let mut timing = session.timing_by_turn().clone();
+            timing.get_mut(&session.turns).unwrap().wall_ms = 1000 * (n as u64 + 1);
+            session.restore_timing(timing);
+            session.record_turn(start, &conversation);
+        }
+        (session, conversation)
+    }
+
+    /// Planner messages do not contain every prompt and cannot define display turn boundaries.
+    #[test]
+    fn reopening_keeps_exact_prompts_and_turn_count() {
+        let scratch = Scratch::new("history-boundaries");
+        let (session, conversation) = fixture();
+        let reopened = reopen(
+            &scratch.project,
+            &save(&scratch.project, &session, &conversation),
+        );
+        assert_eq!(reopened.turns, 4);
+        assert_eq!(
+            reopened
+                .transcript
+                .iter()
+                .filter(|e| e.speaker == Speaker::Assistant)
+                .count(),
+            5
+        );
+        assert_eq!(
+            reopened
+                .transcript
+                .iter()
+                .filter(|e| e.speaker == Speaker::Tool)
+                .count(),
+            3
+        );
+        use sessions::StoredOutcome;
+        assert!(matches!(
+            reopened.turn_history()[0].outcome,
+            Some(StoredOutcome::Completed)
+        ));
+        assert!(matches!(
+            reopened.turn_history()[1].outcome,
+            Some(StoredOutcome::Failed { .. })
+        ));
+        assert!(matches!(
+            reopened.turn_history()[2].outcome,
+            Some(StoredOutcome::Cancelled { .. })
+        ));
+        assert!(matches!(
+            reopened.turn_history()[3].outcome,
+            Some(StoredOutcome::Completed)
+        ));
+
+        assert_eq!(
+            reopened
+                .transcript
+                .iter()
+                .filter(|e| e.speaker == Speaker::User)
+                .map(|e| e.text.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "successful prompt",
+                "failed prompt",
+                "cancelled prompt",
+                "no plan prompt"
+            ]
+        );
+    }
+
+    /// A missing failed or stopped entry makes export claim a different history.
+    #[test]
+    fn reopening_keeps_failure_and_cancellation_in_export() {
+        let scratch = Scratch::new("history-outcomes");
+        let (session, conversation) = fixture();
+        let reopened = reopen(
+            &scratch.project,
+            &save(&scratch.project, &session, &conversation),
+        );
+        let endings: Vec<_> = reopened
+            .transcript
+            .iter()
+            .filter(|e| matches!(e.speaker, Speaker::Failure | Speaker::Stopped))
+            .map(|e| (e.speaker, e.text.clone()))
+            .collect();
+        assert_eq!(endings.len(), 2);
+        assert_eq!(
+            endings[0],
+            (Speaker::Failure, "safe transport failure".into())
+        );
+        assert_eq!(endings[1].0, Speaker::Stopped);
+        let markdown = bravebot_tui::render::as_markdown(&reopened, "history");
+        let path = sessions::export(&scratch.project, "history", None, &markdown).unwrap();
+        let text = std::fs::read_to_string(path).unwrap();
+        let failed = text
+            .split("failed prompt")
+            .nth(1)
+            .unwrap()
+            .split("cancelled prompt")
+            .next()
+            .unwrap();
+        assert!(failed.contains("## Failed\n\nsafe transport failure"));
+        assert!(failed.contains("**Outcome:** failed"));
+        assert!(failed.contains("**Usage:** 22 tokens"));
+        assert!(
+            failed.contains("**Timing:** wall 2000 ms; inference 14 ms; tools 6 ms; stalled 1 ms")
+        );
+        assert!(failed.contains("- [ ] task 1 (in_progress)"));
+        assert!(!failed.contains("task 2"));
+        let cancelled = text
+            .split("cancelled prompt")
+            .nth(1)
+            .unwrap()
+            .split("no plan prompt")
+            .next()
+            .unwrap();
+        assert!(cancelled.contains("## Cancelled"));
+        assert!(!cancelled.contains("## Failed"));
+        assert!(cancelled.contains("**Outcome:** cancelled"));
+        assert!(cancelled.contains("**Usage:** 33 tokens"));
+        assert!(
+            cancelled
+                .contains("**Timing:** wall 3000 ms; inference 21 ms; tools 9 ms; stalled 2 ms")
+        );
+        assert!(cancelled.contains("- [ ] task 2 (in_progress)"));
+        let final_turn = text.split("no plan prompt").nth(1).unwrap();
+        assert!(final_turn.contains("**Outcome:** completed"));
+        assert!(final_turn.contains("**Usage:** 44 tokens"));
+        assert!(!final_turn.contains("**Tasks:**"));
+    }
+
+    /// Distinct values reject shifting one turn's plan or measurements onto its neighbour.
+    #[test]
+    fn reopening_keeps_task_ownership_and_recorded_measurements() {
+        let scratch = Scratch::new("history-metadata");
+        let (session, conversation) = fixture();
+        let reopened = reopen(
+            &scratch.project,
+            &save(&scratch.project, &session, &conversation),
+        );
+        let mut prompt = String::new();
+        let mut plans = BTreeMap::new();
+        for entry in &reopened.transcript {
+            if entry.speaker == Speaker::User {
+                prompt = entry.text.clone();
+            }
+            if !entry.todos.is_empty() {
+                plans.insert(prompt.clone(), entry.todos.clone());
+            }
+        }
+        let expected = ["successful prompt", "failed prompt", "cancelled prompt"]
+            .into_iter()
+            .enumerate()
+            .map(|(n, prompt)| {
+                (
+                    prompt.to_string(),
+                    rows(&List::new(vec![Item::new(
+                        format!("task {n}"),
+                        Status::Active,
+                    )])),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(plans, expected);
+        assert_eq!(reopened.todos_by_turn(), session.todos_by_turn());
+        assert_eq!(reopened.tokens, 110);
+        assert_eq!(
+            reopened.spend_by_turn(),
+            &BTreeMap::from([(1, 11), (2, 22), (3, 33), (4, 44)])
+        );
+        assert_eq!(reopened.timing_by_turn(), session.timing_by_turn());
+        assert_eq!(reopened.timing_total().wall_ms, 10000);
+        assert_eq!(reopened.timing_total().inference_ms, 70);
+        assert_eq!(reopened.timing_total().tools_ms, 30);
+        assert_eq!(reopened.timing_total().stalled_ms, 6);
+    }
+
+    /// Returning an unstarted prompt to the editor must not create a cancelled transcript entry.
+    #[test]
+    fn reopening_does_not_restore_an_unsent_prompt() {
+        let scratch = Scratch::new("history-unsent");
+        let mut session = Session::new("test").with_stored_history();
+        submit(&mut session, "edit this");
+        session.progressed(Spent {
+            tokens: 19,
+            timing: bravebot_agent::timing::Timing {
+                inference_ms: 5,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        session.stopped(None);
+        session.restore("edit this");
+        assert_eq!(session.input(), "edit this");
+        session.record_turn(0, &Conversation::new());
+        let reopened = reopen(
+            &scratch.project,
+            &save(&scratch.project, &session, &Conversation::new()),
+        );
+        assert!(
+            !reopened
+                .transcript
+                .iter()
+                .any(|e| matches!(e.speaker, Speaker::User | Speaker::Stopped))
+        );
+        assert_eq!(reopened.turns, 1);
+        assert_eq!(reopened.tokens, 19);
+        assert_eq!(reopened.spend_by_turn().get(&1), Some(&19));
+        assert_eq!(reopened.timing_by_turn()[&1].inference_ms, 5);
+        assert!(bravebot_tui::store::load_history().is_empty());
+    }
+    /// Rewind must use turn boundaries even when one turn had no planner messages.
+    #[test]
+    fn reopened_history_stays_rewound_after_another_save_and_new_turn() {
+        let scratch = Scratch::new("history-rewind");
+        let (original, conversation) = fixture();
+        let record = save(&scratch.project, &original, &conversation);
+        let mut session = reopen(&scratch.project, &record);
+        let (snapshot, _) = session.take_rewind(2).unwrap();
+        assert_eq!(snapshot.turns, 2);
+        assert_eq!(
+            session.transcript[snapshot.transcript_len].text,
+            "cancelled prompt"
+        );
+        session.transcript.truncate(snapshot.transcript_len);
+        session.turns = snapshot.turns;
+        session.restore_spend(snapshot.tokens, snapshot.spend);
+        session.restore_timing(snapshot.timing);
+        session.restore_cache(snapshot.cached);
+        session.rewind_history();
+        let mut conversation = Conversation::restored(snapshot.conversation);
+        let saved = save(&scratch.project, &session, &conversation);
+        let mut session = reopen(&scratch.project, &saved);
+        assert_eq!(session.turns, 2);
+        assert_eq!(session.tokens, 33);
+        assert_eq!(session.spend_by_turn(), &BTreeMap::from([(1, 11), (2, 22)]));
+        assert_eq!(
+            session.timing_by_turn().keys().copied().collect::<Vec<_>>(),
+            [1, 2]
+        );
+        let markdown = bravebot_tui::render::as_markdown(&session, "history");
+        assert!(markdown.contains("failed prompt"));
+        assert!(markdown.contains("## Failed"));
+        assert!(!markdown.contains("cancelled prompt"));
+        assert!(!markdown.contains("no plan prompt"));
+        let start = conversation.recounted().len();
+        submit(&mut session, "replacement prompt");
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user("replacement prompt"));
+        conversation.push(Message::assistant("replacement answer"));
+        session.complete("replacement answer", vec![], 91);
+        session.record_turn(start, &conversation);
+        let session = reopen(
+            &scratch.project,
+            &save(&scratch.project, &session, &conversation),
+        );
+        assert_eq!(session.turns, 3);
+        assert_eq!(session.tokens, 124);
+        assert_eq!(
+            session.spend_by_turn(),
+            &BTreeMap::from([(1, 11), (2, 22), (3, 91)])
+        );
+        assert!(!session.todos_by_turn().contains_key(&3));
+        assert_eq!(session.timing_by_turn()[&3].inference_ms, 0);
+        assert_eq!(
+            session
+                .transcript
+                .iter()
+                .filter(|e| e.speaker == Speaker::Failure)
+                .count(),
+            1
+        );
+        assert!(
+            !session
+                .transcript
+                .iter()
+                .any(|e| e.speaker == Speaker::Stopped)
+        );
+    }
+
+    /// Older records carry totals but provide no evidence for a turn boundary, a failure reason
+    /// or a measured zero, and saving one back invents none of them.
+    #[test]
+    fn old_history_keeps_unknown_outcomes_and_missing_measurements() {
+        let scratch = Scratch::new("history-old");
+        let (session, conversation) = fixture();
+        let record = save(&scratch.project, &session, &conversation);
+        let mut json = serde_json::to_value(record).unwrap();
+        for field in ["history", "spend", "timing", "rewind"] {
+            json.as_object_mut().unwrap().remove(field);
+        }
+        let record: sessions::Record = serde_json::from_value(json).unwrap();
+        let session = reopen(&scratch.project, &record);
+        assert_eq!(session.tokens, 110);
+        let markdown = bravebot_tui::render::as_markdown(&session, "older history");
+        assert!(!markdown.contains("**Usage:**"));
+        assert!(!markdown.contains("**Timing:**"));
+        assert!(!markdown.contains("**Outcome:**"));
+        assert!(session.spend_by_turn().is_empty());
+        assert!(session.timing_by_turn().is_empty());
+        assert!(session.turn_history().is_empty());
+        assert!(
+            !session
+                .transcript
+                .iter()
+                .any(|e| matches!(e.speaker, Speaker::Stopped | Speaker::Failure))
+        );
+        let session = reopen(
+            &scratch.project,
+            &save(&scratch.project, &session, &conversation),
+        );
+        assert_eq!(session.tokens, 110);
+        let markdown = bravebot_tui::render::as_markdown(&session, "older history");
+        assert!(!markdown.contains("**Usage:**"));
+        assert!(!markdown.contains("**Timing:**"));
+        assert!(!markdown.contains("**Outcome:**"));
+        assert!(session.spend_by_turn().is_empty());
+        assert!(session.timing_by_turn().is_empty());
+        assert!(session.turn_history().is_empty());
+    }
+
+    /// Legacy user messages do not identify turns, even when spend and timing survived.
+    #[test]
+    fn legacy_context_keeps_measurements_without_guessing_turn_ownership() {
+        let scratch = Scratch::new("legacy-context-history");
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("loaded context"));
+        conversation.push(Message::user("actual prompt"));
+        conversation.push(Message::assistant("answer"));
+        let mut record = save(&scratch.project, &Session::new("test"), &conversation);
+        record.history = None;
+        record.turns = 1;
+        record.tokens = 17;
+        record.spend = BTreeMap::from([(1, 17)]);
+        record.todos = BTreeMap::from([(
+            1,
+            vec![sessions::StoredTask {
+                content: "legacy task".into(),
+                status: "in_progress".into(),
+            }],
+        )]);
+        let todos = record.todo_rows();
+        record.timing = BTreeMap::from([(
+            1,
+            bravebot_agent::timing::Timing {
+                wall_ms: 31,
+                inference_ms: 23,
+                ..Default::default()
+            },
+        )]);
+        let timing = record.timing.clone();
+        for _ in 0..2 {
+            let session = reopen(&scratch.project, &record);
+            assert_eq!(session.turns, 1);
+            assert_eq!(session.tokens, 17);
+            assert_eq!(session.spend_by_turn(), &BTreeMap::from([(1, 17)]));
+            assert_eq!(session.timing_by_turn(), &timing);
+            assert_eq!(session.todos_by_turn(), todos);
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .all(|entry| entry.todos.is_empty())
+            );
+            assert!(session.turn_history().is_empty());
+            let markdown = bravebot_tui::render::as_markdown(&session, "legacy");
+            assert!(markdown.contains("loaded context"));
+            assert!(markdown.contains("actual prompt"));
+            assert!(markdown.contains("answer"));
+            assert!(!markdown.contains("**Usage:**"));
+            assert!(!markdown.contains("**Timing:**"));
+            record = save(&scratch.project, &session, &conversation);
+        }
+        let mut session = reopen(&scratch.project, &record);
+        let start = conversation.recounted().len();
+        submit(&mut session, "new prompt");
+        session.prompt_recorded(start);
+        conversation.push(Message::user("new prompt"));
+        conversation.push(Message::assistant("new answer"));
+        session.complete("new answer", vec![], 29);
+        session.record_turn(start, &conversation);
+        let record = save(&scratch.project, &session, &conversation);
+        let session = reopen(&scratch.project, &record);
+        assert_eq!(session.turns, 2);
+        assert_eq!(session.tokens, 46);
+        assert_eq!(session.turn_history().len(), 1);
+        assert_eq!(session.turn_history()[0].number, 2);
+        assert_eq!(session.todos_by_turn(), todos);
+        assert_eq!(session.spend_by_turn(), &BTreeMap::from([(1, 17), (2, 29)]));
+        let markdown = bravebot_tui::render::as_markdown(&session, "mixed");
+        assert!(!markdown.contains("**Usage:** 17 tokens"));
+        assert!(
+            markdown.contains(
+                "## User\n\nnew prompt\n\n**Outcome:** completed\n\n**Usage:** 29 tokens"
+            )
+        );
+        // A later failure adds display entries absent from the conversation. It must not
+        // shift an older rewind point that has no explicit turn boundary.
+        let mut session = session;
+        let start = conversation.recounted().len();
+        submit(&mut session, "failed prompt");
+        session.fail(
+            "safe failure",
+            Ending::Failed(Diagnosis::of(Category::Transport)),
+        );
+        session.record_turn(start, &conversation);
+        let record = save(&scratch.project, &session, &conversation);
+        let mut session = reopen(&scratch.project, &record);
+        let mut snapshot = a_point_before_turn_two(&Conversation::new());
+        snapshot.turns = 0;
+        session.restore_rewind_points(
+            vec![bravebot_tui::state::RewindPoint {
+                snapshot,
+                backups: vec![],
+                prompt: "actual prompt".into(),
+            }],
+            &conversation,
+        );
+        let (snapshot, _) = session.take_rewind(1).unwrap();
+        assert_eq!(
+            snapshot.transcript_len, 1,
+            "rewind must keep only the resume note"
+        );
+        session.turns = snapshot.turns;
+        session.rewind_history();
+        assert!(session.todos_by_turn().is_empty());
+        let mut session = reopen(&scratch.project, &record);
+        session.clear();
+        assert!(session.todos_by_turn().is_empty());
+    }
+
+    /// A failed turn may retain several planner messages without ever producing a final answer.
+    #[test]
+    fn failure_after_work_keeps_its_prompt_and_safe_reason_without_changing_context() {
+        let scratch = Scratch::new("history-failed-work");
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        submit(&mut session, "inspect files");
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user("inspect files"));
+        session.narrate("looking at the files");
+        session.narrate("PRIVATE_DISPLAY_ONLY_CONTENT");
+        conversation.push(Message::assistant("looking at the files"));
+        let reason = bravebot_tui::state::failure_reason(Diagnosis::of(Category::Transport));
+        session.fail(&reason, Ending::Failed(Diagnosis::of(Category::Transport)));
+        session.record_turn(0, &conversation);
+        let expected = serde_json::to_value(conversation.snapshot()).unwrap();
+        let record = save(&scratch.project, &session, &conversation);
+        assert_eq!(
+            serde_json::to_value(&record.conversation).unwrap(),
+            expected
+        );
+        let reopened = reopen(&scratch.project, &record);
+        assert_eq!(reopened.turns, 1);
+        let transcript: Vec<_> = reopened
+            .transcript
+            .iter()
+            .filter(|e| e.speaker != Speaker::System)
+            .map(|e| (e.speaker, e.text.as_str()))
+            .collect();
+        assert_eq!(
+            transcript,
+            [
+                (Speaker::User, "inspect files"),
+                (Speaker::Assistant, "looking at the files"),
+                (Speaker::Failure, reason.as_str())
+            ]
+        );
+    }
+    /// Transcript retention and input recall have separate cancellation rules.
+    #[test]
+    fn cancelled_work_survives_resume_but_leaves_input_recall() {
+        let scratch = Scratch::new("history-cancel-recall");
+        for quit in [false, true] {
+            let mut session = Session::new("test").with_stored_history();
+            submit(&mut session, "stop this work");
+            session.narrate("visible work");
+            if quit {
+                session.quit();
+            }
+            session.stopped(Some(1));
+            if !quit {
+                session.restore("stop this work");
+            }
+            session.record_turn(0, &Conversation::new());
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .any(|entry| entry.speaker == Speaker::Stopped)
+            );
+            assert!(
+                bravebot_tui::store::load_history().is_empty(),
+                "cancelled prompt remains recallable"
+            );
+            let reopened = reopen(
+                &scratch.project,
+                &save(&scratch.project, &session, &Conversation::new()),
+            );
+            assert!(
+                reopened
+                    .transcript
+                    .iter()
+                    .any(|entry| entry.speaker == Speaker::Stopped)
+            );
+            assert!(
+                reopened
+                    .transcript
+                    .iter()
+                    .any(|entry| entry.text == "stop this work")
+            );
+        }
+    }
+    /// Compaction and messages outside turns cannot change the saved turn identities.
+    #[test]
+    fn compaction_and_nonturn_messages_leave_history_associations_intact() {
+        let scratch = Scratch::new("history-compacted");
+        let (mut session, mut conversation) = fixture();
+        let before = conversation.recounted().len();
+        conversation.compacted(4, "summary for the planner");
+        assert_eq!(conversation.recounted().len(), before);
+        conversation.push(Message::user("I ran a shell command myself"));
+        let start = conversation.recounted().len();
+        submit(&mut session, "after shell");
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user("after shell"));
+        conversation.push(Message::assistant("after shell answer"));
+        session.complete("after shell answer", vec![], 5);
+        session.record_turn(start, &conversation);
+        let record = save(&scratch.project, &session, &conversation);
+        let reopened = reopen(&scratch.project, &record);
+        assert_eq!(reopened.turns, 5);
+        assert!(matches!(
+            reopened.turn_history()[1].outcome,
+            Some(sessions::StoredOutcome::Failed { .. })
+        ));
+        assert!(matches!(
+            reopened.turn_history()[2].outcome,
+            Some(sessions::StoredOutcome::Cancelled { .. })
+        ));
+
+        assert_eq!(reopened.spend_by_turn().get(&5), Some(&5));
+        assert_eq!(reopened.todos_by_turn(), session.todos_by_turn());
+        assert_eq!(
+            reopened.turn_history()[4].prompt.as_deref(),
+            Some("after shell")
+        );
+        assert!(
+            reopened
+                .transcript
+                .iter()
+                .any(|e| e.text == "I ran a shell command myself")
+        );
+        let reopened = reopen(
+            &scratch.project,
+            &save(&scratch.project, &reopened, &conversation),
+        );
+        assert_eq!(reopened.turns, 5);
+        assert_eq!(reopened.todos_by_turn(), session.todos_by_turn());
+    }
+    /// Clearing is a new session, so no stored turn can survive into the next save.
+    #[test]
+    fn clearing_removes_persisted_turn_history() {
+        let scratch = Scratch::new("history-clear");
+        let (mut session, _) = fixture();
+        session.clear();
+        let reopened = reopen(
+            &scratch.project,
+            &save(&scratch.project, &session, &Conversation::new()),
+        );
+        assert_eq!(reopened.turns, 0);
+        assert_eq!(reopened.tokens, 0);
+        assert!(reopened.turn_history().is_empty());
+        assert!(reopened.todos_by_turn().is_empty());
+        assert!(reopened.spend_by_turn().is_empty());
+        assert!(reopened.timing_by_turn().is_empty());
+        assert!(
+            !reopened
+                .transcript
+                .iter()
+                .any(|e| e.speaker != Speaker::System)
+        );
+    }
+    /// A worker panic drops planner context; later messages must not reuse the lost ranges.
+    #[test]
+    fn a_lost_conversation_keeps_turn_identity_and_can_be_rewound() {
+        let scratch = Scratch::new("history-lost-conversation");
+        let (mut session, conversation) = fixture();
+        let before_reset = conversation.snapshot();
+        let start = conversation.recounted().len();
+        let point = bravebot_tui::state::TurnSnapshot {
+            conversation: before_reset.clone(),
+            turns: session.turns,
+            tokens: session.tokens,
+            spend: session.spend_by_turn().clone(),
+            timing: session.timing_by_turn().clone(),
+            cached: session.cached(),
+            trust: TrustStore::new(&scratch.project),
+            programs: TrustedPrograms::new(),
+            transcript_len: session.transcript.len(),
+            title: "history".into(),
+            was_wrote: true,
+        };
+        submit(&mut session, "worker failed");
+        session.open_rewind_point(point, "worker failed".into());
+        session.fail(
+            "safe internal failure",
+            Ending::Failed(Diagnosis::of(Category::Internal)),
+        );
+        let mut conversation = Conversation::new();
+        session.record_turn(start, &conversation);
+        let record = save(&scratch.project, &session, &conversation);
+        let mut session = reopen(&scratch.project, &record);
+        let point = bravebot_tui::state::TurnSnapshot {
+            conversation: conversation.snapshot(),
+            turns: session.turns,
+            tokens: session.tokens,
+            spend: session.spend_by_turn().clone(),
+            timing: session.timing_by_turn().clone(),
+            cached: session.cached(),
+            trust: TrustStore::new(&scratch.project),
+            programs: TrustedPrograms::new(),
+            transcript_len: session.transcript.len(),
+            title: "history".into(),
+            was_wrote: true,
+        };
+        submit(&mut session, "after reset");
+        session.open_rewind_point(point, "after reset".into());
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user("after reset"));
+        conversation.push(Message::assistant("new context answer"));
+        session.complete("new context answer", vec![], 13);
+        session.record_turn(0, &conversation);
+        let record = save(&scratch.project, &session, &conversation);
+        let mut session = reopen(&scratch.project, &record);
+        assert_eq!(session.turns, 6);
+        assert_eq!(session.tokens, 123);
+        let entries: Vec<_> = session
+            .transcript
+            .iter()
+            .filter(|entry| entry.speaker == Speaker::Assistant)
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "new messages were replayed into lost ranges"
+        );
+        assert_eq!(entries[0].text, "new context answer");
+        assert!(entries[0].todos.is_empty());
+        assert_eq!(
+            session
+                .transcript
+                .iter()
+                .filter(|e| e.speaker == Speaker::User)
+                .map(|e| e.text.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "successful prompt",
+                "failed prompt",
+                "cancelled prompt",
+                "no plan prompt",
+                "worker failed",
+                "after reset"
+            ]
+        );
+        assert_eq!(session.todos_by_turn()[&1][0].content, "task 0");
+        let (snapshot, _) = session.take_rewind(2).unwrap();
+        session.transcript.truncate(snapshot.transcript_len);
+        session.turns = snapshot.turns;
+        session.restore_spend(snapshot.tokens, snapshot.spend);
+        session.restore_timing(snapshot.timing);
+        session.rewind_history();
+        let conversation = Conversation::restored(snapshot.conversation);
+        let session = reopen(
+            &scratch.project,
+            &save(&scratch.project, &session, &conversation),
+        );
+        assert_eq!(session.turns, 4);
+        assert_eq!(session.tokens, 110);
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == "answer 0")
+        );
+        assert!(
+            !session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == "new context answer")
+        );
+        assert!(
+            !session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == "safe internal failure")
+        );
+    }
+    /// Context and submitted prompts are distinct messages even though both have the user role.
+    #[test]
+    fn context_before_prompt_keeps_each_message_once() {
+        let scratch = Scratch::new("history-context");
+        let mut session = Session::new("test");
+        submit(&mut session, "original prompt");
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("loaded context"));
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user("original prompt"));
+        conversation.push(Message::assistant("done"));
+        session.complete("done", Vec::new(), 7);
+        session.record_turn(0, &conversation);
+        let record = save(&scratch.project, &session, &conversation);
+        let loaded = reopen(&scratch.project, &record);
+        let users: Vec<&str> = loaded
+            .transcript
+            .iter()
+            .filter(|e| e.speaker == Speaker::User)
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(
+            users
+                .iter()
+                .filter(|text| **text == "original prompt")
+                .count(),
+            1,
+            "submitted prompt duplicated: {users:?}"
+        );
+        assert_eq!(
+            users
+                .iter()
+                .filter(|text| **text == "loaded context")
+                .count(),
+            1,
+            "recorded context lost: {users:?}"
+        );
+    }
+
+    /// A later file read can fail after earlier context was recorded, before the prompt was added.
+    #[test]
+    fn partial_context_failure_preserves_the_context() {
+        let scratch = Scratch::new("history-partial-context");
+        let mut session = Session::new("test");
+        submit(&mut session, "original prompt");
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("loaded context before missing file"));
+        session.fail(
+            "safe workspace failure",
+            Ending::Failed(Diagnosis::of(Category::Workspace)),
+        );
+        session.record_turn(0, &conversation);
+        let record = save(&scratch.project, &session, &conversation);
+        let loaded = reopen(&scratch.project, &record);
+        let export = bravebot_tui::render::as_markdown(&loaded, "test");
+        assert!(
+            export.contains("loaded context before missing file"),
+            "recorded context lost: {export}"
+        );
+    }
+
+    /// Queuing more work must not make cancellation remove somebody else's recall entry.
+    #[test]
+    fn cancelling_removes_only_the_running_prompt_from_recall() {
+        let scratch = Scratch::new("history-queued-recall");
+        let mut session = Session::new("test").with_stored_history();
+        submit(&mut session, "running prompt");
+        session.narrate("visible work");
+        session.paste("queued second");
+        assert!(session.queue());
+        session.paste("queued third");
+        assert!(session.queue());
+        session.stopped(Some(1));
+        session.restore("running prompt");
+        let prompts: Vec<&str> = session
+            .history
+            .entries()
+            .iter()
+            .map(|e| e.prompt.as_str())
+            .collect();
+        assert_eq!(prompts, ["queued second", "queued third"]);
+        let stored = bravebot_tui::store::load_history();
+        assert_eq!(
+            stored.iter().map(|e| e.prompt.as_str()).collect::<Vec<_>>(),
+            prompts
+        );
+        drop(scratch);
+    }
+
+    /// Hidden turns and in-turn user messages must not renumber an unfinished task list.
+    #[test]
+    fn hidden_cancellation_then_corrections_keeps_plan_ownership() {
+        let scratch = Scratch::new("history-hidden-plan");
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        submit(&mut session, "cancel before work");
+        session.stopped(Some(0));
+        session.restore("cancel before work");
+        session.record_turn(0, &conversation);
+        session.clear_input();
+        submit(&mut session, "next prompt");
+        for message in [
+            Message::user("loaded context"),
+            Message::user("next prompt"),
+            Message::assistant("working"),
+            Message::user("correction"),
+            Message::user("delegate report"),
+            Message::assistant("done"),
+        ] {
+            conversation.push(message);
+        }
+        session.prompt_recorded(1);
+        let plan = rows(&List::new(vec![Item::new("unfinished", Status::Active)]));
+        session.set_todos(plan.clone());
+        session.complete("done", vec![], 10);
+        session.record_turn(0, &conversation);
+        for _ in 0..3 {
+            session = reopen(
+                &scratch.project,
+                &save(&scratch.project, &session, &conversation),
+            );
+            assert_eq!(session.turns, 2);
+            assert_eq!(session.todos_by_turn(), BTreeMap::from([(2, plan.clone())]));
+            assert_eq!(
+                session
+                    .transcript
+                    .iter()
+                    .filter(|e| e.speaker == Speaker::User)
+                    .map(|e| e.text.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "next prompt",
+                    "loaded context",
+                    "correction",
+                    "delegate report"
+                ]
+            );
+        }
+    }
+
+    /// Quitting uses a different cancellation path and must keep the prompts still queued.
+    #[test]
+    fn quitting_removes_only_the_running_prompt_from_recall() {
+        let _scratch = Scratch::new("quit-queued-recall");
+        let mut session = Session::new("test").with_stored_history();
+        submit(&mut session, "running prompt");
+        session.narrate("visible work");
+        session.paste("queued prompt");
+        assert!(session.queue());
+        session.quit();
+        session.stopped(Some(1));
+        assert_eq!(
+            session
+                .history
+                .entries()
+                .iter()
+                .map(|e| e.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["queued prompt"]
+        );
+        assert_eq!(
+            bravebot_tui::store::load_history(),
+            session.history.entries()
+        );
+    }
+
+    /// A cancelled retry must not erase a completed submission with the same words.
+    #[test]
+    fn cancelling_a_duplicate_keeps_the_earlier_submission_in_recall() {
+        let _scratch = Scratch::new("duplicate-recall");
+        let mut session = Session::new("test").with_stored_history();
+        submit(&mut session, "same prompt");
+        session.complete("done", vec![], 0);
+        submit(&mut session, "same prompt");
+        session.stopped(Some(0));
+        session.restore("same prompt");
+        assert_eq!(
+            session
+                .history
+                .entries()
+                .iter()
+                .map(|e| e.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["same prompt"]
+        );
+        assert_eq!(
+            bravebot_tui::store::load_history(),
+            session.history.entries()
+        );
+    }
+
+    /// Deduplication shares one recall entry until every submission it represents is cancelled.
+    #[test]
+    fn cancelling_queued_duplicates_keeps_recall_until_the_last_submission() {
+        let _scratch = Scratch::new("queued-duplicate-recall");
+        let mut session = Session::new("test").with_stored_history();
+        submit(&mut session, "same prompt");
+        session.paste("same prompt");
+        assert!(session.queue());
+        session.stopped(Some(0));
+        session.restore("same prompt");
+        assert_eq!(
+            session
+                .history
+                .entries()
+                .iter()
+                .map(|e| e.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["same prompt"]
+        );
+        assert_eq!(session.send_queued().as_deref(), Some("same prompt"));
+        session.stopped(Some(0));
+        session.restore("same prompt");
+        assert!(session.history.is_empty());
+        assert!(bravebot_tui::store::load_history().is_empty());
+    }
+
+    fn config_for(endpoint: &str) -> bravebot_config::Config {
+        bravebot_config::Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.into()),
+            _ => None,
+        })
+        .unwrap()
+    }
+
+    fn tool_reply(name: &str, arguments: &str, tokens: u64) -> String {
+        let payload = serde_json::json!({
+            "choices":[{"delta":{"content":"working", "tool_calls":[{"index":0,"id":"call","function":{"name":name,"arguments":arguments}}]},"finish_reason":"tool_calls"}],
+            "usage":{"prompt_tokens":tokens,"completion_tokens":1}
+        });
+        format!("data: {payload}\n\ndata: [DONE]\n\n")
+    }
+
+    fn answer_reply() -> String {
+        let payload = serde_json::json!({"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":17,"completion_tokens":2}});
+        format!("data: {payload}\n\ndata: [DONE]\n\n")
+    }
+
+    // Run the worker and carry its real reports through the UI channel before recording history.
+    fn run_task(
+        session: &mut Session,
+        conversation: &mut Conversation,
+        root: &std::path::Path,
+        config: &bravebot_config::Config,
+        task: &bravebot_agent::Task,
+        cancel: &bravebot_core::cancel::Cancel,
+    ) {
+        use bravebot_tui::remote_confirm::{RemoteReporter, ToMain};
+        let start = conversation.recounted().len();
+        submit(session, &task.prompt);
+        let (outbound, inbound) = std::sync::mpsc::channel();
+        let mut reporter = RemoteReporter::new(outbound);
+        let result = bravebot_agent::turn::resume(
+            config,
+            &bravebot_net::Egress::new(),
+            &Workspace::new(root).unwrap(),
+            task,
+            conversation,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut bravebot_core::event::RecordingSink::new(),
+            TrustStore::new(root),
+            TrustedPrograms::new(),
+            None,
+            cancel,
+        );
+        for message in inbound.try_iter() {
+            match message {
+                ToMain::PromptRecorded(at) => session.prompt_recorded(at),
+                ToMain::Spent(spent) => session.progressed(spent),
+                ToMain::Todos(todos) => session.set_todos(todos),
+                ToMain::Narration(text) => session.narrate(text),
+                ToMain::Started(activity) => session.start_activity(activity),
+                ToMain::Finished(activity) => session.finish_activity(activity),
+                ToMain::ReportingFor(delegate) => session.reporting_for(delegate),
+                _ => {}
+            }
+        }
+        match result {
+            Ok(outcome) => {
+                session.complete(outcome.reply_for_display(), vec![], outcome.tokens);
+                session.spent_time(outcome.timing);
+            }
+            Err(error) => match error.ending() {
+                Ending::Failed(diagnosis) => session.fail(
+                    bravebot_tui::state::failure_reason(diagnosis),
+                    error.ending(),
+                ),
+                Ending::Stopped { attempts } => {
+                    session.stopped(attempts);
+                    session.restore(&task.prompt);
+                }
+                Ending::Done => panic!("an error cannot succeed"),
+            },
+        }
+        session.record_turn(start, conversation);
+    }
+
+    /// Real context loading must identify the prompt for both plain and multipart requests.
+    #[test]
+    fn context_loading_reports_the_submitted_prompt_position() {
+        for multipart in [false, true] {
+            let scratch = Scratch::new("context-prompt-position");
+            std::fs::write(scratch.project.join("context.txt"), "CONTEXT_SENTINEL").unwrap();
+            let (endpoint, requests) = super::completed_usage::an_endpoint(vec![answer_reply()]);
+            let mut task = bravebot_agent::Task::new("original prompt").with_file("context.txt");
+            if multipart {
+                task = task.with_image(bravebot_agent::turn::PastedImage {
+                    media_type: "image/png",
+                    bytes: vec![1, 2, 3],
+                });
+            }
+            let mut session = Session::new("test");
+            let mut conversation = Conversation::new();
+            run_task(
+                &mut session,
+                &mut conversation,
+                &scratch.project,
+                &config_for(&endpoint),
+                &task,
+                &bravebot_core::cancel::Cancel::new(),
+            );
+            requests
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(session.turn_history()[0].prompt_offset, Some(1));
+            let expected = serde_json::to_value(conversation.snapshot()).unwrap();
+            let record = save(&scratch.project, &session, &conversation);
+            let session = reopen(&scratch.project, &record);
+            let users: Vec<_> = session
+                .transcript
+                .iter()
+                .filter(|e| e.speaker == Speaker::User)
+                .map(|e| e.text.as_str())
+                .collect();
+            assert_eq!(users.len(), 2, "{users:?}");
+            assert_eq!(users[0], "original prompt");
+            assert!(users[1].contains("CONTEXT_SENTINEL"));
+            assert_eq!(serde_json::to_value(record.conversation).unwrap(), expected);
+        }
+    }
+
+    /// A prompt that resembles an internal note must not hide the answer on resume.
+    #[test]
+    fn reopening_keeps_answers_after_prompts_with_internal_prefixes() {
+        use bravebot_agent::conversation::{COMPACTED_PREFIX, RESUMED_PREFIX, TOOL_RESULT_PREFIX};
+        for prefix in [TOOL_RESULT_PREFIX, RESUMED_PREFIX, COMPACTED_PREFIX] {
+            for multipart in [false, true] {
+                let scratch = Scratch::new("prefix-prompt-position");
+                let prompt = format!("{prefix}my experiment: please explain it");
+                let (endpoint, requests) =
+                    super::completed_usage::an_endpoint(vec![answer_reply()]);
+                let mut task = bravebot_agent::Task::new(&prompt);
+                if multipart {
+                    task = task.with_image(bravebot_agent::turn::PastedImage {
+                        media_type: "image/png",
+                        bytes: vec![1, 2, 3],
+                    });
+                }
+                let mut session = Session::new("test");
+                let mut conversation = Conversation::new();
+                run_task(
+                    &mut session,
+                    &mut conversation,
+                    &scratch.project,
+                    &config_for(&endpoint),
+                    &task,
+                    &bravebot_core::cancel::Cancel::new(),
+                );
+                requests
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                let record = save(&scratch.project, &session, &conversation);
+                let session = reopen(&scratch.project, &record);
+                let entries: Vec<_> = session
+                    .transcript
+                    .iter()
+                    .filter(|entry| matches!(entry.speaker, Speaker::User | Speaker::Assistant))
+                    .map(|entry| (entry.speaker, entry.text.as_str()))
+                    .collect();
+                assert_eq!(
+                    entries,
+                    [
+                        (Speaker::User, prompt.as_str()),
+                        (Speaker::Assistant, "done")
+                    ],
+                    "prefix {prefix:?}, multipart {multipart}"
+                );
+            }
+        }
+    }
+
+    /// A read failure before the prompt, including after a successful read, must retain both facts.
+    #[test]
+    fn context_loading_failure_preserves_partial_context_and_prompt() {
+        for partial in [false, true] {
+            let scratch = Scratch::new("context-prompt-failure");
+            std::fs::write(scratch.project.join("context.txt"), "CONTEXT_SENTINEL").unwrap();
+            let mut task = bravebot_agent::Task::new("original prompt");
+            if partial {
+                task = task.with_file("context.txt");
+            }
+            task = task.with_file("missing.txt");
+            let mut session = Session::new("test");
+            let mut conversation = Conversation::new();
+            run_task(
+                &mut session,
+                &mut conversation,
+                &scratch.project,
+                &config_for("http://127.0.0.1:1"),
+                &task,
+                &bravebot_core::cancel::Cancel::new(),
+            );
+            assert!(session.finished.unwrap().failed());
+            assert_eq!(session.turn_history()[0].prompt_offset, None);
+            let session = reopen(
+                &scratch.project,
+                &save(&scratch.project, &session, &conversation),
+            );
+            let export = bravebot_tui::render::as_markdown(&session, "test");
+            assert_eq!(export.matches("original prompt").count(), 1);
+            assert_eq!(export.contains("CONTEXT_SENTINEL"), partial);
+            assert!(export.contains("**Outcome:** failed"));
+        }
+    }
+
+    /// The next request must exclude the failure that reopening displays to the person.
+    #[test]
+    fn a_request_after_resume_excludes_the_display_failure() {
+        let scratch = Scratch::new("resumed-request");
+        let mut session = Session::new("test");
+        let conversation = Conversation::new();
+        submit(&mut session, "DISPLAY_ONLY_PROMPT");
+        session.fail(
+            "SAFE_DISPLAY_DIAGNOSTIC",
+            Ending::Failed(Diagnosis::of(Category::Workspace)),
+        );
+        session.record_turn(0, &conversation);
+        let record = save(&scratch.project, &session, &conversation);
+        let mut session = reopen(&scratch.project, &record);
+        let export = bravebot_tui::render::as_markdown(&session, "test");
+        assert!(export.contains("SAFE_DISPLAY_DIAGNOSTIC"));
+        assert!(export.contains("DISPLAY_ONLY_PROMPT"));
+        let mut conversation = Conversation::restored(record.conversation);
+        let (endpoint, requests) = super::completed_usage::an_endpoint(vec![answer_reply()]);
+        run_task(
+            &mut session,
+            &mut conversation,
+            &scratch.project,
+            &config_for(&endpoint),
+            &bravebot_agent::Task::new("next prompt"),
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        let request = requests
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(request.contains("next prompt"));
+        assert!(!request.contains("SAFE_DISPLAY_DIAGNOSTIC"));
+        assert!(!request.contains("DISPLAY_ONLY_PROMPT"));
+    }
+
+    /// A stop inside a processor must stay cancelled through reporting, saving and export.
+    #[test]
+    fn processor_cancellation_preserves_its_plan_and_measurements_on_resume() {
+        let scratch = Scratch::new("processor-history");
+        std::fs::write(scratch.project.join("input.txt"), "private input").unwrap();
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let (endpoint, requests) = super::completed_usage::endpoint_stopping_at(
+            vec![
+                tool_reply(
+                    "todo_write",
+                    r#"{"todos":[{"content":"unfinished work","status":"in_progress"}]}"#,
+                    10,
+                ),
+                tool_reply("read_file", r#"{"path":"input.txt"}"#, 20),
+                tool_reply(
+                    "spawn_processor",
+                    r#"{"reads":["ref:1"],"instruction":"summarise"}"#,
+                    30,
+                ),
+                String::new(),
+            ],
+            Some((3, cancel.clone())),
+        );
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        run_task(
+            &mut session,
+            &mut conversation,
+            &scratch.project,
+            &config_for(&endpoint),
+            &bravebot_agent::Task::new("inspect input.txt"),
+            &cancel,
+        );
+        assert_eq!(requests.try_iter().count(), 4);
+        assert!(matches!(
+            session.finished.unwrap().ending,
+            Ending::Stopped { .. }
+        ));
+        assert_eq!(session.tokens, 63);
+        let timing = session.timing_by_turn().clone();
+        let plans = session.todos_by_turn();
+        assert_eq!(plans[&1][0].content, "unfinished work");
+        assert_eq!(plans[&1][0].status, Status::Active);
+        let session = reopen(
+            &scratch.project,
+            &save(&scratch.project, &session, &conversation),
+        );
+        assert_eq!(session.spend_by_turn(), &BTreeMap::from([(1, 63)]));
+        assert_eq!(session.timing_by_turn(), &timing);
+        assert_eq!(session.todos_by_turn(), plans);
+        let export = bravebot_tui::render::as_markdown(&session, "test");
+        assert_eq!(export.matches("inspect input.txt").count(), 1);
+        assert!(export.contains("**Outcome:** cancelled"));
+        assert!(export.contains("## Cancelled"));
+        assert!(!export.contains("## Failed"));
+        assert!(export.contains("- [ ] unfinished work"));
+    }
+
+    /// A generated loop tick did not enter recall and must not remove the last human submission.
+    #[test]
+    fn cancelling_a_generated_tick_leaves_input_recall_unchanged() {
+        let _scratch = Scratch::new("generated-recall");
+        let mut session = Session::new("test").with_stored_history();
+        submit(&mut session, "earlier prompt");
+        session.complete("done", vec![], 0);
+        let before = session.history.entries().to_vec();
+        let prompt = session
+            .start_loop(bravebot_tui::loops::parse("1m check again").unwrap())
+            .unwrap();
+        session.stopped(Some(0));
+        session.restore(prompt);
+        assert_eq!(session.history.entries(), before);
+        assert_eq!(bravebot_tui::store::load_history(), before);
+    }
+
+    /// A cancellation that removed nothing must leave the file alone, because a second session
+    /// has been appending to it since this one loaded and holds prompts this one has never seen.
+    #[test]
+    fn cancelling_a_generated_tick_keeps_what_another_session_recorded() {
+        let _scratch = Scratch::new("generated-recall-elsewhere");
+        let mut session = Session::new("test").with_stored_history();
+        submit(&mut session, "earlier prompt");
+        session.complete("done", vec![], 0);
+        bravebot_tui::store::append_history(&bravebot_tui::history::Entry::sent(
+            "prompt from a second session",
+            None,
+        ));
+        let prompt = session
+            .start_loop(bravebot_tui::loops::parse("1m check again").unwrap())
+            .unwrap();
+        session.stopped(Some(0));
+        session.restore(prompt);
+        assert_eq!(
+            bravebot_tui::store::load_history()
+                .iter()
+                .map(|entry| entry.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["earlier prompt", "prompt from a second session"]
+        );
     }
 }

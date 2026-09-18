@@ -76,6 +76,8 @@ the questions asked beside the work, and the standing permissions a resume resto
 be named, renaming rewrites the record immediately, a chosen name survives the next turn, and an
 empty name is refused.
 
+What the record says about each individual turn is SESSION-23.
+
 `verified-by: bravebot_tui::sessions::renaming_a_session_rewrites_the_record_immediately`
 `verified-by: bravebot_tui::sessions::a_chosen_name_survives_the_next_turn`
 `verified-by: bravebot_tui::sessions::a_session_can_be_named_before_it_has_a_record`
@@ -111,7 +113,22 @@ not be saved would trade something that matters for something that does not.
 ### SESSION-6: a submitted prompt is remembered, and a cancelled one is not
 
 Prompts persist across runs and are capped, consecutive duplicates collapse into one, and a prompt
-that was cancelled is removed again.
+that was cancelled is removed again. This is input recall, separate from the transcript: cancelled
+work already shown stays in the transcript even though its prompt leaves input recall.
+Cancellation removes the running submission's claim on its recall entry, including when quitting.
+Queued submissions keep their entries. Where consecutive duplicates share an entry, it remains
+while any submission it represents has not been cancelled. Cancelling a generated turn removes no
+input-recall entry, since that turn did not submit one. A cancellation that removes no entry leaves
+the stored history as it stands, because another session may have added to it since this one read it
+and writing this session's list back would take those prompts away.
+
+`verified-by: bravebot_tui::sessions::cancelling_removes_only_the_running_prompt_from_recall`
+`verified-by: bravebot_tui::sessions::quitting_removes_only_the_running_prompt_from_recall`
+`verified-by: bravebot_tui::sessions::cancelling_a_duplicate_keeps_the_earlier_submission_in_recall`
+`verified-by: bravebot_tui::sessions::cancelling_queued_duplicates_keeps_recall_until_the_last_submission`
+`verified-by: bravebot_tui::sessions::cancelling_a_generated_tick_leaves_input_recall_unchanged`
+`verified-by: bravebot_tui::sessions::cancelling_a_generated_tick_keeps_what_another_session_recorded`
+`verified-by: bravebot_tui::sessions::cancelled_work_survives_resume_but_leaves_input_recall`
 
 Each is stored with when it was sent and which workspace it was sent from, both of which the search
 over the history reads ([terminal-input.md](terminal-input.md#INPUT-20)). A line written before
@@ -160,8 +177,7 @@ writing.
 `verified-by: bravebot_tui::history::a_new_history_is_empty_and_not_browsing`
 `verified-by: bravebot_tui::history::an_empty_history_has_nothing_to_recall`
 `verified-by: bravebot_tui::history::the_position_counts_from_the_oldest`
-`verified-by: bravebot_tui::history::popping_removes_the_newest_entry`
-`verified-by: bravebot_tui::history::popping_an_empty_history_is_harmless`
+`verified-by: bravebot_tui::history::withdrawing_removes_the_cancelled_entry`
 
 <a id="SESSION-8"></a>
 ### SESSION-8: a session says how to pick it up again as it ends
@@ -394,6 +410,15 @@ the tree is refused as well. Anything already at the path is refused rather than
 symlink whose target is missing included. Missing parent directories are created. The file is
 written mode 0600, as SESSION-16 writes the record it came from.
 
+Exporting after a resume retains each recorded prompt and safe failure reason, with failed and
+cancelled endings distinct and attached to the turn that produced them. Under each prompt, the
+export includes its recorded outcome, usage, timing, and task list with each item's saved status.
+Missing older measurements and unknown outcomes are omitted rather than printed as measured zero
+or success. All of it sits under the prompt's own heading, beside the headings that say who spoke
+and how the turn ended rather than in place of any of them.
+
+`verified-by: bravebot_tui::sessions::reopening_keeps_failure_and_cancellation_in_export`
+
 **Why.** The transcript belongs to the person who had the conversation, which
 [compaction.md](compaction.md) says in as many words, and without this the only way to exercise
 that is to read the record's JSON out of the state directory. The path is typed on the same line
@@ -433,7 +458,14 @@ turns wrote the same path, it goes back to what it held before the first of them
 conversation returns to the snapshot taken before the earliest rewound turn, and with it the turn
 count, the spend, the timing, the trust map, the trusted programs, and the transcript. Those
 turns' audit lines are dropped, since they decided about turns that are no longer in the
-conversation. A rewind that goes back past the session's first turn removes its record rather than
+conversation. Their display prompts, outcomes, and task lists are removed with them. Saving and
+reopening after rewind must not restore them, and a new turn that reuses a removed turn number
+inherits none of its metadata.
+
+`verified-by: bravebot_tui::sessions::reopened_history_stays_rewound_after_another_save_and_new_turn`
+`verified-by: bravebot_tui::app::rewinding_reopened_history_removes_outcomes_plans_and_audit_before_reuse`
+
+A rewind that goes back past the session's first turn removes its record rather than
 leaving one with nothing in it, and a name the user gave the session before that turn stays with
 it: the name was not the turn's to give, so it is not the rewind's to take. The directory the
 session was given of its own is not in the project: what a turn wrote there is neither put back nor
@@ -587,8 +619,9 @@ beside it.
 Anything read back that this build cannot make sense of means the path will not go back: a word
 for what was there that it does not know, and contents that will not decode, both land there
 rather than on the path having been absent. A resumed point's place in the transcript is worked
-out from its turn number rather than read from the record, since the transcript a resume draws is
-not the one the point was taken against.
+out from explicit turn boundaries rather than a stored display index, since the transcript a
+resume draws is not the one the point was taken against. Older records without those boundaries
+use the conversation captured by the point; no missing outcome is inferred from that content.
 
 **Why.** A mistake is often noticed after closing the program and opening it again, which is the
 same case SESSION-19 exists for a few minutes later. A resume that brought back the transcript
@@ -609,6 +642,88 @@ names it on the line that reports the rewind.
 `verified-by: bravebot_tui::sessions::a_kept_file_this_build_cannot_read_will_not_go_back_rather_than_being_deleted`
 `verified-by: bravebot_tui::state::a_restored_point_finds_its_place_in_the_transcript_it_comes_back_into`
 
+<a id="SESSION-23"></a>
+### SESSION-23: the record says where each turn began and ended, and what came of it
+
+A record keeps, for every turn, its number, the prompt as it was shown, what came of it, and which
+messages of the conversation belong to it. A turn that failed or was cancelled keeps its own task
+list, spend, timing and audit lines through saving and reopening, with no final answer and no
+planner message of its own needed to hold them. A recorded failure carries only the reason the
+interface composed, never a message from the backend. A prompt handed back to the editor on
+cancellation stays out of the transcript on resume while that turn's spend and timing stay with its
+number; whether those words remain available to recall is SESSION-6, and the two are independent of
+each other. None of this is sent to the planner.
+
+**Why.** Turn boundaries cannot be recovered from the conversation afterwards, because a
+user-role message is as likely to be loaded context, a correction or a shell line as a prompt.
+Guessing them charges one turn's spend to another and shows one turn's plan under the next, which
+is worse than a resumed session that says nothing about either. The reason is composed rather than
+copied because a record is read back into a later turn's context, which is the route SESSION-2
+closes.
+
+`verified-by: bravebot_tui::sessions::reopening_keeps_exact_prompts_and_turn_count`
+`verified-by: bravebot_tui::sessions::reopening_keeps_task_ownership_and_recorded_measurements`
+`verified-by: bravebot_tui::sessions::failure_after_work_keeps_its_prompt_and_safe_reason_without_changing_context`
+`verified-by: bravebot_tui::sessions::hidden_cancellation_then_corrections_keeps_plan_ownership`
+`verified-by: bravebot_tui::sessions::processor_cancellation_preserves_its_plan_and_measurements_on_resume`
+`verified-by: bravebot_tui::sessions::reopening_does_not_restore_an_unsent_prompt`
+`verified-by: bravebot_tui::sessions::a_request_after_resume_excludes_the_display_failure`
+
+<a id="SESSION-24"></a>
+### SESSION-24: a resumed transcript puts the prompt back where it was sent
+
+The turn records where the submitted prompt entered the conversation, and a resume replaces that
+one message with the prompt as it was shown. Context read for the turn, corrections sent while it
+ran, and what a delegate reported keep their own order within the turn. A context read that fails
+before the prompt is appended keeps both the prompt and whatever context was recorded before it. A
+delegate's prompt position belongs to its own conversation and never stands for the parent turn's.
+
+**Why.** The prompt is not always the turn's first message, since context named on the line is read
+into the conversation ahead of it. A resume that assumed it was first would show that context as
+the words the person typed and lose the words they did type, and a transcript that misreports the
+question is worse than one that omits it.
+
+`verified-by: bravebot_tui::sessions::context_before_prompt_keeps_each_message_once`
+`verified-by: bravebot_tui::sessions::context_loading_reports_the_submitted_prompt_position`
+`verified-by: bravebot_tui::sessions::partial_context_failure_preserves_the_context`
+`verified-by: bravebot_tui::sessions::context_loading_failure_preserves_partial_context_and_prompt`
+`verified-by: bravebot_tui::sessions::reopening_keeps_answers_after_prompts_with_internal_prefixes`
+`verified-by: bravebot_agent::shared::only_the_parent_reports_its_prompt_position`
+
+<a id="SESSION-25"></a>
+### SESSION-25: a record that never said where its turns began is not given boundaries now
+
+Such a record keeps the turn count it states, and its user-role messages establish nothing: loaded
+context, a correction and a shell line carry the same role as a prompt. A resume leaves those
+messages belonging to no turn, keeps the measurements and task lists the record does hold, and
+attaches no turn's metadata to a message it guessed was a prompt. An outcome the record does not
+state stays unknown and a measurement it does not hold stays absent, rather than being shown as
+success or as a measured zero. Saving preserves all of this: only turns taken after the resume gain
+boundaries.
+
+**Why.** Somebody's own sessions are the ones this is read back for, so a format that could not
+read what is already on their disk would be paid for in exactly the thing it is for. A boundary
+guessed from a role is wrong on precisely the long sessions worth resuming, the ones that loaded
+context and were corrected, so leaving the older half of a session unattributed costs a heading
+where guessing costs the numbers.
+
+`verified-by: bravebot_tui::sessions::legacy_context_keeps_measurements_without_guessing_turn_ownership`
+`verified-by: bravebot_tui::sessions::old_history_keeps_unknown_outcomes_and_missing_measurements`
+
+<a id="SESSION-26"></a>
+### SESSION-26: a worker that loses its conversation keeps the turns taken before it
+
+The turns before the loss keep their prompts, outcomes and measurements, and the messages they
+claimed are no longer claimed: those places belong to a conversation that is gone, and the one the
+session holds now starts again from nothing. A rewind across the loss brings back the earlier
+conversation and the places in it together.
+
+**Why.** A turn number is what the person saw and what their spend is filed under, so losing the
+conversation must not renumber the session. Letting the old places stand instead would hand the
+first turn's boundaries to whatever the new conversation puts in the same positions, which reads as
+a transcript of work nobody did.
+
+`verified-by: bravebot_tui::sessions::a_lost_conversation_keeps_turn_identity_and_can_be_rewound`
 
 ## Known costs
 

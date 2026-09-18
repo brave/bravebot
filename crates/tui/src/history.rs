@@ -73,11 +73,18 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
+/// One submission's claim on a recall entry. Kept only while this process runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Ticket(usize);
+
 /// Prompts already sent, and where the user is looking.
 #[derive(Debug, Default)]
 pub struct History {
     /// Oldest first, so the newest is at the end.
     entries: Vec<Entry>,
+    /// Stable identities and submission counts, aligned with entries. Duplicates share a claim.
+    claims: Vec<(Ticket, usize)>,
+    next_ticket: usize,
     /// How far back the user has walked. `None` means they are editing, not browsing.
     ///
     /// Counted from the newest entry: 1 is the most recent prompt. Stored as a distance rather
@@ -95,6 +102,8 @@ impl History {
     /// Start from prompts stored by earlier sessions, oldest first.
     pub fn from_entries(entries: Vec<Entry>) -> Self {
         Self {
+            claims: (0..entries.len()).map(|id| (Ticket(id), 1)).collect(),
+            next_ticket: entries.len(),
             entries,
             back: None,
             stashed: String::new(),
@@ -120,19 +129,34 @@ impl History {
             .last()
             .is_some_and(|last| last.prompt == entry.prompt)
         {
+            self.claims.last_mut().expect("an existing entry").1 += 1;
             return None;
         }
+        self.claims.push((Ticket(self.next_ticket), 1));
+        self.next_ticket += 1;
         self.entries.push(entry);
         self.entries.last()
     }
 
-    /// Remove the newest entry, for a prompt whose turn was cancelled.
-    ///
-    /// The text goes back into the input box, so keeping it in history too would offer the user
-    /// the same line from two places.
-    pub fn pop(&mut self) -> Option<Entry> {
+    /// The entry just submitted, including a submission collapsed into its predecessor.
+    pub(crate) fn ticket(&self) -> Ticket {
+        self.claims.last().expect("a submitted prompt").0
+    }
+
+    /// Cancel one submission without removing other submissions that share its words. Reports
+    /// whether an entry left the list.
+    pub(crate) fn withdraw(&mut self, ticket: Ticket) -> bool {
         self.leave();
-        self.entries.pop()
+        let Some(at) = self.claims.iter().position(|(id, _)| *id == ticket) else {
+            return false;
+        };
+        self.claims[at].1 -= 1;
+        if self.claims[at].1 == 0 {
+            self.claims.remove(at);
+            self.entries.remove(at);
+            return true;
+        }
+        false
     }
 
     /// How many prompts are stored.
@@ -326,20 +350,11 @@ mod tests {
     /// A cancelled prompt goes back in the input box, so it must leave history too rather than
     /// being offered from two places.
     #[test]
-    fn popping_removes_the_newest_entry() {
+    fn withdrawing_removes_the_cancelled_entry() {
         let mut history = with(&["first", "second"]);
-        assert_eq!(
-            history.pop().map(|entry| entry.prompt).as_deref(),
-            Some("second")
-        );
+        history.withdraw(history.ticket());
         assert_eq!(history.len(), 1);
         assert_eq!(history.older("").as_deref(), Some("first"));
-    }
-
-    #[test]
-    fn popping_an_empty_history_is_harmless() {
-        let mut history = History::new();
-        assert_eq!(history.pop(), None);
     }
 
     /// Browsing then submitting a new prompt must not corrupt the position, which is why the

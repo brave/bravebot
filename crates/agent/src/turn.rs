@@ -2117,6 +2117,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // The prompt and what came with it are one message, because that is what the user did: they
     // typed a line and dropped a file on it, or pasted a picture into it. Two messages would put
     // the picture somewhere other than the sentence asking about it.
+    let prompt_at = conversation.recounted().len();
     if task.attachments.is_empty() && task.images.is_empty() {
         conversation.push(Message::user(task.prompt.clone()));
     } else {
@@ -2188,6 +2189,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         }
 
         conversation.push(Message::user_parts(parts));
+    }
+
+    // A plain prompt can begin with an internal-note prefix that recounting omits.
+    // In that case this position belongs to the next entry, not the submitted prompt.
+    if conversation.recounted().len() > prompt_at {
+        reporter.prompt_recorded(prompt_at);
     }
 
     // Premium is used when a subscription has been imported and this build knows the premium

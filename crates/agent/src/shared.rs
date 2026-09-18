@@ -138,6 +138,13 @@ macro_rules! reports {
 }
 
 impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
+    fn prompt_recorded(&mut self, at: usize) {
+        // A delegate has its own conversation; its offsets do not describe the parent turn.
+        if self.from.is_none() {
+            self.lent.hold().prompt_recorded(at);
+        }
+    }
+
     reports! {
         fn todos(&mut self, rows: Vec<Row>);
         fn output_tokens(&mut self, written: u64);
@@ -272,5 +279,19 @@ mod tests {
             vec![a_total(1_000), a_total(1_200)],
             "a delegate's own total was reported as the turn's"
         );
+    }
+
+    /// Nested delegates cannot replace the parent prompt's position with their own offset.
+    #[test]
+    fn only_the_parent_reports_its_prompt_position() {
+        let mut recording = RecordingReporter::default();
+        {
+            let lent = Lent::new(&mut recording);
+            lent.turn().prompt_recorded(7);
+            let mut delegate = lent.delegate(DelegateId::nth(1));
+            let nested = Lent::new(&mut delegate);
+            nested.turn().prompt_recorded(2);
+        }
+        assert_eq!(recording.prompts, [7]);
     }
 }

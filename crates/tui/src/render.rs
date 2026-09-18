@@ -1964,12 +1964,55 @@ pub fn as_markdown(session: &Session, title: &str) -> String {
     };
     out.push_str(&format!("# {display_title}\n\n"));
 
-    for entry in &session.transcript {
+    let plans = session.todos_by_turn();
+    let turns = session.transcript_turns();
+    let recorded: std::collections::BTreeMap<_, _> = session
+        .turn_history()
+        .iter()
+        .map(|turn| (turn.number, turn))
+        .collect();
+    for (index, entry) in session.transcript.iter().enumerate() {
         match entry.speaker {
             crate::state::Speaker::User => {
                 out.push_str("## User\n\n");
                 out.push_str(&entry.text);
                 out.push_str("\n\n");
+                if let Some(turn) = turns.get(&index) {
+                    if let Some(recorded) = recorded.get(turn)
+                        && let Some(outcome) = &recorded.outcome
+                    {
+                        let outcome = match outcome {
+                            crate::sessions::StoredOutcome::Completed => "completed",
+                            crate::sessions::StoredOutcome::Failed { .. } => "failed",
+                            crate::sessions::StoredOutcome::Cancelled { .. } => "cancelled",
+                        };
+                        out.push_str(&format!("**Outcome:** {outcome}\n\n"));
+                    }
+                    if let Some(tokens) = session.spend_by_turn().get(turn) {
+                        out.push_str(&format!("**Usage:** {tokens} tokens\n\n"));
+                    }
+                    if let Some(timing) = session.timing_by_turn().get(turn) {
+                        out.push_str(&format!(
+                            "**Timing:** wall {} ms; inference {} ms; tools {} ms; stalled {} ms\n\n",
+                            timing.wall_ms, timing.inference_ms, timing.tools_ms, timing.stalled_ms
+                        ));
+                    }
+                    if let Some(tasks) = plans.get(turn) {
+                        out.push_str("**Tasks:**\n\n");
+                        for task in tasks {
+                            let mark = if task.status == bravebot_core::todo::Status::Done {
+                                "x"
+                            } else {
+                                " "
+                            };
+                            out.push_str(&format!(
+                                "- [{mark}] {} ({})\n",
+                                task.content, task.status
+                            ));
+                        }
+                        out.push('\n');
+                    }
+                }
             }
             crate::state::Speaker::Assistant => {
                 if !entry.text.trim().is_empty() {
