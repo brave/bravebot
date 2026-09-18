@@ -3813,6 +3813,24 @@ fn one_request_key(session: &mut Session, key: KeyEvent, uninterruptible: &str) 
     }
 }
 
+/// What a compaction won back, in tokens.
+///
+/// The summariser read the part of the exchange that stopped being sent and wrote what replaced
+/// it, so the difference between the two halves of its own usage is the room the conversation
+/// gave back. Nothing else here can supply the figure: the server is the only thing that counts
+/// tokens, and it does not count the shortened conversation until the next request.
+///
+/// The figure only ever over-states. What the summariser read holds the instructions it was
+/// given as well as the exchange, and there is no tokeniser here to take them off again; a server
+/// that reported no count of what it wrote leaves the interface's own estimate of the reply
+/// standing in its place, which counts chunks rather than tokens and so counts no more of them.
+/// Saturating, because those are two counts of different things and nothing guarantees their
+/// order: subtracting the other way round would report a compaction that shortened nothing as
+/// having freed sixteen million million million tokens.
+fn room_won_back(usage: &bravebot_aichat::protocol::Usage) -> u64 {
+    usage.prompt_tokens.saturating_sub(usage.completion_tokens)
+}
+
 /// Summarise the conversation, showing the spinner while it happens.
 ///
 /// A smaller relative of [`run_turn_animated`], and smaller because there is less to do: a
@@ -3916,7 +3934,7 @@ fn compact_animated(
     match &done {
         Ok(Some(summary)) => {
             session.end_aside(summary.usage.total());
-            session.compacted();
+            session.compacted(room_won_back(&summary.usage), config.context_budget);
             session.note(t!(
                 compact_done,
                 summarised = summary.summarised,
@@ -8796,6 +8814,37 @@ mod tests {
             session.transcript.is_empty(),
             "the command was sent as a prompt"
         );
+    }
+
+    /// The summariser read the exchange that stopped being sent and wrote what replaced it, and
+    /// the room won back is the difference. What it read is not the figure: the summary it wrote
+    /// is still in the conversation and still occupies room. Nor is what the whole call cost,
+    /// which adds the two together and reports a compaction as having freed more than the
+    /// conversation ever held.
+    #[test]
+    fn the_room_a_compaction_won_back_is_what_it_read_less_what_it_wrote() {
+        let usage = bravebot_aichat::protocol::Usage {
+            prompt_tokens: 40_000,
+            completion_tokens: 4_000,
+            ..Default::default()
+        };
+
+        assert_eq!(room_won_back(&usage), 36_000);
+    }
+
+    /// The two counts are of different things (what a server said it read, and what it said or
+    /// the interface estimated it wrote), so nothing guarantees which is larger. Subtracting an
+    /// unsigned count that turns out to be the larger one wraps, and a session that shortened
+    /// nothing would report having freed sixteen million million million tokens.
+    #[test]
+    fn a_count_of_what_was_written_past_what_was_read_does_not_wrap_the_figure() {
+        let usage = bravebot_aichat::protocol::Usage {
+            prompt_tokens: 3_000,
+            completion_tokens: 9_000,
+            ..Default::default()
+        };
+
+        assert_eq!(room_won_back(&usage), 0);
     }
 
     /// Typed before submitting, so the word never reaches the planner as a prompt: a session

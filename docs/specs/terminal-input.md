@@ -853,15 +853,25 @@ reaches for it before reading anything.
 
 A session that has measured a request states how full the context is, as a percentage of the budget
 the conversation is compacted at, capped at a hundred. A conversation shortened underneath that
-figure says it was compacted rather than a percentage, because the number it held describes an
-exchange that is not the one on screen. A session that has measured nothing says that it has not
-measured anything.
+figure says it was compacted, and how much room that won back, rather than how full the context
+is, because the number it held describes an exchange that is not the one on screen. A session that
+has measured nothing says that it has not measured anything.
 
 **No state of the session is drawn as a blank.** A count that arrived with no budget to divide it
 by states no percentage, and the session then knows no more about how full the context is than one
 that has measured nothing, so it reads the same. A reading absent from the line is the width rule
 of INPUT-13 dropping it whole, or the line belonging to the shell (INPUT-2), and neither is
 something the session knows about the context.
+
+**A compaction states how much room it won back, as a fraction of the budget it was compacted
+at.** The summariser read the part of the exchange that stopped being sent and wrote what replaced
+it, so the difference between those two counts is the room the conversation gave back. The figure
+is marked approximate in every case, and it only ever over-states: the count of what the summariser
+read holds the instructions it was given as well as the exchange, and nothing here can take them
+off again. A compaction the server reported no usage for says that the conversation was compacted
+and states no figure. A budget adopted after a compaction leaves the figure alone, since what was
+won back is a fact about the exchange that was shortened rather than about the window in force
+now.
 
 **A percentage against a budget nobody advertised is marked as approximate.** The budget is a
 window the endpoint reported for the model in force, a figure somebody set by hand, or a default
@@ -875,7 +885,10 @@ where it was, which for a session that has sent nothing at all is absent.
 
 **Why.** This reading is what a person uses to decide whether to compact, and it is the only
 account of the size of a conversation that exists here: the server reports what a request cost and
-never what it had room for, and there is no tokeniser to count with. A state drawn as a blank is
+never what it had room for, and there is no tokeniser to count with. Having just compacted is the
+moment somebody most wants a figure and the one moment nothing has counted the conversation, since
+the shortened one is not counted until the next request goes out; the compaction is itself a
+request, so its own reply is where the figure comes from. A state drawn as a blank is
 indistinguishable from the other state drawn as a blank, from a line too narrow to hold the figure,
 and from a reading that has stopped working, so it makes the figure look intermittent, and a figure
 that comes and goes is one people stop reading.
@@ -888,13 +901,19 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_tui::state::how_full_the_context_is_comes_back_as_a_percentage`
 `verified-by: bravebot_tui::state::a_request_past_the_budget_reads_as_full_rather_than_more_than_full`
 `verified-by: bravebot_tui::state::a_context_measured_at_nothing_is_a_context_nobody_has_measured`
-`verified-by: bravebot_tui::state::a_compacted_session_reports_compacted_occupancy`
+`verified-by: bravebot_tui::state::a_compacted_session_reports_what_the_compaction_won_back`
+`verified-by: bravebot_tui::state::a_compaction_that_won_no_room_back_states_no_figure`
+`verified-by: bravebot_tui::state::room_won_back_with_no_budget_to_state_it_against_is_no_figure`
+`verified-by: bravebot_tui::state::a_budget_adopted_after_a_compaction_leaves_what_it_won_back_alone`
+`verified-by: bravebot_tui::app::the_room_a_compaction_won_back_is_what_it_read_less_what_it_wrote`
 `verified-by: bravebot_tui::state::updating_budget_retains_token_count_with_new_capacity`
 `verified-by: bravebot_tui::state::a_budget_that_did_not_move_can_still_stop_being_one_anybody_advertised`
 `verified-by: bravebot_tui::state::clearing_a_session_forgets_how_full_the_old_one_was`
 `verified-by: bravebot_tui::render::the_hint_line_says_how_full_the_context_is`
 `verified-by: bravebot_tui::render::the_hint_line_marks_a_guessed_budget`
 `verified-by: bravebot_tui::render::the_hint_line_reports_a_compacted_context`
+`verified-by: bravebot_tui::render::the_hint_line_says_how_much_room_a_compaction_won_back`
+`verified-by: bravebot_tui::render::a_compaction_with_no_figure_to_give_still_says_the_conversation_was_compacted`
 `verified-by: bravebot_tui::render::the_hint_line_says_an_unmeasured_context_has_not_been_measured`
 `verified-by: bravebot_tui::render::a_measurement_with_no_budget_to_state_it_against_reads_as_unmeasured`
 `verified-by: bravebot_tui::app::a_failed_turn_measures_context_if_requests_were_sent`
