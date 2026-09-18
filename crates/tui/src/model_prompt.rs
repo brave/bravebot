@@ -18,7 +18,7 @@ use bravebot_aichat::models::Model;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -259,7 +259,7 @@ pub fn choose<B: Backend>(
         let Ok(event) = input::read() else {
             return None;
         };
-        let TermEvent::Key(key) = event else {
+        let Some(key) = event.key() else {
             continue;
         };
         // A key event arrives twice on Windows, once pressed and once released, and the release

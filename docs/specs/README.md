@@ -21,7 +21,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [vetting.md](vetting.md) | `CHECK` | 13 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
 | [delegation.md](delegation.md) | `DELEGATE` | 18 | a second planner, narrower than the first, and what crosses back from one |
 | [turns.md](turns.md) | `TURN` | 5 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing or checks nothing |
-| [prompting.md](prompting.md) | `PROMPT` | 10 | every moment the system stops and puts something to a human, and what an answer grants |
+| [prompting.md](prompting.md) | `PROMPT` | 11 | every moment the system stops and puts something to a human, and what an answer grants |
 | [permission-modes.md](permission-modes.md) | `MODE` | 10 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |
 | [naming-files.md](naming-files.md) | `NAME` | 7 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |
 | [pasting.md](pasting.md) | `PASTE` | 9 | what Ctrl-V puts into a turn, text or picture, and on what footing |
@@ -31,7 +31,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [instructions.md](instructions.md) | `INSTR` | 9 | which instruction files are looked for, where, in what order, and where what they say ends up |
 | [cli.md](cli.md) | `CLI` | 15 | running without the interactive interface: one-shot tasks, piped input, and `doctor` |
 | [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
-| [terminal-input.md](terminal-input.md) | `INPUT` | 34 | what the user types into: the box, the keys, and where a terminal's own limits show through |
+| [terminal-input.md](terminal-input.md) | `INPUT` | 35 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 8 | a line beginning with `/`: where one may come from, when a line is one, and what it does to the line |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 22 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
 | [watching.md](watching.md) | `WATCH` | 21 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, and the mode Ctrl-L opens over them |

@@ -7,25 +7,28 @@
 //!
 //! What a program writing a command line produces is a burst: every character of it available in
 //! the same instant, because it was written in one call. A person cannot do that. So a run of keys
-//! that were all waiting together is not typing, and this module turns such a run into a paste,
-//! which is what it is: text that arrived from somewhere else. [`crate::app::handle_paste`] then
-//! puts it in the box where a person can read it, and PASTE-1 is what stops its trailing newline
-//! from sending.
+//! that were all waiting together is not typing, and this module reports such a run as
+//! [`Input::TypedIn`] rather than as keys. [`crate::app::handle_typed_in`] then puts it in the box
+//! where a person can read it, and INPUT-35 is what stops it being sent from there.
 //!
 //! Two things follow from that, and the second is the one that matters:
 //!
-//! - A burst never sends. The Enter at the end of an injected command line becomes a newline in
-//!   the box, so a line nobody typed is not a prompt nobody sent.
-//! - A burst never answers. Every prompt in this crate discards an event that is not a key, so a
-//!   run arriving as a paste cannot press `y` at a trust question or `a` at a run prompt. A
-//!   question is answered by a key that arrived on its own, which is what a person produces.
+//! - A burst never sends. Its own trailing newline becomes a newline in the box, and the mark it
+//!   leaves on the line means a later Enter does not send it either, however that Enter arrived.
+//! - A burst never answers. Every prompt in this crate answers a key and discards everything else,
+//!   so a run cannot press `y` at a trust question or `a` at a run prompt. Those two questions do
+//!   not take a single key at all (PROMPT-11), which is the stronger half of the same point.
 //!
-//! **What this does not buy.** An injector that writes one key every few hundred milliseconds is
-//! a person as far as any timing test can tell, and nothing here stops it. Timing is evidence and
-//! not proof, and the terminal offers nothing better: this raises the cost of the channel from a
-//! single write to a paced conversation, and does not make the channel trustworthy. The guarantee
-//! that keeps untrusted content out of the driver's decisions is not this, and does not rest on
-//! it.
+//! **What this does not buy, measured rather than assumed.** The test is whether the next character
+//! was already waiting when the reader looked, not how many milliseconds apart they were, and the
+//! reader looks in microseconds. So a writer that pauses at all defeats it: a pause of thirty
+//! milliseconds between characters is enough, which is well inside what ordinary software does, not
+//! the patient adversary a coarser reading of this would suggest. A key carrying no text is a
+//! second gap, since a run of them is not a burst by [`characters`] and a control byte written on
+//! its own is delivered as the keypress it looks like. What the timing test buys is the single
+//! write, which is the common shape and the one that was reported; the rest is bought by the two
+//! clauses above, which do not rest on timing at all. The guarantee that keeps untrusted content
+//! out of the driver's decisions is none of this, and does not rest on it.
 //!
 //! Every reader in this crate goes through [`read`] and [`poll`] rather than calling crossterm
 //! directly, because a run can only be recognised where the whole run is visible. A prompt that
@@ -39,6 +42,37 @@ use std::collections::VecDeque;
 use std::io;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+
+/// One thing read from the terminal, and whether a person produced it.
+///
+/// The distinction is not a guess. A person pasting from the clipboard arrives inside the markers
+/// bracketed paste puts round it, which crossterm parses and reports as [`TermEvent::Paste`] before
+/// this module sees a key at all. A program writing into the pty sends bare bytes, so its words
+/// arrive as keys and are recognised here by their timing. The two are produced at two different
+/// points in [`read`], and nothing downstream has to tell them apart by looking at the text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Input {
+    /// What the terminal reported as itself: a key press, a bracketed paste, a mouse report, a
+    /// resize. A paste arriving this way came off the clipboard, which a person put there.
+    Terminal(TermEvent),
+    /// Words another program typed into the terminal, recognised as a run rather than as typing.
+    ///
+    /// Carried and shown like any other text. What it may not do is send: see INPUT-35.
+    TypedIn(String),
+}
+
+impl Input {
+    /// The key press this is, for a reader that answers keys and discards everything else.
+    ///
+    /// Most callers are prompts, which take one key and ignore the rest, and this spares each of
+    /// them a nested match on an event they would drop anyway.
+    pub fn key(&self) -> Option<KeyEvent> {
+        match self {
+            Input::Terminal(TermEvent::Key(key)) => Some(*key),
+            _ => None,
+        }
+    }
+}
 
 /// The most keys taken into one run.
 ///
@@ -55,8 +89,8 @@ const MOST_IN_A_RUN: usize = 8192;
 /// typing has to be handed out key by key, so the reader buffers. Shared rather than per thread
 /// because the queue must be the same queue whoever reads: the terminal is one stream, and a
 /// second queue would hand out events in an order nothing wrote them in.
-fn pending() -> &'static Mutex<VecDeque<TermEvent>> {
-    static PENDING: OnceLock<Mutex<VecDeque<TermEvent>>> = OnceLock::new();
+fn pending() -> &'static Mutex<VecDeque<Input>> {
+    static PENDING: OnceLock<Mutex<VecDeque<Input>>> = OnceLock::new();
     PENDING.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
@@ -76,16 +110,18 @@ pub fn poll(timeout: Duration) -> io::Result<bool> {
 ///
 /// Hands out what is buffered before reading the terminal again, so the order the terminal wrote
 /// events in is the order callers see them.
-pub fn read() -> io::Result<TermEvent> {
+pub fn read() -> io::Result<Input> {
     if let Some(event) = pending().lock().expect("input queue").pop_front() {
         return Ok(event);
     }
 
     let first = event::read()?;
     // Only keys are gathered. A mouse event, a resize or a focus change says nothing about who
-    // typed and is delivered as it arrived.
+    // typed and is delivered as it arrived. A paste is here too, and this is the one place a
+    // person's paste is told from a program's: the terminal marked this one, so it came off the
+    // clipboard and goes through as itself.
     let TermEvent::Key(first) = first else {
-        return Ok(first);
+        return Ok(Input::Terminal(first));
     };
 
     let mut run = vec![first];
@@ -96,7 +132,10 @@ pub fn read() -> io::Result<TermEvent> {
             // a paste and is passed through as itself rather than folded into the run, and the
             // queue is drained before the terminal is read again, so it stays where it was.
             other => {
-                pending().lock().expect("input queue").push_back(other);
+                pending()
+                    .lock()
+                    .expect("input queue")
+                    .push_back(Input::Terminal(other));
                 break;
             }
         }
@@ -133,13 +172,18 @@ pub fn read() -> io::Result<TermEvent> {
 /// interrupt. They are dropped rather than delivered because the run is text, and an instruction
 /// inside text is one nobody gave. Delivering them is what lets a burst say `ctrl-c` to a running
 /// turn or Escape to a prompt, which is the same defect as the one this fixes.
-pub(crate) fn resolve(run: Vec<KeyEvent>) -> Vec<TermEvent> {
+pub(crate) fn resolve(run: Vec<KeyEvent>) -> Vec<Input> {
     if characters(&run) < 2 {
-        return run.into_iter().map(TermEvent::Key).collect();
+        return run
+            .into_iter()
+            .map(|key| Input::Terminal(TermEvent::Key(key)))
+            .collect();
     }
 
     // Non-empty by the count above: two keys carrying text is what put the run on this branch.
-    vec![TermEvent::Paste(run.iter().filter_map(text_of).collect())]
+    // [`Input::TypedIn`] rather than a paste, because a paste is what a person did with a clipboard
+    // and this is what a program did with a write, and the box may show one and send the other.
+    vec![Input::TypedIn(run.iter().filter_map(text_of).collect())]
 }
 
 /// How many keys in a run a person would have had to type a character with.
@@ -204,7 +248,7 @@ mod tests {
 
     fn pasted(run: Vec<KeyEvent>) -> Option<String> {
         match resolve(run).as_slice() {
-            [TermEvent::Paste(text)] => Some(text.clone()),
+            [Input::TypedIn(text)] => Some(text.clone()),
             _ => None,
         }
     }
@@ -231,7 +275,7 @@ mod tests {
         assert!(
             resolve(typed("no"))
                 .iter()
-                .all(|event| !matches!(event, TermEvent::Key(_)))
+                .all(|taken| !matches!(taken, Input::Terminal(TermEvent::Key(_))))
         );
     }
 
@@ -242,7 +286,7 @@ mod tests {
     fn one_character_on_its_own_stays_a_key() {
         assert_eq!(
             resolve(typed("y")),
-            vec![TermEvent::Key(key(KeyCode::Char('y')))]
+            vec![Input::Terminal(TermEvent::Key(key(KeyCode::Char('y'))))]
         );
     }
 
@@ -278,7 +322,10 @@ mod tests {
         release.kind = KeyEventKind::Release;
         assert_eq!(
             resolve(vec![press, release]),
-            vec![TermEvent::Key(press), TermEvent::Key(release)]
+            vec![
+                Input::Terminal(TermEvent::Key(press)),
+                Input::Terminal(TermEvent::Key(release)),
+            ]
         );
     }
 

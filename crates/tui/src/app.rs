@@ -39,7 +39,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::input;
+use crate::input::{self, Input};
 use crate::render;
 use crate::select;
 use crate::state::{Session, Status};
@@ -423,6 +423,11 @@ fn edit_line(session: &mut Session, key: KeyEvent) -> bool {
         KeyCode::Char('k') if ctrl => session.delete_to_line_end(),
         _ => return false,
     }
+    // Every key that reaches here moved the caret in the line or deleted around it, which is a
+    // person at the words rather than a program that wrote them. Here rather than at the two
+    // callers, so the idle box and the mid-turn box adopt on the same set of keys and cannot come
+    // to disagree about which ones count.
+    session.adopt_the_line();
     true
 }
 
@@ -1009,6 +1014,15 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             session.type_newline();
             Action::Redraw
         }
+        // Before every arm that takes the line anywhere, shell mode and the command arms included:
+        // what the line holds was written by another program, and an Enter that arrived the same way
+        // would send it, run it, or dispatch it as a command without anybody having read it. Said
+        // rather than ignored, since a key that does nothing and explains nothing reads as a hung
+        // interface.
+        KeyCode::Enter if session.holds_untouched_typed_in() => {
+            session.note_once(t!(typed_in_not_sent));
+            Action::Redraw
+        }
         // Before every command arm, because in shell mode the line is a command and nothing else.
         // `/status` is a path to a program somebody might have, and `!` is how they said so.
         KeyCode::Enter if session.shell => match session.submit_command() {
@@ -1544,6 +1558,16 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
         return Action::Redraw;
     }
 
+    // Before every arm that takes the line, for the reason the idle ladder refuses first: queueing is
+    // sending with a wait in front of it, and words another program typed would reach the planner
+    // when the turn in flight ended rather than now. A burst arriving mid-turn is the same defect
+    // with a delay. Before the shell arm below as well as the prompt one, since a line queued there
+    // is run rather than said, and a program's words queued to be run is the worse of the two.
+    if key.code == KeyCode::Enter && session.holds_untouched_typed_in() {
+        session.note_once(t!(typed_in_not_sent));
+        return Action::Redraw;
+    }
+
     // Before every arm that queues anything else, because in shell mode the line is a command line
     // and nothing else, which is the order the idle ladder answers the two in: `/status` there is a
     // path to a program somebody may have. The line waits, as every line Enter is pressed on
@@ -1633,6 +1657,27 @@ pub fn handle_paste(session: &mut Session, text: &str) -> Action {
     if !session.drop_files(text) {
         session.paste_text(text);
     }
+    Action::Redraw
+}
+
+/// Take words another program typed into the terminal, at rest or mid-turn.
+///
+/// One function for both, unlike a paste, because the two paste handlers differ mainly in what they
+/// do about a clipboard and there is no clipboard here: these words came off a write into the pty.
+///
+/// No drop is looked for. A drop is recognised by the pasted text being a path, and this text is a
+/// path often enough (a `source` line naming one is exactly the shape that reaches here), so
+/// reading it as a drop would attach and read files on the strength of what a program typed. A paste
+/// of a path is a person dragging a file in; this is not, and the routing a drop fixes is not
+/// something to take from it.
+///
+/// The scroller is left alone for the reason a paste leaves it alone: the line underneath is not what
+/// somebody reading the transcript is looking at.
+pub fn handle_typed_in(session: &mut Session, text: &str) -> Action {
+    if session.scrolling() {
+        return Action::None;
+    }
+    session.paste_typed_in(text);
     Action::Redraw
 }
 
@@ -2495,17 +2540,28 @@ fn event_loop(
                         match input::read()? {
                             // Presses only. Asking for disambiguated keys asks for releases as well, and a
                             // release handled as a press types every character twice.
-                            TermEvent::Key(key) if key.kind == KeyEventKind::Release => {
+                            Input::Terminal(TermEvent::Key(key))
+                                if key.kind == KeyEventKind::Release =>
+                            {
                                 Action::None
                             }
-                            TermEvent::Key(key) => handle_key(&mut session, key),
-                            TermEvent::Mouse(mouse) => handle_mouse(&mut session, mouse),
-                            TermEvent::Paste(text) => handle_paste(&mut session, &text),
+                            Input::Terminal(TermEvent::Key(key)) => handle_key(&mut session, key),
+                            Input::Terminal(TermEvent::Mouse(mouse)) => {
+                                handle_mouse(&mut session, mouse)
+                            }
+                            Input::Terminal(TermEvent::Paste(text)) => {
+                                handle_paste(&mut session, &text)
+                            }
+                            // Shown in the box like a paste, and refused by the Enter ladder rather
+                            // than dropped here: a person has to be able to read what was written at
+                            // their terminal, and deciding it is not worth showing would hide the
+                            // one thing that explains what just happened.
+                            Input::TypedIn(text) => handle_typed_in(&mut session, &text),
                             // Coming back from copying something is the moment a picture appears on the
                             // clipboard, and the cheapest moment to notice: once per switch away and back,
                             // rather than a clipboard tool spawned on a timer for the whole life of the
                             // session.
-                            TermEvent::FocusGained => {
+                            Input::Terminal(TermEvent::FocusGained) => {
                                 session.image_on_clipboard = crate::clipboard::holds_an_image();
                                 Action::Redraw
                             }
@@ -3861,13 +3917,13 @@ fn run_command(
 
         while input::poll(Duration::ZERO)? {
             match input::read()? {
-                TermEvent::Key(key) if key.kind == KeyEventKind::Release => {}
+                Input::Terminal(TermEvent::Key(key)) if key.kind == KeyEventKind::Release => {}
                 // A running command is something to stop, so Ctrl-C stops it and stays, for the
                 // reason it stops a turn: the way out is the press after that, at the box.
-                TermEvent::Key(key) if stops_the_turn(session, key) => {
+                Input::Terminal(TermEvent::Key(key)) if stops_the_turn(session, key) => {
                     cancel.cancel();
                 }
-                TermEvent::Mouse(mouse) => {
+                Input::Terminal(TermEvent::Mouse(mouse)) => {
                     let action = handle_mouse(session, mouse);
                     if action == Action::Copy {
                         copy_selection(terminal, session)?;
@@ -4020,14 +4076,20 @@ fn compact_animated(
                 match input::read()? {
                     // The one place Ctrl-C still leaves with something in flight, and what a mode
                     // standing over the session takes ahead of it, are both that function's.
-                    TermEvent::Key(key) => {
+                    Input::Terminal(TermEvent::Key(key)) => {
                         one_request_key(session, key, t!(compact_uninterruptible));
                     }
-                    TermEvent::Paste(text) => {
+                    // Words another program typed reach the box mid-turn the way a paste does, and are
+                    // refused by the same guard when Enter comes: a queued line is a sent line with a
+                    // wait in front of it.
+                    Input::TypedIn(text) => {
+                        handle_typed_in(session, &text);
+                    }
+                    Input::Terminal(TermEvent::Paste(text)) => {
                         let action = handle_paste_while_working(session, &text);
                         act_while_working(session, action, crate::clipboard::paste);
                     }
-                    TermEvent::Mouse(mouse) => {
+                    Input::Terminal(TermEvent::Mouse(mouse)) => {
                         let action = handle_mouse(session, mouse);
                         if action == Action::Copy {
                             copy_selection(terminal, session)?;
@@ -4168,14 +4230,20 @@ fn aside_animated(
             while input::poll(Duration::ZERO)? {
                 match input::read()? {
                     // The same shape as a summary's keys, and the same function reads them.
-                    TermEvent::Key(key) => {
+                    Input::Terminal(TermEvent::Key(key)) => {
                         one_request_key(session, key, t!(btw_uninterruptible));
                     }
-                    TermEvent::Paste(text) => {
+                    // Words another program typed reach the box mid-turn the way a paste does, and are
+                    // refused by the same guard when Enter comes: a queued line is a sent line with a
+                    // wait in front of it.
+                    Input::TypedIn(text) => {
+                        handle_typed_in(session, &text);
+                    }
+                    Input::Terminal(TermEvent::Paste(text)) => {
                         let action = handle_paste_while_working(session, &text);
                         act_while_working(session, action, crate::clipboard::paste);
                     }
-                    TermEvent::Mouse(mouse) => {
+                    Input::Terminal(TermEvent::Mouse(mouse)) => {
                         let action = handle_mouse(session, mouse);
                         if action == Action::Copy {
                             copy_selection(terminal, session)?;
@@ -4369,22 +4437,28 @@ fn manifest_animated(
         if input::poll(FRAME)? {
             while input::poll(Duration::ZERO)? {
                 match input::read()? {
-                    TermEvent::Key(key) if key.kind == KeyEventKind::Release => {}
+                    Input::Terminal(TermEvent::Key(key)) if key.kind == KeyEventKind::Release => {}
                     // Both keys stop the run and neither leaves, exactly as in a turn. A person
                     // watching a plan go wrong is asking for the plan to stop; the next press, at
                     // the box, is the one that leaves.
-                    TermEvent::Key(key) if stops_the_turn(session, key) => {
+                    Input::Terminal(TermEvent::Key(key)) if stops_the_turn(session, key) => {
                         cancel.cancel();
                     }
-                    TermEvent::Key(key) => {
+                    Input::Terminal(TermEvent::Key(key)) => {
                         let action = handle_key_while_working(session, key);
                         act_while_working(session, action, crate::clipboard::paste);
                     }
-                    TermEvent::Paste(text) => {
+                    // Words another program typed reach the box mid-turn the way a paste does, and are
+                    // refused by the same guard when Enter comes: a queued line is a sent line with a
+                    // wait in front of it.
+                    Input::TypedIn(text) => {
+                        handle_typed_in(session, &text);
+                    }
+                    Input::Terminal(TermEvent::Paste(text)) => {
                         let action = handle_paste_while_working(session, &text);
                         act_while_working(session, action, crate::clipboard::paste);
                     }
-                    TermEvent::Mouse(mouse) => {
+                    Input::Terminal(TermEvent::Mouse(mouse)) => {
                         let action = handle_mouse(session, mouse);
                         if action == Action::Copy {
                             copy_selection(terminal, session)?;
@@ -4681,12 +4755,18 @@ fn goal_check_animated(
                 match input::read()? {
                     // Which of the goal, a mode over the session, and the session itself a stop
                     // key is asking about is that function's to say.
-                    TermEvent::Key(key) => goal_check_key(session, key),
-                    TermEvent::Paste(text) => {
+                    Input::Terminal(TermEvent::Key(key)) => goal_check_key(session, key),
+                    // Words another program typed reach the box mid-turn the way a paste does, and are
+                    // refused by the same guard when Enter comes: a queued line is a sent line with a
+                    // wait in front of it.
+                    Input::TypedIn(text) => {
+                        handle_typed_in(session, &text);
+                    }
+                    Input::Terminal(TermEvent::Paste(text)) => {
                         let action = handle_paste_while_working(session, &text);
                         act_while_working(session, action, crate::clipboard::paste);
                     }
-                    TermEvent::Mouse(mouse) => {
+                    Input::Terminal(TermEvent::Mouse(mouse)) => {
                         let action = handle_mouse(session, mouse);
                         if action == Action::Copy {
                             copy_selection(terminal, session)?;
@@ -4990,7 +5070,7 @@ fn run_turn_animated(
                     // Presses only, for the reason the outer loop ignores releases: a release taken
                     // for a press would type every character twice, and cancel the turn on the way up
                     // from the Escape that already cancelled it.
-                    TermEvent::Key(key) if key.kind == KeyEventKind::Release => {}
+                    Input::Terminal(TermEvent::Key(key)) if key.kind == KeyEventKind::Release => {}
                     // Both keys stop the turn and neither leaves. Ctrl-C is the way out of the
                     // program, but there is a turn to stop first, and a person watching an answer
                     // go wrong is asking for the answer to stop rather than for the session to
@@ -4999,18 +5079,24 @@ fn run_turn_animated(
                     // Nothing is said about stopping. The stop is the prompt coming back to the
                     // box a moment later, which is both the answer and what the person wanted;
                     // a line saying "cancelling…" is a progress report on a key press.
-                    TermEvent::Key(key) if stops_the_turn(session, key) => {
+                    Input::Terminal(TermEvent::Key(key)) if stops_the_turn(session, key) => {
                         cancel.cancel();
                     }
-                    TermEvent::Key(key) => {
+                    Input::Terminal(TermEvent::Key(key)) => {
                         let action = handle_key_while_working(session, key);
                         act_while_working(session, action, crate::clipboard::paste);
                     }
-                    TermEvent::Paste(text) => {
+                    // Words another program typed reach the box mid-turn the way a paste does, and are
+                    // refused by the same guard when Enter comes: a queued line is a sent line with a
+                    // wait in front of it.
+                    Input::TypedIn(text) => {
+                        handle_typed_in(session, &text);
+                    }
+                    Input::Terminal(TermEvent::Paste(text)) => {
                         let action = handle_paste_while_working(session, &text);
                         act_while_working(session, action, crate::clipboard::paste);
                     }
-                    TermEvent::Mouse(mouse) => {
+                    Input::Terminal(TermEvent::Mouse(mouse)) => {
                         // Bound rather than tested inline, because handling the event scrolls and
                         // moves the selection whatever it returns. A match guard would hide that.
                         let action = handle_mouse(session, mouse);
@@ -14026,5 +14112,193 @@ mod tests {
             std::fs::remove_dir_all(directory).unwrap();
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Words another program typed into the terminal: shown, and not sent by an Enter that arrived
+    /// the same way.
+    mod typed_in {
+        use super::*;
+
+        /// The line a program typed, and the shape the reported case had.
+        const WRITTEN_IN: &str = " source /tmp/x/.venv/bin/activate";
+
+        /// The reported defect. The words land as a run, and the return at the end of the write
+        /// arrives on its own as a keypress, which used to submit: a program's line became a prompt
+        /// and a turn spent tokens on it.
+        #[test]
+        fn an_enter_does_not_send_words_another_program_typed() {
+            let mut session = Session::new("kernel-enforced");
+            handle_typed_in(&mut session, WRITTEN_IN);
+
+            let action = handle_key(&mut session, key(KeyCode::Enter));
+
+            assert!(
+                !matches!(action, Action::Submit(_)),
+                "a line another program typed was sent"
+            );
+            assert_eq!(
+                session.input(),
+                WRITTEN_IN,
+                "the words left the box without being sent"
+            );
+        }
+
+        /// The regression that matters most. A person pasting a prompt and pressing Enter is the
+        /// ordinary way long prompts are written, and it arrives bracketed, which is what tells it
+        /// apart from a write into the pty. Refusing this would be worse than the bug.
+        #[test]
+        fn a_paste_off_the_clipboard_still_sends_on_the_next_enter() {
+            let mut session = Session::new("kernel-enforced");
+            handle_paste(&mut session, "explain this stack trace");
+
+            assert!(
+                matches!(
+                    handle_key(&mut session, key(KeyCode::Enter)),
+                    Action::Submit(_)
+                ),
+                "a pasted prompt stopped sending"
+            );
+        }
+
+        /// What the mark waits for. Somebody who has typed into the line has read it, and from then
+        /// on it is their line and Enter means what it always means.
+        #[test]
+        fn a_keystroke_adopts_the_words_and_then_they_send() {
+            let mut session = Session::new("kernel-enforced");
+            handle_typed_in(&mut session, WRITTEN_IN);
+            handle_key(&mut session, key(KeyCode::Char('x')));
+
+            assert!(
+                matches!(
+                    handle_key(&mut session, key(KeyCode::Enter)),
+                    Action::Submit(_)
+                ),
+                "an edited line would not send"
+            );
+        }
+
+        /// Moving within the line counts too: a person who put the caret into the words has been at
+        /// them, and reading only edits would leave somebody who inspected the line unable to send.
+        #[test]
+        fn moving_within_the_line_adopts_the_words() {
+            let mut session = Session::new("kernel-enforced");
+            handle_typed_in(&mut session, WRITTEN_IN);
+            handle_key(&mut session, key(KeyCode::Left));
+
+            assert!(
+                matches!(
+                    handle_key(&mut session, key(KeyCode::Enter)),
+                    Action::Submit(_)
+                ),
+                "a line somebody moved within would not send"
+            );
+        }
+
+        /// A second press is not the way through. `\r\r` costs a program nothing more than `\r`, so
+        /// letting the press after the refusal send would hand back what the refusal bought.
+        #[test]
+        fn pressing_enter_again_does_not_send_what_the_first_refused() {
+            let mut session = Session::new("kernel-enforced");
+            handle_typed_in(&mut session, WRITTEN_IN);
+            handle_key(&mut session, key(KeyCode::Enter));
+
+            assert!(
+                !matches!(
+                    handle_key(&mut session, key(KeyCode::Enter)),
+                    Action::Submit(_)
+                ),
+                "a second Enter sent what the first refused"
+            );
+        }
+
+        /// Shell mode is where this costs most: the line there is a command line, so an Enter on it
+        /// runs what a program wrote rather than sending it to a planner that would have asked.
+        #[test]
+        fn a_shell_line_another_program_typed_is_not_run() {
+            let mut session = Session::new("kernel-enforced");
+            session.shell = true;
+            handle_typed_in(&mut session, "rm -rf /tmp/x");
+
+            assert!(
+                !matches!(
+                    handle_key(&mut session, key(KeyCode::Enter)),
+                    Action::Run(_)
+                ),
+                "a command another program typed was run"
+            );
+        }
+
+        /// A long run is folded behind a marker, which is a different line from the one the words
+        /// are in. The mark is about the line either way, so folding must not lose it.
+        #[test]
+        fn a_folded_run_keeps_the_mark_the_words_arrived_with() {
+            let mut session = Session::new("kernel-enforced");
+            handle_typed_in(&mut session, "one\ntwo\nthree\nfour\nfive");
+
+            assert!(
+                session.input().contains('#'),
+                "the run was not folded, so this test is not about folding: {}",
+                session.input()
+            );
+            assert!(
+                !matches!(
+                    handle_key(&mut session, key(KeyCode::Enter)),
+                    Action::Submit(_)
+                ),
+                "a folded run was sent"
+            );
+        }
+
+        /// The mark belongs to the words on the line, so a line that is gone leaves none behind. A
+        /// mark that outlived its words would stop the next prompt somebody typed from sending.
+        #[test]
+        fn clearing_the_line_takes_the_mark_with_it() {
+            let mut session = Session::new("kernel-enforced");
+            handle_typed_in(&mut session, WRITTEN_IN);
+            session.clear_input();
+            session.type_char('h');
+            session.type_char('i');
+
+            assert!(
+                matches!(
+                    handle_key(&mut session, key(KeyCode::Enter)),
+                    Action::Submit(_)
+                ),
+                "a prompt typed after the line was cleared would not send"
+            );
+        }
+
+        /// A drop is recognised by the pasted text being a path, and the reported line names one.
+        /// Reading a program's words as a drop would attach and read files on their strength, which
+        /// is a routing decision taken from something nobody typed.
+        #[test]
+        fn a_path_another_program_typed_attaches_nothing() {
+            let mut session = Session::new("kernel-enforced");
+            handle_typed_in(&mut session, "/etc/hosts");
+
+            assert!(session.attached().is_empty(), "a file was staged");
+            assert_eq!(
+                session.input(),
+                "/etc/hosts",
+                "the path became an attachment"
+            );
+        }
+
+        /// A key that does nothing and says nothing reads as a hung interface, and this one has to
+        /// explain itself: the words in the box are the only clue about what just happened.
+        #[test]
+        fn the_refusal_says_why() {
+            let mut session = Session::new("kernel-enforced");
+            handle_typed_in(&mut session, WRITTEN_IN);
+            handle_key(&mut session, key(KeyCode::Enter));
+
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .any(|line| line.text.contains("another program")),
+                "the refusal explained nothing"
+            );
+        }
     }
 }

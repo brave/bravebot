@@ -1200,6 +1200,17 @@ pub struct Session {
     /// place of everything the user pasted, and they would have no way to tell. Numbers are never
     /// reused, so a marker means one thing for as long as the session lasts.
     pasted_text: Vec<PastedText>,
+    /// Whether the line holds words another program typed in that nobody has touched since.
+    ///
+    /// Set when such a run reaches the box and cleared by the first keystroke that edits or moves
+    /// within the line, which is a person taking the words as their own. While it is set the line
+    /// does not leave the box, so an Enter that arrived the same way the words did sends nothing
+    /// (INPUT-35).
+    ///
+    /// One flag for the line rather than a span per run: what matters is whether anybody has been
+    /// at the line since, and a second run arriving sets it again regardless of where the first
+    /// one landed.
+    typed_in_untouched: bool,
     /// Whether history is written to disk.
     ///
     /// Off by default so constructing a session does no I/O: a test would otherwise read and
@@ -1345,6 +1356,7 @@ impl Session {
             pasted: Vec::new(),
             sent_pasted: Vec::new(),
             pasted_text: Vec::new(),
+            typed_in_untouched: false,
             persist: false,
             said: Vec::new(),
             started: None,
@@ -2389,6 +2401,10 @@ impl Session {
         // typing again has finished reading.
         self.shortcuts = false;
 
+        // Somebody typing into the line has read what was on it, so words another program wrote
+        // there stop being words nobody vouched for.
+        self.typed_in_untouched = false;
+
         // `!` on an empty line is the mode rather than a character, which is what makes the rest of
         // the line the command verbatim. Only on an empty line: a `!` inside a sentence is
         // punctuation, and inside a command it is history expansion for the shell to deal with.
@@ -2420,6 +2436,9 @@ impl Session {
     pub fn type_newline(&mut self) {
         self.abandon_the_selection();
         self.history.leave();
+        // Shift-Enter is a person writing a paragraph, which adopts the line for the reason typing
+        // a character does.
+        self.typed_in_untouched = false;
         self.input.insert(self.caret, '\n');
         self.caret += 1;
         // A command is one line by definition, and a reference ends at whitespace, so a newline
@@ -3572,6 +3591,11 @@ impl Session {
         self.input = line.into();
         self.caret = self.input.len();
         self.shortcuts = false;
+        // A whole line arriving is a different line, so whatever the last one held is no longer on
+        // the screen. Here rather than in each caller for the reason the list of keys is: this is
+        // the one place a line is replaced, and a mark outliving the words it was about would stop
+        // a prompt the person typed themselves from sending.
+        self.typed_in_untouched = false;
     }
 
     /// Whether the line has more than one line in it, which is what gives Up and Down something
@@ -4257,6 +4281,36 @@ impl Session {
         self.pasted_text.push(PastedText { marker, text });
     }
 
+    /// Take words another program typed into the terminal, and mark the line as holding them.
+    ///
+    /// Everything a pasted text gets, folding included: it is shown, it can be read, and it can be
+    /// edited into something the person meant. The difference is only the mark, and the mark is what
+    /// keeps it from being sent by an Enter nobody pressed.
+    ///
+    /// Set after the words land rather than before, so a fold that pushes a marker instead of the
+    /// text still leaves the line marked: the mark is about the line, not about which representation
+    /// the words took.
+    pub fn paste_typed_in(&mut self, text: &str) {
+        self.paste_text(text);
+        self.typed_in_untouched = true;
+    }
+
+    /// Whether the line still holds words another program typed in, untouched by anybody.
+    ///
+    /// What the box asks before letting the line leave it.
+    pub fn holds_untouched_typed_in(&self) -> bool {
+        self.typed_in_untouched
+    }
+
+    /// Take the words on the line as the person's own.
+    ///
+    /// Called for the keystrokes that edit or move within the line. A person who has put the caret
+    /// into these words and pressed a key has read them, which is the whole of what the mark was
+    /// waiting for.
+    pub fn adopt_the_line(&mut self) {
+        self.typed_in_untouched = false;
+    }
+
     /// A line with every paste marker in it put back to the text it stands for.
     ///
     /// Every marker, not the ones a count says should be there: a user who deleted one meant to
@@ -4518,6 +4572,10 @@ impl Session {
         }
         self.abandon_the_selection();
         self.history.leave();
+        // Deleting is editing, so it adopts the line the way typing into it does. Below the guard
+        // above, because the press that only leaves shell mode deletes nothing and so reads
+        // nothing: it is not somebody taking the words on the line as their own.
+        self.typed_in_untouched = false;
         if let Some((start, end)) = marker {
             self.input.replace_range(start..end, "");
             self.caret = start;

@@ -189,6 +189,10 @@ At startup the user is asked whether they trust the working directory. Yes write
 the tree. Declining writes nothing, so every write is shown. Leaving at the question starts no
 session.
 
+The three are rows, and the one under the cursor is taken when Enter is pressed. The question opens
+on the row that declines, so nothing is granted by a keystroke made without reading, and no single
+key reaches the row that trusts ([PROMPT-11](prompting.md#PROMPT-11)).
+
 A session running in the mode that asks about nothing is the one exception: the question is not put,
 and the map is the one a yes would have written. That mode approves vouching for every quarantined
 file the planner reads, so the tree becomes trusted a file at a time whether or not the question is
@@ -201,10 +205,10 @@ there, since the question is not being put in that case either and the answer it
 more specific record.
 
 `verified-by: bravebot_tui::trust_prompt::trusting_covers_the_whole_workspace`
-`verified-by: bravebot_tui::trust_prompt::only_y_trusts_and_enter_answers_nothing`
+`verified-by: bravebot_tui::trust_prompt::the_question_opens_on_declining_so_a_stray_enter_grants_nothing`
 `verified-by: bravebot_tui::trust_prompt::declining_trusts_nothing`
 `verified-by: bravebot_tui::trust_prompt::leaving_starts_no_session`
-`verified-by: bravebot_tui::trust_prompt::ctrl_c_leaves_rather_than_answering_the_question`
+`verified-by: bravebot_tui::trust_prompt::ctrl_c_moves_nothing_and_decides_nothing`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
 `verified-by: bravebot_tui::app::a_resume_keeps_its_own_map_even_where_the_mode_would_answer`

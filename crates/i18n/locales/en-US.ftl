@@ -340,6 +340,8 @@ trust-directory-regardless =
 trust-directory-yes = trust it
 trust-directory-no = ask me about every write
 quit = quit
+# Both questions a session opens with offer the same keys, so they share one line.
+trust-question-keys = ↑↓ choose  ·  Enter confirm
 
 
 ## Opening a directory a settings file named, asked once for each when a session starts
@@ -1188,6 +1190,8 @@ paste-with-the-first-tick =
     that picture goes with the first tick of this loop; the ones after it say it was pasted
 paste-too-large = that picture is { $size }, and a paste carries at most { $limit }
 paste-nothing-on-clipboard = there is nothing on the clipboard to paste
+typed-in-not-sent =
+    another program typed that into the terminal: edit the line to send it, or Escape to clear it
 paste-folded = { $lines ->
     [one] [Pasted text #{ $number } +{ $lines } line]
    *[other] [Pasted text #{ $number } +{ $lines } lines]

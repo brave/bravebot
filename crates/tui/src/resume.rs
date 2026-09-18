@@ -14,7 +14,7 @@ use bravebot_session::sessions::{self, Summary};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -189,7 +189,7 @@ pub fn choose<B: Backend>(terminal: &mut Terminal<B>, project: &Path) -> Choice 
         let Ok(event) = input::read() else {
             return Choice::Fresh;
         };
-        let TermEvent::Key(key) = event else {
+        let Some(key) = event.key() else {
             continue;
         };
         // A key event arrives twice on Windows, once pressed and once released, and the release

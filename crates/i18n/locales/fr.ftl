@@ -297,6 +297,7 @@ trust-directory-regardless =
 trust-directory-yes = lui faire confiance
 trust-directory-no = me demander à chaque écriture
 quit = quitter
+trust-question-keys = ↑↓ choisir  ·  Entrée valider
 
 
 ## Ouvrir les répertoires qu'un fichier de réglages nomme, demandés une fois chacun au démarrage
@@ -1061,6 +1062,8 @@ paste-with-the-first-tick =
     collée
 paste-too-large = cette image fait { $size }, et un collage en porte au plus { $limit }
 paste-nothing-on-clipboard = il n'y a rien à coller dans le presse-papiers
+typed-in-not-sent =
+    un autre programme a écrit cela dans le terminal : modifiez la ligne pour l'envoyer, ou Échap pour l'effacer
 paste-folded = { $lines ->
     [one] [Texte collé #{ $number } +{ $lines } ligne]
    *[other] [Texte collé #{ $number } +{ $lines } lignes]

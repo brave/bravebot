@@ -15,7 +15,7 @@ use bravebot_i18n::t;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -171,7 +171,7 @@ pub fn choose<B: Backend>(
         let Ok(event) = input::read() else {
             return None;
         };
-        let TermEvent::Key(key) = event else {
+        let Some(key) = event.key() else {
             continue;
         };
         if key.kind != event::KeyEventKind::Press {

@@ -24,7 +24,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
-use crate::input;
+use crate::input::{self, Input};
 use crate::render::{marked_rows, quarantined_rows};
 use crate::theme;
 
@@ -149,8 +149,10 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> An
         match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
+            Ok(Input::Terminal(TermEvent::Key(key))) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(Input::Terminal(TermEvent::Key(key))) => match answer_for(key) {
                 Some(Response::Answer(answer)) => return answer,
                 Some(Response::Scroll(by)) => {
                     scroll = scroll.saturating_add_signed(by).min(most);
@@ -546,8 +548,10 @@ pub fn ask_run<B: Backend>(terminal: &mut Terminal<B>, request: &RunRequest) -> 
         match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
-            Ok(TermEvent::Key(key)) => match run_answer_for(key, request) {
+            Ok(Input::Terminal(TermEvent::Key(key))) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(Input::Terminal(TermEvent::Key(key))) => match run_answer_for(key, request) {
                 Some(RunResponse::Answer(answer)) => return answer,
                 Some(RunResponse::Scroll(by)) => {
                     scroll = scroll.saturating_add_signed(by).min(most);
@@ -1004,8 +1008,10 @@ pub fn ask_output<B: Backend>(terminal: &mut Terminal<B>, request: &OutputReques
         match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
-            Ok(TermEvent::Key(key)) => match output_answer_for(key, request) {
+            Ok(Input::Terminal(TermEvent::Key(key))) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(Input::Terminal(TermEvent::Key(key))) => match output_answer_for(key, request) {
                 Some(VetResponse::Answer(answer)) => return answer,
                 Some(VetResponse::Scroll(by)) => {
                     scroll = scroll.saturating_add_signed(by).min(most);
@@ -1293,8 +1299,10 @@ pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> 
         match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
-            Ok(TermEvent::Key(key)) => match vet_answer_for(key, request) {
+            Ok(Input::Terminal(TermEvent::Key(key))) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(Input::Terminal(TermEvent::Key(key))) => match vet_answer_for(key, request) {
                 Some(VetResponse::Answer(answer)) => return answer,
                 Some(VetResponse::Scroll(by)) => {
                     scroll = scroll.saturating_add_signed(by).min(most);
@@ -1480,8 +1488,10 @@ pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest)
         }
 
         match input::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
+            Ok(Input::Terminal(TermEvent::Key(key))) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(Input::Terminal(TermEvent::Key(key))) => match answer_for(key) {
                 Some(Response::Answer(answer)) => return answer,
                 // Nothing here scrolls: a URL and a host are two lines, and there is no body to
                 // page through because none has been fetched yet.
@@ -1505,8 +1515,10 @@ pub fn ask_server<B: Backend>(terminal: &mut Terminal<B>, request: &ServerReques
         }
 
         match input::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
+            Ok(Input::Terminal(TermEvent::Key(key))) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(Input::Terminal(TermEvent::Key(key))) => match answer_for(key) {
                 Some(Response::Answer(answer)) => return answer,
                 // Nothing here scrolls: the whole question is a binary, a directory and two
                 // sentences, and there is no body because nothing has been read yet.
@@ -1687,8 +1699,10 @@ pub fn ask_vouch<B: Backend>(terminal: &mut Terminal<B>, request: &VouchRequest)
         match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
+            Ok(Input::Terminal(TermEvent::Key(key))) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(Input::Terminal(TermEvent::Key(key))) => match answer_for(key) {
                 Some(Response::Answer(answer)) => return answer,
                 Some(Response::Scroll(by)) => {
                     scroll = scroll.saturating_add_signed(by).min(most);
@@ -1859,8 +1873,10 @@ pub fn ask_manifest<B: Backend>(terminal: &mut Terminal<B>, request: &ManifestRe
         }
 
         match input::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
+            Ok(Input::Terminal(TermEvent::Key(key))) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(Input::Terminal(TermEvent::Key(key))) => match answer_for(key) {
                 Some(Response::Answer(answer)) => return answer,
                 // A plan longer than the box is the one most worth reading before answering, since
                 // approving it approves the steps below the fold as well.
@@ -2124,8 +2140,8 @@ mod tests {
     #[test]
     fn a_line_another_program_typed_in_endorses_nothing() {
         let request = a_run(false);
-        for event in crate::input::resolve(crate::input::run_spelling("deactivate\r")) {
-            if let TermEvent::Key(key) = event {
+        for taken in crate::input::resolve(crate::input::run_spelling("deactivate\r")) {
+            if let Some(key) = taken.key() {
                 assert!(
                     run_answer_for(key, &request).is_none(),
                     "a key out of a burst answered the run prompt"

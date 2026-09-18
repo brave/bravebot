@@ -1483,8 +1483,10 @@ found, and the same set is taken again on the way back.
 the transcript only while the mouse is reported, and all-motion reporting is narrowed away because
 a pointer merely crossing the window is an event and a redraw per pixel of travel, for a gesture
 nothing here reads. Bracketed paste is what stops a pasted prompt sending itself, since without it
-the newline most clipboards carry arrives as Enter; where a paste arrives without those markers,
-INPUT-34 is what recognises it. Focus reporting is what makes the clipboard
+the newline most clipboards carry arrives as Enter; it is also what says a paste came off a
+clipboard at all, which is how a person's paste is told from words a program wrote
+([INPUT-35](#INPUT-35)), and text arriving without those markers is recognised by
+[INPUT-34](#INPUT-34). Focus reporting is what makes the clipboard
 worth a look at the one moment a picture appears on it, rather than polled for ever. Disambiguated
 keys are what make Shift-Enter arrive at all, a terminal otherwise sending the same byte however
 Enter was pressed.
@@ -1502,25 +1504,30 @@ person than whatever error put it there.
 `verified-by: bravebot_tui::app::the_session_reads_a_drag_and_not_every_pointer_movement`
 
 <a id="INPUT-34"></a>
-### INPUT-34: keys that were all waiting together are a paste, and a paste never answers
+### INPUT-34: keys that were all waiting together are words another program typed
 
 A terminal delivers one byte stream and says nothing about who wrote it, so a person at a keyboard
 and another program holding the other end of the pty arrive identically. **A run of keys that were
-all waiting together is read as a paste rather than as typing.** The test is two or more characters
-available in the same read: one character is a keystroke however it got there, and two asks for a
-keyboard that filled the buffer between one read and the next.
+all waiting together is read as words another program typed rather than as typing.** The test is two
+or more characters available in the same read: one character is a keystroke however it got there, and
+two asks for a keyboard that filled the buffer between one read and the next.
 
-What such a run becomes is the text it spells, which lands in the box exactly as a paste does and
-therefore does not send, per [PASTE-1](pasting.md#PASTE-1). Enter inside the run is a newline and
-Tab a tab, since a command line written into a terminal carries both. Everything else in it is
-dropped: a chord, an Escape, an interrupt. The run is text, and an instruction inside text is one
-nobody gave.
+Such a run is not a paste and is not recorded as one. A paste came off the clipboard, which a person
+put there, and the terminal marks it: bracketed paste wraps it in markers the terminal parses before
+any of this is reached. A run arrives bare, so the two are told apart by where they were produced
+rather than by anything about the text, and a reader that has to know which it has can ask. What the
+run becomes is the text it spells, which lands in the box the way a paste does and is shown there.
+Enter inside the run is a newline and Tab a tab, since a command line written into a terminal carries
+both. Everything else in it is dropped: a chord, an Escape, an interrupt. The run is text, and an
+instruction inside text is one nobody gave.
 
-**A paste is not an answer to anything.** Every question this program puts up, the one at startup
+**Such a run is not an answer to anything.** Every question this program puts up, the one at startup
 about the working directory and every prompt in [prompting.md](prompting.md), is answered by a key
 and discards everything else, so a run cannot press `y` at a trust question or `a` at a run prompt.
-Nothing is said when one is discarded: a question that has not been answered is a question still on
-the screen, which is what the person sees.
+The two questions a session opens with do not take a single key at all
+([PROMPT-11](prompting.md#PROMPT-11)), which does not rest on this test. Nothing is said when a run
+is discarded at a question: a question that has not been answered is a question still on the screen,
+which is what the person sees.
 
 Two runs that are not pastes, whatever their length. A run carrying no characters at all, which is
 what key autorepeat looks like behind a slow redraw, is delivered key by key; reading it as a paste
@@ -1536,16 +1543,22 @@ running there.
 
 **Why the sending half matters as much.** Without this, the Enter at the end of an injected command
 line is Enter: the words before it go to the planner as a prompt, and a turn starts that nobody
-asked for. The behaviour already existed for a paste the terminal marked, which is the whole of the
-reason bracketed paste is asked for, and an unmarked burst is the same thing with the markers
-missing.
+asked for. Recognising the run is only half of stopping that, because the return at the end of a
+write often arrives in a read of its own and is then a keypress like any other. What the run leaves
+behind is a mark on the line, and [INPUT-35](#INPUT-35) is what the mark does.
 
-**What this does not buy, said plainly.** Timing is evidence and not proof. A writer that sends one
-key every few hundred milliseconds is a person as far as any test of this kind can tell, and this
-clause does not stop it: it raises the cost of the channel from one write to a paced conversation.
-What it does stop is every writer that types a line the way a program types, which is all of them
-today. The guarantee this repository exists for does not rest on this clause, since the terminal is
-a person's own channel and not a route untrusted content travels.
+**What this does not buy, measured rather than assumed.** Timing is evidence and not proof, and this
+test is narrower than it reads. What it asks is whether the next character was already waiting when
+the reader looked, not how far apart in time they were, and the reader looks in microseconds. A
+writer that pauses at all therefore defeats it: thirty milliseconds between characters is enough,
+which is inside what ordinary software does rather than the patient adversary a coarser reading would
+suggest. A key carrying no text is a second gap, since a run of them is not a burst by this test at
+all, and a control byte written on its own is delivered as the keypress it looks like, an interrupt
+among them. So what this clause buys is the single write, which is the common shape and the one that
+was reported. It does not buy the paced writer. The clauses that do not rest on timing,
+[INPUT-35](#INPUT-35) and [PROMPT-11](prompting.md#PROMPT-11), are what carry the rest. The
+guarantee this repository exists for does not rest on any of them, since the terminal is a person's
+own channel and not a route untrusted content travels.
 
 `verified-by: bravebot_tui::input::a_line_that_arrived_all_at_once_is_a_paste`
 `verified-by: bravebot_tui::input::a_run_carrying_two_characters_reaches_nothing_that_reads_keys`
@@ -1557,3 +1570,55 @@ a person's own channel and not a route untrusted content travels.
 `verified-by: bravebot_tui::input::a_burst_keeps_the_newlines_and_tabs_it_carried`
 `verified-by: bravebot_tui::trust_prompt::a_command_line_another_program_typed_in_answers_nothing`
 `verified-by: bravebot_tui::confirm::a_line_another_program_typed_in_endorses_nothing`
+
+<a id="INPUT-35"></a>
+### INPUT-35: words another program typed are shown, and are not sent until a person has touched them
+
+A run recognised by [INPUT-34](#INPUT-34) lands in the box and is drawn there. **While the line still
+holds such a run that nobody has touched, the line does not leave the box.** Enter does not send it to
+the planner, does not run it in shell mode, does not dispatch it as a command, and does not queue it
+behind a turn in flight. The refusal is said rather than silent, because a key that does nothing and
+explains nothing reads as a hung interface, and the words in the box are the only account of what
+happened.
+
+The mark is cleared by the first keystroke that edits the line or moves within it. That keystroke is a
+person at the words: they are on the screen, somebody has put the caret into them and pressed a key,
+and from then on the line is theirs and Enter means what it always means. A whole line arriving from
+anywhere else clears it too, since those are different words.
+
+Pressing Enter again is not the way through. A second press sends nothing, because `\r\r` costs a
+program no more than `\r` and an escape hatch reachable by repeating the key would return what the
+clause was for.
+
+A paste is not covered by this and must not be. A person copying a prompt and pressing Enter is how
+long prompts are written, and a clipboard paste arrives inside the markers bracketed paste puts round
+it, so it is a person's text on the terminal's own word. Refusing it would cost that workflow to buy
+nothing: the text came from somebody at the keyboard either way.
+
+Nor is a drop looked for in such a run. A drop is recognised by pasted text being a path, and a line
+written into a terminal is a path often enough (the `source` line that activates a virtualenv names
+one), so reading a run as a drop would attach and read files on the strength of what a program typed,
+which fixes routing from something nobody said.
+
+**Why.** A run reaching the box is harmless while it sits there; what turns it into an instruction is
+the Enter after it, and that Enter is a single byte the writer already had to send to finish its
+line. Recognising the run without holding it back therefore stops nothing in the shape that was
+reported: the words land, the return follows in the next read, and a turn begins on a prompt nobody
+wrote. Shell mode is where it costs most, since the line there is a command line and Enter runs it.
+
+**What this does not claim.** A program that writes a character, then an arrow key, then Enter clears
+the mark itself and sends, exactly as a person would, and nothing here tells the two apart. This buys
+the shape a program writing a command line actually produces, and raises everything else from one
+write to a sequence that has to be built for this. It does not make the terminal a channel anything
+may be trusted from.
+
+`verified-by: bravebot_tui::app::an_enter_does_not_send_words_another_program_typed`
+`verified-by: bravebot_tui::app::a_paste_off_the_clipboard_still_sends_on_the_next_enter`
+`verified-by: bravebot_tui::app::a_keystroke_adopts_the_words_and_then_they_send`
+`verified-by: bravebot_tui::app::moving_within_the_line_adopts_the_words`
+`verified-by: bravebot_tui::app::pressing_enter_again_does_not_send_what_the_first_refused`
+`verified-by: bravebot_tui::app::a_shell_line_another_program_typed_is_not_run`
+`verified-by: bravebot_tui::app::a_folded_run_keeps_the_mark_the_words_arrived_with`
+`verified-by: bravebot_tui::app::clearing_the_line_takes_the_mark_with_it`
+`verified-by: bravebot_tui::app::a_path_another_program_typed_attaches_nothing`
+`verified-by: bravebot_tui::app::the_refusal_says_why`
