@@ -1393,17 +1393,37 @@ fn waiting_for_more_returns_when_the_job_ends_without_printing() {
 /// moves past it for good.
 #[test]
 fn what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other() {
-    let scratch = Scratch::new("since-interleaved");
+    // Named for this process as well as for the test, because the handshake below is a file and a
+    // scratch name is otherwise a fixed path in the temporary directory. Two runs of this binary at
+    // once on one machine would share that file, and the second job would be released by the first
+    // test's look rather than by its own.
+    let scratch = Scratch::new(&format!("since-interleaved-{}", std::process::id()));
+    let looked = scratch.path.join("looked");
+    // The second line waits for the test to say it has taken its first look, rather than for a
+    // second on the clock. A second is how long the first look has before the line it is supposed
+    // to be too early for turns up inside it, and on a machine loaded enough to deliver the two
+    // pipes a second apart that is the same machine that made the look late.
     let resolved = script(
         &scratch.path,
         "both",
-        "#!/bin/sh\necho out1\necho err1 >&2\nsleep 1\necho out2\nsleep 30\n",
+        &format!(
+            "#!/bin/sh\necho out1\necho err1 >&2\nwhile [ ! -f '{}' ]; do sleep 0.05; done\n\
+             echo out2\nsleep 30\n",
+            looked.display()
+        ),
     );
 
     let pipeline = Pipeline::new(vec![Stage::new("both", Vec::new())]);
-    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
-    for _ in 0..100 {
-        if job.printed().contains("err1") {
+    let job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    // Both lines, because both are what the first look has to be handed to be a first look at all.
+    // They arrive on two pipes read by two threads, so err1 having been drained says nothing about
+    // out1 having been. Bounded by the thirty seconds the wait below is given rather than by five:
+    // this is the same job starting up, and what a shorter allowance measures on a machine running
+    // every other test binary beside this one is the load.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        let printed = job.printed();
+        if printed.contains("out1") && printed.contains("err1") {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1417,7 +1437,15 @@ fn what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other() {
          second: {first:?}"
     );
 
-    job.wait_for_more(std::time::Duration::from_secs(30), &Cancel::new());
+    std::fs::write(&looked, "").expect("release the second line");
+    // Polled rather than waited for. A wait counts what has arrived when it is entered as already
+    // seen, so one descheduled between the write above and the wait would find the line already
+    // there and sit out the whole bound on nothing further coming. What is being waited for here
+    // is the line itself, and `has_more` is that question whenever it is asked.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !job.has_more(&seen) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     let second = job.since(&mut seen);
     assert!(
         second.contains("out2"),
