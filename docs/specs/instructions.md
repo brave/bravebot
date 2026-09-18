@@ -210,6 +210,7 @@ argument the other way: a path to a directory that is not there costs a turn the
 `verified-by: bravebot_agent::preamble::moving_the_working_directory_restates_it`
 `verified-by: bravebot_agent::preamble::the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it`
 `verified-by: bravebot_agent::preamble::a_session_with_no_directory_of_its_own_is_told_of_none`
+`verified-by: bravebot_agent::preamble::a_windows_version_is_the_three_numbers_a_build_is_named_by`
 
 ## Known costs
 

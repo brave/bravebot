@@ -258,8 +258,6 @@ fn is_git_repository(directory: &Path) -> bool {
 }
 
 /// The kernel's release string, which is what a person means by the OS version.
-///
-/// `None` off unix, where there is no `uname` and the platform line already says as much.
 #[cfg(unix)]
 fn os_release() -> Option<String> {
     Some(
@@ -270,7 +268,65 @@ fn os_release() -> Option<String> {
     )
 }
 
-#[cfg(not(unix))]
+/// The same fact on Windows, where a version is the three numbers a build is named by.
+///
+/// `RtlGetVersion` rather than the documented `GetVersionEx`: that one reports 6.2 to any process
+/// whose manifest does not claim a later Windows, and this binary ships no manifest, so it would
+/// state Windows 8 on every Windows 10 and 11 machine. A version that is wrong is worse than no
+/// version at all, because nothing a planner does with it looks wrong.
+///
+/// Declared here rather than taken from a crate: one call for one string is not worth a
+/// dependency, and `ntdll` is the only library involved.
+// The exemption sits on the function because the function is the call, declaration and all.
+#[allow(unsafe_code)]
+#[cfg(windows)]
+fn os_release() -> Option<String> {
+    /// What the call fills in, laid out as the platform declares it. `csd_version` is the service
+    /// pack name, which nothing here reads, and its 128 words are part of the size the call
+    /// checks the struct by.
+    #[repr(C)]
+    struct VersionInfo {
+        size: u32,
+        major: u32,
+        minor: u32,
+        build: u32,
+        platform: u32,
+        csd_version: [u16; 128],
+    }
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        #[link_name = "RtlGetVersion"]
+        fn rtl_get_version(info: *mut VersionInfo) -> i32;
+    }
+
+    let mut info = VersionInfo {
+        size: std::mem::size_of::<VersionInfo>() as u32,
+        major: 0,
+        minor: 0,
+        build: 0,
+        platform: 0,
+        csd_version: [0; 128],
+    };
+
+    // The pointer is to a local of exactly the size the struct states, which is the whole of what
+    // the call requires of the caller.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let status = unsafe { rtl_get_version(&mut info) };
+
+    (status == 0).then(|| version(info.major, info.minor, info.build))
+}
+
+/// How the three numbers are written, which is how Windows itself writes them.
+///
+/// Apart from the call so the line can be checked on a machine that cannot make it.
+#[cfg(any(windows, test))]
+fn version(major: u32, minor: u32, build: u32) -> String {
+    format!("{major}.{minor}.{build}")
+}
+
+/// `None` where the platform states no version at all, which no target this ships for does.
+#[cfg(not(any(unix, windows)))]
 fn os_release() -> Option<String> {
     None
 }
@@ -446,6 +502,15 @@ fn pointer_target(text: &str, from: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How Windows names a build, and the shape a planner reads a version in: three numbers, no
+    /// padding and nothing else. The call that produces them cannot run here, so this is what
+    /// holds the line the call feeds.
+    #[test]
+    fn a_windows_version_is_the_three_numbers_a_build_is_named_by() {
+        assert_eq!(version(10, 0, 26100), "10.0.26100");
+        assert_eq!(version(6, 1, 7601), "6.1.7601");
+    }
 
     /// The shape that cost a real turn a round trip: a repository supporting several agents
     /// keeps one document and points the other names at it.

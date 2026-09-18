@@ -31,11 +31,13 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`spawn_agent`](spawn-agent.md) | `kind` | `task`, `each` | one report per delegate |
 | [`run`](run.md) | every stage's program and arguments, `directory`, `background`, `deadline_seconds` | standard input | a reference |
 | [`read_output`](read-output.md) | the reference naming the result | none | the bytes, if a person allows it |
+| [`vet_content`](vet-content.md) | the reference naming the slot | none | the bytes, if a person allows it |
 | [`job_output`](run.md#RUN-15) | `job`, `kill`, `wait_seconds` | none | what it has printed since the last look |
 | [`fetch_url`](fetch-url.md) | `url` | none | a reference |
 | [`load_skill`](load-skill.md) | `name` | none | the skill's text |
 | [`todo_write`](todo-write.md) | none | `todos` | confirmation |
 | [`schedule_next`](schedule-next.md) | `delay_seconds`, `noop` | `reason` | the wait that will happen |
+| [`watch_file`](watch-file.md) | `path` | none | confirmation that the watch exists |
 | [`ask_user`](ask-user.md) | `questions` | none | what the user answered |
 
 Reads return content when it is trusted and a reference when it is not. Writes are silent or shown

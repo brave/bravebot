@@ -90,8 +90,9 @@ as well as what is under it. Four anchors decide where a pattern begins:
 
 A single leading slash is therefore **not** the filesystem root. A specifier with no slash in it is
 a name and matches at any depth, so `Read(.env)` and `Read(**/.env)` are one rule. Relative and
-absolute patterns are separate namespaces and neither reaches into the other, the same separation
-the trust map keeps. A pattern whose anchor is unknown, such as `~/` on a machine with no home
+absolute patterns are separate namespaces and neither reaches into the other: a pattern is matched
+against the path as a gate holds it, which is relative for a file in the project and in full for one
+outside, and a rule written one way says nothing about the other. A pattern whose anchor is unknown, such as `~/` on a machine with no home
 directory, is reported as unusable rather than silently matching nothing.
 
 `verified-by: bravebot_core::permissions::a_bare_name_matches_at_any_depth_in_every_list`

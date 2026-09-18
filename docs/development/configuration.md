@@ -1,6 +1,7 @@
 # Configuration
 
-Uses [direnv](https://direnv.net/). Copy the template and fill it in:
+Development uses [direnv](https://direnv.net/) (on macOS, `brew install direnv`).
+Copy the template and fill it in:
 
 ```sh
 cp .envrc.example .envrc
@@ -15,7 +16,10 @@ rather than producing a binary that only works in the tree it came from; to buil
 deliberately, set `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1` and supply the variables at run time.
 
 The environment still wins when set, which is how a released binary is pointed at a local
-backend without rebuilding it. Baked values are masked so `strings` on the binary does not
+backend without rebuilding it. One thing outranks it: a machine-level file an administrator
+deploys, which pins where a request goes for everybody on that machine and is what
+`docs/specs/backends.md` calls the managed layer. Nothing on a development machine has one unless
+somebody wrote it as root. Baked values are masked so `strings` on the binary does not
 print them; that is obfuscation and not encryption, so a binary built with a live key should
 be treated as holding one.
 
@@ -24,3 +28,7 @@ forwards these variables as a BuildKit secret rather than a build argument, whic
 the signing key in the image metadata.
 
 Run `bravebot doctor` to check configuration and confinement without revealing the signing key.
+
+In this source checkout, doctor also reports the agent instructions discovery link and whether
+`direnv` is on PATH. Both checks are read-only development advice; ordinary user workspaces
+need neither. The direnv check does not test shell-hook activation or `.envrc` approval.

@@ -21,11 +21,13 @@ use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
 use std::path::Path;
 
-/// How many vouched commands are listed before the rest become a count.
+/// How many remembered lines are listed before the rest become a count.
 ///
-/// The trust map is listed in full because a rule nobody can read is a file whose footing has to
-/// be remembered. This list is capped for now; whether that is the same problem is #57.
-const MAX_COMMANDS: usize = 6;
+/// The two standing permissions above this one are listed in full, because a permission nobody can
+/// read back is one whose effect has to be remembered instead. This record is the one that can be
+/// read somewhere else: it is a file, and the line below the list says where it is, so the count
+/// says how much more is in a file the reader has just been pointed at.
+const MAX_REMEMBERED: usize = 6;
 
 /// One line of the report: a label, a value, and an optional aside.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +91,12 @@ pub struct Facts<'a> {
     pub confinement: &'a str,
     /// How much the session is asking before it acts, as the mode key last left it.
     pub permission_mode: bravebot_agent::PermissionMode,
+    /// Whether a check that finds nothing promotes a slot without the person being asked.
+    ///
+    /// Reported for the reason the permission mode is: it is a standing answer that stops a prompt
+    /// appearing, and a note at startup scrolls away. Only where it is on, since a line saying the
+    /// ordinary thing on every session is a line people learn to skim.
+    pub auto_vetting: bool,
     pub turns: usize,
     pub tokens: u64,
     /// Where the session's wall clock went, every turn added together.
@@ -115,6 +123,12 @@ pub struct Facts<'a> {
     ///
     /// Left out when there is none, for the reason the loop is.
     pub goal: Option<&'a crate::goals::Running>,
+    /// The standing watches this session holds, oldest first.
+    ///
+    /// Empty says nothing at all, for the reason the loop's absence says nothing. A live one is
+    /// a line each, because the number is what a person ends it by and the turn that armed it is
+    /// what makes a prompt arriving hours later have a cause.
+    pub watches: &'a [crate::watches::Watch],
     /// The command lines somebody asked to be remembered past a session, for this directory.
     ///
     /// `None` where this session keeps no such record at all: no state directory, or a mode that
@@ -240,8 +254,8 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // The note says which tier the last turn actually ran on, not whether this build knows a premium
     // host. It used to say the latter, which is baked in at compile time and true of every build:
     // a session whose subscription was never read still reported "premium configured" while every
-    // request went out on the free tier and came back answered by a weaker model. What a person
-    // wants from this line is which tier they are getting, and that is a fact about a request.
+    // request went out spending no subscription and came back answered by a weaker model. What a
+    // person wants from this line is what they are getting, and that is a fact about a request.
     lines.push(
         Line::new(t!(status_endpoint), environment(&facts.config.endpoint)).with_note(
             match (facts.config.premium_endpoint.is_some(), facts.premium) {
@@ -262,6 +276,16 @@ pub fn report(facts: &Facts<'_>) -> Report {
     if let Some(named) = named_mode(facts.permission_mode) {
         lines
             .push(Line::new(t!(status_permissions), named).with_note(t!(status_permissions_cycle)));
+    }
+
+    // Beside it for the same reason, and only where it is on: this is the other standing answer
+    // that stops a prompt appearing, and the only record of it otherwise is a note at the top of
+    // the session that has scrolled away by the time somebody wonders.
+    if facts.auto_vetting {
+        lines.push(
+            Line::new(t!(status_vetting), t!(status_vetting_auto))
+                .with_note(t!(status_vetting_where)),
+        );
     }
 
     // What is going to happen without anybody typing anything, which is the one thing about a
@@ -302,6 +326,24 @@ pub fn report(facts: &Facts<'_>) -> Report {
         lines.push(Line::new(t!(status_goal), goal.condition()).with_note(note));
     }
 
+    // The third thing that happens without anybody typing, and the one with the least to go on
+    // elsewhere: a fire arrives hours after the turn that armed it, so the line carries the
+    // number a person ends the watch by, which turn armed it, and how long it has left.
+    let now = std::time::Instant::now();
+    for watch in facts.watches {
+        lines.push(
+            Line::new(
+                &t!(status_watch, number = watch.number()),
+                watch.path().to_string(),
+            )
+            .with_note(t!(
+                status_watch_armed_by,
+                turn = watch.armed_by(),
+                left = crate::loops::spell(watch.left(now))
+            )),
+        );
+    }
+
     lines.push(Line::new(
         t!(status_this_session),
         format!(
@@ -312,8 +354,8 @@ pub fn report(facts: &Facts<'_>) -> Report {
     ));
 
     // Under the turn and token counts, because it is the same question about the same session:
-    // what did this cost. Drawn only once a turn has run, since every figure would be zero before
-    // that and a panel of zeroes reads as a broken feature rather than as an idle session.
+    // what did this cost. A session with no turn yet has as much to say here as any other, since an
+    // aside asked before the first prompt waits on the model for however long it waits.
     //
     // The threshold is a whole second rather than any time at all, because the figures are rendered
     // by the same formatter the indicator uses and it floors to seconds: a part of 400ms would be
@@ -417,14 +459,20 @@ pub fn report(facts: &Facts<'_>) -> Report {
             )
             .with_note(t!(status_trusted_commands_note)),
         );
-        for command in vouched.iter().take(MAX_COMMANDS) {
-            lines.push(Line::new("", command.display()));
-        }
-        if vouched.len() > MAX_COMMANDS {
-            lines.push(Line::new(
-                "",
-                t!(status_and_more, count = vouched.len() - MAX_COMMANDS),
-            ));
+        // Every one of them, however many there are: a vouched command that the report will not
+        // show is a permission with nothing anywhere to say it is held, since the prompt it
+        // answers is the thing that has stopped appearing.
+        //
+        // With the tree it was given in, because that is part of what the entry covers (RUN-8) and
+        // the entry is what this report exists to read back: two entries for one command in two
+        // directories would otherwise draw as one line twice, and a reader could not tell which
+        // grant they hold. Relative to the workspace where it is inside it, the way every other
+        // path on this screen is written.
+        for command in vouched.iter() {
+            lines.push(Line::new("", command.display()).with_note(t!(
+                status_command_in,
+                directory = within(facts.directory, &command.directory)
+            )));
         }
     }
 
@@ -443,7 +491,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
             )
             .with_note(t!(status_remembered_note)),
         );
-        for entry in entries.iter().take(MAX_COMMANDS) {
+        for entry in entries.iter().take(MAX_REMEMBERED) {
             lines.push(Line::new("", entry.line.display()).with_note(
                 match entry.answered_in == facts.session_id {
                     true => t!(status_remembered_this_session),
@@ -451,11 +499,11 @@ pub fn report(facts: &Facts<'_>) -> Report {
                 },
             ));
         }
-        if entries.len() > MAX_COMMANDS {
+        if entries.len() > MAX_REMEMBERED {
             // How many of each was left out, not just how many: the two lifetimes are the point,
             // and a person deciding what to delete cannot tell from a bare count which answers
             // they are still carrying from another session.
-            let left_out = &entries[MAX_COMMANDS..];
+            let left_out = &entries[MAX_REMEMBERED..];
             let earlier = left_out
                 .iter()
                 .filter(|entry| entry.answered_in != facts.session_id)
@@ -490,7 +538,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
 pub fn configured_tier(config: &Config) -> &'static str {
     match config.premium_endpoint {
         Some(_) => t!(status_premium_available),
-        None => t!(status_free_tier),
+        None => t!(status_no_subscription),
     }
 }
 
@@ -508,6 +556,21 @@ fn environment(endpoint: &str) -> &'static str {
         t!(environment_prod)
     } else {
         t!(environment_custom)
+    }
+}
+
+/// `path` as this screen writes it: relative to `root` where it is inside it, abbreviated
+/// otherwise.
+///
+/// The root itself reads as `.`, which is how the trust map's rules above are written, so a vouched
+/// entry given at the root and a rule about the root are spelled the same way. A directory the
+/// person opened by name is not under the root and has no relative spelling, so it keeps its
+/// absolute one.
+fn within(root: &Path, path: &Path) -> String {
+    match path.strip_prefix(root) {
+        Ok(rest) if rest.as_os_str().is_empty() => ".".to_string(),
+        Ok(rest) => rest.display().to_string(),
+        Err(_) => abbreviate(path),
     }
 }
 
@@ -560,7 +623,7 @@ mod tests {
         std::sync::LazyLock::new(TrustedPrograms::new);
 
     fn trusting() -> TrustStore {
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new("/work");
         trust.trust(".");
         trust
     }
@@ -589,6 +652,7 @@ mod tests {
             // Asking, which is what every session does unless somebody changed it. The tests about
             // the line set this themselves.
             permission_mode: bravebot_agent::PermissionMode::Ask,
+            auto_vetting: false,
             turns: 4,
             tokens: 12_400,
             // Nothing measured, which is what a session looks like before its first turn. Tests
@@ -604,10 +668,61 @@ mod tests {
             looping: None,
             // Nothing to work towards, on the same footing.
             goal: None,
+            // Nothing watched, on the same footing. The test about the watch lines builds its
+            // own registry and sets it.
+            watches: &[],
             // Nothing remembered past a session, which is what a fresh directory looks like. Tests
             // about that line build their own record and set it.
             remembered: None,
         }
+    }
+
+    /// What is going to happen without anybody typing is the one thing about a session that
+    /// cannot be read back off the transcript, and a watch is the sharpest case: a fire arrives
+    /// hours after the turn that armed it, so the line has to carry both the number a person ends
+    /// it by and the turn they asked for it in.
+    #[test]
+    fn the_report_lists_every_live_watch_with_the_turn_that_armed_it() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut watches = crate::watches::Watches::new();
+        watches
+            .arm(
+                "notes/plan.md".to_string(),
+                3,
+                bravebot_agent::watch::Looked::Saw("first".to_string()),
+                std::time::Instant::now(),
+            )
+            .expect("a watch");
+
+        let mut facts = facts(&config, &trust);
+        facts.watches = watches.live();
+        let report = report(&facts);
+
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_watch, number = 1))
+            .expect("the watch is on the report");
+        assert_eq!(line.value, "notes/plan.md");
+        assert!(line.note.contains('3'), "{:?}", line.note);
+    }
+
+    /// A line saying a thing is not happening is a line on every report for the sake of the few
+    /// where it is.
+    #[test]
+    fn a_session_watching_nothing_says_nothing_about_watches() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let report = report(&facts(&config, &trust));
+
+        assert!(
+            !report
+                .lines
+                .iter()
+                .any(|line| line.label.trim() == t!(status_watch, number = 1)),
+            "a session with no watch reported one"
+        );
     }
 
     /// The other thing that happens without anybody typing. The count is the part a person
@@ -752,8 +867,16 @@ mod tests {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
         let vouched = TrustedPrograms::from_iter([
-            bravebot_core::programs::Command::new("/usr/bin/git", vec!["log".to_string()]),
-            bravebot_core::programs::Command::new("/usr/bin/make", vec!["check".to_string()]),
+            bravebot_core::programs::Command::new(
+                "/usr/bin/git",
+                vec!["log".to_string()],
+                "/tmp/project",
+            ),
+            bravebot_core::programs::Command::new(
+                "/usr/bin/make",
+                vec!["check".to_string()],
+                "/tmp/project/crates",
+            ),
         ]);
         let mut facts = facts(&config, &trust);
         facts.programs = &vouched;
@@ -763,8 +886,76 @@ mod tests {
         // "git" alone would not tell a reader which command they trusted.
         assert!(shown.contains("/usr/bin/git log"), "{shown}");
         assert!(shown.contains("/usr/bin/make check"), "{shown}");
+        // And the tree, which is the other part (RUN-8): an entry given in `crates/` runs unasked
+        // there and nowhere else, so a report naming only the command would have a reader believing
+        // they hold a grant at the root as well. The root itself reads as ".", the way the trust
+        // map's rules above it are written.
+        assert!(shown.contains("in ."), "{shown}");
+        assert!(shown.contains("in crates"), "{shown}");
         // Both halves of the grant, said where the user can see them.
         assert!(shown.contains("output is trusted"), "{shown}");
+    }
+
+    /// RUN-9: every command vouched for is readable back, however many there are. A vouched
+    /// command is the one permission whose whole effect is that a prompt stops appearing, so one
+    /// the report leaves out is a standing grant with nothing anywhere to say it is held.
+    #[test]
+    fn every_vouched_command_is_listed_however_many_there_are() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let vouched = TrustedPrograms::from_iter((0..12).map(|nth| {
+            bravebot_core::programs::Command::new(
+                "/usr/bin/make",
+                vec![format!("check-{nth:02}")],
+                "/tmp/project",
+            )
+        }));
+        let mut facts = facts(&config, &trust);
+        facts.programs = &vouched;
+
+        let shown = rendered(&report(&facts));
+        for nth in 0..12 {
+            assert!(
+                shown.contains(&format!("/usr/bin/make check-{nth:02}")),
+                "{shown}"
+            );
+        }
+    }
+
+    /// RUN-8, RUN-9: the tree is part of the entry, so it is part of what the report reads back.
+    /// Two entries for one command in two directories draw as two lines saying where each holds;
+    /// a report naming the command alone would draw them as one line twice and leave a reader
+    /// unable to tell which grant they have.
+    #[test]
+    fn the_report_names_the_tree_each_vouched_command_runs_unasked_in() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let vouched = TrustedPrograms::from_iter([
+            bravebot_core::programs::Command::new(
+                "/usr/bin/make",
+                vec!["check".to_string()],
+                "/tmp/project",
+            ),
+            bravebot_core::programs::Command::new(
+                "/usr/bin/make",
+                vec!["check".to_string()],
+                "/tmp/project/crates/tui",
+            ),
+        ]);
+        let mut facts = facts(&config, &trust);
+        facts.programs = &vouched;
+
+        let shown = rendered(&report(&facts));
+        assert_eq!(
+            shown.matches("/usr/bin/make check").count(),
+            2,
+            "two entries for one command in two trees did not read back as two: {shown}"
+        );
+        // The root reads as ".", the way the trust map's own rules on this screen are written, and
+        // a tree inside the workspace reads relative to it rather than as an absolute path a reader
+        // has to compare by eye.
+        assert!(shown.contains("in ."), "{shown}");
+        assert!(shown.contains("in crates/tui"), "{shown}");
     }
 
     /// The ordinary case has to say so rather than say nothing, or a user reading the report
@@ -841,7 +1032,7 @@ mod tests {
     fn a_shortened_list_of_remembered_lines_says_how_many_came_from_an_earlier_session() {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
-        let lines = record_of(MAX_COMMANDS + 3);
+        let lines = record_of(MAX_REMEMBERED + 3);
         let mut facts = facts(&config, &trust);
         facts.remembered = Some(Remembered {
             lines: &lines,
@@ -925,6 +1116,33 @@ mod tests {
         }
     }
 
+    /// A standing answer that stops a prompt appearing has to be readable for the rest of the
+    /// session. The note at the top of the transcript has scrolled away by the time somebody
+    /// wonders why they are not being asked, and the file it is kept in is where they undo it.
+    #[test]
+    fn a_session_that_stopped_asking_about_a_check_says_so() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut facts = facts(&config, &trust);
+        facts.auto_vetting = true;
+        let shown = rendered(&report(&facts));
+        assert!(shown.contains("vetting"), "{shown}");
+        assert!(
+            shown.contains("~/.bravebot/vetting"),
+            "the report did not say where the answer is kept: {shown}"
+        );
+    }
+
+    /// Nothing is said where the session asks, which is every session nobody turned the mode on
+    /// for. A line reporting the ordinary state would be one more line to skim past.
+    #[test]
+    fn an_ordinary_session_says_nothing_about_a_check() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let shown = rendered(&report(&facts(&config, &trust)));
+        assert!(!shown.contains("~/.bravebot/vetting"), "{shown}");
+    }
+
     /// Nothing is said where the session is asking. A line reporting the ordinary state on every
     /// session is a line people learn to skim, and this report has to keep the one above worth
     /// reading.
@@ -980,7 +1198,7 @@ mod tests {
         let shown = rendered(&report(&facts(&config, &trusted)));
         assert!(shown.contains("trusted"), "{shown}");
 
-        let declined = TrustStore::new();
+        let declined = TrustStore::new("/work");
         let shown = rendered(&report(&facts(&config, &declined)));
         assert!(shown.contains("not trusted"), "{shown}");
         assert!(shown.contains("every write is shown"), "{shown}");
@@ -988,7 +1206,7 @@ mod tests {
 
     /// The bug this replaced. Every build knows a premium host, so reporting premium from the
     /// configuration said "premium" for a session whose credentials were never read, while every
-    /// request went out on the free tier and came back answered by a weaker model. A status panel
+    /// request went out spending no subscription and came back answered by a weaker model. A panel
     /// that cannot be trusted on this point is worse than one that omits it.
     #[test]
     fn the_tier_reported_is_the_one_the_last_turn_actually_ran_on() {
@@ -1003,10 +1221,10 @@ mod tests {
         let mut free = facts(&config, &trust);
         free.premium = Some(false);
         let shown = rendered(&report(&free));
-        assert!(shown.contains("no subscription was used"), "{shown}");
+        assert!(shown.contains("no subscription was spent"), "{shown}");
         assert!(
             !shown.contains("premium, a credential"),
-            "a free-tier turn was reported as premium: {shown}"
+            "a turn that spent no subscription was reported as premium: {shown}"
         );
 
         let mut premium = facts(&config, &trust);
@@ -1033,7 +1251,7 @@ mod tests {
 
         // And a build that cannot reach premium at all says so in both places.
         let free = config_for("https://ai-chat.bsg.brave.com", None);
-        assert_eq!(configured_tier(&free), t!(status_free_tier));
+        assert_eq!(configured_tier(&free), t!(status_no_subscription));
         let shown = rendered(&report(&facts(&free, &trust)));
         assert!(shown.contains(configured_tier(&free)), "{shown}");
     }
@@ -1282,8 +1500,8 @@ mod tests {
         );
     }
 
-    /// Before a turn has run every figure is zero, and a panel of zeroes reads as a broken feature
-    /// rather than as a session that has not started.
+    /// A session that has measured nothing has nothing to say about where its time went, and a
+    /// panel of zeroes reads as a broken feature rather than as a session that has not started.
     #[test]
     fn a_session_with_no_turn_yet_reports_no_time() {
         let config = config_for("http://127.0.0.1:1", None);

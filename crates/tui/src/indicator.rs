@@ -9,6 +9,9 @@
 //! the questions a waiting user actually has: how long has this been going, and what is it
 //! costing me.
 //!
+//! `NO_MOTION` in the environment stills the glyph. The counters go on counting, because a figure
+//! that changes when the thing it measures does is information rather than animation.
+//!
 //! No progress bar, because there is nothing honest to measure against. A turn takes as many
 //! rounds as the model asks for, and a bar that guessed would be a lie that looks like data.
 //!
@@ -17,6 +20,7 @@
 use crate::verbs;
 use bravebot_i18n::t;
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// Glyphs the spinner cycles through.
@@ -28,6 +32,31 @@ const FRAMES: &[&str] = &["✳", "✽", "✻", "✺", "✹", "✸"];
 
 /// How long each glyph is shown. Slow enough not to strobe, quick enough to read as motion.
 const FRAME_MILLIS: u128 = 120;
+
+/// The glyph shown where motion is not wanted.
+///
+/// One of the cycle rather than a shape of its own, so the line keeps its width and reads as the
+/// same thing standing still rather than as a different indicator.
+const STILL: &str = FRAMES[2];
+
+/// Whether the indicator stands still, from `NO_MOTION` in the environment.
+static STILLED: AtomicBool = AtomicBool::new(false);
+
+/// Read whether the person asked for no motion, once, before anything is drawn.
+///
+/// Held in a static for the reason the answer about colour is: the glyph is chosen on every frame
+/// of every turn, and a lookup that locks the environment would be paid for each one.
+pub fn sense_no_motion() {
+    STILLED.store(
+        crate::asked_for(std::env::var_os("NO_MOTION").as_deref()),
+        Ordering::Relaxed,
+    );
+}
+
+/// Whether the indicator stands still.
+pub fn stilled() -> bool {
+    STILLED.load(Ordering::Relaxed)
+}
 
 /// What to show while a turn is running.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,9 +86,8 @@ impl Indicator {
     /// `tokens` is the running total. Taking elapsed time as an argument rather than reading a
     /// clock keeps this a pure function, so a test can assert on any instant it likes.
     pub fn new(turn: usize, elapsed: Duration, tokens: u64) -> Self {
-        let frame = (elapsed.as_millis() / FRAME_MILLIS) as usize % FRAMES.len();
         Self {
-            glyph: FRAMES[frame],
+            glyph: glyph_at(elapsed),
             verb: Cow::Borrowed(verbs::for_turn(turn)),
             elapsed: format_elapsed(elapsed),
             tokens: (tokens > 0).then(|| format_tokens(tokens)),
@@ -118,6 +146,17 @@ impl Indicator {
 /// Shared so a running command turns the same shape at the same rate as a running turn: two
 /// spinners that differed would look like two kinds of busy.
 pub fn glyph_at(elapsed: Duration) -> &'static str {
+    glyph_for(elapsed, stilled())
+}
+
+/// The glyph for a moment, given whether the indicator is standing still.
+///
+/// The answer is taken as an argument rather than read here so that the rule can be checked
+/// without putting a process-wide switch in force under every other test in this binary.
+fn glyph_for(elapsed: Duration, stilled: bool) -> &'static str {
+    if stilled {
+        return STILL;
+    }
     FRAMES[(elapsed.as_millis() / FRAME_MILLIS) as usize % FRAMES.len()]
 }
 
@@ -170,6 +209,37 @@ mod tests {
 
     fn at(secs: u64, tokens: u64) -> Indicator {
         Indicator::new(0, Duration::from_secs(secs), tokens)
+    }
+
+    /// Constant motion is tiring to work beside and is worse than that for vestibular
+    /// sensitivity, so it can be declined. What replaces the animation is a glyph rather than a
+    /// blank: the indicator is how somebody tells a running turn from a hung one, and removing it
+    /// would answer the wrong question.
+    #[test]
+    fn the_indicator_stands_still_where_no_motion_is_asked_for() {
+        let over_a_full_cycle: Vec<&str> = (0..FRAMES.len() as u64 + 1)
+            .map(|frame| {
+                glyph_for(
+                    Duration::from_millis((frame * FRAME_MILLIS as u64) + 1),
+                    true,
+                )
+            })
+            .collect();
+
+        assert!(
+            over_a_full_cycle.iter().all(|glyph| *glyph == STILL),
+            "the glyph moved: {over_a_full_cycle:?}"
+        );
+        assert!(!STILL.is_empty(), "the indicator went out altogether");
+    }
+
+    /// The default is the animation, since a turn runs with nothing else on the screen moving and
+    /// a still interface is indistinguishable from a hung one.
+    #[test]
+    fn motion_nobody_declined_still_moves() {
+        let first = glyph_for(Duration::from_millis(0), false);
+        let next = glyph_for(Duration::from_millis(FRAME_MILLIS as u64), false);
+        assert_ne!(first, next);
     }
 
     /// The shape asked for, end to end.

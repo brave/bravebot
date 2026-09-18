@@ -4,12 +4,18 @@ title: Backends
 status: normative
 governs:
   - crates/agent/src/backend.rs
+  - crates/agent/src/outcome.rs
+  - crates/agent/src/subscription.rs
+  - crates/cli/src/main.rs
   - crates/bedrock/src/credentials.rs
   - crates/tui/src/app.rs
   - crates/tui/src/status.rs
   - crates/tui/src/state.rs
   - crates/config/src/bedrock.rs
+  - crates/config/src/env_var.rs
   - crates/config/src/lib.rs
+  - crates/config/src/managed.rs
+  - crates/bedrock/src/lib.rs
   - crates/aichat/src/lib.rs
   - crates/aichat/src/models.rs
   - crates/config/src/provider.rs
@@ -364,8 +370,8 @@ the model or the messages a turn built would be deciding what was asked rather t
 ### BACKEND-16: a gateway credential is named rather than resolved ahead of time
 
 Where a gateway's credential lives is named by its block: variables that may hold it, or a value
-written in the file. It is read at the point a request needs it, and a request that cannot be
-authenticated is refused with the remedy named rather than sent.
+written in the file. It is read at the point a request needs it, and a request whose block named a
+credential that nothing holds is refused with the remedy named rather than sent.
 
 **Why.** Read once at startup, a credential goes stale in a session where somebody exported a new
 one. Sent without one, the request fails at the far end for a reason nothing local could explain,
@@ -379,10 +385,29 @@ signature over the request, so there is no credential for a block to name and no
 Which set of AWS credentials to sign with comes from the profile the block names, resolved when a
 request needs it, which is the same moment and the same reason a token is read.
 
+**A block naming no credential is the second exception.** An empty `env` and no `options.apiKey` is
+the person saying this gateway wants none, so its requests carry no `authorization` header and its
+roster is asked for without one. A block that does name somewhere for a credential to live, and finds
+nothing there, is a stale or missing token and is still refused.
+
+**Why the distinction is where it is.** The reason above holds for the second case and not the first:
+a gateway that wants no credential answers an unauthenticated request, so nothing fails at the far end
+for a reason nothing local could explain, and a refusal names a remedy that does not exist. Requiring
+a value instead would require a field of a block that does not have one, which BACKEND-13 rules out,
+and a dummy `apiKey` teaches people to write fake credentials into a file they paste into issues.
+Deciding it by endpoint rather than by what the block says would refuse the same local service reached
+across a LAN or through a reverse proxy. BACKEND-5 is unaffected: such a gateway is reachable, so
+offering its models is not offering rows that fail when picked.
+
 `verified-by: bravebot_config::provider::a_named_variable_holds_the_token_before_the_file_does`
 `verified-by: bravebot_config::provider::a_token_written_into_the_file_is_still_read`
 `verified-by: bravebot_config::provider::a_provider_with_nothing_holding_a_token_has_none`
+`verified-by: bravebot_config::provider::a_provider_naming_no_credential_needs_none`
 `verified-by: bravebot_agent::backend::a_gateway_with_nothing_holding_a_token_refuses_the_request`
+`verified-by: bravebot_agent::backend::a_gateway_naming_no_credential_sends_unauthenticated`
+`verified-by: bravebot_aichat::lib::a_gateway_needing_no_credential_sends_no_authorization_header`
+`verified-by: bravebot_aichat::client::a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated`
+`verified-by: bravebot_cli::main::a_gateway_needing_no_credential_is_reported_as_needing_none`
 
 <a id="BACKEND-17"></a>
 ### BACKEND-17: a gateway named by a name this system knows needs no endpoint written down
@@ -449,9 +474,10 @@ network. Where it names none, the gateway itself is asked, and what it answers i
 that cannot be fetched contributes nothing and takes nothing away from the rest of the roster.
 
 What the credential in use may reach is asked for ahead of what the service offers generally, and the
-wider roster answers only where the narrower question does not. Nothing is capped: every model
-reported that can call tools is offered, ordered with the model a session would use first and the rest
-by name.
+wider roster answers only where the narrower question does not. A block naming no credential has no
+account for that narrower question to be about, so only the wider one is asked. Nothing is capped:
+every model reported that can call tools is offered, ordered with the model a session would use first
+and the rest by name.
 
 **Why.** A block naming no models is the ordinary case, not a mistake: the tool this shape is borrowed
 from resolves a roster from a registry, so the commonest block copied in names a credential and
@@ -471,7 +497,8 @@ Asking what the credential may reach is asking the question a person actually ha
 cannot serve is a row that fails the moment it is picked, and the two answers differ by a factor of
 three, so the wide roster is mostly rows that would not work. It is a fallback rather than the only
 request because that narrower route is a gateway's own extension: one that does not answer it has to
-end up with a roster anyway.
+end up with a roster anyway. With no credential named there is nothing for the narrow answer to be
+narrower than, so that request spends a round trip to be told what the wide one says.
 
 No cap, because a picker filters as somebody types and any limit is this system deciding they may not
 choose a model their gateway serves. Ordering does that work instead, and it is needed precisely
@@ -490,6 +517,8 @@ the same conservative default a stated roster gets.
 `verified-by: bravebot_aichat::models::a_gateway_that_reports_no_capabilities_still_offers_its_models`
 `verified-by: bravebot_aichat::models::a_fetched_entry_with_no_usable_name_is_dropped`
 `verified-by: bravebot_aichat::models::fetched_gateway_models_are_not_marked_premium`
+`verified-by: bravebot_aichat::client::a_gateway_with_a_credential_is_asked_what_that_account_may_reach`
+`verified-by: bravebot_aichat::client::a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated`
 `verified-by: bravebot_tui::app::a_fetched_roster_leads_with_the_model_in_force`
 `verified-by: bravebot_tui::app::a_fetched_roster_nobody_has_chosen_from_is_still_sorted`
 
@@ -561,19 +590,45 @@ get, reported to them as in force. Where a roster answers the question there is 
 and where it does not, withholding what somebody asked for on the strength of a listing that never
 mentioned the subject would be deciding against them from silence.
 
-**Where there is no listing, a refusal is the answer.** AWS Bedrock describes no model's parameters,
-so nothing can be consulted before a level is sent and the level goes out to be judged. A model that
-refuses the field has answered the same question the listing answers elsewhere: no later request
-carries a level to it, and it is reported as reading none rather than as having one in force.
+**Where there is no listing, a refusal is the answer.** Neither AWS Bedrock nor a settings block
+naming its models says which parameters a model takes, and a fetched roster need not say either, so
+where nothing describes the field the level goes out to be judged. A model that refuses the field has
+answered the same question the listing answers elsewhere: no later request carries a level to it, and
+it is reported as reading none rather than as having one in force. What one model refused says nothing
+about another, and a request refused with the level gone as well settles nothing and is not
+remembered, that status being also what a prompt too long for the model comes back as.
 
-**Why.** The judgment is the only description this service offers, and throwing it away leaves the
+**A level a block wrote down is not this program's to give up.** BACKEND-15 carries a configured
+model's options into the body as they stand, so a level written there fills the field again after this
+concession has been given up, and a service that refuses it refuses the request as it would refuse
+any other option it does not take. What is given up is the level somebody chose in the interface,
+that being the one this program decided to send.
+
+**The level is the last concession given up.** A request also carries cache breakpoints nobody asked
+for, and either field is refused with the same status, so the two are given up in order: a request
+still marking a prefix is sent again without the marks first, and the level goes only where that
+request is refused too. Giving up the level first would read a refusal of the caching as the model
+refusing to be told how hard to think, and stop sending a level to a model that reads one. Where the
+request that answered had given up both, both are remembered, the status naming no field: a service
+that reads a breakpoint and refuses a level gives up the caching as well for the life of the process.
+
+**Why.** The judgment is the only description these services offer, and throwing it away leaves the
 interface reporting a charge somebody chose and stopped getting, which is the thing this clause
-exists to prevent. Learned rather than declared because an inference-profile ARN does not say which
-provider is behind it, and a settings file cannot state what its author does not know either.
+exists to prevent. It is also all that stands between a service that refuses the field and a
+conversation in which no turn can succeed, the level being in every request such a turn makes.
+Learned rather than declared because an inference-profile ARN does not say which provider is behind
+it, and a settings file cannot state what its author does not know either.
 
 `verified-by: bravebot_bedrock::lib::what_a_model_refused_outlives_the_client_that_found_out`
 `verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_is_not_remembered`
 `verified-by: bravebot_bedrock::lib::one_model_refusing_says_nothing_about_another`
+`verified-by: bravebot_aichat::client::a_level_a_gateway_refuses_costs_the_field_and_not_the_turn`
+`verified-by: bravebot_aichat::client::a_gateway_that_refused_a_level_is_not_sent_one_again`
+`verified-by: bravebot_aichat::client::a_level_refusal_the_retry_did_not_fix_is_not_remembered`
+`verified-by: bravebot_aichat::client::one_model_refusing_a_level_says_nothing_about_another_on_the_same_gateway`
+`verified-by: bravebot_aichat::client::a_level_a_block_wrote_down_is_not_given_up`
+`verified-by: bravebot_aichat::lib::a_model_whose_service_refused_a_level_is_reported_as_reading_none`
+`verified-by: bravebot_aichat::models::a_row_whose_service_refused_a_level_reads_none_however_silent_the_roster`
 `verified-by: bravebot_aichat::models::a_gateway_model_that_does_not_take_the_effort_parameter_says_so`
 `verified-by: bravebot_aichat::models::a_gateway_that_states_no_parameters_is_not_taken_to_read_no_level`
 `verified-by: bravebot_tui::app::a_level_is_withheld_from_a_model_that_reads_none`
@@ -613,21 +668,26 @@ nothing or somebody told their configuration is broken when their session merely
 
 
 <a id="BACKEND-24"></a>
-### BACKEND-24: three settings layers resolve a name at a time, closest first
+### BACKEND-24: settings layers resolve a name at a time, closest first
 
 Settings are read from three files: `settings.json` in the user's own directory, then
 `settings.json` in a `.bravebot` directory beside the work, then `settings.local.json` beside that
 one. A later file overrides an earlier one per name rather than wholesale, so a file setting one thing
 leaves everything else in force.
 
+A file the command line named is read after all three, by these same rules, so what it sets beats
+every file that was found. The flag that names one, and the path it refuses, are in
+[cli.md](cli.md).
+
 | What | How layers combine |
 |---|---|
-| `env`, `provider`, `attribution` | per name, one level down; the value under a name is replaced whole |
+| `env`, `provider`, `attribution`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, every list under `permissions` | every layer's entries are kept |
 | `model`, anything else | the closest layer that set it wins |
 
 The project layers are read from the directory the process started in and no ancestor of it. Each
-layer fails independently: one that is missing, oversized, or unparseable leaves the others in force.
+layer fails independently: one that is missing, larger than 64 KB, or unparseable leaves the others
+in force.
 
 **Why.** An account is not the only scope a value belongs to. A credential profile is a property of
 the person, the gateway a particular checkout talks to is a property of that checkout, and something
@@ -639,7 +699,9 @@ which is why a gateway entry is replaced whole and a project file naming one mus
 
 The two names under `attribution` combine per name for the same reason `env` does: they are
 unrelated destinations that happen to share a block, and a file answering for one must not answer
-for the other by omission.
+for the other by omission. The chords under `keybindings` and the two caps under `search` are the
+same case: a file moving one action's key is no statement about the other six, and a checkout
+widening a search's walk for its own size is none about how long a read may take.
 
 The lists are the exception because an entry in one only ever narrows what is possible: a name under
 `scrubEnv` takes a variable away from a subprocess, and a rule under `permissions` refuses something
@@ -652,8 +714,18 @@ session would depend on which directory somebody happened to change into, and th
 above the thing being worked on. Refusing the whole stack over one bad layer is the other thing it
 declines: a mistake in a checkout must not decide that somebody's own profile no longer applies.
 
+The bound is there because these files are a handful of short strings and a session must start
+without waiting on one. A file that grew by accident, or that is not a settings file at all, is
+skipped rather than parsed, and 64 KB is far above anything a person writes by hand.
+
 The order and the merge rules are Claude Code's, down to the name `settings.local.json`, so that
 knowing where to put a value for one tool is knowing it for the other.
+
+The file a command line named is a fourth scope rather than a fourth place to look: it is a property
+of the invocation, which none of the three is, and it is above them because naming a file explicitly
+is a stronger statement than finding one where it was looked for. It fails independently as they do,
+so a named file that has gone missing under a running process does not take a person's own profile
+with it.
 
 `verified-by: bravebot_config::settings::a_project_layer_overrides_a_name_the_global_one_set`
 `verified-by: bravebot_config::settings::a_name_only_the_global_layer_set_survives_a_project_layer`
@@ -663,12 +735,17 @@ knowing where to put a value for one tool is knowing it for the other.
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_directories_a_file_makes_reachable`
 `verified-by: bravebot_config::settings::the_closest_layer_that_named_a_model_wins`
 `verified-by: bravebot_config::settings::a_layer_answering_for_one_attribution_name_leaves_the_other`
+`verified-by: bravebot_config::settings::a_layer_capping_one_side_of_a_search_leaves_the_other`
 `verified-by: bravebot_config::settings::a_layer_naming_no_model_leaves_the_one_below_it`
 `verified-by: bravebot_config::settings::a_project_layer_replaces_one_gateway_and_leaves_the_others`
 `verified-by: bravebot_config::settings::a_project_gateway_naming_no_host_replaces_one_that_did`
 `verified-by: bravebot_config::settings::an_unparseable_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::an_oversized_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::a_directory_with_no_project_layer_reads_the_global_one_alone`
+`verified-by: bravebot_config::settings::a_command_line_file_adds_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::a_command_line_file_is_reported_as_the_layer_that_won_a_name`
+`verified-by: bravebot_config::settings::a_command_line_file_that_is_not_there_leaves_the_found_layers_in_force`
+`verified-by: bravebot_config::settings::a_command_line_file_that_is_already_a_layer_is_read_once`
 `verified-by: bravebot_config::settings::the_layers_that_were_read_are_reported_weakest_first`
 `verified-by: bravebot_config::settings::a_name_more_than_one_layer_set_reports_the_file_that_won`
 `verified-by: bravebot_config::settings::an_override_reports_the_name_and_the_file_and_never_the_value`
@@ -742,8 +819,9 @@ ending in an image or a tool call is left with the breakpoint on the system prom
 a cache write and nothing else. A request whose conversation no later request sends is left the same
 way: the write on the end of that exchange is charged above the tokens it covers and buys a cache
 nothing reads back, while the prompt in front of it is the same bytes every time such a request is
-made. Which requests those are is the caller's to say, and [compaction.md](compaction.md) is where
-one says it.
+made. Which requests those are is the caller's to say, and
+[compaction.md](compaction.md), [goal.md](goal.md), [watching.md](watching.md) and
+[tools/spawn-processor.md](tools/spawn-processor.md) are where they say it.
 
 **The reported prompt is what was sent, not what was read.** This API states `inputTokens` net of
 the cache and reports the cached tokens beside it, so the three are added back together on the way
@@ -958,7 +1036,9 @@ is worth a cache write because the request after it sends everything in front of
 that gives its conversation up once it has been answered has no request after it, and the write is
 charged above the tokens it covers for a prefix nothing can read back. The prompt keeps its mark,
 being the same bytes every time such a request is made, so what is given up is a write and no read.
-[compaction.md](compaction.md) is where a request says its conversation is not sent again.
+[compaction.md](compaction.md), [goal.md](goal.md), [watching.md](watching.md) and
+[tools/spawn-processor.md](tools/spawn-processor.md) are where a request says its conversation is
+not sent again.
 
 **Marked on the way out and nowhere else.** The mark is put on a copy as the body is built, so the
 request a turn assembled does not carry one and neither does anything a session records. A
@@ -969,10 +1049,12 @@ again by a request that never asked for it, and against a service that had alrea
 this endpoint's roster nor a gateway's says whether a model's service reads a breakpoint, so the
 request asks. A service that will not take the body answers an invalid-request status, and that
 request is sent once more with no breakpoints on it; where that answers, no later request in the
-process marks anything for that model on that service. A retry that failed too proves nothing, an
-invalid-request status being also what a prompt too long for the model is answered with, so nothing
-is remembered and the next request asks again. This is BACKEND-27's rule and its reason, in the
-statuses this protocol says it with.
+process marks anything for that model on that service. Where that retry is refused as well and still
+carried an effort level, the level is what is given up next, and a request that answers with both
+gone is remembered as having had both refused: BACKEND-22 states that order and the caching it costs.
+A refusal with nothing further to give up proves nothing, an invalid-request status being also what a
+prompt too long for the model is answered with, so nothing is remembered and the next request asks
+again. This is BACKEND-27's rule and its reason, in the statuses this protocol says it with.
 
 **Remembered against the service as well as the model.** A model id says nothing about who serves
 it: two gateways can offer the same name, and one of them can be the name Brave's own endpoint
@@ -1003,10 +1085,412 @@ sent.
 `verified-by: bravebot_aichat::client::a_service_that_refused_the_breakpoints_is_not_asked_for_them_again`
 `verified-by: bravebot_aichat::client::a_refusal_on_one_service_does_not_stop_the_asking_on_another`
 `verified-by: bravebot_aichat::client::a_refusal_the_retry_did_not_fix_is_not_remembered`
+`verified-by: bravebot_aichat::client::a_level_a_gateway_refuses_costs_the_field_and_not_the_turn`
 `verified-by: bravebot_aichat::client::a_request_the_server_refused_is_not_sent_again_unchanged`
 `verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
 
+<a id="BACKEND-33"></a>
+### BACKEND-33: an `env` block names these twelve variables
+
+The `env` block of a settings file sets variables under their own names, and these are the names
+something reads:
+
+| Name | What it decides |
+|---|---|
+| `SERVICES_KEY_AICHAT` | the key a request to Brave's endpoint is signed with |
+| `BRAVE_SERVICES_KEY_ID` | which key that signature is checked against |
+| `BRAVE_AI_CHAT_ENDPOINT` | the host Brave's endpoint is reached at |
+| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host an imported subscription is spent against |
+| `BRAVE_AI_CHAT_DEFAULT_MODEL` | which model answers before anybody has chosen one |
+| `BRAVEBOT_CONTEXT_BUDGET` | how many prompt tokens a conversation may reach before it is shortened |
+| `BRAVEBOT_USE_BEDROCK` | `1` to reach models through somebody's own AWS account |
+| `AWS_REGION` | which region that account is reached in |
+| `AWS_PROFILE` | which profile in the AWS configuration names the credentials to sign with |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | the model the tier word `opus` names |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | the model the tier word `sonnet` names |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | the model the tier word `haiku` names |
+
+A gateway is not configured from this block: it is a `provider` entry, whose shape BACKEND-13
+states and whose credential BACKEND-16 names. The top-level `model` key is not one of these either, being a
+choice rather than a variable, and BACKEND-11 is what ranks it.
+
+**Why.** A configuration surface that is described but never named is one nobody can use without
+reading the source. Anything written *about* this system (the site somebody installs it from, a
+message telling a person what to set) is written from what is stated here, so a backend whose
+variables are named nowhere is a backend that reaches people undocumented however completely its
+behaviour is specified. Naming them is also what makes the set reviewable: a thirteenth variable is
+a change to this table, which a person reads, rather than a constant added to a file nobody is
+asked to look at.
+
+The AWS names keep the spelling another tool already gave them, and the switch and the budget carry
+this program's own prefix, for the reason BACKEND-24 gives about the file as a whole: a block
+copied from elsewhere should work unedited, while a name that decides what *this* program does
+belongs to this program and must not collide with whatever else a shared shell profile wanted.
+
+`verified-by: bravebot_config::lib::every_name_a_settings_block_may_set_reaches_the_configuration`
+`verified-by: bravebot_config::settings::an_env_block_is_read`
+
+<a id="BACKEND-34"></a>
+### BACKEND-34: a settings value is a string, and anything else is not a value
+
+Every value in a settings block is a JSON string. A name spelled with a number, a boolean, a null, a
+list or an object holds nothing, and holds nothing in the layers underneath it either: the closest
+layer that spelled the name is the layer that answered for it. Every other name in that file is
+unaffected.
+
+A block spelled as anything but a block is answered for the same way, one level up. A layer whose
+`env` is a number, a string, a list or a null sets no variable, and no variable is read from the
+layers under it either. The file still parses, so this is not the failed-layer case BACKEND-24
+describes, and the other blocks in it are read as they would have been.
+
+**Why.** What a variable takes is a string, and JSON has a distinct spelling for each of the other
+kinds. Coercing one invents a spelling the writer did not choose, `1` and `true` being far from
+obviously `"1"` and `"true"` to whoever reads the value back later, and the values here are hosts
+and credentials, where a guess about spelling is a guess about where a request goes. Dropping the name
+rather than the file keeps the damage to the thing that was mistyped, since the rest of the file
+still describes a working backend.
+
+A weaker layer is not fallen through to because the name was answered, by the file closest to the
+work. Falling through would make a typo in a checkout resolve quietly to a value from a file the
+person was not looking at, which is the one outcome worse than the name being unset. That is the
+reason the same thing happens to a whole block, and it is also where the rule costs the most: a
+single mistyped `env` takes a person's own variables away with the checkout's.
+
+`verified-by: bravebot_config::settings::a_value_that_is_not_a_string_is_left_out`
+`verified-by: bravebot_config::settings::a_value_that_is_not_a_string_leaves_the_name_unset_in_every_layer`
+`verified-by: bravebot_config::settings::a_block_that_is_not_a_block_leaves_no_names_under_it`
+`verified-by: bravebot_config::settings::a_model_that_is_blank_or_not_a_string_names_nothing`
+
+<a id="BACKEND-35"></a>
+### BACKEND-35: an exported variable, then the build, then the file
+
+For every name but the top-level `model` key, a value exported into the process environment outranks
+one this binary was built with, which outranks the `env` block. A variable exported blank does not
+displace a value the build carries; where the build carries none, the blank is what the
+configuration holds, so a missing credential is reported as empty rather than as absent.
+
+**Why.** An exported variable is the most specific thing a person said, and a file that overrode it
+would make `AWS_PROFILE=other bravebot` do nothing. The build sits above the file so that a released
+binary reaches the host it was given and signs with the credentials it was given, whatever the
+`.bravebot` directory of the checkout somebody happens to be working in says. That layer is the
+easiest thing on the machine to write to, which is the same reason BACKEND-1 gives for a file
+granting no capability at all.
+
+On a binary built with nothing, which is a source build, the file is what answers for all of it:
+the endpoint, the key id and the signing key included, and a project layer can name any of them.
+That is the case the file exists for, and what it costs is under Known costs.
+
+BACKEND-11 is the one exception and says why: a `model` key ranked here would lose to the baked-in
+default on every binary anybody was given. A name a machine-level file pinned is resolved from that
+file and from none of these three, which is BACKEND-38.
+
+`verified-by: bravebot_config::lib::the_environment_outranks_the_settings_file`
+`verified-by: bravebot_config::lib::a_baked_in_value_outranks_the_settings_file`
+`verified-by: bravebot_config::lib::the_settings_file_applies_when_the_environment_is_silent`
+`verified-by: bravebot_config::lib::a_blank_variable_does_not_shadow_a_built_in_value`
+`verified-by: bravebot_config::lib::a_blank_variable_survives_when_nothing_was_built_in`
+
+<a id="BACKEND-36"></a>
+### BACKEND-36: a name nothing reads is kept and decides nothing
+
+Every name an `env` block sets is read into the settings and reported by `doctor` among the names
+that file set, whether or not anything consults it. A name outside BACKEND-33's table decides
+nothing: it configures nothing, it is not an error, and, like every name in the block, it is not
+exported. The switch that hands this agent's own credentials back to a program it starts is read
+from the process environment alone, so a file spelling that name changes nothing about what a
+subprocess is given.
+
+**Why.** This is the person's own configuration surface and a file people copy between tools, so it
+holds names written for something else and names written for a later version of this one. Refusing
+one would make a settings file from a newer release stop an older binary from starting, and
+discarding one silently would make a typo and a forward-looking entry look identical to whoever is
+debugging it, which is why `doctor` reports the names rather than only the ones that landed.
+
+Keeping a name is not the same as acting on one, and the distance between the two is the whole of
+what makes the file safe to read. A block that could switch off credential scrubbing would be a
+block that hands this agent's secrets to every command it runs, decided by whatever last edited a
+file in a checkout.
+
+`verified-by: bravebot_config::lib::a_name_nothing_consults_changes_nothing`
+`verified-by: bravebot_config::settings::a_name_this_crate_does_not_know_is_still_read`
+`verified-by: bravebot_config::settings::the_names_are_reportable_and_the_values_are_not`
+
+<a id="BACKEND-37"></a>
+### BACKEND-37: failures carry safe reasons and measured request counts
+
+Backend failures report a fixed category, an HTTP status when known, and the number of requests
+handed to egress. The count includes retries and capability probes for streamed and whole replies.
+A failure before egress has zero attempts; an uncounted error has an unknown count. A retry announced
+before backoff does not count until it starts. Cancelling that wait retains the requests already sent.
+
+Categories come from structured errors. Error bodies, headers, credentials, URLs, and raw transport
+messages do not enter these details. Processor failures use a fixed category in their tool results;
+delegate failures tell the planner only that the delegate did not finish. Compaction failure
+messages also use the category. These paths do not copy raw backend errors into the conversation.
+
+Cancellation is distinct from failure. A processor carries cancellation and its attempt count
+separately from its tool-result text, so the parent can report the stop without parsing that text.
+
+Known Bedrock stream exceptions map to fixed categories: validation to refused, throttling to
+rate-limited, and service-unavailable or internal-server errors to unavailable. Other exception
+names map to incomplete. Retry eligibility is unchanged.
+
+`verified-by: bravebot_agent::backend::each_status_a_service_answers_with_is_reported_as_what_it_means`
+`verified-by: bravebot_agent::backend::a_gateway_with_nothing_holding_a_token_is_reported_as_unconfigured`
+`verified-by: bravebot_agent::backend::aws_refusing_the_credentials_it_was_signed_with_is_reported_as_unauthorized`
+`verified-by: bravebot_agent::backend::what_is_kept_about_a_failure_carries_nothing_the_service_or_the_setting_said`
+`verified-by: bravebot_agent::turn::a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_made`
+`verified-by: bravebot_agent::turn::a_reply_that_stopped_early_is_reported_as_unfinished_with_no_status`
+`verified-by: bravebot_agent::turn::a_refusal_counts_the_cache_probe_as_a_second_request`
+`verified-by: bravebot_bedrock::lib::request_counts_include_capability_probes`
+`verified-by: bravebot_bedrock::lib::cancellation_in_backoff_counts_only_sent_requests`
+`verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_between_attempts`
+`verified-by: bravebot_aichat::client::a_stop_between_attempts_at_a_whole_reply_does_not_wait_out_the_pause`
+`verified-by: bravebot_bedrock::lib::a_stop_between_attempts_at_a_whole_reply_does_not_wait_out_the_pause`
+`verified-by: bravebot_bedrock::lib::framed_service_exceptions_keep_their_kind_and_request_count`
+`verified-by: bravebot_agent::failure_categories::service_exception_keeps_its_actionable_category`
+`verified-by: bravebot_agent::turn::compaction_failure_narration_keeps_credentials_out`
+`verified-by: bravebot_agent::turn::what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpoint`
+`verified-by: bravebot_agent::turn::a_failed_processor_reports_a_category_and_nothing_the_service_or_the_setting_said`
+`verified-by: bravebot_agent::turn::a_stop_counts_the_requests_that_were_sent_and_no_others`
+`verified-by: bravebot_agent::turn::a_stop_while_a_processor_runs_is_reported_as_a_stop_with_what_it_sent`
+
+<a id="BACKEND-38"></a>
+### BACKEND-38: one machine-level file pins a destination above everything a person can set
+
+A file in the directory the platform reserves for an administrator answers for the names it pins,
+above the process environment and therefore above every other source. It is
+`/etc/bravebot/managed.json`, `/Library/Application Support/bravebot/managed.json` on macOS, and
+`C:\ProgramData\bravebot\managed.json` on Windows. The path is a literal and no variable names it.
+
+These names may be pinned, being the ones that decide where a request goes:
+`BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
+`AWS_PROFILE`, the three tier models of BACKEND-33's table, and the `provider` block. Every other
+name in the file decides nothing, the signing key and the key id included. A pinned name is resolved
+from this file alone, and a name it does not pin resolves exactly as it would with no such file.
+
+No credential is read from this file. A gateway entry's `apiKey` is dropped, and the entry's host,
+models and variable names are honoured without it.
+
+The `provider` block is pinned whole rather than a name at a time, and a block that is present and
+empty says that there are no gateways. A file that does not have the block, or that spells it as
+anything but a block, leaves the gateways a person configured in force.
+
+Refusing every account but the organisation's takes both halves: the switch pinned off and the
+`provider` block pinned, since a gateway entry can name an AWS account too.
+
+The file is read as the settings files of BACKEND-24 are: one that is missing, larger than 64 KB or
+unparseable pins nothing, and a value that is blank or is not a string pins nothing under that name.
+
+**Why.** Every other source is ultimately the individual's. The environment sits at the top of
+BACKEND-35's order so that a released binary can be pointed at a local backend without rebuilding
+it, and that convenience is what this deliberately inverts: a pin an exported variable outranked
+would pin nothing, so an organisation requiring that inference traffic reach an approved endpoint,
+or refusing to have models reached through somebody's personal cloud account, would have no way to
+say it.
+
+The authority is the filesystem's rather than this program's. The file sits in the directory the
+platform reserves for administration, and nothing here checks who owns it or what the permissions on
+it are: somebody who can write that path can replace this binary, so a check would add a thing to
+get wrong and settle nothing. How far that argument holds per platform is under Known costs. It is
+also why the path is a literal. `%ProgramData%` and the rest are stated in the environment of the process,
+which is the environment of the person this layer binds, so reading one would let them choose which
+file answers for them.
+
+A name at a time, and only these names, because a layer that can pin a preference is a layer
+somebody uses to pin a preference. What two parties have a legitimate say in is where a request goes
+and whose account pays for it; which theme is on and which keys do what are neither, and pinning one
+of those is an administrator reaching past the thing they have a stake in. The credential names are
+out for a different reason: a file here names a destination and grants nothing, which is BACKEND-1's
+rule and holds hardest for a file a person cannot read in their own directory. A gateway's own
+credential field is dropped rather than obeyed for the same reason plus one more: everyone on the
+machine can read this file, so a token in it is a token handed to every account rather than one held
+by its owner. Dropping it rather than refusing the entry keeps the host, which is the part worth
+pinning, and the service says what is missing on the first request.
+
+The gateway block is whole because pinning an endpoint pins nothing while anybody may add a
+destination beside it, and a gateway entry can name an AWS account as readily as a host, which is
+why refusing a personal account needs the block and not just the switch. Saying there are none has
+to be sayable, since "our endpoint or nothing" is half of what an organisation deploying this file
+means, and absence has to stay distinguishable from it, or a file pinning only a host would silently
+take away a gateway it never mentioned. A `provider` spelled as anything but a block is a mistyped
+file rather than either statement: taking every gateway on the machine away on the strength of a
+stray `null` is the one reading of it nobody would intend.
+
+Failing softly on a bad file is BACKEND-24's argument one layer up: a mistake in a file nobody can
+edit must not decide that the program no longer starts, and the remedy is with whoever can write
+that path rather than with the person in front of the screen.
+
+`verified-by: bravebot_config::managed::an_endpoint_is_pinnable`
+`verified-by: bravebot_config::managed::a_name_outside_the_pinnable_set_pins_nothing`
+`verified-by: bravebot_config::managed::the_switch_that_reaches_a_personal_account_is_pinnable`
+`verified-by: bravebot_config::managed::an_empty_gateway_block_says_there_are_no_gateways`
+`verified-by: bravebot_config::managed::a_file_with_no_gateway_block_leaves_the_gateways_alone`
+`verified-by: bravebot_config::managed::a_provider_key_that_is_not_a_block_decides_nothing`
+`verified-by: bravebot_config::managed::a_gateway_block_names_the_gateways_in_force`
+`verified-by: bravebot_config::managed::a_token_written_into_the_file_is_not_read`
+`verified-by: bravebot_config::managed::an_absent_file_pins_nothing_and_is_not_reported`
+`verified-by: bravebot_config::managed::an_unparseable_file_pins_nothing_and_is_still_named`
+`verified-by: bravebot_config::managed::a_blank_value_pins_nothing`
+`verified-by: bravebot_config::lib::a_managed_pin_outranks_an_exported_variable`
+`verified-by: bravebot_config::lib::a_name_the_managed_layer_did_not_pin_resolves_as_it_would_have`
+`verified-by: bravebot_config::lib::a_pinned_switch_outranks_the_exported_one`
+`verified-by: bravebot_config::lib::refusing_a_personal_cloud_account_takes_the_switch_and_the_gateways`
+`verified-by: bravebot_config::lib::a_managed_gateway_block_replaces_the_one_in_the_settings`
+`verified-by: bravebot_config::lib::an_empty_managed_gateway_block_leaves_no_gateways`
+`verified-by: bravebot_config::lib::a_managed_layer_silent_on_gateways_keeps_the_configured_ones`
+
+<a id="BACKEND-39"></a>
+### BACKEND-39: a configuration naming no model service says what to configure
+
+Where the model in force would be sent to Brave's own aichat endpoint and no Leo Premium
+subscription is in hand to spend on it, nothing is configured to serve the turn and no work starts.
+A session does not open and a one-shot run asks nothing. What is said instead is the three ways to
+configure a service that can answer, each naming the thing to type or to write: an AWS account
+through Bedrock, an OpenAI-compatible gateway, and importing a Leo Premium subscription. `doctor`
+says the same and fails, which is [CLI-7](cli.md#CLI-7).
+
+The model decides, as it does everywhere here: a model a configured service serves is not this
+case, whatever the aichat fields hold. The model asked about is the one the run will actually
+request, which is a name given on the command line, then the one a session recorded, then the
+configured default.
+
+An endpoint that is not one of Brave's own deployments is not this case either, development channel
+and production alike. That is somebody's own host, a local model server or a private deployment or
+a proxy in front of either, and nobody is handed a configuration pointing at one. A port written
+into an endpoint does not change which deployment it names.
+
+**A service configured while the model in force is Brave's own is told apart, and gets one line
+rather than the three.** That is where a settings block copied out of the tool BACKEND-13 borrows
+its shape from lands: those blocks name their models and name no default, so the model stays the
+one the build baked in. What is said there is the key that names one of the configured service's
+models, and the three routes are left out.
+
+The refusal is the configuration ending of [CLI-6](cli.md#CLI-6) rather than a status of its own.
+Where a subscription is stored and could not be read, what the store said about it is said first.
+A machine with nowhere to keep credentials has none stored rather than a batch it could not read.
+
+**Why.** Nothing has been set up yet. A released binary arrives pointed at Brave's own aichat
+endpoint, and being pointed at it is not the same as having a service configured to do this work: no
+account was named, no gateway was written down, and no subscription was imported. A run that went
+ahead would send the turn there anyway and hand back whatever that request became, and whatever it
+became is not the agent doing the work. What a person is left with is a session that failed, or one
+that answered poorly, and nothing on the screen saying the missing piece was a configuration. The
+conclusion drawn from a first session is the one that sticks.
+
+Said before anything runs because that is the only moment where the answer is "configure a
+service". Afterwards the question a person has is why the answers are bad, which is a question the
+configuration cannot be reached from.
+
+Refusing rather than letting the request go, for the reason
+[PREM-8](premium-credentials.md#PREM-8) reports a subscription it could not read rather than passing
+over it: what comes back from a request that was never going to be served carries no sign of why,
+and nothing about a bad session points at where a request went.
+
+Three routes rather than one, and each named by what to type, because a refusal that states the
+problem and no way out of it has moved the work to the person and told them nothing they could not
+already see. Leo Premium is last and says why it is last: those models are reached through Brave's
+AI gateway, which has problems of its own being worked on. It is still the shortest route for
+somebody who already subscribes, which is why it is offered rather than left out.
+
+Telling the configured case apart is the same argument in the other direction. Somebody there is
+one settings key from working, and three ways to set up a service would be three things to read
+past on the way to the one that applies, the first of which is the thing they already did.
+
+The test is the endpoint rather than a switch somebody sets. A build pointed at a host that is not
+Brave's has been configured by whoever pointed it, and that covers every development build and
+every local service without a preference to store. A switch would be the thing set once and
+forgotten, which is how an unconfigured build comes back on the machine of the person who was going
+to configure something properly later.
+
+What would change this clause is a released binary arriving with a model service already set up. The
+refusal exists because one does not.
+
+`verified-by: bravebot_agent::backend::braves_endpoint_with_nothing_beside_it_has_no_service_configured`
+`verified-by: bravebot_agent::backend::a_model_a_configured_service_serves_has_one`
+`verified-by: bravebot_agent::backend::a_service_configured_while_the_model_is_braves_own_has_none_for_that_model`
+`verified-by: bravebot_agent::backend::an_endpoint_that_is_not_braves_is_a_service_that_was_chosen`
+`verified-by: bravebot_agent::subscription::braves_own_deployments_are_told_from_a_host_somebody_chose`
+`verified-by: bravebot_agent::subscription::a_port_is_not_part_of_the_host`
+`verified-by: bravebot_cli::running::a_first_run_with_no_service_configured_says_how_to_configure_one`
+`verified-by: bravebot_cli::running::a_configured_gateway_is_not_refused`
+`verified-by: bravebot_cli::running::a_service_configured_with_no_model_of_its_own_named_says_to_name_one`
+`verified-by: bravebot_cli::running::a_model_named_on_the_command_line_is_not_refused`
+
+<a id="BACKEND-40"></a>
+### BACKEND-40: completed replies keep reported usage even when their content is unusable
+
+Clients decode and validate usage separately from assistant content. A completed reply with empty
+content, malformed content or tool calls, or an output-limit error retains valid reported usage.
+Earlier valid text does not make a malformed reply usable, including when a later JSON frame is
+damaged. The error keeps its original category, request count and safe reporting path.
+
+For a whole reply, the response body must have arrived. For a stream, the protocol must say the
+reply ended: an aichat finish reason or `[DONE]`, or a Bedrock message stop. Transport EOF is not
+that signal. Cancellation after protocol completion retains reported usage even while the socket
+is open, and still returns cancellation. Usage metadata on its own does not complete a reply.
+A later stream exception or framing error does not erase usage already reported for a completed
+reply, even when it arrives in the same read as the completion and usage frames. If it
+causes a retry, the completed attempt's cost remains charged exactly once whether the later
+attempt succeeds, fails, or is cancelled during backoff. Reply content and progress restart on
+retry. Each attempt starts with unknown usage; completed costs from earlier attempts remain
+separate and are added to the call total. Unfinished attempts contribute no estimate. A total
+containing a measured zero remains known; a call with no completed reported usage remains unknown.
+The final attempt's prompt measurement is separate from these cumulative costs.
+
+Retained usage resets at the start of each call, including a call cancelled before sending.
+Unknown usage remains distinct from a measured zero. Both input and output token counts must be
+present as unsigned integers; missing counts do not mean zero.
+Invalid or absent usage, and usage from an unfinished reply, contributes no estimate to a failed
+or cancelled request. Backend errors carry
+known usage to callers without exposing response content or changing the failure diagnosis.
+
+**Why.** A service can finish and charge for a reply that the caller cannot use. Losing its bill
+would understate the cost; charging an unfinished reply would claim a cost not yet known.
+
+`verified-by: bravebot_aichat::client::completed_retry_usage_survives_success_failure_and_backoff_cancellation`
+`verified-by: bravebot_bedrock::lib::completed_retry_usage_survives_success_failure_and_backoff_cancellation`
+`verified-by: bravebot_aichat::client::malformed_whole_reply_keeps_known_usage`
+`verified-by: bravebot_aichat::client::malformed_streamed_reply_keeps_known_usage`
+`verified-by: bravebot_bedrock::lib::malformed_replies_keep_only_valid_reported_usage`
+`verified-by: bravebot_bedrock::lib::output_limit_keeps_completed_usage`
+`verified-by: bravebot_bedrock::lib::completed_usage_survives_later_exception`
+`verified-by: bravebot_bedrock::lib::completed_usage_survives_later_corrupt_frame`
+`verified-by: bravebot_bedrock::eventstream::events_before_corruption_survive_any_read_boundary`
+`verified-by: bravebot_aichat::client::malformed_json_stream_keeps_usage_without_accepting_earlier_text`
+`verified-by: bravebot_bedrock::lib::cancellation_before_eof_keeps_only_protocol_completed_usage`
+`verified-by: bravebot_agent::turn::completed_stream_keeps_usage_when_cancelled_before_socket_closes`
+
 ## Known costs
+
+- **The refusal is made at startup, and a model chosen mid-session is not checked again.**
+  BACKEND-39 is asked once, before a session opens, so somebody who opens on a configured model and
+  then picks one of Brave's from `/model` keeps it for the rest of that session.
+  Checking per turn would put a file read and a refusal in front of every round, and the choice
+  there is a person naming a model from a list that says which service answers it (BACKEND-6),
+  which is the opposite of the case the clause exists for: nobody arrives at it without knowing
+  what they picked.
+
+- **Which model answers is the individual's, and a managed layer cannot pin it.** A pinned default
+  model would lose to a `/model` choice the moment one was recorded, so it would pin nothing, and
+  making that choice unavailable is a change to what a person is offered rather than to where a
+  request goes. An organisation with a reason to care, a cost or a data-handling consequence
+  attached to one model, has the endpoint and the account to say it with and not the name.
+
+- **The layer binds nobody who can write the file, and what that takes differs per platform.** Its
+  whole authority is the permissions on the path. On a machine whose user is also its administrator,
+  which is most machines this is installed on, a pin is a note to self, and checking an owner would
+  not change that, the same account being able to replace the binary. Where it is thinner than that
+  argument assumes is a shared machine: `/etc` is root's, but `/Library/Application Support` is
+  writable by the admin group, and a `C:\ProgramData` subdirectory nobody has created yet can be
+  created by any authenticated user, who could then pin another account's endpoint. So the layer is
+  worth what the directory's permissions are worth, and on those two platforms an administrator has
+  to create the directory with permissions of their choosing rather than leave it to this program,
+  which never creates it.
+
+- **On Windows the path names one drive.** `C:\ProgramData` is where it looks, because the variable
+  that would say otherwise is the person's own to set, so a machine whose system drive is elsewhere
+  has no managed layer at all rather than one that can be redirected.
 
 - **The effort level is the one field in a Bedrock request that a single provider defines.** The
   body Bedrock states for every provider it hosts has no field for how hard to think, so the level
@@ -1036,7 +1520,7 @@ sent.
   nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits
   the field, so it is not validated, and on `near-glm-5`, which reports a non-zero reasoning-token
   count for an ordinary prompt, that count does not move with the level. The premium rows of the
-  roster were not measured, a free-tier credential being substituted to a weaker model before the
+  roster were not measured, an unsubscribed request being substituted to a weaker model before the
   request lands, so nothing here is established about them. A level chosen against a Brave-served
   model is therefore carried, sent, and dropped, while the interface goes on reporting it as in
   force. Bedrock is unaffected, the level reaching the model in the field that model defines.
@@ -1046,20 +1530,40 @@ sent.
   the parameter without saying which words it accepts. A model may reject or silently round a level
   it does not know, and no listing distinguishes that from honouring it.
 
+- **A blank exported variable reaches the file for the model and for nothing else.** BACKEND-11's
+  resolution treats a blank as absence the whole way down, so a `model` key still answers. BACKEND-35's
+  stops at the build: on a binary built with nothing, exporting a name blank leaves the configuration
+  holding the blank and the value in the file unread. The two orders are the same argument, that a
+  placeholder in a shell profile is not an instruction to discard anything, applied to one more source
+  in one of them than in the other, and which behaviour a person meets depends on which name they
+  blanked.
+
+- **A gateway that wants a credential and was told of none is refused by the service rather than
+  here.** BACKEND-16 reads a block naming no credential as the person saying none is wanted, so a
+  block naming a service that does want one, and naming none, sends an unauthenticated request and
+  gets that service's own rejection where a local refusal named the remedy. What the block says is
+  the only statement available about whether a credential is wanted; the endpoint does not answer it,
+  a private deployment behind a name this system knows being free to want none and a local service
+  being reachable at one of those names. Deciding by endpoint would buy the better message for the
+  names BACKEND-17 compiles in and pay for it by refusing every gateway outside them that wants
+  nothing. A block whose `apiKey` is written blank, or whose `env` lists only blank names, names no
+  credential by that same reading, since a blank in this file is read as nothing having been written
+  there. A placeholder somebody meant to fill in later is therefore read as them saying none is
+  wanted, and the refusal that would have pointed at it does not happen.
+
 - **A credential is resolved by running the AWS CLI.** Reaching Bedrock needs short-lived keys that
   expire during a session, and the tool that holds them is the one the person already signs in
   with. That is a process this code did not write, reading a configuration this code does not
   govern.
 
-- **Not every request whose conversation nothing sends again says so.** Coming off the end of a
-  conversation is the caller's to ask for, and the summariser is the only caller that asks. A judge
-  putting a condition to the model, a question answered beside the work, and a processor reading
-  untrusted content are each sent once and answered once, and each still marks the end of what it
-  carries, so each pays a cache write for a prefix nothing reads back. The judge is the one that adds
-  up, being sent after every turn of a session working towards a condition, and it carries the
-  conversation: see [goal.md](goal.md), [watching.md](watching.md) and [processors.md](processors.md)
-  for what those requests are. A processor given content that ends in a picture is already unmarked,
-  for the reason BACKEND-32 gives.
+- **A planning round marks a conversation the round after it cannot read.** Planning a manifest is
+  two requests over one growing conversation, so the second does send the first's messages again, and
+  it sends them behind a different set of instructions. A cached prefix is matched from the start of
+  a request, so a prompt that changed leaves nothing after it matchable, and the mark on the end of
+  the first round's conversation is a write nothing reads. The second round is the last one, so its
+  own mark buys nothing either. Saying so is the caller's to do, as it is everywhere else, and
+  [manifest.md](manifest.md) is where it would be said. What it costs is two writes over a short
+  conversation, a planner carrying the prompt a person typed and one reply rather than a session.
 
 - **Compaction throws away the cache of the conversation.** A summary replaces the messages in front
   of the last few, which is a rewrite of the prefix the rolling breakpoint sits in, so the round

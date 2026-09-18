@@ -4,7 +4,7 @@
 //! from precommitted routing, never from model output, so a turn cannot be redirected
 //! by the content it processes.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 pub mod aside;
 pub mod backend;
@@ -18,10 +18,12 @@ pub mod exec;
 pub mod glob;
 pub mod goal;
 pub mod home;
+pub mod hooks;
 pub mod lsp;
 pub mod manifest;
 pub mod memory;
 pub mod mode;
+pub mod outcome;
 pub mod permission_mode;
 pub mod permissions;
 pub mod preamble;
@@ -42,12 +44,17 @@ mod testutil;
 pub mod timing;
 pub mod tools;
 pub mod turn;
+pub mod vet;
+pub mod watch;
 pub mod workspace;
 
-pub use confirm::{Confirmer, Decision, Intent, RunDecision, RunRequest, Unattended, WriteRequest};
+pub use confirm::{
+    Confirmer, Decision, Intent, Remark, RunDecision, RunRequest, Unattended, WriteRequest,
+};
 pub use conversation::Conversation;
 pub use delegate::Delegated;
 pub use mode::Mode;
+pub use outcome::{Category, Diagnosis, Ending, Spent};
 pub use permission_mode::{Confining, PermissionMode};
 pub use processor::ProcessorError;
 pub use report::{Activity, IgnoreReports, Reporter};

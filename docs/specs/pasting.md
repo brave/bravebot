@@ -137,8 +137,15 @@ leaves the page's URL behind as text and text has another key.
 On macOS this reads the pasteboard through `osascript`. On Linux it needs `wl-paste` or `xclip`.
 
 `verified-by: bravebot_tui::app::an_empty_paste_goes_and_reads_the_clipboard_instead`
+`verified-by: bravebot_tui::app::an_empty_paste_mid_turn_goes_and_reads_the_clipboard_too`
+`verified-by: bravebot_tui::app::ctrl_v_reads_the_clipboard_during_a_turn_too`
 `verified-by: bravebot_tui::app::a_paste_that_carried_text_is_left_alone`
 `verified-by: bravebot_tui::app::which_key_carries_a_picture_is_said_once_per_session`
+`verified-by: bravebot_tui::clipboard::a_picture_wins_over_the_text_beside_it`
+`verified-by: bravebot_tui::clipboard::the_text_beside_a_picture_is_never_read`
+`verified-by: bravebot_tui::clipboard::a_picture_over_the_cap_is_refused_rather_than_swapped_for_the_text`
+`verified-by: bravebot_tui::clipboard::text_alone_is_the_paste`
+`verified-by: bravebot_tui::clipboard::an_empty_clipboard_reads_as_nothing_rather_than_as_empty_text`
 `verified-by: bravebot_tui::clipboard::a_missing_tool_reads_as_nothing_on_the_clipboard`
 `verified-by: bravebot_tui::clipboard::a_missing_tool_is_not_taken_for_a_successful_copy`
 

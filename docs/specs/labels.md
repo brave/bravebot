@@ -13,15 +13,16 @@ guards:
       - crates/agent/src/aside.rs: 2
       - crates/agent/src/manifest.rs: 4
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 22
+      - crates/agent/src/tools.rs: 27
       - crates/agent/src/turn.rs: 4
+      - crates/agent/src/vet.rs: 1
       - crates/agent/src/workspace.rs: 2
-      - crates/agent/tests/workspace.rs: 37
+      - crates/agent/tests/workspace.rs: 39
       - crates/aichat/tests/client.rs: 2
-      - crates/core/src/policy.rs: 39
+      - crates/core/src/policy.rs: 48
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 1
-      - crates/mcp/tests/stdio.rs: 1
+      - crates/mcp/tests/stdio.rs: 2
   - symbol: Labelled::relabel
     sites:
       - crates/core/src/policy.rs: 1
@@ -29,13 +30,13 @@ guards:
       - crates/core/src/value.rs: 4
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 36
+      - crates/core/src/policy.rs: 45
   - symbol: Policy::present
     sites:
       - crates/agent/src/aside.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 2
-      - crates/agent/src/turn.rs: 8
+      - crates/agent/src/turn.rs: 9
       - crates/core/src/policy.rs: 8
   - symbol: Policy::label_model_output
     sites:
@@ -267,6 +268,7 @@ and the content has no say in it.
 | a reply taken out of a transport's envelope | the context's, never the network's | `verified-by: bravebot_core::policy::adopting_model_output_takes_the_context_s_label_not_the_transport_s` |
 | an answer a person typed to a question | trusted and public, because a person wrote it | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` |
 | what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
+| one slot's bytes a person read on their screen and vouched for | trusted and private, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |
 
@@ -311,9 +313,9 @@ what catches it.
 
 ## Known costs
 
-- **Two places in the policy layer do look at untrusted bytes in order to decide something.** The
-  clauses above say nothing may, so these are exceptions, and they are written down rather than
-  left to be found.
+- **Three places in the policy layer do look at untrusted bytes in order to decide something.**
+  The clauses above say nothing may, so these are exceptions, and they are written down rather
+  than left to be found.
 
   The first is splitting a processor's answer. A processor hands back a single piece of text that
   holds two things: a remark meant for the person watching, and the document to be written. It
@@ -337,17 +339,67 @@ what catches it.
     of a file the planner named and a person approved from a diff, and its contents were already
     coming from the attacker's file. They gain nothing they did not already have.
   - **Put their words in the remark.** It reaches a person's screen and stops there. It is drawn as
-    untrusted content, inside a margin it cannot forge, and no model is given it. It can still
-    *lie*: the remark is free text attributed to the processor, so it can claim the document only
-    fixes a typo when it does something else. Nothing checks a remark against the document it
-    accompanies, and nothing could. What keeps that from mattering is that the remark is not the
-    decision. The write is approved later, from a diff of the actual bytes, so a person who reads
-    the diff sees what happens whatever the remark said. The residue is that a plausible remark
-    might persuade somebody to skim, which is
-    [issue #23](https://github.com/brave/bravebot/issues/23).
+    untrusted content, inside a margin it cannot forge, and no model is given it
+    ([PROC-11](processors.md#PROC-11)). It can still *lie*: the remark is free text attributed to
+    the processor, so it can claim the document only fixes a typo when it does something else.
+    Nothing checks a remark against the document it accompanies, and nothing could. What keeps
+    that from mattering is that the remark is not the decision. The write is approved later, from
+    a diff of the actual bytes, so a person who reads the diff sees what happens whatever the
+    remark said, and the remark is drawn beside that diff so the two are read in one place
+    ([PROC-12](processors.md#PROC-12)). The residue is that a plausible remark might still
+    persuade somebody to skim the diff it sits above.
   - **Add or drop a trailing newline.**
 
   What is not on the list is the thing that would matter: choosing *which* file is written. That
   stays the planner's choice plus a person's approval, and no amount of steering the text changes
   it. The clauses above forbid decisions that redirect an effect, and none of these redirect
   anything.
+
+- **The third is reading a verdict out of a check.** A second model is shown quarantined content (a
+  slot the planner named, or a file somebody is about to be asked to vouch for) and answers with
+  one word about whether the content looks like an attempt to give instructions. Reading that word
+  is a decision taken from a reply that is a function of untrusted content, so it is untrusted too.
+  [vetting.md](vetting.md) is the whole of what such a check is and may say, and
+  [CHECK-10](vetting.md#CHECK-10) is which prompts run one.
+
+  Suppose an attacker owns the content, so they steer both the content and, through it, what the
+  check replies. Everything that buys them is on this list:
+
+  - **Force the word `safe`.** With auto-vetting off, which is the default and every session
+    nobody turned it on for, what that reaches is the banner on the prompt. The bytes are drawn
+    below it either way, the keys that answer the question are offered either way, and nothing is
+    promoted until a person says so, so this buys a quieter sentence above content the reader is
+    still reading. On the vouch prompt the bytes drawn are the head of the file rather than all of
+    it, so what the quieter sentence sits above is a preview; the answer still writes nothing on
+    its own.
+  - **Put the key that turns auto-vetting on in front of the person.** The standing key at a vetting
+    prompt is drawn only where the check found nothing, so forcing `safe` is what offers it
+    ([PROMPT-6](prompting.md#PROMPT-6)). It buys the offer and not the grant: the person has to
+    press it, with the bytes on the same screen and a line beside the key saying what it turns on.
+    It is drawn only on the two prompts that promote one slot's bytes, and the other direction is
+    held shut, since a warning or a check that could not be made offers nothing. The reason the
+    offer is put where the mode would have saved a keystroke rather than left out of the interface
+    is that the alternative is somebody editing a settings file to get it, which is a decision made
+    further from the thing it is about.
+  - **Force the word `safe` where somebody turned auto-vetting on.** Then it promotes, and nobody
+    reads the bytes. This is the one thing on the list that reaches the planner's context without a
+    person in between, and it is why the mode is off until somebody asks for it in one of the three
+    ways [CHECK-11](vetting.md#CHECK-11) names, and why the settings key that asks for it cannot be
+    written into a checkout. What it buys is bounded by everything the verdict does not decide: one
+    slot, whichever one the planner named, once, at `(T,priv)` so nothing leaves the machine and
+    nothing becomes routing, with no trust rule written, and only on the routes
+    [CHECK-12](vetting.md#CHECK-12) covers, so vouching for a path is still asked about. The slot is
+    still the planner's choice and not the content's.
+  - **Force the word `unsafe`, or reply with nothing a verdict can be read out of.** That lands on
+    the prompt with the warning, which is the direction this is built to fail in.
+  - **Put their words in the reason.** It reaches a person's screen and stops there. It is drawn
+    inside a margin it cannot forge, no model is given it, and it is kept out of the audit trail.
+    It can still *lie*, since nothing holds a reason against the content it describes and nothing
+    could. The residue is that a plausible sentence might persuade somebody to skim, which is the
+    same residue as the remark above and is
+    [issue #23](https://github.com/brave/bravebot/issues/23).
+
+  What is **not** on the list: choosing which slot is checked, choosing any destination, lowering
+  confidentiality, writing a trust rule, or answering either of the other two prompts a check runs
+  for. While auto-vetting is off, reaching the planner at all is not on it either, and a verdict is
+  advice about bytes already on a person's screen.

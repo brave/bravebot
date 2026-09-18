@@ -9,6 +9,7 @@ use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_core::trust::TrustStore;
 use bravebot_core::value::Labelled;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// A scratch directory that removes itself, so tests do not leave state behind.
 struct Scratch {
@@ -106,7 +107,7 @@ fn a_second_spelling_of_a_distrusted_file_is_read_as_untrusted() {
 
     // The state a turn leaves behind after writing a fetched page into a vouched-for tree: the
     // workspace is trusted, and the file that page landed in is not.
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(".");
     trust.distrust("src/fetched.json");
 
@@ -133,11 +134,11 @@ fn a_second_spelling_of_a_distrusted_file_is_read_as_untrusted() {
     assert!(policy.finish());
 }
 
-/// The other half of that rule, at the spelling the two namespaces meet on. A relative rule and an
-/// absolute rule are separate (TRUST-3), and `/add-dir` will accept a directory the project sits
-/// inside, so from then on a project file has an absolute name that resolves. If the map is asked
-/// about that name as written it finds nothing, and the answer the user gave at startup about the
-/// whole workspace (TRUST-7) covers only half of what it named.
+/// The other half of that rule, at the spelling the reduction exists for. `/add-dir` will accept a
+/// directory the project sits inside, so from then on a project file has an absolute name that
+/// resolves through a directory other than the project. Asked under that name as written, a file
+/// the person marked untrusted inside the project would be answered by the rule about the
+/// directory above it instead (TRUST-18).
 #[test]
 fn a_project_file_named_absolutely_is_read_under_its_relative_rule() {
     let scratch = Scratch::new("absolute-inside-the-project");
@@ -152,7 +153,7 @@ fn a_project_file_named_absolutely_is_read_under_its_relative_rule() {
         .expect("a directory the project sits inside is added");
 
     // The startup answer: the workspace is the user's own.
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(".");
 
     let mut sink = RecordingSink::new();
@@ -216,7 +217,7 @@ fn a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule() {
         .join("shared/fetched.json")
         .display()
         .to_string();
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(".");
     trust.trust(&added.display().to_string());
     trust.distrust(&added.join("fetched.json").display().to_string());
@@ -271,7 +272,7 @@ fn a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rul
 
     // Only the answer that opened the holder, so the project's rule cannot stand in for it: a name
     // wrongly reduced to a relative one would be covered by nothing and read untrusted.
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(&added.display().to_string());
 
     let mut sink = RecordingSink::new();
@@ -306,10 +307,10 @@ fn a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rul
 }
 
 /// The same substitution where the name lands in the project instead of beside it. The workspace
-/// canonicalises its root, so reducing an absolute name by string prefix reaches the project's own
-/// rule only for the spellings that already match that canonical form: a name through a symlinked
-/// ancestor lands in the project and is answered by nothing, which is the startup answer covering
-/// half of what it named (TRUST-3).
+/// canonicalises its root, so an absolute name reaches the project's own rules by string prefix
+/// only for the spellings that already match that canonical form: a name through a symlinked
+/// ancestor lands in the project and would be answered by nothing without the reduction
+/// (TRUST-18).
 #[cfg(unix)]
 #[test]
 fn a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule() {
@@ -328,7 +329,7 @@ fn a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_
         .expect("a directory the project sits inside is added");
 
     // The startup answer, and nothing about the holder, so only the project's rule can answer.
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(".");
 
     let mut sink = RecordingSink::new();
@@ -359,7 +360,7 @@ fn a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_
 /// link into the middle of an open directory reaches it without naming it, so there is no ancestor
 /// to replace and no spelling under the recorded name. Answering from where the path ends instead
 /// would be keying on the destination, which is what would let a link hand back the rule for a
-/// different name (TRUST-3), so the name stands as written and nothing covers it.
+/// different name (TRUST-18), so the name stands as written and nothing covers it.
 #[cfg(unix)]
 #[test]
 fn a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule() {
@@ -376,7 +377,7 @@ fn a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered
         .add_directory(holder.to_str().expect("utf-8 path"))
         .expect("a directory beside the project is added");
 
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(".");
     trust.trust(&added.display().to_string());
 
@@ -1224,7 +1225,7 @@ fn a_search_that_could_not_reach_every_file_says_so() {
     }
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_limit(10);
+        .with_search_caps(Some(10), None);
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -1265,7 +1266,7 @@ fn a_search_that_reached_every_file_makes_no_claim() {
     }
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_limit(10);
+        .with_search_caps(Some(10), None);
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -1293,6 +1294,100 @@ fn a_search_that_reached_every_file_makes_no_claim() {
         !found.unvisited,
         "every file was searched and the search claimed otherwise"
     );
+}
+
+/// A read that ran out of time is partial in the same dangerous way as a walk that stopped
+/// short: the files left unopened cannot have matched, and nothing in an empty result says they
+/// were never read.
+///
+/// No wall clock is waited on. A budget of nothing is spent before the first file, which is the
+/// same state a real timeout leaves the search in and is the only one a test can reach without
+/// a tree slow enough to take ten seconds.
+#[test]
+fn a_search_that_ran_out_of_time_says_so() {
+    let scratch = Scratch::new("search-timed-out");
+    std::fs::write(scratch.path.join("f.txt"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(None, Some(Duration::ZERO));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let found = workspace
+        .grep(
+            &mut policy,
+            std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+            &Labelled::trusted(".".to_string()),
+            None,
+            true,
+            1,
+        )
+        .expect("grep succeeds");
+    let proof = policy.authorise_content_release("test", "matches");
+    let found = found.declassify(&proof);
+
+    assert!(
+        found.timed_out,
+        "the clock ran out and the search did not say so"
+    );
+    assert_eq!(
+        found.searched, 0,
+        "no file can be read out of a spent clock"
+    );
+    assert!(
+        found.matches.is_empty(),
+        "nothing was read, so nothing matched"
+    );
+}
+
+/// A cap nobody configured leaves the built-in one in force, one cap at a time: a tree that needs
+/// a longer read and not a wider walk says so about the clock alone, and the default walk still
+/// reaches the end of a small tree.
+#[test]
+fn a_cap_nobody_named_stays_on_its_built_in_number() {
+    let scratch = Scratch::new("search-default-cap");
+    for n in 0..12 {
+        std::fs::write(scratch.path.join(format!("f{n:05}.txt")), "needle\n").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(None, Some(Duration::from_secs(60)));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let found = workspace
+        .grep(
+            &mut policy,
+            std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+            &Labelled::trusted(".".to_string()),
+            None,
+            true,
+            1,
+        )
+        .expect("grep succeeds");
+    let proof = policy.authorise_content_release("test", "matches");
+    let found = found.declassify(&proof);
+
+    assert_eq!(
+        found.searched, 12,
+        "the built-in walk reaches a tree this size"
+    );
+    assert!(!found.unvisited, "a longer clock must not narrow the walk");
+    assert!(!found.timed_out, "the search fitted the clock it was given");
 }
 
 /// The ordinary case must not claim truncation, or the notice becomes noise the model
@@ -2844,8 +2939,8 @@ fn moving_closes_the_directory_left_behind() {
 }
 
 /// An added directory that holds the new working directory closes with it. Leaving it open would
-/// give every file under the new root two spellings, one relative and one absolute, and the trust
-/// map keeps those in separate namespaces precisely so that one file has one answer.
+/// record a second open directory for every file under the new root to be named under, and which
+/// of the two a name took would then decide which rule answered for the file.
 #[test]
 fn moving_closes_an_added_directory_that_overlaps_the_new_one() {
     let scratch = Scratch::new("moved-overlap");
@@ -3258,7 +3353,7 @@ fn a_search_that_could_not_reach_every_file_offers_no_later_page() {
     }
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_limit(10);
+        .with_search_caps(Some(10), None);
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -3532,7 +3627,7 @@ fn a_denied_file_does_not_spend_a_searchs_budget() {
     std::fs::write(scratch.path.join("keep.txt"), "needle\n").unwrap();
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_limit(2);
+        .with_search_caps(Some(2), None);
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -3581,7 +3676,7 @@ fn a_capped_search_keeps_the_same_files_every_time() {
 
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_limit(10);
+        .with_search_caps(Some(10), None);
 
     let paths_of = || {
         let mut sink = RecordingSink::new();
@@ -3631,7 +3726,7 @@ fn a_capped_search_prefers_a_directorys_own_files() {
 
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_limit(3);
+        .with_search_caps(Some(3), None);
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
         routing(),
@@ -4087,6 +4182,111 @@ fn a_file_in_the_sessions_own_directory_is_reachable_by_its_absolute_path() {
     );
 }
 
+/// An undo puts the project back, and a file the turn wrote for its own use is not the project.
+/// Restoring one would restore a file whose only reader was the turn being undone, and a rewind
+/// that reported it as a file it could not put back would be reporting every intermediate file a
+/// turn wrote.
+#[test]
+fn a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo() {
+    let project = Scratch::new("scratch-not-rewound");
+    let given = SessionScratch::create().expect("a directory of its own");
+    std::fs::write(given.path().join("workings.txt"), "the first pass").expect("already there");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(Some(given.path().to_path_buf()));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    for name in ["workings.txt", "another.txt"] {
+        let named = given.path().join(name).display().to_string();
+        policy.issue_grant("file_write", "path", named.clone());
+        workspace
+            .write_endorsed(
+                &mut policy,
+                &Labelled::new(named, Label::untrusted_public()),
+                &Labelled::trusted("the second pass".to_string()),
+            )
+            .expect("a write in the session's own directory");
+    }
+
+    assert!(
+        workspace.take_backups().is_empty(),
+        "an intermediate file was kept for an undo nobody would ask for"
+    );
+    assert_eq!(
+        std::fs::read_to_string(given.path().join("workings.txt")).expect("still there"),
+        "the second pass",
+        "the write did not happen"
+    );
+}
+
+/// What the budget is for: the file somebody wants back. An intermediate file is the size of thing
+/// the bound is set to stay clear of, so one spending the budget leaves the source file the turn
+/// wrote next unable to go back.
+#[test]
+fn a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project() {
+    use bravebot_agent::workspace::{Before, MAX_REWIND_BYTES};
+
+    let project = Scratch::new("scratch-not-in-the-budget");
+    let source = project.path.join("source.txt");
+    std::fs::write(&source, "what the turn is about to change").expect("a file in the project");
+    let given = SessionScratch::create().expect("a directory of its own");
+    let heavy = given.path().join("heavy.bin");
+    std::fs::write(&heavy, vec![b'x'; MAX_REWIND_BYTES]).expect("an intermediate file");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(Some(given.path().to_path_buf()));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let named = heavy.display().to_string();
+    policy.issue_grant("file_write", "path", named.clone());
+    workspace
+        .write_endorsed(
+            &mut policy,
+            &Labelled::new(named, Label::untrusted_public()),
+            &Labelled::trusted("the next pass".to_string()),
+        )
+        .expect("the intermediate file is written");
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted("source.txt".to_string()),
+            &Labelled::trusted("what the turn made of it".to_string()),
+        )
+        .expect("and so is the source file");
+
+    let backups = workspace.take_backups();
+    // The paths on their own, because what a heavy one holds is what the report of a failure here
+    // would otherwise be made of.
+    let kept: Vec<_> = backups.iter().map(|backup| backup.path.clone()).collect();
+    assert_eq!(kept, vec![source.canonicalize().expect("canonical")]);
+    assert!(
+        matches!(&backups[0].was, Before::Bytes(bytes) if bytes == b"what the turn is about to change"),
+        "the source file lost its place in the budget to an intermediate file"
+    );
+
+    assert!(workspace.restore_backups(backups).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(&source).expect("the source file"),
+        "what the turn is about to change"
+    );
+}
+
 /// Given, not opened by name. It is not among the directories the user asked for, because `/status`
 /// says what it is instead of listing it as somewhere they chose to reach.
 #[test]
@@ -4163,7 +4363,7 @@ fn a_second_spelling_of_a_file_in_the_sessions_own_directory_reaches_the_same_ru
 
     // A rule about the canonical name and nothing else. The workspace was answered about nothing, so
     // a name that reaches no rule reads untrusted and the reduction is the whole of what is tested.
-    let mut trust = TrustStore::new();
+    let mut trust = TrustStore::new(workspace.root());
     trust.trust(&holder.join("given/fetched.json").display().to_string());
 
     let mut sink = RecordingSink::new();

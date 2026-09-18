@@ -176,6 +176,23 @@ enum Entry {
         /// taken from a filename and never from anything read, so it decides nothing an attacker
         /// steers: a slot cannot become a picture by containing something that looks like one.
         picture: Option<String>,
+        /// Where these bytes came from, as the driver described them when it quarantined them:
+        /// a path, a URL, a command, a processor.
+        ///
+        /// Kept because the reference carrying it is handed to the planner and gone, while a
+        /// prompt drawn later still has to be able to say what the person is looking at. `ref:1`
+        /// means something to the planner and nothing at all to somebody being asked about it.
+        ///
+        /// The driver's own sentence, never anything read.
+        origin: Option<String>,
+        /// What the processor that produced this document said about it, where it said anything.
+        ///
+        /// Content, and kept labelled for that reason: unlike `from_command`, which is the
+        /// driver's own rendering of an argv, this is text a model wrote over bytes nobody
+        /// vouched for. It is held beside the document so that the approval the document is put
+        /// to can show the claim made about it, and it is released for a screen and nowhere
+        /// else.
+        remark: Option<Labelled<String>>,
     },
     Unread(Deferred),
 }
@@ -223,6 +240,22 @@ impl Entry {
         match self {
             Self::Read { picture, .. } => picture.as_deref(),
             // Nothing has been read, so nothing is known about what it holds.
+            Self::Unread(_) => None,
+        }
+    }
+
+    fn origin(&self) -> Option<&str> {
+        match self {
+            Self::Read { origin, .. } => origin.as_deref(),
+            // Nothing has been read, so the path is the whole of what there is to say.
+            Self::Unread(deferred) => Some(&deferred.path),
+        }
+    }
+
+    fn remark(&self) -> Option<&Labelled<String>> {
+        match self {
+            Self::Read { remark, .. } => remark.as_ref(),
+            // Nothing has produced this yet, so nothing has been said about it.
             Self::Unread(_) => None,
         }
     }
@@ -283,6 +316,22 @@ impl SlotStore {
         }
     }
 
+    /// Record where a slot's bytes came from, in the driver's own words.
+    pub(crate) fn set_origin(&mut self, id: &SlotId, origin: &str) {
+        if let Some(Entry::Read { origin: slot, .. }) = self.slots.get_mut(id) {
+            *slot = Some(origin.to_string());
+        }
+    }
+
+    /// Where a slot's bytes came from, where the driver said.
+    ///
+    /// Metadata, like everything else a caller may ask a slot store, and the driver's own sentence
+    /// rather than anything read. Only the policy layer may ask, because what it is for is putting
+    /// a line in front of a person, which is a release.
+    pub(crate) fn origin_of(&self, id: &SlotId) -> Option<&str> {
+        self.slots.get(id).and_then(Entry::origin)
+    }
+
     /// Record that a slot holds what this command printed.
     pub(crate) fn mark_from_command(&mut self, id: &SlotId, command: &str) {
         if let Some(Entry::Read { from_command, .. }) = self.slots.get_mut(id) {
@@ -322,6 +371,21 @@ impl SlotStore {
     /// Whether this slot holds a picture rather than text.
     pub fn is_a_picture(&self, id: &SlotId) -> bool {
         self.picture_of(id).is_some()
+    }
+
+    /// Record what the processor that produced this document said about it.
+    pub(crate) fn mark_remark(&mut self, id: &SlotId, said: Labelled<String>) {
+        if let Some(Entry::Read { remark, .. }) = self.slots.get_mut(id) {
+            *remark = Some(said);
+        }
+    }
+
+    /// What was said about the document this slot holds, still labelled.
+    ///
+    /// Only the policy layer may ask, and it comes back wrapped: this is a model's words about
+    /// bytes nobody vouched for, so nothing outside the gates gets to read it.
+    pub(crate) fn remark_of(&self, id: &SlotId) -> Option<&Labelled<String>> {
+        self.slots.get(id).and_then(Entry::remark)
     }
 
     /// The file a slot is waiting on, where it is waiting on one.
@@ -423,6 +487,8 @@ impl SlotStore {
                 home: Home::Anywhere,
                 from_command: None,
                 picture: None,
+                origin: None,
+                remark: None,
             },
         );
         Ok(measured)
@@ -511,6 +577,8 @@ impl SlotWriter<'_> {
                 home: Home::Anywhere,
                 from_command: None,
                 picture: None,
+                origin: None,
+                remark: None,
             },
         );
         Ok(())
@@ -544,6 +612,8 @@ impl SlotWriter<'_> {
                 home: Home::Anywhere,
                 from_command: None,
                 picture: None,
+                origin: None,
+                remark: None,
             },
         );
         Ok(measured)
@@ -559,7 +629,7 @@ pub struct Measured {
 
 impl Measured {
     /// Measure content without reading it.
-    fn of(content: &Labelled<String>) -> Self {
+    pub(crate) fn of(content: &Labelled<String>) -> Self {
         let shape = content.shape();
         Self {
             lines: shape.lines,

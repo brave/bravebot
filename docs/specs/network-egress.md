@@ -4,6 +4,7 @@ title: Network egress
 status: normative
 governs:
   - crates/net/src/lib.rs
+  - crates/net/src/transport.rs
 ---
 
 ## Scope
@@ -106,13 +107,116 @@ mean the server is temporarily unable are treated as retryable.
 `verified-by: bravebot_net::lib::only_the_statuses_that_mean_not_now_are_worth_another_attempt`
 `verified-by: bravebot_net::egress::a_non_success_status_is_an_error`
 
+<a id="NET-7"></a>
+### NET-7: what a handshake is validated against is the machine's answer, not this build's alone
+
+A build ships a set of certificate authorities, and the environment may name others in their place:
+`SSL_CERT_FILE` for a bundle, `SSL_CERT_DIR` for a directory of them. What they name replaces the
+shipped set rather than adding to it. The two paths are read independently, so one that yields no
+certificate does not discard what the other held; where neither held anything, nothing is trusted
+rather than the shipped set coming back. Which roots are in force, and any named path that yielded
+nothing, are reported by `doctor` ([CLI-7](cli.md#CLI-7)).
+
+**Why.** A network that inspects TLS presents a certificate from an authority whoever set the
+machine up has already installed, and every other client on it honours these two variables. A
+program that read neither would refuse every connection over an authority its user had already
+decided to trust, and nothing in any diagnostic would point at the cause.
+
+Replacing rather than adding is the decision the rest of the machine makes with these variables: a
+bundle is the whole of what to trust, and somebody pinning a private authority has ruled the public
+ones out on purpose. Returning to the shipped set when a named path yields nothing would undo that
+in silence, and would leave the connection they were trying to fix failing for a reason nothing
+states.
+
+Reading the two paths independently is the other side of the same bargain. A machine that names both
+commonly has only one of them, and discarding the certificates it does have because a second path
+was missing would cost every connection this process makes to save a line in a report. The line is
+still owed, because the set in force is then not the set that was asked for.
+
+`verified-by: bravebot_net::transport::an_environment_that_names_no_certificates_leaves_the_built_in_roots_in_force`
+`verified-by: bravebot_net::transport::a_certificate_file_the_environment_names_is_what_is_trusted`
+`verified-by: bravebot_net::transport::a_certificate_directory_is_read_alongside_a_file`
+`verified-by: bravebot_net::transport::a_variable_that_is_set_but_empty_names_nothing`
+`verified-by: bravebot_net::transport::the_named_certificates_replace_the_built_in_roots`
+`verified-by: bravebot_net::transport::a_certificate_file_that_cannot_be_read_trusts_nothing_and_says_which_path`
+`verified-by: bravebot_net::transport::a_certificate_file_holding_no_certificate_is_refused`
+`verified-by: bravebot_net::transport::a_certificate_directory_holding_none_is_refused`
+`verified-by: bravebot_net::transport::a_directory_entry_that_is_not_a_certificate_is_skipped`
+`verified-by: bravebot_net::transport::a_path_that_yields_nothing_does_not_discard_one_that_does`
+`verified-by: bravebot_net::transport::a_client_gets_the_built_in_roots_when_nothing_names_others`
+`verified-by: bravebot_net::lib::the_one_way_out_is_built_against_the_stated_transport_rather_than_a_default_client`
+
+<a id="NET-8"></a>
+### NET-8: a proxy is configured on purpose, and named in the report
+
+The proxy every client in this process uses is read once, from `ALL_PROXY`, `HTTPS_PROXY` and
+`HTTP_PROXY` in that order and in either case, with `NO_PROXY` naming the hosts that bypass it, and
+is then set on each client explicitly rather than left to a library's default. A proxy whose
+protocol this build cannot connect through is not carried at all. `doctor` names the proxy by
+protocol, host and port, the hosts it is not used for, and whether it requires a credential, or says
+that a proxy was named and is not the route; the credential itself is never printed.
+
+**Why.** Honouring the variables is right: they are how whoever set the machine up states the only
+route off it, and a program that ignored them would not connect at all. Inheriting them is not.
+Behaviour inherited from a default is a property of a dependency's version rather than a decision
+here, and a release that changed that default would silently start or stop routing every request
+this process makes through somebody else's machine, with no test to notice.
+
+What a proxy is trusted with is what the person who configured it decided to trust it with. It
+carries request bodies, which for this process means conversation content, and it can read them only
+where it also terminates TLS, which takes an authority this process trusts and therefore
+[NET-7](#NET-7): a second statement by the same person, on the same machine, that every other client
+on it is held to as well. A proxy nobody stated sees nothing, and one somebody stated sees what they
+already let it see.
+
+A protocol that cannot be connected through is dropped rather than held, because holding it would
+make the report name a route no request takes: the transport library answers a proxy it has no
+support for by connecting directly, and, for one set rather than read from the environment, by
+ending the process at the first connection. Saying that one was named and is not the route is what a
+person can act on.
+
+The credential is withheld for the reason every other secret in that report is: a proxy uri carries
+a username and password on the networks that require one, and a diagnostic that printed one is a
+diagnostic people paste into issues. That one is in use is still said, because a proxy refusing an
+unauthenticated request is among the failures the report exists to explain. `NO_PROXY` is named for
+the same reason in the other direction: it decides whether a proxy in force applies to the host that
+is failing, and `NO_PROXY=*` leaves one configured and used for nothing.
+
+`verified-by: bravebot_net::transport::the_proxy_a_client_gets_is_the_one_stated_rather_than_a_library_default`
+`verified-by: bravebot_net::transport::a_proxy_is_named_without_the_credential_it_carries`
+`verified-by: bravebot_net::transport::a_proxy_without_a_credential_is_not_reported_as_having_one`
+`verified-by: bravebot_net::transport::a_proxy_protocol_this_build_cannot_connect_through_is_not_the_route`
+`verified-by: bravebot_cli::main::a_proxy_this_build_cannot_connect_through_is_reported_as_not_the_route`
+`verified-by: bravebot_cli::main::the_network_section_names_the_hosts_a_proxy_is_not_used_for`
+`verified-by: bravebot_cli::main::the_network_section_names_the_roots_in_force_and_the_proxy`
+`verified-by: bravebot_cli::main::the_network_section_never_prints_a_proxy_credential`
+
 ## Known costs
 
 - **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds its own
   HTTP client for the subscription service. That traffic carries credentials and an order id,
   never workspace content or model output, so no labelled value escapes the gate. NET-1 is about
   everything carrying labelled content. A second egress in this process that ever carried content
-  would be a violation.
+  would be a violation. Its client is its own; its transport is not. `register` is handed the
+  transport configuration this module resolved, by a caller that depends on both crates, so NET-7
+  and NET-8 hold of it too and a machine whose authority or route off it is stated in the
+  environment reaches the subscription service on the terms it reaches everything else. What stays
+  separate is the policy gate, which that client has nothing to put to.
+
+- **The machine's own trust store is not read.** `SSL_CERT_FILE` and `SSL_CERT_DIR` are, so on a
+  machine where neither is set an authority installed into the platform store is invisible here.
+  Consulting that store takes a dependency reaching a different system library on each platform,
+  and the cross-builds that produce the released binaries compile for platforms they are not
+  running on. What the variables cost instead is a line in a shell profile, which is what every
+  other client on such a machine already asks for, and `doctor` names them so that the remedy is in
+  the report rather than in this document.
+
+- **A certificate directory is read whole, rather than by the links OpenSSL follows.** OpenSSL
+  consults `<subject hash>.<n>` in a `CApath` and ignores everything else, so a file left behind
+  after its link was removed is no longer trusted there and is still trusted here. Following the
+  links means computing a subject hash, which means parsing X.509, which this crate does not do and
+  should not start doing to read a directory. Reading every file is what the Rust clients that read
+  these variables do.
 
 - **A program this agent starts makes its own requests, and they do not come through here.** `run`
   ([tools/run.md](tools/run.md)) executes programs, and a line the user typed in shell mode

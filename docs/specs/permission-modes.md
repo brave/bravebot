@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/permission_mode.rs
   - crates/agent/src/delegate.rs
+  - crates/agent/src/manifest.rs
   - crates/cli/src/main.rs
   - crates/tui/src/state.rs
 guards:
@@ -74,6 +75,13 @@ raised no prompt. Commands, output and vouching are put to the person as they ar
 mode, and what a command does once it is approved is bounded by that prompt rather than by this
 clause.
 
+A manifest run the session starts ([manifest.md](manifest.md#MANIFEST-11)) is refused from its
+frozen plan, before the plan is put to the person, where any step in it writes a file. The plan is
+where the mode has to be answered for the same reason the prompt is not: a body the plan carried,
+going to a path the person vouched for, raises no write prompt at all, so a refusal that waited for
+one would let the whole run through. A plan that writes nothing runs, since there is nothing in it
+for this clause to refuse.
+
 The planner is told, in the system prompt, that writing is refused for the turn and why.
 
 **Why.** A mode whose only difference was that somebody keeps saying no is a session where the
@@ -97,6 +105,8 @@ made from less than the person can see themselves.
 `verified-by: bravebot_agent::turn::plan_mode_refuses_a_write_the_trust_map_would_have_let_through`
 `verified-by: bravebot_agent::turn::plan_mode_refuses_an_edit_the_trust_map_would_have_let_through`
 `verified-by: bravebot_agent::turn::plan_mode_refuses_a_write_a_settings_rule_would_have_let_through`
+`verified-by: bravebot_agent::manifest::plan_mode_refuses_a_plan_that_writes`
+`verified-by: bravebot_agent::manifest::plan_mode_runs_a_plan_that_writes_nothing`
 
 <a id="MODE-4"></a>
 ### MODE-4: bypassing answers every permission question, including the ones that decide trust
@@ -115,6 +125,12 @@ rather than a file at a time.
 A run approved this way vouches for no program. The list of commands a person said to stop asking
 about is written into the session record and outlives the mode, and a record claiming somebody
 approved programs they were never shown would be a standing permission nobody granted.
+
+**No check is made for a prompt that is not drawn.** [CHECK-10](vetting.md#CHECK-10) puts a confined
+check in front of every prompt that would promote quarantined content, and this is the one mode
+where those prompts are answered without being shown to anybody. A check there would be a model call
+whose word nobody reads, so it is not made, and the verdict recorded is the one that claims nothing.
+This is the only exemption from that clause.
 
 **Why.** The mode is for a place where the blast radius is bounded by something other than these
 prompts, which in practice means a container with no network and nothing in it worth losing. It is

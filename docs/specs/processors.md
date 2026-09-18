@@ -149,6 +149,74 @@ processor in a subprocess would confine the wrong thing.
 
 `verified-by: none`
 
+<a id="PROC-10"></a>
+### PROC-10: a check over one slot is not put in a subprocess either, and for the same reason
+
+Asking a second model whether one quarantined slot looks like an injection attempt is a call of
+the same shape as a processor's, so PROC-9 settles it: the code making the call is ours, and a
+subprocess would hold the wrong thing. What such a check holds is narrower still, since it can
+write nothing at all; [vetting.md](vetting.md) is where that is set out.
+
+Recorded here so that the next person to ask finds the answer rather than reopening PROC-9. The
+technique this is ported from does use a subprocess, and what it is containing there is an agent
+with tools, a filesystem and a network, which can *act* when it is injected rather than merely
+answer wrongly. Nothing here has any of those to begin with.
+
+`verified-by: none`
+
+## What the person sees
+
+<a id="PROC-11"></a>
+### PROC-11: a remark is drawn as untrusted content and nothing else
+
+The remark reaches the person watching through the quarantined path and no other: reported as
+content in no model's context, and drawn inside the margin the renderer owns, with every control
+character replaced. So it cannot paint a margin of its own, cannot make its words look like
+something bravebot said, and says on the screen whose words they are.
+
+**Why.** The remark is free text a processor authors over an untrusted file, so it is
+attacker-influenced like anything else a processor produces, and the whole of what it can do is
+say something untrue. That ceiling is held by how the remark is drawn rather than by where it
+goes, and nothing pinned it to that path: the reach it is reported with is set in one place,
+[PROC-5](#PROC-5)'s test asserts the remark is shown and that no model saw it but nothing about
+how it is drawn, and no test in the interface drew a remark at all.
+
+`verified-by: bravebot_agent::turn::what_a_processor_says_reaches_the_person_and_no_model`
+`verified-by: bravebot_tui::marking::a_remark_is_drawn_inside_the_margin_it_cannot_forge`
+
+<a id="PROC-12"></a>
+### PROC-12: a remark is put beside the write it describes
+
+The remark is carried with the document it accompanies and drawn in the question about writing
+that document, above the diff, as untrusted content. A write the planner wrote itself has no
+remark and shows none.
+
+It decides nothing. No gate reads it, an approval is given from the diff of the real bytes, and a
+write goes the same way with the remark as without it. What it is for is that the claim and the
+evidence are read in one place.
+
+**Why.** Nothing checks a remark against the document it accompanies and nothing could, so a
+processor can say it fixed one line while the document does something else. What kept that from
+mattering was that the remark is not the decision, and what was left was the ordering: the remark
+enters the transcript when the processor returns, and the question comes rounds later, so a person
+read the diff with the claim about it some way up the screen. A claim can only be caught out
+against the thing it is a claim about. "I only fixed the typo" beside three hundred changed lines
+is visibly untrue; remembered from earlier it is not.
+
+Capped, for the same reason it is drawn at all: a remark long enough to push the diff out of the
+box would be the reader losing the evidence instead of gaining the claim. In lines and in width
+where it is released, and again in drawn rows where it is drawn, because a line wider than the box
+is several rows and only the box knows how wide it is
+([PROMPT-4](prompting.md#PROMPT-4)). What either cap left out is said, and the transcript above
+holds the fuller preview.
+
+`verified-by: bravebot_agent::turn::what_a_processor_said_is_put_beside_the_write_it_describes`
+`verified-by: bravebot_agent::turn::a_write_the_planner_wrote_itself_carries_no_claim`
+`verified-by: bravebot_agent::manifest::a_planned_write_carries_what_the_processor_said_about_it`
+`verified-by: bravebot_core::policy::what_was_said_about_a_document_is_released_for_the_screen_it_is_approved_on`
+`verified-by: bravebot_core::policy::a_document_nobody_said_anything_about_has_nothing_to_show`
+`verified-by: bravebot_tui::confirm::what_a_processor_said_is_drawn_beside_the_diff_it_describes`
+
 ## Known costs
 
 - **An untrusted file's contents reach the backend.** A processor is a model call, so working on

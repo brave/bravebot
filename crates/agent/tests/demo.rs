@@ -101,7 +101,7 @@ fn says(text: &str) -> String {
 }
 
 fn trusting_everything() -> bravebot_core::trust::TrustStore {
-    let mut trust = bravebot_core::trust::TrustStore::new();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust(".");
     trust
 }
@@ -263,6 +263,7 @@ fn a_background_server_stays_up() {
         &mut sink,
         trusting_everything(),
         bravebot_core::programs::TrustedPrograms::new(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
@@ -362,6 +363,13 @@ impl bravebot_agent::Confirmer for ApprovesRuns {
         _r: &bravebot_agent::confirm::OutputRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
     fn confirm_fetch(
         &mut self,

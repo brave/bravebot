@@ -33,6 +33,7 @@ cli-tagline =
     bravebot { $version } : un agent polyvalent résistant à l'injection de prompt
 cli-usage-heading = Utilisation :
 cli-usage-interactive = Démarrer une session interactive
+cli-usage-plain = Démarrer une session en lignes, sans rien prendre au terminal
 cli-usage-task = Exécuter une seule tâche
 cli-usage-piped = ... avec une entrée redirigée, jamais fiable
 cli-usage-resume = Reprendre une session dans ce répertoire
@@ -54,6 +55,23 @@ cli-key-leave = Partir
 cli-commands-heading = Commandes interactives :
 cli-name-a-file = Inclure un fichier de l'espace de travail comme contexte fiable
 
+## Une session en lignes : pas d'écran à elle, pas de couleur, rien de redessiné
+
+cli-plain-opening =
+    bravebot { $version } en lignes, { $model }. Une ligne est une demande ; la fin de
+    l'entrée (Ctrl-D) termine la session.
+# Dit lorsque --plain est donné avec autre chose qu'un terminal sur l'entrée standard. Les lignes
+# qu'il lit sont des demandes, et rien ne se porte garant de ce qu'un tube transporte.
+cli-plain-needs-a-terminal =
+    --plain lit ce que vous tapez, donc son entrée doit être un terminal. Utilisez -p pour
+    exécuter une seule tâche avec une entrée redirigée, lue comme un contexte mis en quarantaine.
+# Dit lorsque --plain est donné à côté d'une autre manière de démarrer. Il démarre une session
+# plutôt qu'il ne la décrit, donc il n'y a rien à combiner avec lui.
+cli-plain-takes-nothing-else =
+    --plain démarre une session et ne prend aucun autre argument. --incognito,
+    --dangerously-skip-permissions et --settings vont avec lui ; tout le reste est une autre
+    manière de démarrer.
+
 mode-accept-edits = ⏵ modifications acceptées
 mode-plan = ⏸ mode plan
 mode-bypass = ⏵⏵ permissions contournées
@@ -61,11 +79,16 @@ mode-bypass = ⏵⏵ permissions contournées
 cli-options-heading = Options :
 cli-option-file = Inclure un fichier de l'espace de travail comme contexte (répétable)
 cli-option-add-dir = Accéder à un répertoire hors de celui de travail (répétable)
+cli-option-settings = Lire ce fichier de réglages pour cette exécution, au-dessus de ceux trouvés sur le disque
 cli-option-mode = turn (par défaut) décide étape par étape ; manifest planifie tout le déroulement d'abord
 cli-option-model = Le modèle demandé par cette exécution, à la place de celui mémorisé ou configuré
 cli-option-print = Non interactif. Lit l'entrée redirigée comme contexte en quarantaine
 cli-option-trace = Afficher le journal d'audit
+cli-option-json = Afficher un objet de résultat sur stdout au lieu de la réponse
 cli-option-incognito = Ne rien écrire dans ~/.bravebot : ni historique, ni session, ni préférence
+cli-option-vet =
+    Pour cette exécution, laisser une vérification sans rien trouver promouvoir du contenu sans
+    vous demander
 cli-option-dangerously-skip-permissions =
     Contourner toutes les vérifications de permission. Recommandé uniquement pour des bacs à sable
     sans accès à Internet
@@ -78,6 +101,8 @@ cli-option-version = Afficher la version
 cli-unknown-option = option inconnue : { $flag }
 cli-file-needs-a-path = --file demande un chemin
 cli-add-dir-needs-a-path = --add-dir demande le chemin absolu d'un répertoire
+cli-settings-needs-a-path = --settings demande le chemin d'un fichier de réglages
+cli-settings-not-a-file = --settings ne nomme aucun fichier : { $path }
 cli-mode-needs-a-name = --mode demande l'un de : { $names }
 cli-model-needs-a-name = --model demande le nom d'un modèle
 cli-unexpected-argument = argument inattendu : { $argument }
@@ -87,12 +112,30 @@ cli-workspace-problem = erreur d'espace de travail : { $problem }
 cli-interface-problem = erreur d'interface : { $problem }
 cli-directory-unknown = impossible de savoir de quel répertoire il s'agit
 cli-no-such-session = aucune session { $id } dans ce répertoire
+cli-manifest-run = { $id } est une exécution planifiée : il n'y a rien à poursuivre, voici ce qu'elle a fait
 cli-nothing-to-continue = aucune session à reprendre dans ce répertoire
 cli-fork-needs-a-name = --fork nécessite un identifiant de session
 cli-piped-input-unreadable = avertissement : impossible de lire l'entrée redirigée : { $problem }
 cli-piped-input-too-large =
     l'entrée redirigée dépasse { $limit } Mio. Écrivez-la dans un fichier et nommez celui-ci
     à la place
+
+
+## Ce qu'une exécution dit quand aucun service de modèle n'est configuré
+
+onboarding-no-model = aucun service de modèle n'est encore configuré
+onboarding-subscription-unusable = l'abonnement enregistré n'a pas pu être utilisé : { $problem }
+onboarding-name-a-configured-model =
+    Un service est configuré, mais le modèle en vigueur est l'un de ceux de Brave : indiquez l'un des vôtres avec la clé `model` dans ~/.bravebot/settings.json, ou avec --model pour une exécution unique. `bravebot doctor` indique ce que propose chaque service configuré.
+onboarding-pick-one = Configurez l'une de ces options, puis relancez bravebot :
+onboarding-bedrock =
+    AWS Bedrock, via votre propre compte : ajoutez un bloc `provider` nommé `amazon-bedrock` dans ~/.bravebot/settings.json, avec sa région et les modèles à proposer.
+onboarding-openrouter =
+    OpenRouter, ou toute autre passerelle compatible OpenAI : ajoutez un bloc `provider` à son nom dans ~/.bravebot/settings.json, avec la variable qui contient sa clé d'API et les modèles à proposer.
+onboarding-leo =
+    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot import-leo-creds` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des deux options ci-dessus.
+onboarding-where-to-read =
+    Des exemples concrets se trouvent dans https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 
 
 ## Ce qu'une exécution unique dit à côté de la réponse
@@ -128,6 +171,7 @@ doctor-backend-aichat = Brave Leo
 doctor-backend-gateway = { $gateway } (passerelle)
 doctor-gateway-token = trouvé (jamais affiché)
 doctor-gateway-token-absent = aucun trouvé (définissez une variable nommée dans `env`)
+doctor-gateway-token-not-needed = aucun requis (le bloc n'en nomme aucun)
 doctor-gateway-models-absent = aucun configuré (la passerelle est interrogée)
 doctor-region = région
 doctor-profile = profil
@@ -149,6 +193,13 @@ doctor-settings-no-variables = settings.json, ne nommant aucune variable
 doctor-settings-layer = couche
 doctor-settings-override = remplacement
 doctor-settings-overridden = { $name } depuis { $path }
+doctor-settings-ignored = ignoré
+doctor-settings-vetting-ignored =
+    vetting.auto dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json
+doctor-managed = géré
+doctor-managed-pinned = { $names } depuis { $path }
+doctor-managed-nothing = { $path }, n'épinglant rien
 doctor-leo = leo
 doctor-subscription =
     abonnement { $environment } importé, { $unspent } identifiants sur { $total } non dépensés
@@ -176,6 +227,18 @@ doctor-network-denial = refus réseau
 doctor-kernel-enforced = imposé par le noyau
 doctor-not-enforced = NON imposé
 doctor-confinement-unavailable = confinement indisponible
+doctor-network = réseau
+doctor-trust-roots = racines de confiance
+doctor-trust-roots-bundled = intégrées ({ $variables } en désigne d'autres)
+doctor-trust-roots-named = { $paths }
+doctor-trust-roots-none = aucune, donc toute connexion échouera
+doctor-trust-roots-unusable = inutilisable
+doctor-proxy = proxy
+doctor-proxy-absent = aucun ({ $variables } en désigne un, en majuscules ou en minuscules)
+doctor-proxy-in-force = { $proxy }
+doctor-proxy-authenticated = { $proxy } (avec un identifiant, jamais affiché)
+doctor-proxy-unsupported = { $protocol } n'est pas pris en charge par cette version, les requêtes sont directes
+doctor-no-proxy = sans proxy
 
 
 ## Importer un abonnement Leo Premium
@@ -198,8 +261,16 @@ leo-browser-untouched =
     pas été touchés
 
 subscription-unusable =
-    l'abonnement importé n'a pas pu être utilisé ({ $problem }) ; ce tour utilise donc
-    l'offre gratuite
+    l'abonnement importé n'a pas pu être utilisé ({ $problem }) ; ce tour n'en utilise
+    donc aucun
+
+background-job-finished = `{ $command }` s'est terminé en arrière-plan : { $outcome }
+
+hook-not-started = le hook { $moment } `{ $program }` n'a pas pu être démarré ({ $detail })
+hook-failed = le hook { $moment } `{ $program }` s'est mal terminé ({ $status })
+hook-stopped =
+    le hook { $moment } `{ $program }` tournait encore après { $seconds } secondes et a été
+    arrêté
 
 
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
@@ -311,6 +382,8 @@ write-too-large-to-show =
     le changement est trop grand pour être montré : { $added } lignes en remplacent
     { $removed }
 write-untrusted = non fiable : personne n'a lu ceci, et le modèle ne l'a jamais vu
+write-remark =
+    ce que le processeur isolé a dit de ce changement, que rien n'a vérifié par rapport à lui
 write-unchanged = { $count ->
     [one] … { $count } ligne inchangée
    *[other] … { $count } lignes inchangées
@@ -361,6 +434,7 @@ run-always-means-both = ce qui veut dire les deux :
 run-always-runs-again = elle s'exécute de nouveau sans rien demander, effets de bord compris
 run-always-output-trusted = ce qu'elle affiche est fiable, et le modèle le lit
 run-always-exact-arguments = ces arguments seulement : git log ne couvrirait pas git push
+run-always-this-directory = ce répertoire seulement : la même ligne ailleurs est redemandée
 run-private-not-remembered =
     une entrée privée est soumise à chaque fois, celle-ci ne peut donc pas être retenue
 run-assignment-not-remembered =
@@ -372,10 +446,28 @@ run-remember-only-asking =
     cela arrête seulement la question : ce qu'elle affiche reste en quarantaine
 run-remember-every-session =
     toute session ouverte dans ce répertoire la lit, pas seulement celle-ci
+run-pattern-varies =
+    ces arguments diffèrent de ceux qui vous ont déjà été soumis : aucune touche ici n'arrête la question
+run-pattern-where =
+    un motif pour la famille s'écrit dans un fichier de configuration, il ne se répond pas ici :
+run-pattern-covers-unread =
+    un motif couvre des lignes que personne n'a lues, ce qui est plus que ce qu'accorde toute touche ici
+run-pattern-only-asking =
+    un motif arrête la question et rien d'autre : ce que la ligne affiche reste en quarantaine
 run-yes = l'exécuter
 run-always = toujours pour cette session
 run-remember = s'en souvenir
 run-no = ne pas l'exécuter
+
+
+## Ce qu'une vérification a dit, en tête de chaque question dont la réponse sortirait un contenu de quarantaine
+
+# Dit d'une sortie de commande, d'un fichier qu'on vous propose d'approuver et d'un emplacement dont
+# le modèle a demandé la lecture, donc « ceci » plutôt qu'un nom : la question autour a déjà dit de
+# quoi il s'agit.
+check-safe = la vérification n'a trouvé aucune tentative de donner des instructions ici
+check-unsafe = la vérification estime que ceci ressemble à une tentative de donner des instructions
+check-inconclusive = la vérification n'a pas abouti, donc rien n'a examiné ceci
 
 
 ## Laisser le modèle lire ce qu'une commande a affiché
@@ -392,6 +484,30 @@ output-unseen =
 output-empty = (rien n'a été affiché)
 output-yes = le laisser lire ceci
 output-no = le garder pour vous
+
+
+## Laisser le modèle lire un emplacement mis en quarantaine qu'une vérification a examiné
+
+vet-title = laisser le modèle lire ceci ?
+vet-verb = Lire
+vet-lines = { $count ->
+    [one] { $count } ligne
+   *[other] { $count } lignes
+    }
+vet-from = provenance : { $origin }
+vet-unseen =
+    le modèle n'a pas vu ceci. L'approuver le met dans son contexte, et il agira dessus.
+vet-covers-this-only =
+    ceci ne couvre que ce qui suit. Aucun chemin n'est approuvé, donc la prochaine lecture de
+    la même chose posera de nouveau la question.
+vet-expected = le modèle a demandé ceci en attendant { $expects }
+vet-empty = (il n'y a rien dedans)
+vet-yes = le laisser lire ceci
+vet-always = ne plus demander
+vet-no = le garder pour vous
+vet-always-covers =
+    a supprime cette question partout où une vérification ne trouve rien, dans cette session et
+    la suivante, jusqu'à ce que vous changiez d'avis. Conservé dans ~/.bravebot/vetting.
 
 
 ## Récupérer une URL
@@ -484,8 +600,13 @@ plan-nothing-yet =
     rien n'a encore été lu ni écrit, donc refuser laisse tout en l'état.
 plan-yes = l'exécuter
 plan-no = ne pas l'exécuter
+# Là où une question est une ligne sur un terminal plutôt qu'un panneau : à quoi ressemble un oui,
+# et la seule réponse qui approuve. Toute autre ligne, et la fin de l'entrée, refuse. Partagé par
+# toutes les questions posées en lignes, pour qu'un seul oui les couvre.
+line-answer = [o/N]
+line-answer-yes = o
+# La ligne propre au plan, qui nomme ce qu'un oui exécute.
 plan-answer = l'exécuter ? [o/N]
-plan-answer-yes = o
 
 
 ## Approuver un fichier en quarantaine
@@ -546,8 +667,8 @@ status-served-instead = servi à la place du modèle demandé
 status-endpoint = Adresse
 status-premium-available = premium disponible, rien encore envoyé
 status-premium-in-use = premium, un jeton a été dépensé
-status-premium-not-spent = offre gratuite : aucun abonnement utilisé
-status-free-tier = offre gratuite seulement
+status-premium-not-spent = aucun abonnement utilisé
+status-no-subscription = aucun abonnement configuré
 status-confinement = Confinement
 status-loop = Boucle
 status-loop-every = toutes les { $every }
@@ -556,10 +677,16 @@ status-loop-next = prochaine dans { $next }
 status-loop-running = en cours
 status-loop-unpaced = en attente que le tour dise quand
 status-goal = Objectif
+status-watch = Veille { $number }
+status-watch-armed-by = posée au tour { $turn } · il reste { $left }
 # « fois » est invariable, donc une seule forme là où l'anglais en a deux.
 status-goal-rounds = renvoyé { $rounds } fois, il en reste { $left }
 status-permissions = Permissions
 status-permissions-cycle = shift-tab pour changer
+status-vetting = Vérification
+status-vetting-auto =
+    une vérification qui ne trouve rien donne le contenu au modèle sans demander
+status-vetting-where = conservé dans ~/.bravebot/vetting
 status-this-session = Cette session
 status-time = Temps
 status-time-inference = sur le modèle
@@ -579,7 +706,7 @@ status-nothing-vouched-this-session =
     rien n'a été approuvé pour cette session ; les lignes ci-dessous s'exécutent sans rien demander
 status-trusted-commands = Commandes fiables
 status-trusted-commands-note = exécutées sans rien demander, et leur sortie est fiable
-status-and-more = … et { $count } de plus
+status-command-in = dans { $directory }
 status-remembered = Lignes mémorisées
 status-remembered-note =
     exécutées sans rien demander dans ce répertoire, et leur sortie reste en quarantaine
@@ -607,7 +734,8 @@ indicator-tokens-written = ↑ { $tokens }
 tokens-thousands = { $thousands } k
 tokens-millions = { $millions } M
 turn-done = tour { $turn } terminé
-turn-failed = tour { $turn } interrompu
+turn-failed = tour { $turn } en échec
+turn-cancelled = tour { $turn } annulé
 
 
 ## Reprendre une session qui tournait ailleurs, ou sur autre chose
@@ -711,9 +839,12 @@ command-btw = Demander quelque chose à côté du travail, sans le mettre dans l
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
 command-loop = Renvoyer une consigne encore et encore, à votre intervalle ou au rythme de chaque tour
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
+command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
+command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-export = Exporter la transcription de la session vers un fichier markdown
 command-memory = Modifier la mémoire centrale conservée pour chaque session
-command-undo = Annuler le dernier tour et restaurer les fichiers
+command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
+command-rewind = Lister les tours qu'un rembobinage peut atteindre, ou reculer d'autant
 command-exit = Partir
 
 
@@ -724,10 +855,22 @@ session-renamed = renommée en { $title }
 session-rename-needs-a-name = /rename demande un nom, comme /rename le bug de l'analyseur
 session-rename-needs-something = /rename demande un nom qui contienne quelque chose
 session-cleared = effacée : une nouvelle session, la précédente restant reprenable
-session-last-turn-undone = session rembobinée d'un tour
-session-last-turn-undone-partly =
-    session rembobinée d'un tour, mais ces fichiers gardent ce qu'il a écrit : { $paths }
+session-rewound = session rembobinée avant le tour { $turn }
+session-rewound-partly =
+    session rembobinée avant le tour { $turn }, mais ces fichiers gardent ce qui a été
+    écrit : { $paths }
 session-nothing-to-undo = rien à annuler dans cette session
+session-rewind-points = un rembobinage revient à l'un de ceux-ci, restaurant chaque ligne jusqu'à lui :
+session-rewind-point =
+    { $turns } en arrière : avant le tour { $turn }, { $asked }, restaure { $paths }
+session-rewind-point-wrote-nothing =
+    { $turns } en arrière : avant le tour { $turn }, { $asked }, aucun fichier à restaurer
+session-rewind-needs-a-number = /rewind demande un nombre de tours, comme /rewind 2
+session-rewind-goes-no-further =
+    { $kept ->
+        [one] cette session peut reculer d'un tour, pas plus
+       *[other] cette session peut reculer de { $kept } tours, pas plus
+    }
 session-exported = transcription exportée vers { $path }
 session-export-failed = impossible d'exporter la transcription : { $problem }
 session-add-dir-needs-a-path = /add-dir demande un répertoire, comme /add-dir ~/notes
@@ -765,6 +908,11 @@ session-trusting-unasked =
 session-not-trusting =
     ce répertoire n'est pas approuvé ; chaque écriture vous sera montrée
 session-vouched-for = { $path } approuvé pour cette session
+session-vetting-on =
+    une vérification qui ne trouve rien donnera désormais le contenu au modèle sans vous
+    demander (~/.bravebot/vetting)
+session-vetting-in-force =
+    une vérification qui ne trouve rien donne le contenu au modèle sans vous demander
 update-available =
     bravebot { $version } est disponible (celle-ci est { $running }) ; pour la mettre à jour :
     { $command }
@@ -777,6 +925,23 @@ session-model-substituted =
     `bravebot doctor` si un abonnement était attendu.
 session-error = erreur : { $problem }
 session-no-output = aucune sortie
+
+## Pourquoi un tour a échoué
+
+failure-unauthorized = le service a refusé les identifiants
+failure-rate-limited = le service a demandé moins de requêtes
+failure-unavailable = le service n'a pas pu répondre
+failure-refused = le service a rejeté la requête
+failure-transport = la requête n'est pas passée
+failure-incomplete = la réponse s'est arrêtée avant la fin
+failure-undecodable = la réponse n'a pas pu être lue
+failure-too-long = le modèle a atteint sa limite de sortie
+failure-unconfigured = rien ici n'était configuré pour envoyer la requête
+failure-blocked = un contrôle local a refusé de laisser sortir la requête
+failure-workspace = l'espace de travail n'a pas pu être utilisé
+failure-internal = un problème est survenu ici
+failure-with-status = { $what } (HTTP { $status })
+failure-with-attempts = { $what }, après { $attempts } tentatives
 
 
 ## Répéter une consigne
@@ -806,6 +971,9 @@ loop-armed-by-the-turn =
     partir aussi
 loop-not-armed-under-a-goal =
     un regard plus tard a été demandé sans être lancé : cette session travaille vers un objectif,
+    et elle fait une chose à la fois
+loop-not-armed-under-a-watch =
+    un regard plus tard a été demandé sans être lancé : cette session surveille déjà un fichier,
     et elle fait une chose à la fois
 
 
@@ -846,6 +1014,51 @@ goal-replaces-loop =
     la boucle qui tournait a été arrêtée : une session ne travaille qu'à une chose à la fois
 
 
+## Être averti quand un fichier change
+
+watch-armed =
+    la veille { $number } porte sur { $path } : vous serez averti dès qu'il semblera avoir été
+    écrit, sans qu'un tour tourne. /watch les liste, /watch stop { $number } arrête celle-ci, et
+    ctrl-c les arrête toutes
+watch-not-armed-under-a-loop =
+    une veille sur un fichier a été demandée sans être posée : une boucle tourne, et une session
+    ne fait qu'une seule chose à la fois qui se produise sans que personne ne tape
+watch-not-armed-under-a-goal =
+    une veille sur un fichier a été demandée sans être posée : cette session travaille vers un
+    objectif, et elle fait une chose à la fois
+watch-not-armed-full =
+    une veille sur un fichier a été demandée sans être posée : { $count } sont déjà actives, le
+    maximum qu'une session garde. /watch stop <n> en arrête une
+watch-not-armed-unreadable =
+    une veille sur { $path } a été demandée sans être posée : ce chemin ne peut pas être regardé,
+    il n'y a donc rien à quoi comparer un regard ultérieur
+watch-fired = veille { $number } : { $path } semble avoir été écrit
+watch-listed =
+    veille { $number } : { $path }, posée au tour { $turn }, il reste { $left }
+watch-none =
+    rien n'est sous veille. Un tour en pose une quand vous demandez à être averti au sujet d'un
+    fichier, et /watch stop <n> en arrête une
+watch-no-such = il n'y a pas de veille { $number }. /watch liste celles qui sont actives
+watch-command-takes =
+    /watch liste ce que cette session surveille, et /watch stop <n> arrête celle qui porte ce
+    numéro
+watch-stopped = la veille { $number } est arrêtée
+watch-stopped-with-its-turn =
+    la veille { $number } est arrêtée : arrêter le tour qu'elle a lancé est la façon de dire que
+    vous en avez fini avec elle
+watch-aged-out = la veille { $number } dure depuis une semaine et s'est arrêtée d'elle-même
+watch-out-of-reach =
+    la veille { $number } est arrêtée : cette session n'atteint plus le chemin qu'elle surveillait
+watches-stopped = { $count ->
+    [one] { $count } veille est arrêtée
+   *[other] { $count } veilles sont arrêtées
+    }
+watches-replaced = { $count ->
+    [one] { $count } veille active a pris fin : une session n'en fait qu'une à la fois
+   *[other] { $count } veilles actives ont pris fin : une session n'en fait qu'une à la fois
+    }
+
+
 ## Coller, déposer et joindre
 
 paste-arrived-empty =
@@ -879,8 +1092,17 @@ turn-ended-unexpectedly = le tour s'est terminé de façon inattendue
 btw-needs-a-question = /btw prend la question à poser, que la conversation ne lira pas
 btw-uninterruptible = la question ne peut pas être interrompue ; elle prend une requête
 btw-ended-unexpectedly = la question s'est terminée de façon inattendue
-btw-answered = demandé à côté du travail, et répondu là ; { $chord } l'ouvre à nouveau
 btw-failed = la question n'a pas pu recevoir de réponse : { $problem }
+
+# Ce que la session dit d'une exécution planifiée lancée depuis elle. Le plan, chaque étape et la
+# réponse s'affichent au fur et à mesure ; il ne reste donc à dire qu'une exécution commence, où
+# elle a été enregistrée, et ce qui a échoué là où quelque chose a échoué. Qu'une exécution ne soit
+# pas un tour de la conversation tient au mode et non à cette exécution : cela n'est pas dit ici.
+manifest-needs-a-task = /manifest prend la tâche à planifier, comme /manifest résume la documentation
+manifest-began = la tâche entière est planifiée d'abord ; la session attend ici jusqu'à la fin de l'exécution
+manifest-ended-unexpectedly = l'exécution s'est terminée de façon inattendue
+manifest-failed = l'exécution s'est arrêtée : { $problem }
+manifest-recorded = enregistré sous { $id } ; à relire avec bravebot --resume { $id }
 
 
 ## L'écran d'accueil
@@ -903,11 +1125,13 @@ verb-load-skill = Compétence
 verb-ask-user = Demander
 verb-run = Exécuter
 verb-read-output = Lire la sortie
+verb-vet-content = Vérifier
 verb-fetch-url = Récupérer
 verb-remember = Mémoriser
 verb-job-output = Tâche
 verb-spawn-agent = Déléguer
 verb-schedule-next = Programmer
+verb-watch-file = Surveiller
 verb-unknown = Outil
 
 

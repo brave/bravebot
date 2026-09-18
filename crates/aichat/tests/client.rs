@@ -4,7 +4,7 @@
 //! headers the server verifies, that it reaches the right path, and that the reply
 //! arrives labelled untrusted.
 
-use bravebot_aichat::protocol::{ChatRequest, Message};
+use bravebot_aichat::protocol::{ChatRequest, Effort, Message};
 use bravebot_aichat::{AichatClient, ChatError};
 use bravebot_config::Config;
 use bravebot_config::DEFAULT_MODEL;
@@ -241,6 +241,8 @@ enum Attempt {
     Status(u16),
     /// Answer properly, with these SSE frames.
     Frames(Vec<String>),
+    /// Complete SSE frames followed by an unfinished HTTP chunked body.
+    BrokenFrames(Vec<String>),
 }
 
 /// Serve one behaviour per connection, in order, recording what each request carried.
@@ -302,6 +304,12 @@ fn serve_attempts(attempts: Vec<Attempt>) -> (String, mpsc::Receiver<Captured>) 
                     );
                     let _ = stream.flush();
                 }
+                Attempt::BrokenFrames(frames) => {
+                    let body = frames.concat();
+                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{}\r\n", body.len(), body).unwrap();
+                    stream.flush().unwrap();
+                    // No terminating HTTP chunk: the protocol can finish before transport fails.
+                }
                 Attempt::Frames(frames) => {
                     let _ = stream.write_all(
                         b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
@@ -333,6 +341,30 @@ fn config_for(endpoint: &str) -> Config {
     .expect("config")
 }
 
+/// A settings block naming one model at `endpoint`, which is the shape somebody writes for a
+/// gateway of their own: a base URL, a model list, and nothing about what the model reads. No
+/// roster is fetched for such a block, so nothing anywhere describes the model's parameters.
+fn gateway_naming(endpoint: &str, model: &str) -> bravebot_config::provider::Provider {
+    let block = format!(
+        r#"{{"provider": {{"a-gateway": {{
+            "options": {{"baseURL": "{endpoint}"}},
+            "models": {{"{model}": {{}}}}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+/// A request that names how hard to think, which is what a turn sends once somebody has chosen a
+/// level.
+fn asking_a_level(model: &str) -> ChatRequest {
+    ChatRequest::new(model, vec![Message::user("hi")]).with_effort(Some(Effort::Xhigh))
+}
+
 fn routing() -> Routing {
     let mut r = Routing::new();
     r.insert_trusted("task", "say hello");
@@ -361,6 +393,7 @@ fn a_completion_round_trips() {
         .complete(&mut policy, &request)
         .expect("completion succeeds");
 
+    assert_eq!(client.attempts(), 1);
     assert_eq!(completion.model, "served-model");
     // Model output is untrusted, whatever it says.
     assert_eq!(completion.content.label(), Label::untrusted_public());
@@ -717,6 +750,7 @@ fn a_stream_stopped_before_it_starts_reports_nothing() {
         .complete_streaming(&mut policy, &request, |_| reports += 1)
         .expect_err("a stopped stream produced a completion");
 
+    assert_eq!(client.attempts(), 0);
     assert!(matches!(error, ChatError::Cancelled), "{error}");
     assert_eq!(reports, 0, "the reply was read anyway");
 }
@@ -1030,7 +1064,7 @@ fn premium_config(endpoint: &str, premium: &str) -> Config {
 #[test]
 fn a_subscribed_request_goes_to_the_premium_host_with_the_credential() {
     let (premium_endpoint, received) = serve(REPLY);
-    // The free host is a port nothing is listening on, so reaching it would fail rather than
+    // The base host is a port nothing is listening on, so reaching it would fail rather than
     // quietly pass.
     let config = premium_config("http://127.0.0.1:1", &premium_endpoint);
     let egress = Egress::new();
@@ -1057,14 +1091,14 @@ fn a_subscribed_request_goes_to_the_premium_host_with_the_credential() {
     );
 }
 
-/// Once the batch is spent the request must fail rather than quietly going out on the free tier.
+/// Once the batch is spent the request must fail rather than quietly going out with no credential.
 /// A downgrade nobody was told about is indistinguishable from the service getting worse, and it
 /// would also spend a premium-tier allowance the user thought they had paid past.
 #[test]
 fn an_exhausted_subscription_fails_rather_than_downgrading() {
     // Both hosts point at a listener, so a fallback would succeed and this would pass wrongly.
-    let (free_endpoint, _received) = serve(REPLY);
-    let config = premium_config(&free_endpoint, &free_endpoint);
+    let (base_endpoint, _received) = serve(REPLY);
+    let config = premium_config(&base_endpoint, &base_endpoint);
     let egress = Egress::new();
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -1090,12 +1124,12 @@ fn an_exhausted_subscription_fails_rather_than_downgrading() {
     );
 }
 
-/// A build with no premium host must stay on the free tier even when credentials exist, rather
-/// than attaching one to a request bound for the free endpoint.
+/// A build with no premium host must attach no credential even when credentials exist, rather
+/// than sending one to an endpoint that did not issue it.
 #[test]
 fn without_a_premium_host_no_credential_is_attached() {
-    let (free_endpoint, received) = serve(REPLY);
-    let config = config_for(&free_endpoint);
+    let (base_endpoint, received) = serve(REPLY);
+    let config = config_for(&base_endpoint);
     let egress = Egress::new();
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -1157,7 +1191,60 @@ fn a_stop_does_not_wait_out_the_pause_between_attempts() {
         })
         .expect_err("a stopped request produced a completion");
 
+    assert_eq!(client.attempts(), 1);
     assert!(matches!(error, ChatError::Cancelled), "{error}");
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "it waited out the pause: {:?}",
+        started.elapsed()
+    );
+    assert!(matches!(
+        client.complete(&mut policy, &request),
+        Err(ChatError::Cancelled)
+    ));
+    assert_eq!(client.attempts(), 0, "a new call resets the attempt count");
+}
+
+/// The same pause runs before a whole reply is asked for again, and that path has no progress
+/// callback to press a key against, so the stop arrives from elsewhere. It is pressed once the
+/// server has the first request, so the stop lands in the pause and not before anything was sent.
+#[test]
+fn a_stop_between_attempts_at_a_whole_reply_does_not_wait_out_the_pause() {
+    let (endpoint, received) = serve_attempts(vec![Attempt::Dropped, Attempt::Dropped]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let cancel = Cancel::new();
+    let mut client = AichatClient::new(&config, &egress).with_cancel(cancel.clone());
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let stopper = thread::spawn(move || {
+        received
+            .recv()
+            .expect("the first request reaches the server");
+        cancel.cancel();
+    });
+
+    let started = std::time::Instant::now();
+    let error = client
+        .complete(&mut policy, &request)
+        .expect_err("a stopped request produced a completion");
+    stopper.join().expect("the stopping thread");
+
+    assert!(matches!(error, ChatError::Cancelled), "{error}");
+    assert_eq!(
+        client.attempts(),
+        1,
+        "the request that was sent still counts"
+    );
     assert!(
         started.elapsed() < Duration::from_millis(500),
         "it waited out the pause: {:?}",
@@ -1288,6 +1375,7 @@ fn a_request_refused_on_its_contents_is_asked_again_without_the_breakpoints() {
     let completion = client
         .complete_streaming(&mut policy, &request, |_| {})
         .expect("the turn survives the refusal");
+    assert_eq!(client.attempts(), 2);
     assert_eq!(completion.model, "served-model");
 
     let first = received.recv().expect("a first request");
@@ -1442,6 +1530,277 @@ fn a_refusal_the_retry_did_not_fix_is_not_remembered() {
     );
 }
 
+/// A gateway declared in settings names its models and never their parameters, so the level goes
+/// out to be judged there. One that refuses the field refuses every request a turn can make, and
+/// the level is a concession nobody asked for: giving it up costs a level, keeping it costs the
+/// conversation.
+#[test]
+fn a_level_a_gateway_refuses_costs_the_field_and_not_the_turn() {
+    let model = "a-model-that-refuses-a-level";
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ]),
+    ]);
+    let config = config_for(&endpoint);
+    let gateway = gateway_naming(&endpoint, model);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let completion = AichatClient::new(&config, &egress)
+        .for_gateway(&gateway, model, None)
+        .complete_streaming(&mut policy, &asking_a_level(model), |_| {})
+        .expect("the turn survives the refusal");
+    assert_eq!(completion.model, "served-model");
+
+    let first = received.recv().expect("a first request");
+    let second = received.recv().expect("a second request");
+    let third = received.recv().expect("a third request");
+    assert!(
+        first.body.contains("cache_control") && first.body.contains("reasoning_effort"),
+        "the first request went out short of a concession: {}",
+        first.body
+    );
+    // The breakpoints go first and the level second, either being refused with the same status: a
+    // request that gave up the level while still marking a prefix would read a refusal of the
+    // caching as the model refusing to be told how hard to think.
+    assert!(
+        !second.body.contains("cache_control") && second.body.contains("reasoning_effort"),
+        "the second request was not the first one without its breakpoints: {}",
+        second.body
+    );
+    assert!(
+        !third.body.contains("reasoning_effort"),
+        "the level was sent to a service that had refused the body without its breakpoints: {}",
+        third.body
+    );
+    // And what the service finally took is otherwise the request it refused, down to the words.
+    assert!(third.body.contains(r#""content":"hi""#), "{}", third.body);
+}
+
+/// What a gateway refused outlives the client that found out. A client is built per request, so a
+/// refusal remembered by that client alone would cost two refused round trips on every turn of
+/// every conversation somebody chose a level for.
+#[test]
+fn a_gateway_that_refused_a_level_is_not_sent_one_again() {
+    let model = "a-model-that-remembers-refusing-a-level";
+    let reply = || {
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ])
+    };
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        reply(),
+        reply(),
+        reply(),
+    ]);
+    let config = config_for(&endpoint);
+    let gateway = gateway_naming(&endpoint, model);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    for _ in 0..3 {
+        AichatClient::new(&config, &egress)
+            .for_gateway(&gateway, model, None)
+            .complete_streaming(&mut policy, &asking_a_level(model), |_| {})
+            .expect("each turn is answered");
+    }
+
+    received.recv().expect("the request it refused");
+    received
+        .recv()
+        .expect("the same request without breakpoints");
+    received.recv().expect("the request it took");
+    for turn in 2..=3 {
+        let sent = received.recv().expect("a later turn's request");
+        assert!(
+            !sent.body.contains("reasoning_effort"),
+            "turn {turn} asked a gateway that had already refused: {}",
+            sent.body
+        );
+    }
+}
+
+/// The status a gateway refuses a field with is also the status a prompt too long for the model
+/// comes back as, so a request refused with the level gone too says nothing about the level.
+/// Concluding a refusal from one would withhold what somebody asked for, for the rest of the
+/// process, from a model that reads it.
+#[test]
+fn a_level_refusal_the_retry_did_not_fix_is_not_remembered() {
+    let model = "a-model-that-refuses-for-its-own-reasons";
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ]),
+    ]);
+    let config = config_for(&endpoint);
+    let gateway = gateway_naming(&endpoint, model);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    AichatClient::new(&config, &egress)
+        .for_gateway(&gateway, model, None)
+        .complete_streaming(&mut policy, &asking_a_level(model), |_| {})
+        .expect_err("a request refused without either concession stays refused");
+    AichatClient::new(&config, &egress)
+        .for_gateway(&gateway, model, None)
+        .complete_streaming(&mut policy, &asking_a_level(model), |_| {})
+        .expect("the next turn is answered");
+
+    received.recv().expect("the request that was refused");
+    received
+        .recv()
+        .expect("the same request without breakpoints");
+    received.recv().expect("the same request without the level");
+    let asked_again = received.recv().expect("the next turn's request");
+    assert!(
+        asked_again.body.contains("reasoning_effort") && asked_again.body.contains("cache_control"),
+        "a refusal that proved nothing stopped the asking: {}",
+        asked_again.body
+    );
+}
+
+/// One gateway answers for every model behind it, and each of them answers for itself. A refusal
+/// recorded against the service alone would take the level away from models that never refused one,
+/// which on a gateway serving hundreds is most of them.
+#[test]
+fn one_model_refusing_a_level_says_nothing_about_another_on_the_same_gateway() {
+    let refuser = "a-model-of-its-own-that-refuses";
+    let other = "another-model-the-same-gateway-serves";
+    let reply = || {
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ])
+    };
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        reply(),
+        reply(),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    AichatClient::new(&config, &egress)
+        .for_gateway(&gateway_naming(&endpoint, refuser), refuser, None)
+        .complete_streaming(&mut policy, &asking_a_level(refuser), |_| {})
+        .expect("the refusing model is answered without the level");
+    AichatClient::new(&config, &egress)
+        .for_gateway(&gateway_naming(&endpoint, other), other, None)
+        .complete_streaming(&mut policy, &asking_a_level(other), |_| {})
+        .expect("the other model is answered");
+
+    received.recv().expect("the request it refused");
+    received
+        .recv()
+        .expect("the same request without breakpoints");
+    received.recv().expect("the request it took");
+    let for_the_other = received.recv().expect("the other model's request");
+    assert!(
+        for_the_other.body.contains("reasoning_effort")
+            && for_the_other.body.contains("cache_control"),
+        "one model's refusal was read as the whole gateway's: {}",
+        for_the_other.body
+    );
+}
+
+/// A block's options reach the body as they stand, so a level written into one is not a concession
+/// this program made and not one it takes back. What is given up is the level somebody chose in the
+/// interface; a field a settings file states outlives it, and a service refusing that field refuses
+/// the request as it would refuse any other option it does not take.
+#[test]
+fn a_level_a_block_wrote_down_is_not_given_up() {
+    let model = "a-model-whose-block-writes-a-level";
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Status(400),
+    ]);
+    let block = format!(
+        r#"{{"provider": {{"a-gateway": {{
+            "options": {{"baseURL": "{endpoint}"}},
+            "models": {{"{model}": {{"options": {{"reasoning_effort": "high"}}}}}}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    let gateway = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    AichatClient::new(&config, &egress)
+        .for_gateway(&gateway, model, None)
+        .complete_streaming(&mut policy, &asking_a_level(model), |_| {})
+        .expect_err("a service refusing an option somebody wrote refuses the request");
+
+    let first = received.recv().expect("a first request");
+    received
+        .recv()
+        .expect("the same request without breakpoints");
+    let third = received.recv().expect("a third request");
+    assert!(
+        first.body.contains(r#""reasoning_effort":"xhigh""#),
+        "the level somebody chose lost to the one the block states: {}",
+        first.body
+    );
+    assert!(
+        third.body.contains(r#""reasoning_effort":"high""#),
+        "the level the block states went the way of the one somebody chose: {}",
+        third.body
+    );
+}
+
 /// Every attempt is a request in its own right, so the gate has to see each one. Retrying past a
 /// refusal would be a way to send something the policy had already stopped.
 #[test]
@@ -1486,7 +1845,7 @@ fn a_retry_goes_through_the_gate_again() {
     assert_eq!(checks, 2, "each attempt must be checked on its own");
 }
 
-/// The listing is a plain GET on the free host. It carries no signature and no credential: the
+/// The listing is a plain GET on the base host. It carries no signature and no credential: the
 /// endpoint requires neither, and spending a subscription credential to read a public list would
 /// be spending one for nothing.
 #[test]
@@ -1570,4 +1929,311 @@ fn a_listing_that_is_not_an_array_is_an_error() {
 
     let refused = bravebot_aichat::models::list(&mut policy, &config, &egress);
     assert!(refused.is_err(), "an envelope was accepted as a list");
+}
+
+/// A gateway block pointed at the mock server with no `models` key, which is the case whose roster is
+/// fetched at all.
+fn gateway_at(endpoint: &str) -> bravebot_config::provider::Provider {
+    let text =
+        format!(r#"{{"provider": {{"ollama": {{"options": {{"baseURL": "{endpoint}/v1"}}}}}}}}"#);
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+const GATEWAY_ROSTER: &str = r#"{"data":[{"id":"qwen3-coder:30b"}]}"#;
+
+/// Ollama serves its roster to anyone and rejects a request carrying a bearer token it has no
+/// account for, so the listing that fills the picker has to go unauthenticated. The service-wide
+/// route is the one asked: with no credential there is no account for `/models/user` to scope an
+/// answer to, and the mock server here answers one request, so asking it twice would hang.
+#[test]
+fn a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated() {
+    let (endpoint, received) = serve(GATEWAY_ROSTER);
+    let provider = gateway_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let models = bravebot_aichat::models::list_from_gateway(&mut policy, &provider, None, &egress)
+        .expect("the roster was fetched");
+    assert_eq!(models[0].key, "ollama/qwen3-coder:30b");
+
+    let captured = received.recv().expect("request captured");
+    assert_eq!(
+        captured.request_line, "GET /v1/models HTTP/1.1",
+        "the account-scoped route was asked for without an account"
+    );
+    assert_eq!(
+        captured.header("authorization"),
+        None,
+        "a gateway that names no credential was sent one"
+    );
+}
+
+/// The narrower roster is still worth a round trip where there is a credential to scope it to: a
+/// model the token cannot reach is a row that fails the moment somebody picks it.
+#[test]
+fn a_gateway_with_a_credential_is_asked_what_that_account_may_reach() {
+    let (endpoint, received) = serve(GATEWAY_ROSTER);
+    let provider = gateway_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    bravebot_aichat::models::list_from_gateway(&mut policy, &provider, Some("a-token"), &egress)
+        .expect("the roster was fetched");
+
+    let captured = received.recv().expect("request captured");
+    assert_eq!(captured.request_line, "GET /v1/models/user HTTP/1.1");
+    assert_eq!(captured.header("authorization"), Some("Bearer a-token"));
+}
+
+/// A malformed tool call must not hide a valid bill.
+#[test]
+fn malformed_whole_reply_keeps_known_usage() {
+    check_malformed_completed_reply(false);
+}
+
+/// Earlier valid text cannot make a malformed completed stream usable.
+#[test]
+fn malformed_streamed_reply_keeps_known_usage() {
+    check_malformed_completed_reply(true);
+}
+
+fn check_malformed_completed_reply(streaming: bool) {
+    let endings = if streaming {
+        vec![(true, true), (true, false), (false, true), (false, false)]
+    } else {
+        vec![(true, true)]
+    };
+    for (done, finish) in endings {
+        for (usage, expected) in [
+            (
+                serde_json::json!({"prompt_tokens":100,"completion_tokens":7}),
+                Some(107),
+            ),
+            (
+                serde_json::json!({"prompt_tokens":0,"completion_tokens":0}),
+                Some(0),
+            ),
+            (
+                serde_json::json!({"prompt_tokens":"100","completion_tokens":7}),
+                None,
+            ),
+            (
+                serde_json::json!({"prompt_tokens":-1,"completion_tokens":7}),
+                None,
+            ),
+            (serde_json::Value::Null, None),
+            (serde_json::json!({}), None),
+            (serde_json::json!([]), None),
+            (serde_json::json!({"completion_tokens":7}), None),
+            (serde_json::json!({"prompt_tokens":100}), None),
+        ] {
+            let mut choice = if streaming {
+                serde_json::json!({"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":7,"arguments":"{}"}}]}})
+            } else {
+                serde_json::json!({"message":{"role":"assistant","content":"partial text","tool_calls":[{"id":"c","type":"function","function":{"name":7,"arguments":"{}"}}]}})
+            };
+            if finish {
+                choice["finish_reason"] = serde_json::json!("tool_calls");
+            }
+            let malformed = serde_json::json!({"choices":[choice],"usage":usage}).to_string();
+            let (endpoint, _received) = if streaming {
+                let mut frames = vec![
+                    frame(r#"{"choices":[{"delta":{"content":"partial text"}}]}"#),
+                    frame(&malformed),
+                ];
+                if done {
+                    frames.push(frame("[DONE]"));
+                }
+                serve_stream(frames)
+            } else {
+                serve(&malformed)
+            };
+            let config = config_for(&endpoint);
+            let egress = Egress::new();
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let cancel = Cancel::new();
+            let mut client = AichatClient::new(&config, &egress).with_cancel(cancel.clone());
+            let request = ChatRequest::new("test-model", vec![Message::user("work")]);
+            let result = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {
+                    if !done && !finish {
+                        cancel.cancel();
+                    }
+                })
+            } else {
+                client.complete(&mut policy, &request)
+            };
+            assert!(
+                result.is_err(),
+                "malformed reply should be rejected even after valid text"
+            );
+            assert_eq!(client.attempts(), 1);
+            assert_eq!(
+                client.completed_usage().map(|usage| usage.total()),
+                if done || finish { expected } else { None },
+                "streaming={streaming}, done={done}, finish={finish}: {result:?}"
+            );
+            cancel.cancel();
+            let stopped = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            };
+            assert!(matches!(stopped, Err(ChatError::Cancelled)));
+            assert_eq!(client.attempts(), 0);
+            assert_eq!(
+                client.completed_usage(),
+                None,
+                "the next call inherited usage"
+            );
+        }
+    }
+}
+
+/// A damaged JSON frame is not a keepalive, even if other frames carry valid text and usage.
+#[test]
+fn malformed_json_stream_keeps_usage_without_accepting_earlier_text() {
+    let (endpoint, _) = serve_stream(vec![
+        frame(r#"{"choices":[{"delta":{"content":"earlier text"}}]}"#),
+        frame(r#"{"choices":[{"delta":{"content": broken}}]}"#),
+        frame(r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":7}}"#),
+        frame("[DONE]"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .unwrap();
+    let mut client = AichatClient::new(&config, &egress);
+    let result = client.complete_streaming(
+        &mut policy,
+        &ChatRequest::new("test-model", vec![Message::user("work")]),
+        |_| {},
+    );
+    assert!(
+        matches!(result, Err(ChatError::Decode { .. })),
+        "{result:?}"
+    );
+    assert_eq!(client.completed_usage().unwrap().total(), 107);
+    assert_eq!(client.attempts(), 1);
+}
+
+/// Retry accounting keeps each completed bill, but excludes metadata from unfinished replies.
+#[test]
+fn completed_retry_usage_survives_success_failure_and_backoff_cancellation() {
+    for (first_completed, second_completed, zero) in [
+        (false, false, false),
+        (false, true, false),
+        (true, true, false),
+        (true, true, true),
+    ] {
+        for ending in ["success", "failure", "cancel"] {
+            let frames = |prompt, output, cached, ended| {
+                let mut frames = vec![frame(
+                    &serde_json::json!({
+                        "choices":[{"delta":{"content":"reply"}}],
+                        "usage":{"prompt_tokens":prompt,"completion_tokens":output,
+                            "prompt_tokens_details":{"cached_tokens":cached}}
+                    })
+                    .to_string(),
+                )];
+                if ended {
+                    frames.push(frame("[DONE]"));
+                }
+                frames
+            };
+            let billed = |n| if zero { 0 } else { n };
+            let mut attempts = vec![
+                Attempt::BrokenFrames(frames(billed(100), billed(7), billed(20), first_completed)),
+                Attempt::BrokenFrames(frames(billed(23), billed(3), billed(4), second_completed)),
+            ];
+            if ending != "cancel" {
+                attempts.push(Attempt::Frames(if ending == "success" {
+                    frames(10, 1, 3, true)
+                } else {
+                    frames(900, 99, 80, false)
+                }));
+            }
+            let (endpoint, received) = serve_attempts(attempts);
+            let config = config_for(&endpoint);
+            let egress = Egress::new();
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let cancel = bravebot_core::cancel::Cancel::new();
+            let mut client = AichatClient::new(&config, &egress).with_cancel(cancel.clone());
+            let request = ChatRequest::new("test-model", vec![Message::user("work")]);
+            let result = client.complete_streaming(&mut policy, &request, |progress| {
+                if ending == "cancel" && progress.attempt == 3 {
+                    cancel.cancel();
+                }
+            });
+            let expected = (if first_completed { billed(107) } else { 0 })
+                + if second_completed { billed(26) } else { 0 }
+                + if ending == "success" { 11 } else { 0 };
+            match ending {
+                "success" => assert_eq!(result.unwrap().usage.total(), expected),
+                "failure" => assert!(matches!(result, Err(ChatError::Incomplete))),
+                _ => assert!(matches!(result, Err(ChatError::Cancelled))),
+            }
+            let known = first_completed || second_completed || ending == "success";
+            assert_eq!(
+                client.completed_usage().map(|usage| usage.total()),
+                known.then_some(expected)
+            );
+            if let Some(usage) = client.completed_usage() {
+                assert_eq!(
+                    usage.cached.read_tokens,
+                    (if first_completed { billed(20) } else { 0 })
+                        + if second_completed { billed(4) } else { 0 }
+                        + if ending == "success" { 3 } else { 0 }
+                );
+            }
+            assert_eq!(client.attempts(), if ending == "cancel" { 2 } else { 3 });
+            assert_eq!(received.try_iter().count(), client.attempts() as usize);
+            cancel.cancel();
+            assert!(matches!(
+                client.complete_streaming(&mut policy, &request, |_| {}),
+                Err(ChatError::Cancelled)
+            ));
+            assert_eq!(client.completed_usage(), None);
+            assert_eq!(client.attempts(), 0);
+        }
+    }
 }

@@ -135,8 +135,134 @@ task calls for it. Your own `~/.bravebot` is trusted for being yours; a project'
 and `.bravebot/skills` are read through the trust map, so they load when you vouched for the
 directory and are left out when you did not. See [specs/skills.md](specs/skills.md).
 
-## Configuration
+## Choosing a model service
 
-Configuration is built into the released binary, so there is nothing to set up. `bravebot doctor`
-reports what it will use. To point it at a different backend, see
-[development/configuration.md](development/configuration.md).
+There is one thing to set up before the first session, and it is which service answers. A released
+binary arrives with none configured, so rather than open a session with nothing set up to answer it,
+a first run says what to configure and stops.
+
+Configure one of these four. `bravebot doctor` reports what it will use once you have.
+
+Each block below sets a top-level `model` key as well. A block on its own leaves the model in force
+the one the build came with, which is Brave's own, so the first run says the same thing again and
+names the key to set. `/model` in a session picks from every model any configured service offers,
+and remembers what you picked.
+
+### AWS Bedrock, through your own account
+
+Put a `provider` block named `amazon-bedrock` in `~/.bravebot/settings.json`, with the region and
+the models to offer. Models are keyed by the name Bedrock knows them by, which may be an
+inference-profile ARN:
+
+```json
+{
+  "provider": {
+    "amazon-bedrock": {
+      "options": { "region": "us-west-2", "profile": "my-bedrock-sso" },
+      "models": {
+        "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abcdef": {
+          "name": "Claude Opus (Bedrock)"
+        }
+      }
+    }
+  },
+  "model": "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abcdef"
+}
+```
+
+The credential is the AWS chain rather than a token, so nothing here names one. `profile` is
+optional and names a credential profile to sign with; without it the ambient credentials are used.
+A profile configured for SSO is signed in to before work starts, and the sign-in prints a URL and a
+code to type into it.
+
+### OpenRouter, or another OpenAI-compatible gateway
+
+Put a `provider` block named for the gateway, with the environment variable that holds its API key
+and the models to offer:
+
+```json
+{
+  "provider": {
+    "openrouter": {
+      "env": ["OPENROUTER_API_KEY"],
+      "models": { "z-ai/glm-4.6": {} }
+    }
+  },
+  "model": "openrouter/z-ai/glm-4.6"
+}
+```
+
+`openrouter` needs no endpoint written down, its own being compiled in. Any other gateway names one
+in `options.baseURL`, and a gateway naming no models at all is asked what it serves. The block is
+read in the shape another tool already reads, so one copied out of that tool's configuration works
+here unedited.
+
+### A local Ollama, or another gateway that wants no key
+
+Ollama wants no API key, so its block names none. Leaving out both `env` and `options.apiKey` is how
+you say none is needed, and the request then carries no `authorization` header:
+
+```json
+{
+  "provider": {
+    "ollama": {
+      "name": "Ollama (local)",
+      "options": { "baseURL": "http://localhost:11434/v1" }
+    }
+  },
+  "model": "ollama/qwen3-coder:30b"
+}
+```
+
+No `models` key, so Ollama is asked what it has pulled, and `/model` lists what came back.
+`bravebot doctor` says a credential is not needed rather than missing.
+
+### Brave Leo Premium, if you already subscribe
+
+```sh
+bravebot import-leo-creds        # or `import-leo-creds development` for a development channel
+```
+
+This registers as an additional device rather than taking the browser's credentials, so Brave keeps
+its own and nothing it holds is spent. Run it on a machine where Brave is signed in to the
+subscription.
+
+These models are reached through Brave's AI gateway, which has problems of its own still being
+worked on, so prefer one of the two above for now. It is the shortest route if you already
+subscribe.
+
+### Pointing it somewhere else entirely
+
+An endpoint of your own is configuration too, and a build pointed at one is not asked to configure
+anything further. See [development/configuration.md](development/configuration.md).
+
+## On a corporate network
+
+Two things a managed network changes, both stated in the environment and both reported by
+`bravebot doctor` under `network`.
+
+**A certificate authority of your own.** A network that inspects TLS presents its own certificate,
+signed by an authority your machine has been given and the released binary has not. Name it the way
+you name it for every other client on the machine:
+
+```sh
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt   # a bundle
+export SSL_CERT_DIR=/etc/ssl/certs                        # or a directory of them
+```
+
+What you name replaces the authorities built into the binary rather than adding to them, so name a
+bundle that holds the public roots as well as yours. Without this, every request fails with
+`invalid peer certificate: UnknownIssuer`.
+
+**A proxy.** `ALL_PROXY`, `HTTPS_PROXY` and `HTTP_PROXY` are honoured, in upper case or lower, and
+`NO_PROXY` names the hosts that bypass one. A SOCKS proxy is not supported; `doctor` says so rather
+than leaving requests to go direct unannounced. A proxy that inspects TLS reads the bodies of the requests that go through
+it, which for this program means the conversation; it can do that only with an authority you also
+gave the machine above.
+
+```sh
+export HTTPS_PROXY=http://proxy.example.internal:8080
+export NO_PROXY=localhost,127.0.0.1,.example.internal
+```
+
+`bravebot doctor` names the proxy by host and port, never its credential.

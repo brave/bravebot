@@ -16,7 +16,15 @@ use std::thread;
 
 /// Serve a fixed sequence of raw HTTP responses, one per connection.
 fn serve(responses: Vec<String>) -> (String, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    serve_as("127.0.0.1", responses)
+}
+
+/// The same, reachable under `host`, so a test can tell two loopback servers apart by name.
+///
+/// Bound through the name rather than through an address resolved here, so the client and the
+/// listener agree about which loopback address it means.
+fn serve_as(host: &str, responses: Vec<String>) -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind((host, 0)).expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
 
@@ -54,7 +62,7 @@ fn serve(responses: Vec<String>) -> (String, mpsc::Receiver<String>) {
         }
     });
 
-    (format!("http://127.0.0.1:{port}"), receiver)
+    (format!("http://{host}:{port}"), receiver)
 }
 
 fn json_response(body: &str) -> String {
@@ -248,39 +256,15 @@ fn a_tool_call_requires_the_mcp_capability() {
 /// A redirecting server is revalidated per hop, so both destinations reach the gate.
 #[test]
 fn a_redirecting_server_is_revalidated() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let port = listener.local_addr().expect("addr").port();
-    thread::spawn(move || {
-        // First connection redirects, second serves the payload.
-        let redirect = "HTTP/1.1 307 Temporary Redirect\r\nLocation: /elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string();
-        for response in [redirect, json_response(INIT_OK)] {
-            let Ok((mut stream, _)) = listener.accept() else {
-                break;
-            };
-            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-            let mut line = String::new();
-            let _ = reader.read_line(&mut line);
-            let mut length = 0usize;
-            loop {
-                let mut header = String::new();
-                if reader.read_line(&mut header).unwrap_or(0) == 0 {
-                    break;
-                }
-                if header == "\r\n" || header == "\n" {
-                    break;
-                }
-                if let Some((name, value)) = header.split_once(':')
-                    && name.trim().eq_ignore_ascii_case("content-length")
-                {
-                    length = value.trim().parse().unwrap_or(0);
-                }
-            }
-            let mut body = vec![0u8; length];
-            let _ = reader.read_exact(&mut body);
-            let _ = stream.write_all(response.as_bytes());
-            let _ = stream.flush();
-        }
-    });
+    // Two servers, and the hop between them named absolutely, so the gate's record of the second
+    // check names a host the first request did not go to. A path-absolute Location keeps the
+    // authority it was served from, which is a redirect the record cannot tell from no redirect at
+    // all now that only the host is kept.
+    let (elsewhere, _moved) = serve_as("localhost", vec![json_response(INIT_OK)]);
+    let redirect = format!(
+        "HTTP/1.1 307 Temporary Redirect\r\nLocation: {elsewhere}/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    let (url, _received) = serve(vec![redirect]);
 
     let egress = Egress::new();
     let mut sink = RecordingSink::new();
@@ -292,7 +276,7 @@ fn a_redirecting_server_is_revalidated() {
     )
     .expect("policy");
 
-    let mut server = HttpServer::new("remote", format!("http://127.0.0.1:{port}/mcp"));
+    let mut server = HttpServer::new("remote", format!("{url}/mcp"));
     server
         .initialize(&mut policy, &egress, "bravebot", "0.1.0")
         .expect("redirect followed");
@@ -311,7 +295,12 @@ fn a_redirecting_server_is_revalidated() {
         .collect();
 
     assert_eq!(checked.len(), 2, "each hop must be checked: {checked:?}");
-    assert!(checked[1].contains("/elsewhere"));
+    assert_eq!(checked[0].as_str(), "egress to 127.0.0.1");
+    assert_eq!(
+        checked[1].as_str(),
+        "egress to localhost",
+        "the redirect target was not the URL the second check saw: {checked:?}"
+    );
 }
 
 /// A tool that reports failure of its own is a failure, and what it says about that failure is

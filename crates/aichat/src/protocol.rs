@@ -270,6 +270,13 @@ impl Effort {
     }
 }
 
+/// The name the effort field goes out under, for a caller that has to take it back out of a body a
+/// service refused.
+///
+/// A `rename` cannot be written in terms of a constant, so this repeats the word the field
+/// serializes as and a test holds the two together.
+pub const EFFORT_FIELD: &str = "reasoning_effort";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatRequest {
     pub model: String,
@@ -562,7 +569,9 @@ pub struct Usage {
 ///
 /// Both zero means a service that said nothing about a cache as much as it means a round that
 /// missed, and nothing here distinguishes the two.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Serialised because a session record carries the figure the status panel is showing, so that a
+/// rewind puts back what the turn before the rewound one read rather than what the rewound one did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cached {
     /// Served out of the cache instead of read.
     pub read_tokens: u64,
@@ -610,6 +619,13 @@ where
 }
 
 impl Usage {
+    /// Add another request's cost without treating the sum as a prompt measurement.
+    pub fn add(&mut self, other: Self) {
+        self.prompt_tokens += other.prompt_tokens;
+        self.completion_tokens += other.completion_tokens;
+        self.cached.add(other.cached);
+    }
+
     /// Everything this request cost, in and out.
     pub fn total(&self) -> u64 {
         self.prompt_tokens + self.completion_tokens
@@ -985,6 +1001,17 @@ mod tests {
             .with_effort(Some(Effort::Xhigh));
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["reasoning_effort"], "xhigh");
+    }
+
+    /// A level a service refused is taken back out of the body by name, so the constant that names
+    /// the field and the name the field goes out under have to be the same word. They are written
+    /// twice because a `rename` takes a literal.
+    #[test]
+    fn the_constant_naming_the_effort_field_is_the_name_it_is_sent_under() {
+        let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hello")])
+            .with_effort(Some(Effort::Xhigh));
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json[EFFORT_FIELD], "xhigh");
     }
 
     #[test]

@@ -9,7 +9,8 @@ governs:
 ## Scope
 
 How long a turn may go on, what happens when it does not stop, and what is said when it goes on
-without producing anything or ends without checking anything.
+without producing anything or ends without checking anything. What completed requests cost survives
+a later failure or stop.
 
 ## Clauses
 
@@ -95,3 +96,46 @@ twenty rounds reading is not asked about a build it has no reason to have done.
 
 `verified-by: bravebot_agent::turn::a_turn_that_writes_without_running_is_asked_about_it`
 `verified-by: bravebot_agent::turn::a_turn_that_wrote_and_ran_is_not_asked_about_it`
+
+<a id="TURN-5"></a>
+### TURN-5: completed work remains charged when a turn fails or stops
+
+The turn reports cumulative usage after completed planner, processor and compaction calls, and
+when delegates are collected. Each report replaces the previous total. A delegate retains its own
+progress until collection, so it cannot overwrite the parent's total. Collection adds either its
+successful outcome or its retained progress on failure, once. A failed or stopped parent collects
+outstanding delegates before returning and reports the resulting total and elapsed timing.
+
+A completed reply also contributes valid reported usage when its content is rejected by the
+backend, or when cancellation arrives after protocol completion but before transport EOF.
+Planner, processor and compaction errors carry that usage into the cumulative total exactly once.
+Known usage from the final planner attempt also updates the last measured prompt size, even when
+its reply is rejected. Costs retained from earlier completed retry attempts enter the cumulative
+total once, but do not replace the final prompt size or supply a measurement for an unfinished
+attempt.
+Unknown usage adds nothing; no estimate is made for a failed or unfinished request. A later call
+cannot inherit a previous call's retained usage. These totals use the existing session storage
+and resume path.
+
+Timing keeps the existing measurements; this does not measure the union of overlapping delegate requests.
+Raw backend errors remain outside planner context and user-facing history.
+
+**Why.** A later error or stop does not undo the cost of requests that already finished.
+
+`verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_failure`
+`verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_cancellation`
+`verified-by: bravebot_agent::turn::compaction_progress_survives_failure`
+`verified-by: bravebot_agent::turn::compaction_progress_survives_cancellation`
+`verified-by: bravebot_agent::turn::successful_parents_collect_outstanding_delegate_usage_once`
+`verified-by: bravebot_agent::turn::failed_parents_collect_outstanding_delegate_usage_once`
+`verified-by: bravebot_agent::turn::stopped_parents_collect_outstanding_delegate_usage_once`
+`verified-by: bravebot_agent::turn::the_last_request_keeps_elapsed_time_on_failure_and_cancellation`
+`verified-by: bravebot_agent::shared::what_a_delegate_has_spent_is_not_reported_as_what_the_turn_has`
+
+`verified-by: bravebot_agent::turn::planner_retry_costs_do_not_replace_the_last_prompt_measurement`
+`verified-by: bravebot_agent::turn::completed_empty_reply_keeps_reported_usage_on_failure`
+`verified-by: bravebot_agent::turn::rejected_subrequests_are_counted_once_when_the_parent_succeeds`
+`verified-by: bravebot_agent::turn::rejected_processor_keeps_completed_usage_when_the_parent_fails`
+`verified-by: bravebot_agent::turn::rejected_compaction_keeps_completed_usage_when_the_parent_fails`
+`verified-by: bravebot_agent::turn::completed_stream_keeps_usage_when_cancelled_before_socket_closes`
+`verified-by: bravebot_tui::sessions::malformed_completed_usage_survives_turn_storage_and_resume`

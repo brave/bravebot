@@ -62,6 +62,12 @@ pub mod catalog;
 /// Which plural category a number falls into, per language.
 pub mod plural;
 
+/// The code the build script writes from those catalogs, compiled here so the rules it applies
+/// have tests. Build-script code that nothing can call is build-script code nothing can pin, and
+/// which catalog's plural rules form a message is exactly such a rule.
+#[cfg(test)]
+mod generate;
+
 /// The compiled catalogs: one item per message, plus [`Locale`] and the [`t!`] arms.
 pub mod messages {
     include!(concat!(env!("OUT_DIR"), "/messages.rs"));

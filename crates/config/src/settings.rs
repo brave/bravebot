@@ -13,6 +13,11 @@
 //! wholesale. Copying that resolution rather than inventing one means somebody who knows where to
 //! put a value for one of these tools knows it for the other.
 //!
+//! A fourth file is read where the command line named one, after all three and by the same rules.
+//! Those three are properties of a person, a checkout and a machine, and none of them is a property
+//! of one invocation, which is what a job configuring one run differently from the next has to be
+//! able to say. [`name_a_settings_file`] is how the entry point says it.
+//!
 //! Blocks borrowing the shape of whichever tool already reads them, so that one copied from
 //! elsewhere works unedited rather than being rewritten first. A different spelling for the same
 //! values would be a second thing to learn for no gain:
@@ -28,6 +33,8 @@
 //! - `attribution`, Claude Code's name for what a commit message or a pull request may carry, so
 //!   that a checkout asking for none of it says so once in a file rather than in prose an agent
 //!   has to be reading at the moment it writes one.
+//! - `vetting`, this program's own, since nothing else has the idea. It is the one block read from
+//!   the **home layer alone**: see [`Settings::auto_vetting`].
 //!
 //! They are independent. A file configuring one has nothing to say about the others, and reading any
 //! of them does not depend on another being present.
@@ -40,9 +47,15 @@
 //! would be. Nothing a turn produces can write one, and no model output reaches one.
 //!
 //! A project file is a file in a checkout, which is a weaker claim than a file in a home directory:
-//! whoever wrote the checkout wrote it. Nothing here distinguishes them, because the resolution this
-//! copies does not. What that costs is written down under Known costs in
+//! whoever wrote the checkout wrote it. Nothing here distinguishes them for the blocks above,
+//! because the resolution this copies does not. What that costs is written down under Known costs in
 //! `docs/specs/backends.md` rather than mitigated here.
+//!
+//! `vetting` is the exception, and it is the exception because of what it decides. Every other name
+//! here configures where a request goes or how the interface behaves; that one says whether a person
+//! is asked before content nobody vouched for reaches the planner, so a line in a checkout's file
+//! could turn the asking off for whoever opened the checkout. It is read from the home layer alone,
+//! and a project file naming it is reported rather than obeyed.
 //!
 //! They do not become the process environment. Values are consulted where a variable would be
 //! consulted, and handed to a subprocess only where that subprocess is the thing they configure.
@@ -51,6 +64,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::Duration;
 
 /// The file each layer is named by, inside its own directory.
 const SETTINGS_FILE: &str = "settings.json";
@@ -64,11 +79,39 @@ const LOCAL_SETTINGS_FILE: &str = "settings.local.json";
 /// The directory a checkout keeps its own settings in.
 const PROJECT_DIR: &str = ".bravebot";
 
+/// The block that says whether a check's safe verdict may promote content without a prompt.
+///
+/// Named as a constant because two places read it: the per-layer look that decides whether the
+/// file saying it was entitled to, and the parse of one root.
+const VETTING_BLOCK: &str = "vetting";
+
 /// The most of it worth reading.
 ///
 /// A settings file is a handful of short strings. Bounded so a file that grew by accident, or was
 /// replaced by something else entirely, is refused rather than parsed.
 const MAX_BYTES: u64 = 64 * 1024;
+
+/// The file the command line named, for the layer that sits above the three that are found.
+///
+/// Process-wide because the thing it is a property of is: `--settings` configures this run of the
+/// program, and [`Settings::load`] answers the interface, a one-shot run, and the list of variables
+/// a subprocess is built with, none of which is reached from the entry point that parsed the flag.
+/// Threading the path to each of them would be the same value passed through code that has nothing
+/// to say about it, and the one caller that was missed would read a different configuration from
+/// the rest of the process.
+///
+/// [`Settings::layered`] takes the answer as an argument instead, so every rule about how the layer
+/// resolves is checked without this being set under any of it.
+static NAMED: OnceLock<PathBuf> = OnceLock::new();
+
+/// Read `path` as a settings layer above the three that are found, for the rest of this process.
+///
+/// Called once, from the entry point, before anything has read a setting. First call wins: a second
+/// one is a caller disagreeing with the first about how this process is configured, and the half of
+/// the program that had already read the answer could not be told about the change anyway.
+pub fn name_a_settings_file(path: PathBuf) {
+    let _ = NAMED.set(path);
+}
 
 /// The `env` block, or empty when there is no file or it cannot be read.
 ///
@@ -97,8 +140,23 @@ pub struct Settings {
     /// Whether core memory is loaded and the remember tool is offered, when the file named it.
     auto_memory_enabled: Option<bool>,
     auto_memory_directory: Option<String>,
+    /// What `vetting.auto` said, where the layer that said it was entitled to.
+    ///
+    /// Read from the **home** layer and no other, which is why [`Settings::layered`] settles this
+    /// rather than [`Settings::from_map`] being trusted with it: what the key turns off is a person
+    /// being asked before content nobody vouched for reaches the planner, and a checkout is a
+    /// weaker claim than a home directory (see this module's own note on what these files are
+    /// trusted for). A project file naming it is reported by `doctor` and not obeyed.
+    vetting: Option<bool>,
+    /// The layers that named `vetting.auto` and were not obeyed, weakest first, for `doctor`.
+    ///
+    /// Kept rather than dropped because a setting that looks like configuration and does nothing is
+    /// the one worth saying out loud. Somebody who wrote it into a checkout has to be told it was
+    /// ignored, not left to wonder why the prompt still appears.
+    vetting_ignored: Vec<PathBuf>,
     keybindings: BTreeMap<String, String>,
     attribution: Attribution,
+    search: SearchCaps,
     providers: Vec<crate::provider::Provider>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
@@ -122,6 +180,30 @@ impl Attribution {
     /// Whether the block said anything.
     pub fn is_empty(&self) -> bool {
         self.commit.is_none() && self.pr.is_none()
+    }
+}
+
+/// The `search` block: what bounds a search of the workspace, where a file bounds it.
+///
+/// `None` per cap, meaning the built-in one stands. A number carries no way to say "leave this
+/// alone", and a value reserved to mean it would be a second spelling of absence for whoever has
+/// to remember which number it was.
+///
+/// Two independent caps rather than one budget: one bounds how much of the tree is walked, the
+/// other how long is spent reading what the walk selected. A tree large enough to need one is not
+/// always slow enough to need the other.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchCaps {
+    /// How many files a search may walk, from `maxFiles`.
+    pub files: Option<usize>,
+    /// How long a search may spend opening them, from `maxSeconds`.
+    pub time: Option<Duration>,
+}
+
+impl SearchCaps {
+    /// Whether the block said anything.
+    pub fn is_empty(&self) -> bool {
+        self.files.is_none() && self.time.is_none()
     }
 }
 
@@ -149,34 +231,76 @@ impl PermissionLists {
     }
 }
 
+/// The user's own settings file inside `directory`, whether or not it exists yet.
+///
+/// The one place a rule about which commands to ask about is written by hand, so a prompt that
+/// advises writing one has to name it. Here rather than in the caller because the name of the file
+/// is this module's, and a second spelling of it would have a prompt sending somebody to a path
+/// nothing reads.
+///
+/// The user's layer and not the project one. A rule in a checkout is a rule whoever wrote the
+/// checkout wrote, and advice to put a standing permission there would be advice to trust a file
+/// that arrives with a clone.
+pub fn user_settings_file(directory: &Path) -> PathBuf {
+    directory.join(SETTINGS_FILE)
+}
+
 impl Settings {
-    /// Read every settings layer in force for this user, in this directory.
+    /// Read every settings layer in force for this user, in this directory, plus the file the
+    /// command line named.
     pub fn load() -> Self {
-        Self::layered(home(), std::env::current_dir().ok().as_deref())
+        Self::layered(
+            home(),
+            std::env::current_dir().ok().as_deref(),
+            NAMED.get().map(PathBuf::as_path),
+        )
     }
 
-    /// As [`Settings::load`], for a named home and working directory, so a test needs no ambient
-    /// ones.
+    /// As [`Settings::load`], for a named home, working directory and command line, so a test needs
+    /// no ambient ones.
     ///
     /// The working directory is where the process started and not an ancestor of it. A session begun
     /// in a subdirectory therefore reads no project settings, which is the same rule Claude Code
     /// applies and is the reason this walks nothing: a search upward would make what configures a
     /// session depend on which directory somebody happened to `cd` into, and the file it eventually
     /// found could sit above the thing being worked on.
-    pub fn layered(home: Option<PathBuf>, cwd: Option<&Path>) -> Self {
+    ///
+    /// `named` is read last, so what it sets beats every file that was found. Taken as an argument
+    /// rather than read from [`NAMED`] here, so the order and the merge rules are checked without a
+    /// process-wide switch in force under every other test in this binary.
+    pub fn layered(home: Option<PathBuf>, cwd: Option<&Path>, named: Option<&Path>) -> Self {
         let project = cwd.map(|cwd| cwd.join(PROJECT_DIR));
+        let home_layer = home.map(|home| home.join(SETTINGS_FILE));
         let paths = [
-            home.map(|home| home.join(SETTINGS_FILE)),
+            home_layer.clone(),
             project.as_ref().map(|dir| dir.join(SETTINGS_FILE)),
             project.as_ref().map(|dir| dir.join(LOCAL_SETTINGS_FILE)),
+            named.map(Path::to_path_buf),
         ];
 
         let mut merged = serde_json::Map::new();
         let mut found = Vec::new();
         let mut winner = BTreeMap::new();
         let mut contested = BTreeMap::new();
+        // Settled per layer rather than off the merged root, because the merge cannot say which
+        // file a name came from and this is the one name where that decides whether it is obeyed.
+        let mut vetting = None;
+        let mut vetting_ignored = Vec::new();
         for path in paths.into_iter().flatten() {
+            // A file already read as a layer above is not read again. Naming one of the three
+            // explicitly is an ordinary thing to do, and reading it twice would report every name
+            // in it as an override of itself, list it twice among the layers, and double every
+            // entry in a list that unions rather than overrides.
+            if found.contains(&path) {
+                continue;
+            }
             let Some(root) = read(&path) else { continue };
+            if root.contains_key(VETTING_BLOCK) {
+                match Some(&path) == home_layer.as_ref() {
+                    true => vetting = auto_vetting(&root),
+                    false => vetting_ignored.push(path.clone()),
+                }
+            }
             for name in env_names(&root) {
                 // Whoever set it before lost it here, which is the only thing worth telling somebody:
                 // a name one file sets needs no explanation of where it came from.
@@ -191,12 +315,17 @@ impl Settings {
         let mut settings = Self::from_map(&merged);
         settings.layers = found;
         settings.contested = contested;
+        // Overwritten rather than merged in, so that the only value here is the home layer's own.
+        // A project file that set it has already been recorded as ignored above, and what it said
+        // cannot reach this even where the home layer said nothing.
+        settings.vetting = vetting;
+        settings.vetting_ignored = vetting_ignored;
         settings
     }
 
     /// Read one layer, for a home directory and nothing beside it.
     pub fn from_home(home: Option<PathBuf>) -> Self {
-        Self::layered(home, None)
+        Self::layered(home, None, None)
     }
 
     /// Read the `env` block, the `model` key and the scrub list out of settings JSON.
@@ -221,7 +350,7 @@ impl Settings {
     /// root that already holds what won. Reading each layer separately and combining the results
     /// afterwards would need this logic twice, once per block, and the second copy is where the two
     /// would drift.
-    fn from_map(root: &serde_json::Map<String, serde_json::Value>) -> Self {
+    pub(crate) fn from_map(root: &serde_json::Map<String, serde_json::Value>) -> Self {
         let env = match root.get("env") {
             Some(serde_json::Value::Object(block)) => block
                 .iter()
@@ -240,8 +369,14 @@ impl Settings {
             editor_mode: word(root, "editorMode"),
             auto_memory_enabled: bool_key(root, "autoMemoryEnabled"),
             auto_memory_directory: word(root, "autoMemoryDirectory"),
+            // Read here so one file's worth can be parsed on its own, and overwritten by
+            // [`Settings::layered`], which is the only caller that knows which layer this came
+            // from and so the only one entitled to answer.
+            vetting: auto_vetting(root),
+            vetting_ignored: Vec::new(),
             keybindings: keybindings_block(root),
             attribution: attribution_block(root),
+            search: search_caps(root),
             providers: crate::provider::Provider::all(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -290,12 +425,38 @@ impl Settings {
         self.auto_memory_directory.as_deref()
     }
 
+    /// What `vetting.auto` said in the home layer, if it said anything.
+    ///
+    /// `None` where no file named it, and `None` too where the only file that named it was a
+    /// checkout's: the value a project file carried is not an answer this can give, and
+    /// [`Settings::vetting_ignored`] is where such a file is reported instead.
+    ///
+    /// A default rather than the answer in force. What a person recorded for themselves outranks
+    /// it and a flag outranks both; `bravebot_core::vetting::auto` is the whole of that rule.
+    pub fn auto_vetting(&self) -> Option<bool> {
+        self.vetting
+    }
+
+    /// The files that named `vetting.auto` and were not obeyed, weakest first, for `doctor`.
+    pub fn vetting_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.vetting_ignored.iter().map(PathBuf::as_path)
+    }
+
     /// What the settings in force say a commit message and a pull request may carry.
     ///
     /// A name the block set is an answer even when it is empty, empty being how a file says to
     /// carry nothing. Nothing here writes either one: this is where a writer of one asks.
     pub fn attribution(&self) -> &Attribution {
         &self.attribution
+    }
+
+    /// What the settings in force put a search of the workspace under, cap by cap.
+    ///
+    /// A cap nobody named is `None` rather than the built-in number, because the built-in one is
+    /// the workspace's to know: answering with it here would make this crate the second place the
+    /// default is written down, and the two would drift.
+    pub fn search(&self) -> &SearchCaps {
+        &self.search
     }
 
     /// Whether anything was set at all.
@@ -305,9 +466,15 @@ impl Settings {
             && self.permissions.is_empty()
             && self.model.is_none()
             && self.editor_mode.is_none()
+            && self.vetting.is_none()
             && self.keybindings.is_empty()
             && self.attribution.is_empty()
+            && self.search.is_empty()
             && self.providers.is_empty()
+            // A file that named `vetting.auto` and was not obeyed still said something, and
+            // `doctor` reports both facts about it. Reading it as absence would print "no
+            // settings.json" one line above the path of the file that holds it.
+            && self.vetting_ignored.is_empty()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -359,6 +526,7 @@ impl Settings {
             .then_some("model")
             .into_iter()
             .chain(self.editor_mode.is_some().then_some("editorMode"))
+            .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain((!self.keybindings.is_empty()).then_some("keybindings"))
             .chain(
                 self.attribution
@@ -367,6 +535,8 @@ impl Settings {
                     .then_some("attribution.commit"),
             )
             .chain(self.attribution.pr.is_some().then_some("attribution.pr"))
+            .chain(self.search.files.is_some().then_some("search.maxFiles"))
+            .chain(self.search.time.is_some().then_some("search.maxSeconds"))
             .chain(self.env.keys().map(String::as_str))
     }
 }
@@ -377,7 +547,7 @@ impl Settings {
 /// oversized one, a syntax error, or a root that is not an object. A half-typed project file leaves
 /// the layers under it in force, because the alternative is a mistake in a checkout deciding that a
 /// person's own profile no longer applies.
-fn read(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
+pub(crate) fn read(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
     match std::fs::metadata(path) {
         Ok(found) if found.len() > MAX_BYTES => return None,
         Ok(_) => {}
@@ -407,6 +577,23 @@ fn word(root: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<
         Some(serde_json::Value::String(word)) => Some(word.trim())
             .filter(|word| !word.is_empty())
             .map(str::to_string),
+        _ => None,
+    }
+}
+
+/// The `vetting` block's `auto` key, as a boolean and nothing else.
+///
+/// A boolean rather than a word, because this is the one value here that is not a name being passed
+/// on to something: it says whether a person is asked. `"true"` as a string, a number, and anything
+/// else are absence, which leaves the layers under it in force. That is stricter than the reading
+/// the `env` block gets, and deliberately: a file that meant to turn this on and mistyped the value
+/// leaves the prompt appearing, which is the direction to be wrong in.
+fn auto_vetting(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
+    match root.get(VETTING_BLOCK) {
+        Some(serde_json::Value::Object(block)) => match block.get("auto") {
+            Some(serde_json::Value::Bool(auto)) => Some(*auto),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -450,7 +637,8 @@ fn merge(
                 if key == "env"
                     || key == "provider"
                     || key == "attribution"
-                    || key == "keybindings" =>
+                    || key == "keybindings"
+                    || key == "search" =>
             {
                 under.extend(above);
             }
@@ -573,6 +761,31 @@ fn keybindings_block(
         .map(|(action, chord)| (action.trim().to_ascii_lowercase(), chord.trim().to_string()))
         .filter(|(action, chord)| !action.is_empty() && !chord.is_empty())
         .collect()
+}
+
+/// The `search` block: how many files a search may walk, and how long it may spend reading them.
+///
+/// Numbers rather than the strings the rest of this file reads, because a cap is a quantity and
+/// there is no spelling of one worth carrying through unrecognised. Whole and positive: anything
+/// else is absence, on the same footing as everything else here, so a half-typed file leaves the
+/// built-in cap in force rather than refusing to start.
+///
+/// Zero is absence too. It is the number somebody writes meaning "no cap", and read literally it
+/// is a search permitted to open no file at all, which answers every pattern with nothing found.
+fn search_caps(root: &serde_json::Map<String, serde_json::Value>) -> SearchCaps {
+    let Some(serde_json::Value::Object(block)) = root.get("search") else {
+        return SearchCaps::default();
+    };
+    let count = |name: &str| {
+        block
+            .get(name)
+            .and_then(serde_json::Value::as_u64)
+            .filter(|cap| *cap > 0)
+    };
+    SearchCaps {
+        files: count("maxFiles").and_then(|files| usize::try_from(files).ok()),
+        time: count("maxSeconds").map(Duration::from_secs),
+    }
 }
 
 /// The `permissions` block: three lists of rule text, and the directories to open.
@@ -893,6 +1106,64 @@ mod tests {
         }
     }
 
+    /// A tree where the built-in caps are the wrong numbers is the only thing that can say so, so
+    /// the block has to reach the code that walks it: without it there is no way to search a
+    /// repository larger than the default walks.
+    #[test]
+    fn a_file_may_cap_a_search_of_a_large_tree() {
+        let settings = Settings::parse(r#"{"search": {"maxFiles": 500000, "maxSeconds": 60}}"#);
+        assert_eq!(settings.search().files, Some(500_000));
+        assert_eq!(settings.search().time, Some(Duration::from_secs(60)));
+        assert!(!settings.is_empty());
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            ["search.maxFiles", "search.maxSeconds"]
+        );
+    }
+
+    /// The two caps bound different things, so a file raising the walk says nothing about how long
+    /// a read may take: one named alone leaves the other on its built-in number.
+    #[test]
+    fn one_search_cap_is_read_without_the_other() {
+        let files = Settings::parse(r#"{"search": {"maxFiles": 400000}}"#);
+        assert_eq!(files.search().files, Some(400_000));
+        assert_eq!(files.search().time, None);
+
+        let time = Settings::parse(r#"{"search": {"maxSeconds": 45}}"#);
+        assert_eq!(time.search().files, None);
+        assert_eq!(time.search().time, Some(Duration::from_secs(45)));
+    }
+
+    /// Zero is what somebody writes meaning "no cap", and honoured literally it is a search
+    /// permitted to open no file at all: every pattern would come back absent from a tree that
+    /// holds it. Absence leaves the built-in cap in force instead.
+    #[test]
+    fn a_search_cap_of_zero_leaves_the_built_in_one_in_force() {
+        let settings = Settings::parse(r#"{"search": {"maxFiles": 0, "maxSeconds": 0}}"#);
+        assert!(settings.search().is_empty());
+        assert!(settings.is_empty());
+    }
+
+    /// Every other shape is absence, on the same footing as the rest of this file: a half-typed
+    /// settings file leaves the built-in cap in force rather than stopping a session.
+    #[test]
+    fn a_search_cap_that_is_not_a_whole_count_is_absence() {
+        for text in [
+            r#"{"search": {"maxFiles": "500000"}}"#,
+            r#"{"search": {"maxFiles": 500000.5, "maxSeconds": 1.5}}"#,
+            r#"{"search": {"maxFiles": -1, "maxSeconds": -1}}"#,
+            r#"{"search": {"maxFiles": true, "maxSeconds": null}}"#,
+            r#"{"search": {"maxFiles": [500000]}}"#,
+            r#"{"search": "wide"}"#,
+            r#"{"maxFiles": 500000}"#,
+        ] {
+            assert!(
+                Settings::parse(text).search().is_empty(),
+                "{text:?} capped something"
+            );
+        }
+    }
+
     /// The block a person copies out of `~/.claude/settings.json`, read without being rewritten
     /// first, which is the whole reason this file has the shape it has.
     #[test]
@@ -1019,6 +1290,8 @@ mod tests {
     struct Layers {
         home: PathBuf,
         cwd: PathBuf,
+        /// The file a command line named, where one of these tests names one.
+        named: Option<PathBuf>,
     }
 
     impl Layers {
@@ -1033,6 +1306,7 @@ mod tests {
             Self {
                 home,
                 cwd: root.join("cwd"),
+                named: None,
             }
         }
 
@@ -1053,8 +1327,43 @@ mod tests {
             self
         }
 
+        /// A file the command line named, outside every directory the layers above are found in:
+        /// the point of the flag is a file that is a property of neither the person nor the
+        /// checkout, so one written inside either would not be the case under test.
+        fn named(mut self, text: &str) -> Self {
+            let path = self
+                .home
+                .parent()
+                .expect("the scratch root")
+                .join("named.json");
+            std::fs::write(&path, text).expect("named layer");
+            self.named = Some(path);
+            self
+        }
+
+        /// The command line naming a file that is already one of the three found layers.
+        fn naming_the_project_layer(mut self) -> Self {
+            self.named = Some(self.cwd.join(PROJECT_DIR).join(SETTINGS_FILE));
+            self
+        }
+
+        /// A file the command line named that nobody wrote, for the failure case.
+        fn naming_nothing(mut self) -> Self {
+            self.named = Some(
+                self.home
+                    .parent()
+                    .expect("the scratch root")
+                    .join("was-never-written.json"),
+            );
+            self
+        }
+
         fn read(&self) -> Settings {
-            Settings::layered(Some(self.home.clone()), Some(&self.cwd))
+            Settings::layered(
+                Some(self.home.clone()),
+                Some(&self.cwd),
+                self.named.as_deref(),
+            )
         }
     }
 
@@ -1092,6 +1401,105 @@ mod tests {
             .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
             .read();
         assert_eq!(settings.get("AWS_PROFILE"), Some("just-this-machine"));
+    }
+
+    /// The point of naming a file on the command line: a run configured differently from the last
+    /// one in the same directory, by somebody who can edit neither the home directory nor the
+    /// checkout. Naming a file is a stronger statement than a file being found where one was looked
+    /// for, so it wins over all three.
+    #[test]
+    fn a_file_the_command_line_named_beats_every_layer_that_was_found() {
+        let settings = Layers::new("named-wins")
+            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
+            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
+            .named(r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#)
+            .read();
+        assert_eq!(settings.get("AWS_PROFILE"), Some("the-ci-account"));
+    }
+
+    /// A fourth layer rather than a replacement for the three. A job that wants one value changed
+    /// would otherwise lose the configuration the checkout carries, which it wants as well, and
+    /// would have to restate a whole configuration to move a profile.
+    #[test]
+    fn a_name_a_command_line_file_left_alone_keeps_the_answer_below_it() {
+        let settings = Layers::new("named-leaves-the-rest")
+            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn"}}"#)
+            .named(r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#)
+            .read();
+        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
+        assert_eq!(
+            settings.get("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            Some("opus-arn")
+        );
+        assert_eq!(settings.get("AWS_PROFILE"), Some("the-ci-account"));
+    }
+
+    /// The lists are the exception for every layer, this one included: an entry only ever narrows
+    /// what is possible, so a file named on the command line adds to them rather than handing back
+    /// a variable the person's own file withheld from a subprocess.
+    #[test]
+    fn a_command_line_file_adds_to_the_names_kept_from_a_program() {
+        let settings = Layers::new("named-scrub-union")
+            .global(r#"{"run": {"scrubEnv": ["PERSONAL_TOKEN"]}}"#)
+            .named(r#"{"run": {"scrubEnv": ["CI_TOKEN"]}}"#)
+            .read();
+        let mut named: Vec<&str> = settings.scrubbed().collect();
+        named.sort_unstable();
+        assert_eq!(named, ["CI_TOKEN", "PERSONAL_TOKEN"]);
+    }
+
+    /// `doctor` has to name it for the same reason it names the other three: a value somebody did
+    /// not expect now has a fourth place it could have come from, and this is the only one that is
+    /// not in a directory they would think to look in.
+    #[test]
+    fn a_command_line_file_is_reported_as_the_layer_that_won_a_name() {
+        let layers = Layers::new("named-reported")
+            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
+            .named(r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#);
+        let settings = layers.read();
+        let file = layers.named.clone().expect("the file that was named");
+
+        let reported: Vec<PathBuf> = settings.layers().map(Path::to_path_buf).collect();
+        assert_eq!(reported, [layers.home.join(SETTINGS_FILE), file.clone()]);
+        assert_eq!(
+            settings.overridden().collect::<Vec<_>>(),
+            [("AWS_PROFILE", file.as_path())]
+        );
+    }
+
+    /// Each layer fails independently, and being named on a command line does not change that: the
+    /// entry point refuses a path that is there to be checked before the run starts, and what is
+    /// left for this to decide is that a file going missing under a running process does not throw
+    /// away somebody's own profile.
+    #[test]
+    fn a_command_line_file_that_is_not_there_leaves_the_found_layers_in_force() {
+        let settings = Layers::new("named-absent")
+            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
+            .naming_nothing()
+            .read();
+        assert_eq!(settings.get("AWS_PROFILE"), Some("personal"));
+        assert_eq!(settings.layers().count(), 1);
+    }
+
+    /// Naming a file that is already being read is ordinary, since the flag is how somebody says
+    /// which configuration a run uses whether or not it is one they keep. Read twice, it would be
+    /// listed twice, report the names it sets as overrides of itself, and double the entries in
+    /// the lists that union rather than override.
+    #[test]
+    fn a_command_line_file_that_is_already_a_layer_is_read_once() {
+        let layers = Layers::new("named-twice")
+            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .naming_the_project_layer();
+        let settings = layers.read();
+
+        assert_eq!(settings.layers().count(), 2);
+        assert_eq!(settings.overridden().count(), 0);
+        assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["A_TOKEN"]);
+        assert_eq!(settings.get("AWS_PROFILE"), Some("shared"));
+        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
     }
 
     /// Naming a variable here only ever takes it away from a subprocess, so the layers add up. An
@@ -1177,6 +1585,39 @@ mod tests {
             ))
             .read();
         assert_eq!(settings.get("AWS_PROFILE"), Some("personal"));
+    }
+
+    /// A layer that spelled a name at all is the layer that answered for it, so a value that is not
+    /// a string leaves the name unset rather than the one underneath standing. The rest of that
+    /// layer, and every other name, is unaffected: one mistyped value must not discard a file.
+    #[test]
+    fn a_value_that_is_not_a_string_leaves_the_name_unset_in_every_layer() {
+        let settings = Layers::new("not-a-string")
+            .global(r#"{"env": {"AWS_PROFILE": "personal", "AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": 1, "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn"}}"#)
+            .read();
+        assert_eq!(settings.get("AWS_PROFILE"), None);
+        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
+        assert_eq!(
+            settings.get("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            Some("opus-arn")
+        );
+    }
+
+    /// The same rule one level up: a layer that spelled `env` as anything but a block answered for
+    /// the whole block, so nothing is read from it and nothing is read from the layers below. The
+    /// file parses, so this is not the failed-layer case, and the other keys are untouched.
+    #[test]
+    fn a_block_that_is_not_a_block_leaves_no_names_under_it() {
+        for spelling in ["null", "5", "\"AWS_PROFILE=personal\"", "[]"] {
+            let settings = Layers::new(&format!("not-a-block-{}", spelling.len()))
+                .global(r#"{"env": {"AWS_PROFILE": "personal", "AWS_REGION": "us-west-2"}}"#)
+                .project(&format!(r#"{{"env": {spelling}, "model": "opus"}}"#))
+                .read();
+            assert_eq!(settings.get("AWS_PROFILE"), None, "{spelling}");
+            assert_eq!(settings.get("AWS_REGION"), None, "{spelling}");
+            assert_eq!(settings.model(), Some("opus"), "{spelling}");
+        }
     }
 
     /// Somebody working in a directory that carries no settings gets exactly what they had before
@@ -1291,6 +1732,126 @@ mod tests {
         assert!(Settings::parse(r#"{"editorMode": ""}"#).is_empty());
     }
 
+    /// The home layer may turn auto-vetting on, which is the whole point of the key: somebody who
+    /// has decided they want it says so once for every session they open.
+    #[test]
+    fn the_home_layer_may_ask_for_auto_vetting() {
+        let settings = Layers::new("vetting-home")
+            .global(r#"{"vetting": {"auto": true}}"#)
+            .read();
+        assert_eq!(settings.auto_vetting(), Some(true));
+        assert_eq!(settings.vetting_ignored().count(), 0);
+    }
+
+    /// A checkout must not be able to stop the asking for whoever opened it. The value is not
+    /// obeyed however it is spelled, and the file is named so the person who wrote it is told.
+    #[test]
+    fn a_project_layer_cannot_turn_auto_vetting_on() {
+        let settings = Layers::new("vetting-project")
+            .project(r#"{"vetting": {"auto": true}}"#)
+            .read();
+        assert_eq!(
+            settings.auto_vetting(),
+            None,
+            "a checkout turned off a person being asked"
+        );
+        assert_eq!(settings.vetting_ignored().count(), 1);
+    }
+
+    /// The machine-local layer is a checkout's file under another name, so it is not the home
+    /// layer either. Reading it would make the rule above depend on which of the two somebody
+    /// picked.
+    #[test]
+    fn the_local_layer_cannot_turn_auto_vetting_on_either() {
+        let settings = Layers::new("vetting-local")
+            .local(r#"{"vetting": {"auto": true}}"#)
+            .read();
+        assert_eq!(settings.auto_vetting(), None);
+        assert_eq!(settings.vetting_ignored().count(), 1);
+    }
+
+    /// A file the command line named is a property of one invocation rather than of the person, so
+    /// it is not the home layer. `--vet` is how a command line asks for this, and it is a flag
+    /// somebody typed rather than a file a job wrote.
+    #[test]
+    fn a_named_layer_cannot_turn_auto_vetting_on() {
+        let settings = Layers::new("vetting-named")
+            .named(r#"{"vetting": {"auto": true}}"#)
+            .read();
+        assert_eq!(settings.auto_vetting(), None);
+        assert_eq!(settings.vetting_ignored().count(), 1);
+    }
+
+    /// The merge cannot decide this one: a project file that restated the key would otherwise beat
+    /// the home file by being read later, which is exactly the override the rule forbids.
+    #[test]
+    fn a_project_layer_does_not_override_what_the_home_layer_said_about_vetting() {
+        let settings = Layers::new("vetting-contest")
+            .global(r#"{"vetting": {"auto": true}}"#)
+            .project(r#"{"vetting": {"auto": false}}"#)
+            .read();
+        assert_eq!(
+            settings.auto_vetting(),
+            Some(true),
+            "a checkout overrode the home layer's answer"
+        );
+        assert_eq!(settings.vetting_ignored().count(), 1);
+    }
+
+    /// Off is a value and not absence, so a home file may turn it off and keep it off against a
+    /// checkout that asks for it.
+    #[test]
+    fn the_home_layer_may_say_no_to_auto_vetting() {
+        assert_eq!(
+            Settings::parse(r#"{"vetting": {"auto": false}}"#).auto_vetting(),
+            Some(false)
+        );
+    }
+
+    /// A value that is not a boolean is absence. A file that meant to turn this on and mistyped it
+    /// leaves the prompt appearing, which is the direction to be wrong in.
+    #[test]
+    fn a_vetting_key_that_is_not_a_boolean_says_nothing() {
+        for text in [
+            r#"{"vetting": {"auto": "true"}}"#,
+            r#"{"vetting": {"auto": 1}}"#,
+            r#"{"vetting": {"auto": null}}"#,
+            r#"{"vetting": {}}"#,
+            r#"{"vetting": true}"#,
+        ] {
+            assert_eq!(
+                Settings::parse(text).auto_vetting(),
+                None,
+                "{text} was read as an answer"
+            );
+        }
+    }
+
+    /// A file whose only name was the one that is not obeyed still said something, and `doctor`
+    /// reports both facts about it. Read as absence it would print "no settings.json" one line
+    /// above the path of the file that holds it, which is the report contradicting itself.
+    #[test]
+    fn a_layer_that_named_only_vetting_is_not_a_layer_that_said_nothing() {
+        let settings = Layers::new("vetting-only")
+            .project(r#"{"vetting": {"auto": true}}"#)
+            .read();
+        assert_eq!(settings.auto_vetting(), None);
+        assert!(
+            !settings.is_empty(),
+            "a file that named the key was reported as having set nothing"
+        );
+    }
+
+    /// A file that sets only this is not a file that set nothing, for the reason the editing style
+    /// is reported: somebody wondering why they are not being asked has to find it in `doctor`.
+    #[test]
+    fn auto_vetting_is_among_the_names_reported() {
+        let settings = Settings::parse(r#"{"vetting": {"auto": true}}"#);
+        let reported: Vec<&str> = settings.names().collect();
+        assert_eq!(reported, ["vetting.auto"]);
+        assert!(!settings.is_empty());
+    }
+
     /// A file that sets only this is not a file that set nothing: `doctor` reports which names a layer
     /// carried, and a person debugging why their box edits the way it does has to see it there.
     #[test]
@@ -1354,6 +1915,18 @@ mod tests {
             settings.attribution().pr.as_deref(),
             Some("Opened by bravebot")
         );
+    }
+
+    /// The two caps are unrelated bounds that share a block, so a checkout widening the walk for
+    /// its own size must not hand back the reading time a person's own file had cut.
+    #[test]
+    fn a_layer_capping_one_side_of_a_search_leaves_the_other() {
+        let settings = Layers::new("search-per-name")
+            .global(r#"{"search": {"maxFiles": 500000, "maxSeconds": 60}}"#)
+            .project(r#"{"search": {"maxFiles": 900000}}"#)
+            .read();
+        assert_eq!(settings.search().files, Some(900_000));
+        assert_eq!(settings.search().time, Some(Duration::from_secs(60)));
     }
 
     /// A model is one choice rather than a list, so the closest layer that names one wins: a checkout

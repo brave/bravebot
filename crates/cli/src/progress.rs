@@ -8,6 +8,7 @@
 //! where it can be piped into something else; a progress log that shared that stream would
 //! corrupt it.
 
+use crate::json::Call;
 use bravebot_agent::report::{Activity, Reporter, Shown};
 use bravebot_core::todo::Row;
 use bravebot_i18n::t;
@@ -21,9 +22,12 @@ const DETAIL_MARKER: &str = "\u{23bf}";
 
 /// Drawn down the margin of everything the planner was not allowed to read.
 ///
+/// Shared with [`crate::plain`], which puts the same content in front of a person as a question:
+/// one glyph, so a block a session in lines draws and a block a run reports read alike.
+///
 /// The same glyph the interactive transcript uses, on every row of the block, so the mark cannot
 /// be ended by anything written inside it. A caption could be imitated; a margin cannot.
-const QUARANTINE_BAR: &str = "\u{2503}";
+pub(crate) const QUARANTINE_BAR: &str = "\u{2503}";
 
 /// The width a shown block is broken at.
 ///
@@ -36,10 +40,14 @@ const BLOCK_WIDTH: usize = 80;
 
 /// Replace control characters, so shown text cannot move the cursor or recolour the screen.
 ///
+/// Shared with [`crate::plain`] for the reason [`QUARANTINE_BAR`] is: the same content is put in
+/// front of a person there, and one of the two surfaces pictering escapes and the other sending
+/// them would be a margin forged on whichever did not.
+///
 /// The margin in front of every row is written by this module. An escape sequence in the content
 /// would let the content write one instead, and a forged margin is worse than no margin, since
 /// drawing one is the whole claim being made about the block.
-fn printable(text: &str) -> String {
+pub(crate) fn printable(text: &str) -> String {
     text.chars()
         .map(|c| {
             if !c.is_control() || c == '\t' {
@@ -84,11 +92,24 @@ fn marked(margin: &str, line: &str) -> Vec<String> {
 /// Generic over the sink so a test can read back exactly what a run would have printed.
 pub struct Progress<W: Write> {
     out: W,
+    /// Every call the run made, in order, for a result object that has to list them.
+    ///
+    /// Kept here because this is the one thing told about every call, start and finish, and a
+    /// second listener would be a second set of hooks to keep in step with dispatch.
+    calls: Vec<Call>,
 }
 
 impl<W: Write> Progress<W> {
     pub fn new(out: W) -> Self {
-        Self { out }
+        Self {
+            out,
+            calls: Vec::new(),
+        }
+    }
+
+    /// What the run called, in the order it called it.
+    pub fn calls(&self) -> &[Call] {
+        &self.calls
     }
 
     /// A failed write is dropped. Progress announces and has nothing to refuse with, so a
@@ -120,6 +141,16 @@ impl<W: Write> Reporter for Progress<W> {
     }
 
     fn tool_finished(&mut self, activity: Activity) {
+        // Recorded as it finishes rather than as it starts, because whether it was refused is
+        // half of what a caller wants and is not known until then. A call dispatch named nothing
+        // for is left out: an empty name is nothing a program can match on.
+        if !activity.tool.is_empty() {
+            self.calls.push(Call {
+                tool: activity.tool.clone(),
+                target: activity.target.clone(),
+                refused: activity.failed,
+            });
+        }
         if let Some(note) = &activity.note {
             self.say(&format!("  {DETAIL_MARKER} {note}"));
         }

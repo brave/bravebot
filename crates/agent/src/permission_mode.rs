@@ -21,7 +21,8 @@
 //! less than the person could see themselves.
 
 use crate::confirm::{
-    Confirmer, Decision, OutputRequest, RunDecision, RunRequest, VouchRequest, WriteRequest,
+    Confirmer, Decision, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
+    WriteRequest,
 };
 
 /// How much this session asks before it acts.
@@ -172,6 +173,20 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    /// Asked in every mode but bypass, as reading a command's output is.
+    ///
+    /// Accepting edits does not accept this: what that mode grants is writes to this tree, and
+    /// this puts bytes nobody vouched for into the planner's context. Plan mode asks rather than
+    /// refusing, since reading is how a plan gets written.
+    fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+        match self.mode {
+            PermissionMode::Bypass => Decision::Approve,
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.inner.confirm_vetted_read(request)
+            }
+        }
+    }
+
     /// Asked in every mode but bypass, including plan mode.
     ///
     /// Accepting edits does not accept fetches: the two have nothing to do with each other, and a
@@ -274,6 +289,7 @@ mod tests {
             existing: None,
             intent: Intent::Create,
             untrusted: false,
+            remark: None,
         }
     }
 

@@ -79,7 +79,7 @@ use bravebot_core::value::Labelled;
 use bravebot_net::Egress;
 use serde_json::Value;
 
-use crate::confirm::{Confirmer, Decision, Intent, ManifestRequest, WriteRequest};
+use crate::confirm::{Confirmer, Decision, Intent, ManifestRequest, Remark, WriteRequest};
 use crate::conversation::Conversation;
 use crate::processor::Chat;
 use crate::report::{Activity, Phase, Reporter};
@@ -556,6 +556,35 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
         Err(error) => return Err(stopped(attempt, error)),
     };
 
+    // Plan mode refuses a write for as long as it is in force, and refuses it where no prompt
+    // would have been raised at all ([permission-modes.md](../../../docs/specs/permission-modes.md)
+    // MODE-3). A step's write prompt is raised only where the policy wants one, so a plan writing a
+    // body it carried into a path the person vouched for asks nobody and goes straight through:
+    // that is the case the clause is written for, so the mode has to be answered from the plan or
+    // it does not hold in this mode at all.
+    //
+    // Here rather than at the step, so the refusal costs what a decline costs: nothing has been
+    // read, nothing has been written, and nobody has been asked to approve a plan whose writes
+    // were never going to land. A plan that writes nothing runs, because there is nothing in it
+    // for the mode to refuse.
+    if task.permission_mode.refuses_writes()
+        && let Some((index, _)) = planned
+            .plan
+            .steps()
+            .iter()
+            .enumerate()
+            .find(|(_, step)| crate::tools::writes_a_file(step.tool()))
+    {
+        return Err(stopped(
+            attempt,
+            TurnError::Precommit(format!(
+                "plan mode refuses a write, and step {} of this plan writes a file, so nothing \
+                 ran. Leave plan mode and ask again.",
+                index + 1
+            )),
+        ));
+    }
+
     match execute(
         config,
         egress,
@@ -585,10 +614,10 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
 /// report of a half-run they interrupted on purpose is noise.
 fn stopped(attempt: Attempt, error: TurnError) -> TurnError {
     match error {
-        TurnError::Cancelled => TurnError::Cancelled,
+        TurnError::Cancelled { attempts } => TurnError::Cancelled { attempts },
         other => TurnError::Manifest {
             attempt: Box::new(attempt),
-            detail: other.to_string(),
+            cause: Box::new(other),
         },
     }
 }
@@ -692,7 +721,7 @@ fn plan<S: Sink, R: Reporter>(
     attempt: &mut Attempt,
 ) -> Result<Planned, TurnError> {
     if cancel.is_cancelled() {
-        return Err(TurnError::Cancelled);
+        return Err(TurnError::Cancelled { attempts: Some(0) });
     }
 
     let mut routing = Routing::new();
@@ -841,7 +870,7 @@ fn ask<S: Sink, R: Reporter>(
     model: &mut String,
 ) -> Result<String, TurnError> {
     if cancel.is_cancelled() {
-        return Err(TurnError::Cancelled);
+        return Err(TurnError::Cancelled { attempts: Some(0) });
     }
 
     policy
@@ -1004,7 +1033,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
 
     for (index, step) in plan.steps().iter().enumerate() {
         if cancel.is_cancelled() {
-            return Err(TurnError::Cancelled);
+            return Err(TurnError::Cancelled { attempts: Some(0) });
         }
 
         let Some(entry) = registered_tool(step.tool()) else {
@@ -1014,7 +1043,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 step.tool()
             )));
         };
-        let activity = Activity::running(entry.capability, step.describe());
+        let activity = Activity::running(entry.capability, step.describe()).of_tool(step.tool());
         reporter.tool_started(activity.clone());
 
         // Wrapped per step for the same reason the turn loop wraps per call: the borrow has to go
@@ -1099,6 +1128,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
 
     let trust = policy.trust().clone();
     let programs = policy.programs().clone();
+    let asked_about = policy.asked().clone();
     Ok(Outcome {
         answer: reply.clone(),
         reply,
@@ -1108,6 +1138,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         clean: planning_was_clean && policy.finish(),
         trust,
         programs,
+        asked_about,
         tokens,
         output_tokens,
         cached,
@@ -1115,6 +1146,9 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         premium,
         // A manifest run has no loop to pace and is offered no way to ask for one.
         wakeup: None,
+        // Nor a session to hold a watch. The plan is frozen before anything is read, so a turn
+        // that armed one would be adding to a run whose steps were settled without it.
+        watches: Vec::new(),
         timing: spent.finish(),
         display: shown,
         notices: Vec::new(),
@@ -1354,6 +1388,12 @@ fn run_step<S: Sink, C: Confirmer>(
             // precommitment rather than a wider permission, so an answer minted here carries the
             // home the same call would give it in a turn.
             policy.answers_for(&out_slot, spec.about(), slots);
+            // And what it said about that document, so the approval the document is put to shows
+            // the claim made about it. A plan does not put the remark in a transcript at all, so
+            // the prompt is the only place a planned run has to show it.
+            if let Some(said) = &processed.note {
+                policy.came_with_a_remark(&out_slot, said, slots);
+            }
             Ok(Done {
                 note,
                 tokens: processed.usage.total(),
@@ -1465,6 +1505,10 @@ fn write<S: Sink, C: Confirmer>(
 ) -> Result<Done, String> {
     let path = locked(policy, index, "path")?;
 
+    // What a processor said about the body, where a processor produced it. Filled below, from the
+    // slot the bytes come out of, and read by nothing but the question.
+    let mut remark = None;
+
     let body = match step.arg("from_slot").and_then(Arg::text) {
         // Quarantined bytes going back into the workspace they came from, without the driver
         // reading one of them.
@@ -1479,6 +1523,18 @@ fn write<S: Sink, C: Confirmer>(
             let content = policy
                 .resolve("write_file", &slot, slots)
                 .map_err(|d| d.to_string())?;
+            remark = policy
+                .remark_for_review(
+                    &slot,
+                    slots,
+                    crate::tools::REMARK_LINES,
+                    crate::tools::REMARK_WIDTH,
+                )
+                .map(|(preview, lines, label)| Remark {
+                    preview,
+                    lines,
+                    label: label.to_string(),
+                });
             policy.declassify_into_workspace(&slot, &path, content)
         }
         // A body the plan carried. Trusted, because the plan was fixed while the task string
@@ -1504,6 +1560,7 @@ fn write<S: Sink, C: Confirmer>(
             path: path.clone(),
             contents: shown.clone(),
             untrusted: !body_label.is_trusted(),
+            remark,
         };
         if confirmer.confirm_write(&request) == Decision::Reject {
             return Err(format!("the user did not approve writing {path}"));

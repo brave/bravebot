@@ -34,7 +34,9 @@ name a file when you want it worked on.
 `@path` in a prompt and `--file` on the command line do the same thing and are trusted for the same
 reason.
 
-`verified-by: bravebot_agent::turn::naming_one_file_leaves_the_rest_of_the_workspace_quarantined`
+`verified-by: bravebot_agent::turn::a_turn_includes_requested_file_contents`
+`verified-by: bravebot_agent::turn::a_turn_includes_referenced_file_contents`
+`verified-by: bravebot_agent::turn::a_referenced_file_is_trusted_though_the_workspace_is_not`
 
 <a id="NAME-2"></a>
 ### NAME-2: the rule is for that file, and nothing beside it
@@ -44,6 +46,7 @@ trusted inside a `vendor` marked untrusted, and the rest of that directory stays
 
 `verified-by: bravebot_core::policy::naming_a_file_vouches_for_nothing_beside_it`
 `verified-by: bravebot_core::policy::a_named_file_is_trusted_inside_an_untrusted_tree`
+`verified-by: bravebot_agent::turn::naming_one_file_leaves_the_rest_of_the_workspace_quarantined`
 
 <a id="NAME-3"></a>
 ### NAME-3: the rule outlives the read
@@ -51,7 +54,8 @@ trusted inside a `vendor` marked untrusted, and the rest of that directory stays
 The file can be edited afterwards, which is usually the point of naming it. Naming one also works
 in a directory declined at startup.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_named_file_is_still_trusted_after_it_is_edited`
+`verified-by: bravebot_agent::turn::a_referenced_file_is_trusted_though_the_workspace_is_not`
 
 <a id="NAME-4"></a>
 ### NAME-4: typing `@` offers what is in the workspace, so the choice is informed

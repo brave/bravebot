@@ -187,7 +187,7 @@ fn run(
         skipping_permissions!(),
         &mut bravebot_agent::IgnoreReports,
         sink,
-        TrustStore::new(),
+        TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
 }
@@ -211,7 +211,7 @@ fn piped_input_is_refused_rather_than_dropped() {
         skipping_permissions!(),
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        TrustStore::new(),
+        TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect_err("must refuse");
@@ -354,7 +354,7 @@ fn a_plan_nobody_approved_runs_nothing() {
         &mut nobody,
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        TrustStore::new(),
+        TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect_err("a plan nobody approved must not run");
@@ -375,7 +375,7 @@ fn a_plan_nobody_approved_runs_nothing() {
     );
 
     // What it stopped at comes back, so somebody can read the plan that was declined.
-    let bravebot_agent::TurnError::Manifest { attempt, detail } = failure else {
+    let bravebot_agent::TurnError::Manifest { attempt, cause } = failure else {
         panic!("a stopped run must come back with its attempt");
     };
     assert!(
@@ -383,6 +383,7 @@ fn a_plan_nobody_approved_runs_nothing() {
         "the plan it asked about was dropped"
     );
     assert!(attempt.steps.is_empty(), "a step ran anyway");
+    let detail = cause.to_string();
     assert!(
         detail.contains("not approved"),
         "the reason should say the plan was not approved, got: {detail}"
@@ -461,6 +462,96 @@ fn injected_text_in_a_file_cannot_add_a_step() {
     assert!(
         received.try_recv().is_err(),
         "the injection bought another model call"
+    );
+}
+
+/// MODE-3 holds over a manifest run, and it has to hold from the plan rather than from the write
+/// prompt. A body the plan carried into a path the person already vouched for needs no approval, so
+/// the confirmer is never reached and plan mode's refusal there never fires: the write just lands.
+/// The case is reachable because a session can start a run (MANIFEST-11), and a session is where
+/// plan mode exists.
+///
+/// `ApprovePlans` is the confirmer that says yes to the whole run and no to each write in it, so a
+/// refusal here is the mode's own and not the double's, and the file's absence is the assertion the
+/// clause is actually about.
+#[test]
+fn plan_mode_refuses_a_plan_that_writes() {
+    let scratch = Scratch::new("plan-mode-write");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "FILE_WRITE", "args": {"path": "out.md", "contents": "a body the plan carried"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let failure = manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("write a summary").with_permission_mode(bravebot_agent::PermissionMode::Plan),
+        &mut bravebot_agent::Confining::new(
+            &mut bravebot_agent::confirm::ApprovePlans,
+            bravebot_agent::PermissionMode::Plan,
+        ),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("plan mode must refuse a plan that writes");
+
+    assert!(failure.to_string().contains("plan mode"), "got: {failure}");
+    assert!(
+        !scratch.path.join("out.md").exists(),
+        "plan mode let a manifest run write a file"
+    );
+}
+
+/// The other half of the same clause: the mode refuses writes and nothing else, so a plan that
+/// reads and answers is a plan plan mode has no business stopping. Refusing every run would make
+/// the mode mean "no manifest runs", which is not what it says.
+#[test]
+fn plan_mode_runs_a_plan_that_writes_nothing() {
+    let scratch = Scratch::new("plan-mode-read-only");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "ANSWER", "args": {"from_slot": "raw"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let outcome = manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("say what it holds").with_permission_mode(bravebot_agent::PermissionMode::Plan),
+        &mut bravebot_agent::Confining::new(
+            &mut bravebot_agent::confirm::ApprovePlans,
+            bravebot_agent::PermissionMode::Plan,
+        ),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("a plan that writes nothing runs in plan mode");
+
+    assert!(
+        outcome.reply_for_display().contains("raw text"),
+        "got: {}",
+        outcome.reply_for_display()
     );
 }
 
@@ -707,6 +798,138 @@ fn a_plan_may_write_a_body_it_fixed_in_advance() {
     );
 }
 
+/// Says yes to everything and keeps what it was shown, so a test can assert on the question
+/// rather than only on the file.
+#[derive(Default)]
+struct RecordsEveryQuestion {
+    writes: Vec<bravebot_agent::confirm::WriteRequest>,
+}
+
+impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
+    fn confirm_manifest(
+        &mut self,
+        _request: &bravebot_agent::confirm::ManifestRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Approve
+    }
+
+    fn confirm_write(
+        &mut self,
+        request: &bravebot_agent::confirm::WriteRequest,
+    ) -> bravebot_agent::Decision {
+        self.writes.push(request.clone());
+        bravebot_agent::Decision::Approve
+    }
+
+    fn confirm_run(
+        &mut self,
+        _request: &bravebot_agent::confirm::RunRequest,
+    ) -> bravebot_agent::confirm::RunDecision {
+        bravebot_agent::confirm::RunDecision::reject()
+    }
+
+    fn confirm_read_output(
+        &mut self,
+        _request: &bravebot_agent::confirm::OutputRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_fetch(
+        &mut self,
+        _request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_server(
+        &mut self,
+        _request: &bravebot_agent::confirm::ServerRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vouch(
+        &mut self,
+        _request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    /// Nobody is there to answer the planner, which is moot in this mode anyway.
+    fn ask_user(
+        &mut self,
+        _asking: &bravebot_core::ask::Asking,
+    ) -> Vec<bravebot_core::ask::Answer> {
+        Vec::new()
+    }
+
+    /// Nobody is typing: no interface, and no queue to type into.
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// A planned run puts no remark in a transcript at all, so the write prompt is the only place it
+/// can reach a person. The plan is fixed before anything is read either way, which says nothing
+/// about what the processor will claim about the document it produces.
+#[test]
+fn a_planned_write_carries_what_the_processor_said_about_it() {
+    let scratch = Scratch::new("planned-remark");
+    std::fs::write(scratch.path.join("game.js"), "const SPEED = 100;\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "game.js", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "fix the speed bug", "out_slot": "fixed"}},
+            {"capability": "FILE_WRITE", "args": {"path": "game.js", "from_slot": "fixed"}},
+        ])),
+        says(&format!(
+            "I only fixed the typo.\n{}\nconst SPEED = 50;\n",
+            bravebot_core::processor::ProcessorSpec::NOTE_MARKER
+        )),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordsEveryQuestion::default();
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("fix the speed bug in game.js"),
+        &mut confirmer,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+
+    let asked = confirmer
+        .writes
+        .first()
+        .expect("nobody was asked about the write");
+    let remark = asked
+        .remark
+        .as_ref()
+        .expect("the question carried no claim about the document it was asking about");
+    assert!(
+        remark.preview.join("\n").contains("only fixed the typo"),
+        "the claim was not the one the processor made: {:?}",
+        remark.preview
+    );
+}
+
 /// Says yes to the plan and no to everything in it.
 struct ApprovesThePlanOnly;
 
@@ -738,6 +961,13 @@ impl bravebot_agent::confirm::Confirmer for ApprovesThePlanOnly {
         _request: &bravebot_agent::confirm::OutputRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_fetch(
@@ -807,7 +1037,7 @@ fn approving_a_plan_is_not_approving_its_writes() {
         &mut ApprovesThePlanOnly,
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        TrustStore::new(),
+        TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect_err("must refuse");
@@ -1070,7 +1300,7 @@ fn the_goal_and_the_steps_are_both_reported_before_any_step_runs() {
         skipping_permissions!(),
         &mut reporter,
         &mut sink,
-        TrustStore::new(),
+        TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("runs");
@@ -1346,12 +1576,15 @@ fn a_cancelled_run_is_not_reported_as_a_failed_attempt() {
         skipping_permissions!(),
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
-        TrustStore::new(),
+        TrustStore::new("/work"),
         &cancel,
     )
     .expect_err("a cancelled run does not finish");
 
-    assert!(matches!(failure, bravebot_agent::TurnError::Cancelled));
+    assert!(matches!(
+        failure,
+        bravebot_agent::TurnError::Cancelled { .. }
+    ));
 }
 
 /// The first planning call must know that something downstream will read the workspace, or it

@@ -19,7 +19,7 @@ make check     # fmt, clippy -D warnings, tests, and toolchain age: what CI enfo
 | [agent-configuration.md](agent-configuration.md) | `agents/` as the one source, and the links `make init` creates |
 | [localization.md](localization.md) | the catalogs, adding a message or a language, and who a string is for |
 | [testing-the-interface.md](testing-the-interface.md) | driving a real terminal for the wiring `cargo test` cannot reach |
-| [labelling-issues.md](labelling-issues.md) | the kind label and the three axes every open issue carries |
+| [labelling-issues.md](labelling-issues.md) | the kind label, the area, the severity, and the three axes every open issue carries |
 | [version-stamp.md](version-stamp.md) | which build produced a session, and reading a transcript against it |
 | [releasing.md](releasing.md) | cross-builds, naming a version, and the two manual publishes |
 

@@ -92,7 +92,7 @@ fn routing() -> Routing {
 }
 
 fn policy<'s>(sink: &'s mut RecordingSink, trusted: &[&str]) -> Policy<'s, RecordingSink> {
-    let mut store = TrustStore::new();
+    let mut store = TrustStore::new("/work");
     for path in trusted {
         store.trust(path);
     }
@@ -435,7 +435,7 @@ fn a_skill_the_trust_map_distrusts_stops_being_offered() {
 
     let mut sink = RecordingSink::new();
     let (catalogue, notices) = {
-        let mut store = TrustStore::new();
+        let mut store = TrustStore::new("/work");
         store.trust(".");
         store.distrust(".bravebot/skills/poisoned/SKILL.md");
         let mut policy = Policy::begin(

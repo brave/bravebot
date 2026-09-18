@@ -88,6 +88,8 @@ doing very little, which is what the count answers.
 
 `verified-by: bravebot_tui::state::a_delegates_block_draws_the_last_of_its_work_and_counts_the_rest`
 `verified-by: bravebot_tui::render::a_delegate_that_has_done_more_than_is_drawn_says_so`
+`verified-by: bravebot_tui::state::a_preview_does_not_take_a_calls_place_in_the_block`
+`verified-by: bravebot_tui::render::a_delegates_previews_do_not_cost_its_block_the_rows_and_the_count`
 
 <a id="WATCH-4"></a>
 ### WATCH-4: what the block has no room for is kept, up to a bound
@@ -239,6 +241,10 @@ could not keep on the screen.
 
 `verified-by: bravebot_tui::state::a_delegate_that_finishes_is_still_the_one_being_watched`
 `verified-by: bravebot_tui::state::a_new_delegate_does_not_take_the_screen_from_the_one_being_read`
+`verified-by: bravebot_tui::state::a_new_delegate_does_not_take_the_screen_from_a_command_being_read`
+`verified-by: bravebot_tui::state::a_new_delegate_does_not_move_the_lists_highlight`
+`verified-by: bravebot_tui::state::a_new_delegate_leaves_an_open_view_where_its_reader_put_it`
+`verified-by: bravebot_tui::state::nothing_the_turn_reports_moves_an_open_view`
 
 <a id="WATCH-11"></a>
 ### WATCH-11: the footer speaks in the interface's own words, and the turn's own row names the key
@@ -440,6 +446,8 @@ them.
 `verified-by: bravebot_tui::state::an_aside_keeps_its_place_when_a_delegate_is_spawned_after_it`
 `verified-by: bravebot_tui::state::neither_half_of_an_aside_reaches_the_transcript`
 `verified-by: bravebot_tui::state::opening_an_aside_does_not_draw_a_delegates_lines`
+`verified-by: bravebot_tui::app::answering_a_question_beside_the_work_leaves_the_transcript_alone`
+`verified-by: bravebot_tui::app::an_answer_being_written_beside_the_work_is_not_drawn_over_the_turn`
 `verified-by: bravebot_tui::render::the_list_names_an_aside_row_as_an_aside`
 `verified-by: bravebot_tui::render::an_asides_view_draws_the_question_and_the_answer`
 `verified-by: bravebot_agent::turn::asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone`
@@ -476,6 +484,23 @@ answered.
 `verified-by: bravebot_tui::render::a_resumed_aside_with_no_answer_says_the_record_did_not_keep_it`
 `verified-by: bravebot_tui::sessions::an_answer_the_planner_could_not_have_held_is_not_written_down`
 `verified-by: bravebot_agent::turn::an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down`
+
+<a id="WATCH-21"></a>
+### WATCH-21: a question asks for no cache of the exchange it is asked beside
+
+An aside's request marks its own instructions for caching and marks nothing on the end of the
+exchange it carries.
+
+**Why.** A cache write is charged above the fresh tokens it covers, and it buys something only where
+a later request sends the same prefix again. A mark would sit at the end of everything the request
+holds, which is the question the person typed, and an aside adds nothing to the exchange it was
+asked beside, so what the write stored could only be read back by a later question repeating those
+words. Nothing sends that prefix again.
+
+**The instructions keep their mark**, being the same bytes every question, which is what marking a
+prompt is for. What is given up is a write and no read.
+
+`verified-by: bravebot_agent::turn::a_question_asked_beside_the_work_asks_for_no_cache_of_the_exchange`
 
 ## Known costs
 

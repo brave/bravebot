@@ -41,3 +41,20 @@ processor to decide as well as to rewrite without any of that judgement reaching
 
 `verified-by: bravebot_agent::turn::the_planner_is_told_the_shape_of_what_a_processor_produced`
 `verified-by: bravebot_agent::turn::a_quarantined_file_is_rewritten_by_a_processor`
+
+<a id="SPAWN-4"></a>
+### SPAWN-4: the call asks for no cache of the content it hands over
+
+A processor's request marks its own instructions for caching and marks nothing on the end of the
+pieces it carries.
+
+**Why.** A cache write is charged above the fresh tokens it covers, and it buys something only where
+a later request sends the same prefix again. A processor has no memory and is asked once, about
+pieces assembled for that call alone, so the prefix a mark here would store is never asked for
+again. The pieces are also the whole of what such a request carries, which puts the premium on the
+longest part of it.
+
+**The instructions keep their mark**, being the same bytes every time the same instruction runs,
+which is what marking a prompt is for. What is given up is a write and no read.
+
+`verified-by: bravebot_agent::turn::a_processor_asks_for_no_cache_of_the_content_it_reads`

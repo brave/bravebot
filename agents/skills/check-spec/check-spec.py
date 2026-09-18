@@ -329,11 +329,18 @@ def check_governs(spec):
             )
 
 
+_STRIPPED = {}
+
+
 def strip_comments(lines):
     """The same lines with their comments blanked out, since a symbol named in prose is not a
     use of it. Half the lines naming `Policy::present` are the trust argument written around
     the gate rather than calls to it, and counting those would make the allowlists below a
     record of the documentation that fails on every reworded sentence.
+
+    Held by content, because `guard_sites` needs this for every symbol it counts and the answer
+    depends on nothing else. The work below is a character at a time over every file in the tree,
+    so a run counting a dozen symbols spent a dozen passes producing the same lines.
 
     Line comments are cut wherever they start rather than only at the margin, block comments
     are followed across lines, and a `//` inside a string stays: all three shapes are in the
@@ -342,6 +349,10 @@ def strip_comments(lines):
 
     A string is not followed across lines. Rust has such strings, but one holding an unclosed
     `/*` would have to be for this to matter, and the counts are checked against the tree."""
+    held = "\n".join(lines)
+    if held in _STRIPPED:
+        return _STRIPPED[held]
+
     stripped = []
     in_block = False
     for raw in lines:
@@ -375,6 +386,7 @@ def strip_comments(lines):
             kept.append(raw[i])
             i += 1
         stripped.append("".join(kept))
+    _STRIPPED[held] = stripped
     return stripped
 
 
@@ -732,6 +744,11 @@ For each clause in your scope:
 3. Every `violation` needs a concrete failure: the input or state, the path through the
    code, and the outcome the clause forbids. `file:line` for each step. A finding you
    cannot walk somebody through is a finding you have not verified, and it does not go in.
+4. Where the wrong behaviour is something a person could look at, a screen drawn wrongly
+   or a prompt that says the wrong thing, put in `screen` how to reach it: what to type,
+   in order, from a fresh session. Leave the field out otherwise, and never guess at one.
+   You do not run anything; that field is a script for whoever files this, so that the
+   bug report can show the screen instead of describing it.
 
 Check the whole clause, including the parts stated in the "Why" paragraph where the clause
 has one, and any table a clause carries: a table row is part of that clause.
@@ -757,7 +774,8 @@ Write JSON to `{results_file}` and nothing else to stdout:
       "severity": "error | warning",
       "evidence": ["crates/.../file.rs:123 what is there"],
       "failure": "input or state, path through the code, outcome the clause forbids",
-      "fix": "what the implementation should do instead, in a sentence"
+      "fix": "what the implementation should do instead, in a sentence",
+      "screen": "how to reach the screen this shows up on, only where a person could look at it"
     }}
   ]
 }}

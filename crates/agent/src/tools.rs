@@ -23,7 +23,7 @@
 //! `write_file`'s `contents_ref` is what puts it in a file. Between them, the planner can
 //! change a file it never saw and the driver can write bytes it never opened.
 
-use crate::confirm::{Confirmer, Decision, Intent, WriteRequest};
+use crate::confirm::{Confirmer, Decision, Intent, Remark, WriteRequest};
 use crate::diff::Diff;
 use crate::processor::{self, Chat};
 use crate::report::{Activity, Reporter};
@@ -35,6 +35,7 @@ use bravebot_core::policy::{Destination, Policy};
 use bravebot_core::slot::{SlotId, SlotStore};
 use bravebot_core::todo::{self, Item, List, Status};
 use bravebot_core::value::Labelled;
+use bravebot_core::vetting::{Endorsed, Verdict};
 use serde_json::{Value, json};
 
 use crate::lsp::LanguageServers;
@@ -65,11 +66,25 @@ pub enum Scheduling {
 ///
 /// `scheduling` says what this turn may say about when it runs again, which decides whether
 /// `schedule_next` is offered at all and, where it is, which of two jobs its description describes.
-pub fn available(scheduling: Scheduling) -> Vec<Tool> {
+/// `arming` says whether the session this turn belongs to keeps standing watches, which decides
+/// whether `watch_file` is offered.
+pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
+    // Which of the two answers a request about one file gets. Both exist wherever watches do, and
+    // a description that named neither as the better one would leave the planner picking the one
+    // it read first, which is the read's own paragraph and therefore always the loop.
+    let watching = if arming.offered() {
+        " Where what is being waited on is this one file, watch_file is the better answer: it \
+         arms a standing watch that outlives this turn and reports the change with no turn of \
+         yours running at all. Keep schedule_next for a wait that is not about one file, or where \
+         the user asked for their own line to be run again."
+    } else {
+        ""
+    };
     let mut tools = vec![
         Tool::function(
             "read_file",
-            "Read a file from the workspace. Returns its lines. Ask for the whole \
+            format!(
+                "Read a file from the workspace. Returns its lines. Ask for the whole \
              file: long ones come back one page at a time, and the result says so and gives the \
              offset to continue from. Name the file with path, or with path_ref where a listing \
              gave you a reference instead of a name. \
@@ -91,13 +106,14 @@ pub fn available(scheduling: Scheduling) -> Vec<Tool> {
              would catch a change. Do that rather than telling somebody to arrange it themselves. \
              Inside a loop the next tick is the next look, so there is nothing to arrange there. \
              Where you have taken a look and not scheduled another, say so, because no change with \
-             nothing watching reads as a promise to report the next one. \
+             nothing watching reads as a promise to report the next one.{watching} \
              \
              A picture or a PDF (.png, .jpg, .gif, .webp, .pdf) comes back as a reference rather \
              than as anything you can look at, whoever vouched for the directory it is in. Give \
              that reference to spawn_processor with a question about it and the answer comes back \
              the way any processor's does. That is how to check a screenshot or read a scanned \
-             page.",
+             page."
+            ),
             json!({
                 "type": "object",
                 "properties": {
@@ -643,8 +659,11 @@ pub fn available(scheduling: Scheduling) -> Vec<Tool> {
                                         server, a watcher, a log follower. Use it when you need \
                                         the program still up while you do something else, such \
                                         as starting a server and then fetching a page from it. \
-                                        Call job_output with the name to see what it has \
-                                        printed. Must be one pipeline with no redirection, and \
+                                        While this turn is still going you are told when it \
+                                        ends, with how it ended and what it printed, so nothing \
+                                        has to poll for that. Call job_output with the name to \
+                                        see what it has printed before then. \
+                                        Must be one pipeline with no redirection, and \
                                         it is killed when this turn ends. Defaults to false, \
                                         which waits and hands back the output."
                     }
@@ -702,7 +721,8 @@ pub fn available(scheduling: Scheduling) -> Vec<Tool> {
              the time: a run's output is quarantined by default, so `which`, `find`, `uname` and \
              the like tell you nothing until you ask for the result. Ask for the errors too when \
              a run fails, or you will not know why it failed and must not claim it succeeded. \
-             Only for output from run; a quarantined file is not readable this way.",
+             Only for output from run; a quarantined file is not readable this way. For \
+             anything else you are holding a reference to, vet_content is the question to ask.",
             json!({
                 "type": "object",
                 "properties": {
@@ -712,6 +732,43 @@ pub fn available(scheduling: Scheduling) -> Vec<Tool> {
                     }
                 },
                 "required": ["ref"]
+            }),
+        ),
+        Tool::function(
+            "vet_content",
+            "Ask to be shown something you are holding a reference to, after a check has looked \
+             at it for you. Give the reference and say what you expect it to hold. A second model \
+             with no tools and no memory reads the content and says in one word whether it looks \
+             like an attempt to give instructions to whoever reads it next; the user sees the \
+             content, that word and the reason for it, and decides. If they agree, the content \
+             comes back to you as text you can read. \
+             \
+             Use it for a page you fetched or a file nobody has vouched for, when working blind \
+             on it is not enough and you actually need to know what it says. Say plainly in your \
+             reply why you need to read it rather than pass it to spawn_processor, because that \
+             is what the user is weighing. \
+             \
+             What a yes covers is this content, this once. Nothing about the file or the host is \
+             vouched for, so reading the same path again asks again, and asking twice for the \
+             same thing is a refusal you earned. It is also not a way around a refusal: if the \
+             user said no, work with what you have.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "ref": {
+                        "type": "string",
+                        "description": "The reference you are holding, e.g. \"ref:5\"."
+                    },
+                    "expects": {
+                        "type": "string",
+                        "description": "What you think this holds and why you want it, in a \
+                                        sentence, e.g. \"the changelog for version 2, to find \
+                                        out what changed\". The check is told this so it can \
+                                        say whether the content is that; the user reads it too. \
+                                        Your own words, not anything you were shown."
+                    }
+                },
+                "required": ["ref", "expects"]
             }),
         ),
         Tool::function(
@@ -755,8 +812,9 @@ pub fn available(scheduling: Scheduling) -> Vec<Tool> {
             "Fetch an http or https URL. What comes back is quarantined, like a file nobody \
              vouched for: you get a reference rather than the text, and you cannot read it or be \
              told what it says. Hand the reference to spawn_processor to have a question answered \
-             about it, or to write_file as contents_ref to save it. The user is asked before \
-             anything leaves the machine.",
+             about it, or to write_file as contents_ref to save it. Where you have to read the \
+             page yourself, vet_content has it checked and asks the user to show it to you. The \
+             user is asked before anything leaves the machine.",
             json!({
                 "type": "object",
                 "properties": {
@@ -769,6 +827,25 @@ pub fn available(scheduling: Scheduling) -> Vec<Tool> {
             }),
         ),
     ];
+
+    if arming.offered() {
+        tools.push(Tool::function(
+            "watch_file",
+            "Be told when one file changes, with no turn of yours running to notice it. This              arms a standing watch: the file is looked at every few seconds from now on, and the              first look that finds its size or modification time moved begins a new turn naming              this watch and this path. The watch outlives this turn and every turn after it.                           Nothing is read, now or when it fires. A fire says the path looks written to and              says nothing else about the file, so read it then if you need what is in it. Two              things follow that are worth saying to the user: a write that restores the same              bytes fires the watch, and a change that leaves the modification time alone does              not.                           Use this where somebody asked to be told when a file changes. Use schedule_next              instead where what is being waited on is not one file, or where they asked for              their own line to be run again.                           One existing file, never a directory and never a pattern, and the path cannot be              changed once the watch is armed. A watch lives at most a week, at most 8 are live              at once, and the user sees every live one: they end one with /watch stop <n>, and              ctrl-c ends them all.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path of the one file to watch, e.g. \
+                                        src/main.rs. It must exist now: there is nothing to \
+                                        compare a later look against otherwise."
+                    }
+                },
+                "required": ["path"]
+            }),
+        ));
+    }
 
     let arranging = match scheduling {
         Scheduling::TheirInterval => return tools,
@@ -837,7 +914,7 @@ pub fn available(scheduling: Scheduling) -> Vec<Tool> {
 /// offered to a run whose gates refuse it on every call is a tool the model has to be told to
 /// ignore.
 ///
-/// Five are left out by name, each for its own reason:
+/// Six are left out by name, each for its own reason:
 ///
 /// - `spawn_agent`, because a delegate cannot delegate. The bound on a tree of them is the
 ///   product of the bounds, which is a number nobody chose, and a person approving a write at
@@ -851,6 +928,10 @@ pub fn available(scheduling: Scheduling) -> Vec<Tool> {
 ///   the person typed. A delegate was given a task by a planner and ends when it answers, so a
 ///   wait it asked for would either be dropped or would put the session back to work on something
 ///   nobody at the keyboard is waiting for.
+/// - `vet_content`, because what crosses back from a delegate is its own set of rules and a
+///   delegate has nobody watching it. The prompt it would draw belongs to the person who set the
+///   sub-task going, about content they never asked to see, in the middle of work they are not
+///   reading.
 /// - `fetch_url`, because every kind holds the capability for reaching the network so the driver
 ///   can make its model call, and that is the whole of what it buys. A delegate pointing a
 ///   request at a host of its own would be egress nobody approved for this sub-task, and the
@@ -859,20 +940,23 @@ pub fn available(scheduling: Scheduling) -> Vec<Tool> {
 pub fn for_delegate(capabilities: &bravebot_core::capability::CapabilitySet) -> Vec<Tool> {
     use bravebot_core::capability::Capability;
 
-    available(Scheduling::ArrangingALook)
-        .into_iter()
-        .filter(|tool| match tool.function.name.as_str() {
-            "spawn_agent" | "ask_user" | "todo_write" | "schedule_next" | "fetch_url"
-            | "remember" => false,
-            "write_file" | "edit_file" => capabilities.contains(Capability::FileWrite),
-            "run" | "read_output" | "job_output" => capabilities.contains(Capability::ShellExec),
-            // LSP-9: asking a server is its own grant, so a delegate holding file reads has not
-            // thereby been given one. Named rather than left to the catch-all below, which would
-            // hand it over with `FileRead`.
-            "lsp" => capabilities.contains(Capability::LanguageServer),
-            _ => capabilities.contains(Capability::FileRead),
-        })
-        .collect()
+    available(
+        Scheduling::ArrangingALook,
+        crate::watch::Arming::Unavailable,
+    )
+    .into_iter()
+    .filter(|tool| match tool.function.name.as_str() {
+        "spawn_agent" | "ask_user" | "todo_write" | "schedule_next" | "fetch_url"
+        | "vet_content" | "remember" => false,
+        "write_file" | "edit_file" => capabilities.contains(Capability::FileWrite),
+        "run" | "read_output" | "job_output" => capabilities.contains(Capability::ShellExec),
+        // LSP-9: asking a server is its own grant, so a delegate holding file reads has not
+        // thereby been given one. Named rather than left to the catch-all below, which would
+        // hand it over with `FileRead`.
+        "lsp" => capabilities.contains(Capability::LanguageServer),
+        _ => capabilities.contains(Capability::FileRead),
+    })
+    .collect()
 }
 
 /// A read a tool decided not to perform yet.
@@ -908,6 +992,8 @@ pub struct Entries {
 /// What a dispatched call produced, ready to send back as a tool message.
 #[derive(Debug)]
 pub struct Output {
+    /// Structured cancellation from a processor, never reconstructed from tool-result text.
+    pub cancelled: Option<crate::outcome::Cancellation>,
     pub call_id: Option<String>,
     pub tool: String,
     /// The rendered result, still labelled.
@@ -977,6 +1063,12 @@ pub struct Output {
     /// Travels back to whoever started the loop, which is the only thing that knows there is one.
     /// A turn that says it twice is taken at its last word, since that is the one it ended on.
     pub wakeup: Option<crate::turn::Wakeup>,
+    /// The path the planner asked to have a standing watch armed on, where it asked.
+    ///
+    /// Travels back for the reason a wakeup does: a watch outlives the turn, so the thing that
+    /// holds it is the session rather than anything here. Already past the gate a read of the
+    /// path goes through, so what arrives is a path this session may look at.
+    pub watch: Option<String>,
     /// The delegates the kernel approved, for the turn to start.
     ///
     /// Started by the turn because a delegate outlives the call that asked for one: the call
@@ -1010,6 +1102,19 @@ pub struct Tools<'a> {
     /// Read by dispatch as well as by the tool table, so a call to a tool this turn was not
     /// offered is answered the way any other unknown name is rather than quietly working.
     pub scheduling: Scheduling,
+    /// Whether this turn may arm a standing watch, and why not where it may not.
+    ///
+    /// Read by dispatch as well as by the tool table, for the reason `scheduling` is: a call to a
+    /// tool this turn was not offered is answered the way any other unknown name is rather than
+    /// quietly working.
+    pub arming: crate::watch::Arming,
+    /// How many watches this turn has already armed, which is what the count bound is read
+    /// against.
+    ///
+    /// Held by the turn rather than counted here, for the reason the delegate count is: the bound
+    /// is on the session and a call is one round of it, so a turn arming its ninth watch has to
+    /// be refused by something that saw the other eight.
+    pub armed: &'a mut usize,
     /// The user's own directory, where their standing instructions and skills live.
     ///
     /// Carried so a delegate discovers the same ones this turn did. Without it a delegate would
@@ -1051,6 +1156,17 @@ pub struct Tools<'a> {
     /// path a rule in the settings file allows, raise no prompt at all, so a refusal that waited
     /// for one would let exactly those writes through.
     pub permission_mode: crate::PermissionMode,
+    /// Whether a check that finds nothing may promote a slot without anybody being asked.
+    ///
+    /// `false` for every turn nobody turned it on for, which is the default and what a turn has
+    /// always done. The three routes into it and the rule that resolves them are
+    /// [`bravebot_core::vetting::auto`]; by the time it reaches here it is one answer, settled
+    /// before the session opened and unchanged for its life.
+    ///
+    /// Read by `vet_content` and by nothing else. The other two prompts a check runs for release
+    /// what a program printed and write a trust rule, and neither is something a word from a model
+    /// may answer with nobody asked.
+    pub auto_vetting: bool,
     /// The current working directory for `run` commands in this turn.
     ///
     /// Initialized to the workspace root and updated when `run` specifies a `directory`.
@@ -1105,6 +1221,38 @@ struct Job {
     /// rather than one offset into the composed text, because output arriving on one stream moves
     /// where the other sits in that composition.
     seen: crate::exec::Seen,
+    /// Whether somebody has already been given the account of how this one ended.
+    ///
+    /// Set by whichever route got there first, so the finish is news exactly once: the turn's own
+    /// look between rounds, or a `job_output` call whose answer already said it had ended. Without
+    /// it a planner that waited for a build would be told a second time, with the output gone,
+    /// since the bytes go to whoever was handed them.
+    reported: bool,
+}
+
+/// A background job's finish, as the turn is told about it (CMDLINE-14).
+///
+/// The name and the outcome are the driver's own: a name this module minted, and a verdict read off
+/// exit codes and a clock. Nothing here was read out of a byte the pipeline printed. What it
+/// *printed* is content, and it carries the label the kernel fixed before anything started.
+pub struct Ended {
+    /// The name the planner was given for it.
+    pub name: String,
+    /// The line as the person approved it.
+    pub line: String,
+    /// How it ended.
+    pub outcome: crate::report::Outcome,
+    /// What it printed that nobody has been handed yet, cut to the cap where it may be read.
+    ///
+    /// `None` where it printed nothing since anybody last looked, which is the job whose exit code
+    /// is the whole of its account: a reference to an empty slot spends a name the planner is
+    /// reading the numbering of and says nothing. A count of bytes and never a look at one.
+    pub printed: Option<Labelled<String>>,
+    /// The whole of it, where the cap cut the sample down.
+    ///
+    /// Beside the sample for the reason a run's is: the cap bounds what a conversation holds and
+    /// not what the program printed, so the middle has to exist somewhere a later call can reach.
+    pub whole: Option<Labelled<String>>,
 }
 
 impl Jobs {
@@ -1137,9 +1285,74 @@ impl Jobs {
                 line,
                 label,
                 seen: crate::exec::Seen::default(),
+                reported: false,
             },
         );
         name
+    }
+
+    /// Every job that has ended and whose finish nobody has been told about yet (CMDLINE-14).
+    ///
+    /// Polled rather than waited on, so a turn asking between rounds is never held by a program
+    /// behaving as intended: a job still running answers immediately. The exit is what makes this
+    /// news, so the planner is told about a build that finished whether or not it thought to ask,
+    /// and a job whose account has already been given is passed over rather than reported twice.
+    ///
+    /// The output is taken as it is handed over, which is what stops it being handed over again:
+    /// `seen` moves, so a `job_output` call after this reports what arrived after this and not the
+    /// whole log a second time.
+    pub fn ended(&mut self) -> Vec<Ended> {
+        let mut finished = Vec::new();
+        for (name, job) in self.running.iter_mut() {
+            if job.reported || !job.running.ended() {
+                continue;
+            }
+            job.reported = true;
+            let printed = job.running.since(&mut job.seen);
+            // Capped only where the planner may read it, exactly as a run's output is: what it may
+            // not read is quarantined whole, and there is nothing of it in the conversation to
+            // bound.
+            let sample = if job.label.is_trusted() {
+                bounded(&printed)
+            } else {
+                None
+            };
+            let (printed, whole) = match sample {
+                Some(sample) => (sample, Some(Labelled::new(printed, job.label))),
+                None => (printed, None),
+            };
+            finished.push(Ended {
+                name: name.clone(),
+                line: job.line.clone(),
+                outcome: how_it_ended(job.running.codes()),
+                printed: (!printed.is_empty()).then(|| Labelled::new(printed, job.label)),
+                whole,
+            });
+        }
+        finished
+    }
+}
+
+/// How a job that has ended finished, read off the exit code of each of its steps.
+///
+/// Structure and nothing else: no byte of what the pipeline printed reaches this. Failed rather
+/// than succeeded where a step did not exit zero, because a planner that waited for a build and was
+/// told it exited 0 reports a red build as green, and where the output is quarantined that sentence
+/// is the only account of it the planner ever gets.
+fn how_it_ended(codes: &[Option<i32>]) -> crate::report::Outcome {
+    let failed: Vec<String> = codes
+        .iter()
+        .enumerate()
+        .filter(|(_, code)| **code != Some(0))
+        .map(|(at, code)| match code {
+            Some(code) => format!("step {} exited {code}", at + 1),
+            None => format!("step {} was killed", at + 1),
+        })
+        .collect();
+    if failed.is_empty() {
+        crate::report::Outcome::Succeeded
+    } else {
+        crate::report::Outcome::Failed(failed.join(", "))
     }
 }
 
@@ -1149,6 +1362,7 @@ impl Jobs {
 /// decides whether the planner may see it. `note` and `changes` go to a screen and are already
 /// released, because a person is allowed to read what a planner is not.
 struct Produced {
+    cancelled: Option<crate::outcome::Cancellation>,
     text: Labelled<String>,
     origin: String,
     /// What to tell the person watching. A few words, never the result itself.
@@ -1215,16 +1429,13 @@ struct Produced {
     covered_by_record: bool,
     /// When the planner asked for the next tick of a self-paced loop.
     wakeup: Option<crate::turn::Wakeup>,
+    /// The path the planner asked to have a standing watch armed on.
+    watch: Option<String>,
     /// The media type, where what this produced is a picture.
     ///
     /// Recorded on the slot by the turn loop, and what makes a picture reach a processor as a part
     /// rather than as a body. The driver's own, from a table of extensions.
     picture: Option<String>,
-    /// The name of a pipeline this call left running, where it started one.
-    ///
-    /// Reported so a person watching sees that something was started rather than run, which is a
-    /// different thing to have agreed to.
-    background: Option<String>,
     /// The delegates the kernel has approved and nobody has started yet.
     ///
     /// Started by the turn rather than here, because a delegate outlives the call that asked for
@@ -1243,6 +1454,7 @@ impl Produced {
             origin: origin.into(),
             note: note.into(),
             failed: false,
+            cancelled: None,
             deferred: None,
             entries: None,
             incomplete: false,
@@ -1259,7 +1471,7 @@ impl Produced {
             covered_by_record: false,
             picture: None,
             wakeup: None,
-            background: None,
+            watch: None,
             delegate: Vec::new(),
         }
     }
@@ -1293,13 +1505,17 @@ impl Produced {
     ///
     /// The name is the driver's own, so the planner is told it as text rather than being handed a
     /// reference: there is nothing quarantined about it, and nothing has been printed yet.
+    ///
+    /// It says the finish arrives by itself, because it does (CMDLINE-14), and a planner that does
+    /// not know that spends a round per look asking whether a build has finished.
     fn started_in_the_background(mut self, job: String) -> Self {
         self.text = Labelled::trusted(format!(
-            "started in the background as {job}. Nothing has been read from it yet: call \
-             job_output with \"{job}\" to see what it has printed, and again later for what is \
-             new. It is killed when this turn ends."
+            "started in the background as {job}. Nothing has been read from it yet. If it ends \
+             while this turn is still going you are told so, with how it ended and what it \
+             printed, without having to ask; call job_output with \"{job}\" before then to see \
+             what it has printed so far, and again later for what is new. It is killed when this \
+             turn ends."
         ));
-        self.background = Some(job);
         self
     }
 
@@ -1367,6 +1583,12 @@ impl Produced {
         self.wakeup = Some(wakeup);
         self
     }
+
+    /// Say which path the planner asked to have a standing watch armed on.
+    fn watching(mut self, path: impl Into<String>) -> Self {
+        self.watch = Some(path.into());
+        self
+    }
 }
 
 /// Whether a call by this name changes a file.
@@ -1429,6 +1651,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "fetch_url" => Some("url"),
         "remember" => Some("text"),
         "job_output" => Some("job"),
+        "vet_content" => Some("ref"),
         _ => None,
     }
 }
@@ -1635,9 +1858,14 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         Err(e) => {
             let produced = problem(format!("error: the arguments were not valid JSON: {e}"));
             // Announced and closed in one breath, because there was never a call to watch.
-            reporter.tool_started(Activity::running(verb, ""));
-            reporter.tool_finished(Activity::running(verb, "").failed(produced.note.clone()));
+            reporter.tool_started(Activity::running(verb, "").of_tool(&name));
+            reporter.tool_finished(
+                Activity::running(verb, "")
+                    .of_tool(&name)
+                    .failed(produced.note.clone()),
+            );
             return Output {
+                cancelled: produced.cancelled,
                 call_id: call.id.clone(),
                 tool: name,
                 text: produced.text,
@@ -1656,6 +1884,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 covered_by_record: produced.covered_by_record,
                 picture: produced.picture,
                 wakeup: produced.wakeup,
+                watch: produced.watch,
                 delegate: produced.delegate,
             };
         }
@@ -1664,7 +1893,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
     // Announced before the call runs, so a slow one is visible while it is slow. This is the
     // difference between a turn that looks stuck and one that is plainly working.
     let target = target_of(policy, &name, tools.slots, &arguments);
-    reporter.tool_started(Activity::running(verb, target.clone()));
+    reporter.tool_started(Activity::running(verb, target.clone()).of_tool(&name));
 
     let produced = match name.as_str() {
         // A mode that refuses writes refuses them whether or not anybody would have been asked,
@@ -1674,7 +1903,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             "refused: this turn is in plan mode, so writing is refused however the user would \
              have answered. Do not retry; say what you would change and why.",
         ),
-        "read_file" => read_file(policy, tools.workspace, tools.slots, confirmer, &arguments),
+        "read_file" => read_file(policy, tools, confirmer, &arguments),
         "list_files" => list_files(policy, tools.workspace, &arguments),
         "search" => search(policy, tools.workspace, &arguments),
         "lsp" => lsp(policy, tools, confirmer, &arguments),
@@ -1694,6 +1923,10 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         "ask_user" if !tools.delegated => ask_user(policy, confirmer, &arguments),
         "run" => run(policy, tools, confirmer, &arguments),
         "read_output" => read_output(policy, tools, confirmer, &arguments),
+        // Not offered to a delegate, so a call from one is answered the way any other unknown
+        // name is. What crosses back from a delegate is its own set of rules, and a delegate
+        // promoting a slot would put bytes into a context the person watching never sees.
+        "vet_content" if !tools.delegated => vet_content(policy, tools, confirmer, &arguments),
         // A kind's network capability buys the driver's own model call and nothing a delegate can
         // point somewhere, so this one is refused here too: the gate would pass it, since the
         // capability really is held.
@@ -1708,10 +1941,22 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         "schedule_next" if !tools.delegated && tools.scheduling != Scheduling::TheirInterval => {
             schedule_next(policy, tools.scheduling, &arguments)
         }
+        // A surface that keeps no watches is offered no way to arm one, and a call from a turn on
+        // it is answered as an unknown name. Refused here as well as absent from the list, for
+        // the reason the two above are.
+        "watch_file" if !tools.delegated && tools.arming.offered() => watch_file(
+            policy,
+            tools.workspace,
+            tools.slots,
+            tools.arming,
+            tools.armed,
+            &arguments,
+        ),
         other => problem(format!("error: no such tool '{other}'")),
     };
 
     let finished = Activity::running(verb, target)
+        .of_tool(&name)
         .with_changes(produced.changes)
         .marked_untrusted(produced.untrusted);
     reporter.tool_finished(if produced.failed {
@@ -1721,6 +1966,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
     });
 
     Output {
+        cancelled: produced.cancelled,
         call_id: call.id.clone(),
         tool: name,
         text: produced.text,
@@ -1739,6 +1985,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         covered_by_record: produced.covered_by_record,
         picture: produced.picture,
         wakeup: produced.wakeup,
+        watch: produced.watch,
         delegate: produced.delegate,
     }
 }
@@ -1754,6 +2001,7 @@ fn problem(text: impl Into<String>) -> Produced {
         origin: String::new(),
         note: text,
         failed: true,
+        cancelled: None,
         deferred: None,
         entries: None,
         incomplete: false,
@@ -1764,13 +2012,13 @@ fn problem(text: impl Into<String>) -> Produced {
         answers_for: None,
         said: None,
         wakeup: None,
+        watch: None,
         content: false,
         usage: Usage::default(),
         inference: std::time::Duration::ZERO,
         printed_by: None,
         covered_by_record: false,
         picture: None,
-        background: None,
         delegate: Vec::new(),
     }
 }
@@ -1870,12 +2118,12 @@ fn wait_from(arguments: &Value) -> Result<Option<std::time::Duration>, &'static 
 
 fn read_file<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
-    workspace: &Workspace,
-    slots: &SlotStore,
+    tools: &mut Tools<'_>,
     confirmer: &mut C,
     arguments: &Value,
 ) -> Produced {
-    let found = match path_argument(policy, "read_file", Purpose::Read, slots, arguments) {
+    let workspace = tools.workspace;
+    let found = match path_argument(policy, "read_file", Purpose::Read, tools.slots, arguments) {
         Ok(found) => found,
         Err(refusal) => return problem(refusal),
     };
@@ -1915,6 +2163,11 @@ fn read_file<S: Sink, C: Confirmer>(
     // later one sees the file. A yes writes the same rule `@` and the startup question write, so
     // nothing here is a second route to trusting content.
     //
+    // Checked before it is asked, as every prompt that promotes content is. The person is told what
+    // a confined second opinion made of the file, and the word decides nothing: what promotes the
+    // file is their answer. Without this the quickest way past a check would be to ask to read the
+    // file, which is the defect this covers.
+    //
     // Asked once per path per turn, and only for a path that is quarantined, so a planner retrying
     // a read does not put the same question up twice.
     //
@@ -1941,6 +2194,13 @@ fn read_file<S: Sink, C: Confirmer>(
     let keyed = workspace.trust_key(&proposed_path);
 
     let media = crate::workspace::media_for(&proposed_path);
+
+    // What a check over this file cost, where one was made. Carried out of the block so it can be
+    // put on whatever this call ends up handing back: a check is a model request, and the turn's
+    // figure has to cover the requests the driver made on its own behalf as well as the planner's.
+    let mut spent = Usage::default();
+    let mut waited = std::time::Duration::ZERO;
+
     if policy.read_is_quarantined(&keyed)
         && media.is_none()
         && workspace.names_a_file(&proposed_path)
@@ -1959,21 +2219,58 @@ fn read_file<S: Sink, C: Confirmer>(
             let proof = policy.authorise_display_release("the head of a quarantined file");
             shaped.declassify(&proof)
         };
+
+        // The second opinion, over the whole file rather than over the preview. What a yes here
+        // grants is that this file's text may be read, so the lines under the cut are part of what
+        // is being trusted, and a check over the head alone would report on the part of the file an
+        // injection attempt has the least reason to be in.
+        //
+        // Not made in the one mode that draws no prompt: bypassing answers this question yes without
+        // showing anybody anything, so a check there is a model call whose word nobody reads. A
+        // verdict is still filled in, and it is the one that claims nothing.
+        let checked = (tools.permission_mode != crate::PermissionMode::Bypass).then(|| {
+            let spec = policy.before_vetting_a_path(&proposed_path, body);
+            let asked_at = std::time::Instant::now();
+            (
+                crate::vet::run(policy, &mut tools.chat, &spec),
+                asked_at.elapsed(),
+            )
+        });
+        let (verdict, reason) = match checked {
+            Some((checked, elapsed)) => {
+                spent = checked.usage;
+                waited = elapsed;
+                let reason = checked.reason.map(|reason| {
+                    let proof = policy.authorise_display_release("what a check said about content");
+                    reason.declassify(&proof)
+                });
+                (checked.verdict, reason)
+            }
+            None => (Verdict::Inconclusive("the check was not made"), None),
+        };
+
         let request = crate::confirm::VouchRequest {
             path: proposed_path.clone(),
             preview,
             truncated,
+            verdict,
+            reason,
         };
         if confirmer.confirm_vouch(&request) == Decision::Approve {
             policy.vouch_for_named_path(&keyed);
         }
     }
 
+    // What a check cost, on whatever comes back. Every way out below goes through this, including
+    // the ones that report a refusal: the request was made and somebody is paying for it whether or
+    // not the read that followed handed anything over.
+    let priced = |produced: Produced| produced.costing(spent).waiting(waited);
+
     // A reference to a file the planner may not read already is that file, so reading it has
     // nothing to hand back but another name for the same thing, which reads as the read having
     // failed. One planner went four references deep before giving up. Nothing to do but say so.
     if destination == Destination::Reference && policy.read_is_quarantined(&keyed) {
-        return confirmed(
+        return priced(confirmed(
             format!(
                 "{shown_path} already names that file, and nothing will show you what is in \
                  it. Give {shown_path} to spawn_processor to work on, and name {shown_path} as \
@@ -1983,7 +2280,7 @@ fn read_file<S: Sink, C: Confirmer>(
                  though you do not."
             ),
             format!("nothing to read: {shown_path} already holds it"),
-        );
+        ));
     }
 
     // A picture, decided from the extension: the driver's own table, so nothing read chooses this.
@@ -1994,7 +2291,7 @@ fn read_file<S: Sink, C: Confirmer>(
     // the content this arrangement exists to keep out of it. So a vouched-for directory does not
     // make a picture readable, and there is no trust question here to ask.
     if let Some(media) = media {
-        return match workspace.read_attachment(policy, &path, media) {
+        return priced(match workspace.read_attachment(policy, &path, media) {
             Ok(encoded) => {
                 let weight = workspace.survey(&proposed_path).unwrap_or(0);
                 Produced::new(
@@ -2006,7 +2303,7 @@ fn read_file<S: Sink, C: Confirmer>(
                 .of_a_picture(media)
             }
             Err(e) => problem(format!("error: {e}")),
-        };
+        });
     }
 
     // A file the planner may not see need not be opened yet. Whether it may see it is a question
@@ -2019,7 +2316,7 @@ fn read_file<S: Sink, C: Confirmer>(
     // moment the planner asked, which is the one thing this branch exists to avoid. The reference
     // is of the file, and what is read from it is read when something needs the bytes.
     if policy.read_is_quarantined(&keyed) {
-        return match workspace.survey(&proposed_path) {
+        return priced(match workspace.survey(&proposed_path) {
             // Deferred under the keyed name as well. The slot carries the map's answer about this
             // file, and the answer that quarantined it is the one it has to carry: keyed one way
             // and labelled the other, a file held back for being untrusted would arrive in the
@@ -2029,10 +2326,10 @@ fn read_file<S: Sink, C: Confirmer>(
             }
             // A path that names nothing is said so now, exactly as an eager read would have.
             Err(e) => problem(format!("error: {e}")),
-        };
+        });
     }
 
-    match workspace.read_page(policy, &path, offset, limit) {
+    priced(match workspace.read_page(policy, &path, offset, limit) {
         Ok(page) => {
             // Reshaped inside the kernel, so the driver never holds the text. Only
             // `Policy::present` decides whether the planner sees what comes out.
@@ -2044,7 +2341,7 @@ fn read_file<S: Sink, C: Confirmer>(
             Produced::new(rendered, shown_path, note).of_content()
         }
         Err(e) => problem(format!("error: {e}")),
-    }
+    })
 }
 
 /// The text a slot holds for a file, read at the moment something needs it.
@@ -2461,6 +2758,23 @@ fn list_files<S: Sink>(
     }
 }
 
+/// How many lines of a processor's remark are drawn beside the diff it describes.
+///
+/// Fewer than the transcript keeps, because this is the box a decision is read in: a processor
+/// that answers with a screenful of prose would otherwise push the lines an approval is given
+/// from out of view, which is the thing showing the remark here is meant to prevent. The fuller
+/// preview is in the transcript above, and the block says how many lines it is not showing.
+pub(crate) const REMARK_LINES: usize = 4;
+
+/// The width a line of it is trimmed to.
+///
+/// Far narrower than the transcript's cap, because the box is narrower and a line wider than the
+/// box is several rows rather than one: four lines of the transcript's hundred and sixty
+/// characters is a dozen rows in a prompt, which is the diff below the fold. A remark is two or
+/// three sentences of prose rather than a minified file, so a sentence's width loses nothing that
+/// the transcript above is not still holding in full.
+pub(crate) const REMARK_WIDTH: usize = 72;
+
 /// Resolve a reference into the bytes a write will carry.
 ///
 /// Three steps, each one a gate. The name is accepted as a reference rather than read as
@@ -2473,7 +2787,7 @@ fn quarantined_body<S: Sink>(
     slots: &mut SlotStore,
     named: &Labelled<String>,
     path: &str,
-) -> Result<(Labelled<String>, bool), String> {
+) -> Result<(Labelled<String>, bool, Option<Remark>), String> {
     let slot = policy
         .accept_reference("write_file", "contents_ref", named)
         .map_err(|denial| format!("refused: {denial}"))?;
@@ -2500,9 +2814,21 @@ fn quarantined_body<S: Sink>(
         .resolve("write_file", &slot, slots)
         .map_err(|denial| format!("refused: {denial}"))?;
 
+    // What the processor that produced these bytes said about them, for the question that is
+    // about to be asked about the bytes. Asked of the slot, so it is the claim made about this
+    // document and not whatever was said last.
+    let remark = policy
+        .remark_for_review(&slot, slots, REMARK_LINES, REMARK_WIDTH)
+        .map(|(preview, lines, label)| Remark {
+            preview,
+            lines,
+            label: label.to_string(),
+        });
+
     Ok((
         policy.declassify_into_workspace(&slot, path, content),
         changes,
+        remark,
     ))
 }
 
@@ -2543,6 +2869,10 @@ fn write_file<S: Sink, C: Confirmer>(
     // is. Set below, from the slot's provenance, never from comparing what it holds.
     let mut changes_anything = true;
 
+    // What a processor said about the body, where a processor produced it. Drawn beside the diff
+    // in the question below, and nothing else reads it.
+    let mut remark = None;
+
     // What the planner called the body, for the account it is given afterwards. Its own words
     // either way: the reference it named, or its own text.
     let body_from = match &named {
@@ -2573,8 +2903,9 @@ fn write_file<S: Sink, C: Confirmer>(
         // having read a byte of it. The user still sees it, which is what an approval is.
         (None, Some(reference)) => {
             match quarantined_body(policy, workspace, tools.slots, &reference, &proposed_path) {
-                Ok((body, would_change)) => {
+                Ok((body, would_change, said)) => {
                     changes_anything = would_change;
+                    remark = said;
                     body
                 }
                 Err(refusal) => return problem(refusal),
@@ -2621,6 +2952,7 @@ fn write_file<S: Sink, C: Confirmer>(
             contents: shown.clone(),
             // The reviewer is the only one who will read this. Say what they are reading.
             untrusted: !body_label.is_trusted(),
+            remark,
         };
 
         if confirmer.confirm_write(&request) == Decision::Reject {
@@ -2775,6 +3107,9 @@ fn edit_file<S: Sink, C: Confirmer>(
             existing: Some(current.clone()),
             intent: Intent::Edit,
             untrusted: !body_label.is_trusted(),
+            // An edit is the planner's own words over a file it read. No processor was involved,
+            // so there is nothing anybody said about it.
+            remark: None,
         };
 
         if confirmer.confirm_write(&request) == Decision::Reject {
@@ -2991,6 +3326,129 @@ fn schedule_next<S: Sink>(
     Produced::new(Labelled::trusted(confirmation), "", note).scheduling(wakeup)
 }
 
+/// Arm a standing watch on one path.
+///
+/// Narrow on purpose, and narrower than a read. One field, a path, and the whole of what arming
+/// it decides is that this session will be asked again when that path looks written to. Nothing
+/// is opened: the look is a `stat`, and what comes back to the planner is a sentence saying the
+/// watch exists.
+///
+/// The gate is the read's, unchanged: inside the workspace that is the promotion a read of a
+/// model's own choice of file already gets, and outside it whatever the trust map answers. A
+/// person who asked to be told when a file changes has asked for less than a read of it, so a
+/// prompt of its own here would put a second question to somebody who has already answered the
+/// first. Nothing is granted beyond it either, which is why the watch is refused where the read
+/// would have been.
+///
+/// Three refusals before the gate, each of which the planner can act on: a session already doing
+/// something without anybody typing, a session with no room, and a turn arming more than the
+/// session can hold. Two after it: a path that names no file, and a path that cannot be looked at
+/// now, which leaves nothing for a later look to be compared against.
+fn watch_file<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    slots: &SlotStore,
+    arming: crate::watch::Arming,
+    armed: &mut usize,
+    arguments: &Value,
+) -> Produced {
+    use crate::watch::Arming;
+
+    let free = match arming {
+        Arming::Allowed { free } => free,
+        Arming::UnderALoop => {
+            return problem(
+                "refused: a loop is running, and a session does one thing at a time that happens \
+                 without anybody typing. The next tick of that loop is the next look, so answer \
+                 from a read now and leave the watch. Say so, since the user can stop the loop \
+                 and ask again.",
+            );
+        }
+        Arming::UnderAGoal => {
+            return problem(
+                "refused: this session is working towards a goal, and a fire would spend rounds \
+                 the user set aside for the work. Answer from a read now, and say that a standing \
+                 watch needs the goal cleared first.",
+            );
+        }
+        Arming::Full => {
+            return problem(
+                "refused: this session already holds as many watches as it keeps. Say so: the \
+                 user ends one with /watch stop <n>, and /status lists them.",
+            );
+        }
+        Arming::Unavailable => {
+            return problem("error: no such tool 'watch_file'");
+        }
+    };
+
+    // The bound is on the session and this turn may have armed some of it already, so what is
+    // left is counted here rather than read off the answer the turn began with.
+    if *armed >= free {
+        return problem(
+            "refused: this session already holds as many watches as it keeps. Say so: the user \
+             ends one with /watch stop <n>, and /status lists them.",
+        );
+    }
+
+    // A reference is refused rather than resolved, which is why this tool advertises no
+    // `path_ref`. The name behind one came out of a directory nobody vouched for, and a fire's
+    // prompt is the one line in this program that can carry no name off a filesystem: resolving
+    // it here would put that name into the user's own role hours later, which is exactly what
+    // the sentence is built to prevent. Refused before the argument is read, so nothing resolves
+    // the reference on the way to saying no.
+    if arguments.get("path_ref").is_some() {
+        return problem(
+            "refused: watch_file takes 'path' and no reference. A reference names a file this \
+             conversation was never shown the name of, and a watch reports the path it was armed \
+             on, so there is nothing here a reference could be. Read the file by reference \
+             instead.",
+        );
+    }
+    let found = match path_argument(policy, "watch_file", Purpose::Read, slots, arguments) {
+        Ok(found) => found,
+        Err(refusal) => return problem(refusal),
+    };
+    // The same promotion a read of the planner's own choice of file gets, and the reason the
+    // watch needs no prompt of its own. What it hands back is the path a read would open, which
+    // a watch does not: the look below is a `stat` on the released name.
+    if let Err(denial) = policy.promote_confined_read("watch_file", "path", &found.path) {
+        return problem(format!("refused: {denial}"));
+    }
+    let path = found.released;
+
+    // A directory is refused at the surface rather than watched and reported on. What changed
+    // inside one is a file name the filesystem produced, and putting that in a fire's prompt is
+    // untrusted content in the one position nothing can label; reporting only that the directory
+    // moved is a fire nobody can act on.
+    if !workspace.names_a_file(&path) {
+        return problem(
+            "refused: 'path' must name a file that exists. A directory cannot be watched: what \
+             changed inside one is a name off the filesystem, and a fire may not carry one.",
+        );
+    }
+    if !matches!(workspace.look(&path), crate::watch::Looked::Saw(_)) {
+        return problem(
+            "refused: that path cannot be looked at, so there is nothing for a later look to be \
+             compared against.",
+        );
+    }
+
+    *armed += 1;
+    let shown = found.shown;
+    Produced::new(
+        Labelled::trusted(format!(
+            "watching: {shown}. You will be asked again, in a turn of its own, when that path \
+             looks written to. Nothing is read until then and the fire says nothing about the \
+             file beyond which watch fired and on what path. Tell the user the watch exists and \
+             that /watch stop ends it."
+        )),
+        "",
+        format!("watching {shown}"),
+    )
+    .watching(path)
+}
+
 /// Hand quarantined content to an isolated model and quarantine what comes back.
 ///
 /// The tool that makes an untrusted workspace workable. Everything the planner cannot read, a
@@ -3001,13 +3459,16 @@ fn schedule_next<S: Sink>(
 /// the instruction is the planner's, and the label on the result is computed by the kernel from
 /// Show a command's output to the user, and give it to the planner if they agree.
 ///
-/// The one place bytes cross out of quarantine into the planner's context on nothing but a
-/// person's say-so, and the order is what makes that defensible: the output is released for
+/// One of the places bytes cross out of quarantine into the planner's context on nothing but a
+/// person's say-so, and the order is what makes that defensible: the output is checked, released for
 /// display, put in front of the person in full, and only then, if they agree, does an endorsement
 /// exist for the kernel to consume.
 ///
-/// The driver never reads it. The text goes from the slot to the screen and, on approval, from the
-/// kernel to the planner; nothing here branches on a byte of it.
+/// **The verdict is not consulted here.** Nothing in this function branches on what the check said:
+/// the word travels to the prompt, the prompt draws it, and what decides is the answer.
+///
+/// The driver never reads the output. The text goes from the slot to the screen and, on approval,
+/// from the kernel to the planner; nothing here branches on a byte of it.
 fn read_output<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -3032,41 +3493,241 @@ fn read_output<S: Sink, C: Confirmer>(
         ));
     }
 
-    // Released for the person to read, which is the whole of what this call is for. A display
-    // release cannot feed an effect, and this one feeds a screen.
-    let shown = {
-        let content = match policy.resolve("read_output", &slot, tools.slots) {
-            Ok(content) => content,
+    // The second opinion, before the question rather than after it. No `expects`: the planner asked
+    // for the output to be read, not for it to be checked, and it has said nothing about what the
+    // command printed.
+    //
+    // Not made in the one mode that draws no prompt: bypassing answers this question yes without
+    // showing anybody anything, so a check there is a model call whose word nobody reads. A verdict
+    // is still filled in, and it is the one that claims nothing.
+    let mut spent = Usage::default();
+    let mut waited = std::time::Duration::ZERO;
+    let spec = match tools.permission_mode == crate::PermissionMode::Bypass {
+        true => None,
+        false => match policy.before_vetting(&slot, None, tools.slots) {
+            Ok(spec) => Some(spec),
             Err(denial) => return problem(format!("refused: {denial}")),
+        },
+    };
+    let (verdict, reason) = match &spec {
+        None => (Verdict::Inconclusive("the check was not made"), None),
+        Some(spec) => {
+            let asked_at = std::time::Instant::now();
+            let checked = crate::vet::run(policy, &mut tools.chat, spec);
+            spent = checked.usage;
+            waited = asked_at.elapsed();
+            let reason = checked.reason.map(|reason| {
+                let proof = policy.authorise_display_release("what a check said about content");
+                reason.declassify(&proof)
+            });
+            (checked.verdict, reason)
+        }
+    };
+
+    // The one branch on a verdict that decides more than which sentence a person reads first, and
+    // it is reachable only where somebody turned auto-vetting on. `Safe` is the only word that
+    // answers here: unsafe, and every way a check can fail to complete, fall through to the prompt
+    // with the banner they would have carried anyway. As `vet_content`, because the grant is the
+    // same shape on both routes: one slot, once, with no rule written.
+    let endorsed = match tools.auto_vetting && verdict.is_safe() {
+        true => Endorsed::ByASafeVerdict,
+        false => Endorsed::ByAPerson,
+    };
+
+    // A `match` rather than an `if`, so a third way of endorsing cannot be added and default to
+    // skipping the prompt: a new variant stops compiling here until somebody says which it is.
+    let ask = match endorsed {
+        Endorsed::ByAPerson => true,
+        Endorsed::ByASafeVerdict => false,
+    };
+
+    // How many lines to tell the planner it got: the check's count where one was made, and what was
+    // actually drawn where somebody was asked. The two are the same slot and agree.
+    let mut counted = spec.as_ref().map_or(0, |spec| spec.lines());
+
+    if ask {
+        // Released for the person to read, which is the whole of what a prompt here is for. A
+        // display release cannot feed an effect, and both of these feed a screen. Inside the branch
+        // because there is no screen on the other one: releasing for a display nobody is looking at
+        // would put a declassification in the trail with no audience for it.
+        let shown = {
+            let content = match policy.resolve("read_output", &slot, tools.slots) {
+                Ok(content) => content,
+                Err(denial) => return problem(format!("refused: {denial}")),
+            };
+            let proof =
+                policy.authorise_display_release("command output the planner asked to read");
+            content.declassify(&proof)
         };
-        let proof = policy.authorise_display_release("command output the planner asked to read");
-        content.declassify(&proof)
-    };
 
-    let request = crate::confirm::OutputRequest {
-        command: tools
-            .slots
-            .command_of(&slot)
-            .unwrap_or("a command")
-            .to_string(),
-        output: shown,
-        reference: slot.to_string(),
-    };
+        let request = crate::confirm::OutputRequest {
+            command: tools
+                .slots
+                .command_of(&slot)
+                .unwrap_or("a command")
+                .to_string(),
+            output: shown,
+            reference: slot.to_string(),
+            verdict,
+            reason,
+        };
 
-    if confirmer.confirm_read_output(&request) == Decision::Reject {
-        return problem(format!(
-            "refused: the user did not let you read {slot}. Do not ask for it again. Work with \
-             what you have, or say in your reply what you needed from it."
-        ));
+        counted = request.lines();
+
+        if confirmer.confirm_read_output(&request) == Decision::Reject {
+            return problem(format!(
+                "refused: the user did not let you read {slot}. Do not ask for it again. Work with \
+                 what you have, or say in your reply what you needed from it."
+            ))
+            .costing(spent)
+            .waiting(waited);
+        }
     }
 
-    // The approval is what makes these bytes readable, and it is bound to this exact reference.
+    // The endorsement is what makes these bytes readable, and it is bound to this exact reference
+    // whichever of the two answered.
     policy.issue_grant("read_output", "ref", slot.to_string());
 
-    match policy.read_output(&slot, tools.slots) {
+    match policy.read_output(&slot, tools.slots, endorsed) {
         Ok(text) => {
-            let lines = tally(request.lines(), "line", "lines");
-            Produced::new(text, format!("what {slot} held"), format!("{lines}, read")).of_content()
+            let lines = tally(counted, "line", "lines");
+            Produced::new(text, format!("what {slot} held"), format!("{lines}, read"))
+                .of_content()
+                .costing(spent)
+                .waiting(waited)
+        }
+        Err(denial) => problem(format!("refused: {denial}")),
+    }
+}
+
+/// Check one quarantined slot, show it to the user with what the check said, and give it to the
+/// planner if they agree.
+///
+/// The second place bytes cross out of quarantine into the planner's context on a person's
+/// say-so, and the order is what makes that defensible. The check runs first, so its word is on
+/// the screen when the question is asked. The content is released for display and put in front of
+/// the person in full. Only then, if they agree, does an endorsement exist for the kernel to
+/// consume.
+///
+/// **The verdict decides who answers, and nothing else.** With auto-vetting off, which is the
+/// default and every session nobody turned it on for, the word travels to the prompt, the prompt
+/// draws it, and what decides is the person's answer. With auto-vetting on, a verdict of `safe`
+/// answers in their place and every other verdict falls back to the same prompt with the same
+/// warning on it. What a verdict never decides is which slot, what label, or how long: those are
+/// the same down both paths.
+///
+/// Unlike `read_output` this covers any quarantined slot, including a file, and it is still not a
+/// second answer to what a file is worth: nothing written here reaches the trust map, so a later
+/// read of the same path is quarantined exactly as it is today.
+fn vet_content<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    arguments: &Value,
+) -> Produced {
+    let Some(named) = argument(arguments, "ref") else {
+        return problem("error: 'ref' is required and must be a reference name, e.g. \"ref:5\"");
+    };
+    let Some(expects) = argument(arguments, "expects") else {
+        return problem(
+            "error: 'expects' is required and must say what you think this holds, e.g. \"the \
+             release notes for version 2\"",
+        );
+    };
+
+    let slot = match policy.accept_reference("vet_content", "ref", &named) {
+        Ok(slot) => slot,
+        Err(denial) => return problem(format!("refused: {denial}")),
+    };
+
+    // A reference to a file the driver reserved and never opened has no bytes yet, and there is
+    // nothing to check or to show until it does. Opened here rather than refused, because the
+    // planner naming one is the ordinary way to ask about a file it may not read.
+    if let Err(refusal) = materialise(
+        policy,
+        tools.workspace,
+        tools.slots,
+        "vet_content",
+        std::slice::from_ref(&slot),
+    ) {
+        return problem(refusal);
+    }
+
+    let spec = match policy.before_vetting(&slot, Some(&expects), tools.slots) {
+        Ok(spec) => spec,
+        Err(denial) => return problem(format!("refused: {denial}")),
+    };
+
+    let asked_at = std::time::Instant::now();
+    let checked = crate::vet::run(policy, &mut tools.chat, &spec);
+    let waited = asked_at.elapsed();
+
+    // The one branch on a verdict that decides more than which sentence a person reads first, and
+    // it is reachable only where somebody turned auto-vetting on. `Safe` is the only word that
+    // answers here: unsafe, and every way a check can fail to complete, fall through to the prompt
+    // with the banner they would have carried anyway. Written down as the third known cost in
+    // `docs/specs/labels.md`.
+    let endorsed = match tools.auto_vetting && checked.verdict.is_safe() {
+        true => Endorsed::ByASafeVerdict,
+        false => Endorsed::ByAPerson,
+    };
+
+    // A `match` rather than an `if`, so a third way of endorsing cannot be added and default to
+    // skipping the prompt: a new variant stops compiling here until somebody says which it is.
+    let ask = match endorsed {
+        Endorsed::ByAPerson => true,
+        Endorsed::ByASafeVerdict => false,
+    };
+    if ask {
+        // Released for the person to read, which is the whole of what a prompt here is for. A
+        // display release cannot feed an effect, and both of these feed a screen. Inside the
+        // branch because there is no screen on the other one: releasing for a display nobody is
+        // looking at would put a declassification in the trail with no audience for it.
+        let shown = {
+            let content = match policy.resolve("vet_content", &slot, tools.slots) {
+                Ok(content) => content,
+                Err(denial) => return problem(format!("refused: {denial}")),
+            };
+            let proof = policy.authorise_display_release("content the planner asked to be shown");
+            content.declassify(&proof)
+        };
+        let reason = checked.reason.map(|reason| {
+            let proof = policy.authorise_display_release("what a check said about content");
+            reason.declassify(&proof)
+        });
+
+        let request = crate::confirm::VetRequest {
+            origin: spec.origin().to_string(),
+            // Never absent on this route: the argument is required above, and this is the one
+            // entry point into a check that carries what the planner claimed.
+            expects: spec.expects().unwrap_or_default().to_string(),
+            content: shown,
+            verdict: checked.verdict,
+            reason,
+        };
+
+        if confirmer.confirm_vetted_read(&request) == Decision::Reject {
+            return problem(format!(
+                "refused: the user did not let you read {slot}. Do not ask for it again. Work \
+                 with what you have, pass {slot} to spawn_processor, or say in your reply what \
+                 you needed from it."
+            ))
+            .costing(checked.usage)
+            .waiting(waited);
+        }
+    }
+
+    // The endorsement is what makes these bytes readable, and it is bound to this exact reference
+    // whichever of the two answered.
+    policy.issue_grant("vet_content", "ref", slot.to_string());
+
+    match policy.promote_vetted(&slot, tools.slots, endorsed) {
+        Ok(text) => {
+            let lines = tally(spec.lines(), "line", "lines");
+            Produced::new(text, format!("what {slot} held"), format!("{lines}, read"))
+                .of_content()
+                .costing(checked.usage)
+                .waiting(waited)
         }
         Err(denial) => problem(format!("refused: {denial}")),
     }
@@ -3216,18 +3877,36 @@ fn run<S: Sink, C: Confirmer>(
     let covered_by_record = !asking && recalled.as_ref().is_some_and(|lines| lines.covers(&plan));
 
     if asking {
+        // Whether this person has already read a prompt for this binary under other arguments,
+        // asked before the line on screen joins that list. An identical line is not a different
+        // argument list, so the order is a matter of reading rather than of correctness.
+        let varied = policy.arguments_have_varied(&plan);
+        policy.asked_about(&plan);
         let request = crate::confirm::RunRequest {
             plan: plan.clone(),
             // Offered only where it would stop a later prompt, which the policy decides: not for a
             // line releasing private data, not for one naming a file to write, not for one running
             // outside the workspace root, and not where a rule the person wrote in advance already
-            // says to ask. The path is what the prompt shows, since a person cannot endorse a
-            // record they were not shown.
+            // says to ask. A remembered line holds no tree, unlike a vouched entry, so the root is
+            // still one of its refusals. The path is what the prompt shows, since a person cannot
+            // endorse a record they were not shown.
             record: record
                 .as_ref()
                 .filter(|_| policy.may_remember(&plan))
                 .filter(|_| crate::remembered::may_be_added_to())
                 .map(|store| store.path().to_path_buf()),
+            // Said only where a key at this prompt will not finish the asking, only where a rule
+            // in that file would decide the line at all, and only where there is a file to name:
+            // a line that writes, releases private data, runs outside the root or carries an
+            // assignment is asked about before any rule is read, so a pattern for one would stop
+            // no prompt, and advice on a machine that names no home directory would send somebody
+            // to a path nothing reads. A session in the mode that adds nothing to `~/.bravebot`
+            // still gets the advice, because writing that file is the person's own act rather
+            // than this session's.
+            pattern: tools
+                .home
+                .filter(|_| varied && policy.a_rule_could_answer(&plan))
+                .map(bravebot_config::user_settings_file),
         };
         let answer = confirmer.confirm_run(&request);
         if !answer.approved() {
@@ -3243,10 +3922,14 @@ fn run<S: Sink, C: Confirmer>(
         // Not for a line an entry could not record: one that feeds a file to a program, and one that
         // writes an assignment in front of a program. The prompt offers `a` for neither, and this is
         // the same refusal at the layer that would act on it, asked of the same predicate so the two
-        // cannot drift. What an entry records is a program and its exact argv, and a `<` redirection
-        // and an assignment are in neither, so an entry made here would cover the same program fed
-        // any other file, or run under no assignment at all. A front end answering `always` anyway
-        // must not be able to widen the list that way.
+        // cannot drift. What an entry records is a program, its exact argv and the tree the line
+        // runs in, and a `<` redirection and an assignment are in none of the three, so an entry
+        // made here would cover the same program fed any other file, or run under no assignment at
+        // all. A front end answering `always` anyway must not be able to widen the list that way.
+        //
+        // The tree is not among the refusals, and that is RUN-8's own answer rather than an
+        // omission: an entry names the directory it was given in, so a line outside the workspace
+        // root is one an entry can hold as written, and it grants there and nowhere else.
         if answer.remember && plan.can_be_remembered() {
             for command in request.would_vouch_for() {
                 policy.remember_command(command);
@@ -3347,8 +4030,8 @@ fn run<S: Sink, C: Confirmer>(
     // What the run reports opening, never the plan's write set. The set names every branch, so a
     // destination a line decided against is in it, and a rule about a file nothing wrote would
     // quarantine a file the planner can read today. Spelled the way a read of the file is
-    // spelled, because relative and absolute rules are separate namespaces in the map and a rule
-    // in the wrong one decides nothing.
+    // spelled, because a name is reduced to the open directory it lands in before the map sees it
+    // and a rule written under an unreduced name decides nothing.
     let mut opened: Vec<std::path::PathBuf> = Vec::new();
     let ran = crate::exec::run_plan(
         &plan,
@@ -3697,25 +4380,7 @@ fn job_output<S: Sink>(
     // what the pipeline printed. Worked out before the kill below, so a job that had already ended
     // is reported as what it did rather than as what the kill would have done to it.
     let outcome = if ended {
-        let failed: Vec<String> = job
-            .running
-            .codes()
-            .iter()
-            .enumerate()
-            .filter(|(_, code)| **code != Some(0))
-            .map(|(at, code)| match code {
-                Some(code) => format!("step {} exited {code}", at + 1),
-                None => format!("step {} was killed", at + 1),
-            })
-            .collect();
-        // Failed rather than Succeeded where a step did not exit zero. A planner that waited for a
-        // build to finish and was told it exited 0 reports a red build as green, and where the
-        // output is quarantined that sentence is the only account of it the planner ever gets.
-        if failed.is_empty() {
-            crate::report::Outcome::Succeeded
-        } else {
-            crate::report::Outcome::Failed(failed.join(", "))
-        }
+        how_it_ended(job.running.codes())
     } else if kill {
         crate::report::Outcome::Stopped(ran_for)
     } else {
@@ -3723,6 +4388,13 @@ fn job_output<S: Sink>(
         // was stopped stops asking about a program that is still printing.
         crate::report::Outcome::Running { ran_for, waited }
     };
+
+    // This answer is the account of the finish, so the turn's own look between rounds does not give
+    // it a second time (CMDLINE-14). A killed job is finished too: the planner asked for the end of
+    // it and was told what it had done, and news of it exiting afterwards is news of nothing.
+    if ended || kill {
+        job.reported = true;
+    }
 
     if kill {
         job.running.kill();
@@ -3950,7 +4622,28 @@ fn spawn_processor<S: Sink>(
             produced.said = done.note;
             produced
         }
-        Err(error) => problem(format!("error: {error}")).waiting(waited),
+        Err(crate::processor::ProcessorError::Chat(error)) => {
+            // Tool problems are trusted driver text. Backend display strings can contain secrets.
+            let cancelled = error.is_cancelled();
+            let diagnosis = error.diagnosis();
+            let reason = if cancelled {
+                "cancelled"
+            } else {
+                diagnosis.category.name()
+            };
+            let mut produced = problem(format!("error: processor request {reason}"))
+                .costing(error.completed_usage().unwrap_or_default())
+                .waiting(waited);
+            if cancelled {
+                produced.cancelled = Some(crate::outcome::Cancellation {
+                    attempts: diagnosis.attempts,
+                });
+            }
+            produced
+        }
+        Err(crate::processor::ProcessorError::Denied(error)) => {
+            problem(format!("error: {error}")).waiting(waited)
+        }
     }
 }
 
@@ -3990,25 +4683,27 @@ fn spawn_agent<S: Sink, R: Reporter>(
     let mut kind_name = "";
 
     for task in &tasks {
-        // The trail's name for it is the driver's own word, not the task: a task is a paragraph,
-        // and it would be in every line of the trail that mentions this run.
+        // Numbered by the driver, in the order this turn spawned them, and numbered before the
+        // gate rather than after it so that the record of the gate names the delegate it
+        // approved. Everything recorded or reported about this delegate carries the number, which
+        // is the only thing saying whose a line is: the alternative is reading the line, which is
+        // prose a model wrote. A fan-out is exactly where two of them read alike, and a refusal
+        // is numbered for the same reason a permission is.
+        //
+        // The trail's name for it is that number, not the task: a task is a paragraph, and it
+        // would be in every line of the trail that mentions this run.
         //
         // Gated once per delegate rather than once per call. A fan-out is several runs, and a
         // gate that saw one of them would be approving the others on the strength of a sibling.
-        let spec = match policy.before_delegate("delegate", &kind, task) {
+        *tools.spawned += 1;
+        let id = crate::report::DelegateId::nth(*tools.spawned);
+        let spec = match policy.before_delegate(id, &kind, task) {
             Ok(spec) => spec,
             Err(denial) => return problem(format!("refused: {denial}")),
         };
 
-        // Numbered by the driver, in the order this turn spawned them. Everything reported about
-        // this delegate carries the number, which is the only thing saying whose a line is: the
-        // alternative is reading the line, which is prose a model wrote.
-        //
-        // The task goes with it, released for a screen the way the target of any other call is. A
-        // person watching several delegates has nothing else to tell them apart by, and a fan-out
-        // is exactly where several of them read alike.
-        *tools.spawned += 1;
-        let id = crate::report::DelegateId::nth(*tools.spawned);
+        // The task is released for a screen the way the target of any other call is. A person
+        // watching several delegates has nothing else to tell them apart by.
         let asked = {
             let proof = policy.authorise_display_release("what a delegate was asked to do");
             task.clone().declassify(&proof)
@@ -4753,6 +5448,7 @@ fn search<S: Sink>(
 
 #[cfg(test)]
 mod tests {
+    use crate::watch::Arming;
     /// Where a gate shows up in the trail, so a test can say which of two reads happened first.
     fn gate_at(sink: &bravebot_core::event::RecordingSink, gate: &str, detail: &str) -> usize {
         sink.events()
@@ -4858,7 +5554,7 @@ mod tests {
 
     #[test]
     fn the_tool_set_is_reads_plus_gated_writes() {
-        let names: Vec<String> = available(Scheduling::ArrangingALook)
+        let names: Vec<String> = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
             .iter()
             .map(|t| t.function.name.clone())
             .collect();
@@ -4878,8 +5574,10 @@ mod tests {
                 "run",
                 "job_output",
                 "read_output",
+                "vet_content",
                 "spawn_agent",
                 "fetch_url",
+                "watch_file",
                 "schedule_next"
             ]
         );
@@ -4899,6 +5597,25 @@ mod tests {
             assert!(
                 !offered.iter().any(|t| t == "spawn_agent"),
                 "a {name} was offered a way to delegate"
+            );
+        }
+    }
+
+    /// The prompt this tool draws belongs to the person who set the sub-task going, about content
+    /// they never asked to see, in the middle of work they are not reading. No kind is offered it,
+    /// whatever it holds: the capability a delegate has for reading files would otherwise hand it
+    /// over through the catch-all.
+    #[test]
+    fn a_delegate_is_never_offered_a_way_to_promote_a_slot() {
+        for name in bravebot_core::delegate::Kind::NAMES {
+            let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
+            let offered: Vec<String> = for_delegate(&kind.capabilities())
+                .iter()
+                .map(|t| t.function.name.clone())
+                .collect();
+            assert!(
+                !offered.iter().any(|t| t == "vet_content"),
+                "a {name} was offered a way to put quarantined bytes into its own context"
             );
         }
     }
@@ -5019,12 +5736,15 @@ mod tests {
             }
         }
 
-        let turn = available(Scheduling::ArrangingALook);
+        let turn = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 });
         shell_free("a turn", &turn);
-        shell_free("a turn pacing a loop", &available(Scheduling::PacingALoop));
+        shell_free(
+            "a turn pacing a loop",
+            &available(Scheduling::PacingALoop, Arming::Allowed { free: 1 }),
+        );
         shell_free(
             "a turn on their interval",
-            &available(Scheduling::TheirInterval),
+            &available(Scheduling::TheirInterval, Arming::Allowed { free: 1 }),
         );
 
         let held: Vec<&str> = turn.iter().map(|t| t.function.name.as_str()).collect();
@@ -5048,7 +5768,7 @@ mod tests {
     /// how long to wait for it, and `directory` names where to run it.
     #[test]
     fn run_takes_one_command_line_and_nothing_else() {
-        let tool = available(Scheduling::ArrangingALook)
+        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
             .into_iter()
             .find(|t| t.function.name == "run")
             .expect("run is offered");
@@ -5177,7 +5897,7 @@ mod tests {
     /// and the description has to say the wait ends when something arrives.
     #[test]
     fn job_output_offers_a_bounded_wait_rather_than_only_a_snapshot() {
-        let tool = available(Scheduling::ArrangingALook)
+        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
             .into_iter()
             .find(|t| t.function.name == "job_output")
             .expect("job_output is offered");
@@ -5309,7 +6029,7 @@ mod tests {
     }
 
     fn run_description() -> String {
-        available(Scheduling::ArrangingALook)
+        available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
             .into_iter()
             .find(|t| t.function.name == "run")
             .expect("run is offered")
@@ -5322,7 +6042,7 @@ mod tests {
     /// reason to run a build. Vouching is the way out and the description has to say so.
     #[test]
     fn run_says_a_vouched_command_comes_back_readable() {
-        let tool = available(Scheduling::ArrangingALook)
+        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
             .into_iter()
             .find(|t| t.function.name == "run")
             .expect("run is offered");
@@ -5355,7 +6075,7 @@ mod tests {
     /// because the driver can hand over what those programs cannot.
     #[test]
     fn read_file_sends_a_question_about_change_to_a_token_it_can_compare() {
-        let tool = available(Scheduling::ArrangingALook)
+        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
             .into_iter()
             .find(|t| t.function.name == "read_file")
             .expect("read_file is offered");
@@ -5428,7 +6148,7 @@ mod tests {
             "sh",
         ];
 
-        for tool in available(Scheduling::ArrangingALook) {
+        for tool in available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 }) {
             let name = tool.function.name;
             let Some(properties) = tool.function.parameters["properties"].as_object() else {
                 continue;
@@ -5454,7 +6174,7 @@ mod tests {
     /// One session opened by asking where Brave was installed rather than looking.
     #[test]
     fn asking_is_described_as_a_last_resort_after_looking() {
-        let tool = available(Scheduling::ArrangingALook)
+        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
             .into_iter()
             .find(|t| t.function.name == "ask_user")
             .expect("ask_user is offered");
@@ -5474,7 +6194,7 @@ mod tests {
     /// what made front-loading questions look obligatory.
     #[test]
     fn ask_user_says_that_looking_first_does_not_forfeit_the_question() {
-        let tool = available(Scheduling::ArrangingALook)
+        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
             .into_iter()
             .find(|t| t.function.name == "ask_user")
             .expect("ask_user is offered");
@@ -5491,7 +6211,7 @@ mod tests {
     /// things to read results that never come back to it.
     #[test]
     fn run_says_its_output_does_not_come_back_to_the_planner() {
-        let tool = available(Scheduling::ArrangingALook)
+        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
             .into_iter()
             .find(|t| t.function.name == "run")
             .expect("run is offered");
@@ -5511,7 +6231,7 @@ mod tests {
     #[test]
     fn the_mutating_tools_state_that_approval_is_required() {
         for name in ["write_file", "edit_file"] {
-            let tool = available(Scheduling::ArrangingALook)
+            let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
                 .into_iter()
                 .find(|t| t.function.name == name)
                 .unwrap_or_else(|| panic!("{name} is offered"));
@@ -5527,7 +6247,7 @@ mod tests {
     /// matching will propose passages that are refused.
     #[test]
     fn the_edit_tool_states_that_matching_is_exact() {
-        let edit = available(Scheduling::ArrangingALook)
+        let edit = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
             .into_iter()
             .find(|t| t.function.name == "edit_file")
             .expect("edit_file is offered");
@@ -5542,7 +6262,7 @@ mod tests {
 
     #[test]
     fn every_tool_declares_a_schema() {
-        for tool in available(Scheduling::ArrangingALook) {
+        for tool in available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 }) {
             assert_eq!(tool.kind, "function");
             assert_eq!(tool.function.parameters["type"], "object");
             assert!(!tool.function.description.is_empty());
@@ -5570,7 +6290,7 @@ mod tests {
     /// vocabulary the parser does not read.
     #[test]
     fn the_todo_schema_advertises_the_statuses_the_kernel_parses() {
-        let tool = available(Scheduling::ArrangingALook)
+        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
             .into_iter()
             .find(|t| t.function.name == "todo_write")
             .expect("todo_write is offered");
@@ -5589,11 +6309,31 @@ mod tests {
         }
     }
 
+    /// Nothing is touched, so there is no field for a person to approve: the list is the whole of
+    /// the call. A destination here, even an optional one, would be a routing argument on the one
+    /// tool whose answer to "what would a person be approving?" is "nothing".
+    #[test]
+    fn the_task_list_tool_offers_no_argument_that_names_a_destination() {
+        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
+            .into_iter()
+            .find(|t| t.function.name == "todo_write")
+            .expect("todo_write is offered");
+        let properties = tool.function.parameters["properties"]
+            .as_object()
+            .expect("the arguments are an object");
+
+        assert_eq!(
+            properties.keys().collect::<Vec<_>>(),
+            vec!["todos"],
+            "todo_write advertises an argument beside the list itself"
+        );
+    }
+
     /// The model has to be told the list is replaced wholesale, or it will send only what changed
     /// and the finished tasks will vanish from the display.
     #[test]
     fn the_todo_tool_states_that_the_whole_list_is_required() {
-        let tool = available(Scheduling::ArrangingALook)
+        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
             .into_iter()
             .find(|t| t.function.name == "todo_write")
             .expect("todo_write is offered");
@@ -5826,6 +6566,10 @@ mod tests {
                 Decision::Reject
             }
 
+            fn confirm_vetted_read(&mut self, _request: &crate::confirm::VetRequest) -> Decision {
+                Decision::Reject
+            }
+
             fn confirm_fetch(&mut self, _request: &crate::confirm::FetchRequest) -> Decision {
                 Decision::Reject
             }
@@ -5862,7 +6606,7 @@ mod tests {
         /// Run the tool against a fresh policy in a workspace the user vouched for.
         fn call<C: Confirmer>(confirmer: &mut C, arguments: Value) -> Labelled<String> {
             let mut sink = RecordingSink::new();
-            let mut trust = TrustStore::new();
+            let mut trust = TrustStore::new("/work");
             trust.trust(".");
             let mut policy = Policy::begin(
                 routing(),
@@ -6277,7 +7021,7 @@ mod tests {
         #[test]
         fn nothing_on_this_tool_says_what_the_next_turn_asks() {
             for scheduling in [Scheduling::ArrangingALook, Scheduling::PacingALoop] {
-                let tool = available(scheduling)
+                let tool = available(scheduling, Arming::Allowed { free: 1 })
                     .into_iter()
                     .find(|t| t.function.name == "schedule_next")
                     .expect("schedule_next is offered");
@@ -6297,7 +7041,7 @@ mod tests {
         #[test]
         fn any_turn_may_arrange_the_next_look_and_is_told_which_case_it_is() {
             let described = |scheduling| {
-                available(scheduling)
+                available(scheduling, Arming::Allowed { free: 1 })
                     .into_iter()
                     .find(|t| t.function.name == "schedule_next")
                     .expect("schedule_next is offered")
@@ -6324,7 +7068,7 @@ mod tests {
         #[test]
         fn a_tick_the_person_timed_is_offered_no_way_to_schedule_one() {
             assert!(
-                !available(Scheduling::TheirInterval)
+                !available(Scheduling::TheirInterval, Arming::Allowed { free: 1 })
                     .iter()
                     .any(|t| t.function.name == "schedule_next"),
                 "a tick running on the person's interval was offered a way to reschedule itself"
@@ -6590,6 +7334,58 @@ mod tests {
             assert!(!rows[0].struck());
         }
 
+        /// Every other tool answers "what would a person be approving?" with a path, a program or
+        /// a URL, and this one has no answer because it reaches nothing. Held to it two ways: the
+        /// call is given no capability at all and still works, and the trail it leaves records no
+        /// field checked before an effect and no capability producing data. Writing the list to a
+        /// file, or routing it anywhere a person would have to agree to, would fail the first and
+        /// show up in the second.
+        #[test]
+        fn a_task_list_decides_no_destination_and_needs_no_capability() {
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::none(),
+                &mut sink,
+            )
+            .expect("policy");
+            let mut reporter = RecordingReporter::default();
+            let produced = todo_write(
+                &mut policy,
+                &mut reporter,
+                &SlotStore::new(),
+                &list(&[
+                    ("Read the file", "completed"),
+                    ("Make the change", "pending"),
+                ]),
+            );
+
+            assert!(!produced.failed, "a list with no capability was refused");
+            assert!(
+                produced.origin.is_empty(),
+                "a task list named a destination: {}",
+                produced.origin
+            );
+            assert_eq!(
+                reporter.updates.last().expect("the display was told").len(),
+                2,
+                "the list did not reach the screen"
+            );
+
+            for event in sink.events() {
+                match event {
+                    bravebot_core::event::Event::ActionField { tool, field, .. } => {
+                        panic!("a task list decided '{field}' for '{tool}'")
+                    }
+                    bravebot_core::event::Event::Observed { capability, .. } => {
+                        panic!("a task list observed something through {capability}")
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         /// A list with no items is a list the model cleared, and the display must follow rather
         /// than keeping the previous one on screen.
         #[test]
@@ -6650,6 +7446,293 @@ mod tests {
         }
     }
 
+    /// Arming a watch is the one thing on this surface that outlives the turn asking for it, so
+    /// what it refuses is the interesting half.
+    mod watching {
+        use super::*;
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        /// A directory that removes itself, so a test leaves nothing behind.
+        struct Scratch {
+            path: std::path::PathBuf,
+        }
+
+        impl Scratch {
+            fn new(name: &str) -> Self {
+                let path = crate::testutil::scratch_dir(&format!(
+                    "bravebot-watching-{name}-{}",
+                    std::process::id()
+                ));
+                let _ = std::fs::remove_dir_all(&path);
+                std::fs::create_dir_all(&path).expect("create scratch");
+                Self { path }
+            }
+        }
+
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.path);
+            }
+        }
+
+        fn armed(
+            workspace: &Workspace,
+            arming: crate::watch::Arming,
+            armed: &mut usize,
+            arguments: Value,
+        ) -> (Produced, String) {
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "tell me when a file changes");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy");
+            let produced = watch_file(
+                &mut policy,
+                workspace,
+                &SlotStore::new(),
+                arming,
+                armed,
+                &arguments,
+            );
+            let proof = policy.authorise_display_release("test inspects the tool result");
+            let told = produced.text.clone().declassify(&proof);
+            (produced, told)
+        }
+
+        /// The baseline. Without it every refusal below would prove nothing.
+        #[test]
+        fn a_file_that_exists_is_armed_and_the_path_travels_back_to_the_session() {
+            let scratch = Scratch::new("armed");
+            std::fs::write(scratch.path.join("a.txt"), "hello\n").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut count = 0;
+            let (produced, told) = armed(
+                &workspace,
+                Arming::Allowed { free: 8 },
+                &mut count,
+                json!({"path": "a.txt"}),
+            );
+
+            assert_eq!(produced.watch.as_deref(), Some("a.txt"));
+            assert_eq!(count, 1);
+            assert!(told.starts_with("watching: a.txt"), "{told}");
+        }
+
+        /// A session does one thing at a time that happens without anybody typing, and the
+        /// planner is told which of the three reasons it is so that it can say so.
+        #[test]
+        fn a_session_already_doing_something_untyped_refuses_and_says_which() {
+            let scratch = Scratch::new("busy");
+            std::fs::write(scratch.path.join("a.txt"), "hello\n").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            for (arming, expected) in [
+                (Arming::UnderALoop, "a loop is running"),
+                (Arming::UnderAGoal, "working towards a goal"),
+                (Arming::Full, "as many watches as it keeps"),
+            ] {
+                let mut count = 0;
+                let (produced, told) =
+                    armed(&workspace, arming, &mut count, json!({"path": "a.txt"}));
+                assert!(told.starts_with("refused:"), "{arming:?}: {told}");
+                assert!(told.contains(expected), "{arming:?}: {told}");
+                assert_eq!(produced.watch, None, "{arming:?}");
+                assert_eq!(count, 0, "{arming:?}");
+            }
+        }
+
+        /// The bound is the session's and a turn may arm several, so what is left has to be
+        /// counted here. A tool reporting a watch the session then refused would have told the
+        /// planner about one that does not exist.
+        #[test]
+        fn a_turn_that_fills_the_last_free_slot_is_refused_after_it() {
+            let scratch = Scratch::new("filling");
+            std::fs::write(scratch.path.join("a.txt"), "hello\n").unwrap();
+            std::fs::write(scratch.path.join("b.txt"), "hello\n").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut count = 0;
+            let (first, _) = armed(
+                &workspace,
+                Arming::Allowed { free: 1 },
+                &mut count,
+                json!({"path": "a.txt"}),
+            );
+            assert_eq!(first.watch.as_deref(), Some("a.txt"));
+
+            let (second, told) = armed(
+                &workspace,
+                Arming::Allowed { free: 1 },
+                &mut count,
+                json!({"path": "b.txt"}),
+            );
+            assert_eq!(second.watch, None);
+            assert!(told.contains("as many watches as it keeps"), "{told}");
+        }
+
+        /// What changed inside a directory is a name the filesystem produced, and a fire's
+        /// prompt may not carry one. Refusing at the surface is cheaper than labelling a name
+        /// that has no business being in a prompt at all.
+        #[test]
+        fn a_directory_is_refused_rather_than_watched() {
+            let scratch = Scratch::new("directory");
+            std::fs::create_dir(scratch.path.join("src")).unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut count = 0;
+            let (produced, told) = armed(
+                &workspace,
+                Arming::Allowed { free: 8 },
+                &mut count,
+                json!({"path": "src"}),
+            );
+
+            assert!(told.starts_with("refused:"), "{told}");
+            assert!(told.contains("directory cannot be watched"), "{told}");
+            assert_eq!(produced.watch, None);
+        }
+
+        /// Nothing for a later look to be compared against is nothing to watch, and arming
+        /// anyway would make the first look that found the file a change it never underwent.
+        #[test]
+        fn a_path_that_names_nothing_is_refused() {
+            let scratch = Scratch::new("missing");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut count = 0;
+            let (produced, told) = armed(
+                &workspace,
+                Arming::Allowed { free: 8 },
+                &mut count,
+                json!({"path": "gone.txt"}),
+            );
+
+            assert!(told.starts_with("refused:"), "{told}");
+            assert_eq!(produced.watch, None);
+        }
+
+        /// A path the read gate refuses is a path nobody vouched for, and a watch on one is a
+        /// standing channel about a file this program has no business reporting movement on.
+        #[test]
+        fn a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be() {
+            let scratch = Scratch::new("escaping");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut count = 0;
+            let (produced, told) = armed(
+                &workspace,
+                Arming::Allowed { free: 8 },
+                &mut count,
+                json!({"path": "../outside.txt"}),
+            );
+
+            assert!(told.starts_with("refused:"), "{told}");
+            assert_eq!(produced.watch, None);
+        }
+
+        /// One field, a path, so the whole of what a person would have to approve is which file
+        /// this session may be told about. A field for anything else would be a decision nobody
+        /// could read off the call.
+        #[test]
+        fn nothing_on_this_tool_says_anything_but_which_file() {
+            let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 8 })
+                .into_iter()
+                .find(|t| t.function.name == "watch_file")
+                .expect("watch_file is offered");
+            let properties = tool.function.parameters["properties"]
+                .as_object()
+                .expect("properties");
+            let fields: Vec<&str> = properties.keys().map(String::as_str).collect();
+            assert_eq!(fields, ["path"]);
+        }
+
+        /// Both answers describe themselves as the answer to a request to be told when something
+        /// changes, so a planner given two and told nothing takes the one it read first, which is
+        /// the read's own paragraph and therefore always the schedule.
+        #[test]
+        fn a_read_is_sent_to_the_watch_where_one_can_be_armed() {
+            let described = available(Scheduling::ArrangingALook, Arming::Allowed { free: 8 })
+                .into_iter()
+                .find(|t| t.function.name == "read_file")
+                .expect("read_file is offered")
+                .function
+                .description;
+            assert!(
+                described.contains("watch_file is the better answer"),
+                "a read does not send a question about one file to the watch: {described}"
+            );
+        }
+
+        /// A wait the turn schedules is still the answer where nothing can be armed, so the
+        /// sentence pointing at a tool that is not there has to go with it.
+        #[test]
+        fn a_read_is_sent_to_the_schedule_alone_where_no_watch_can_be_armed() {
+            let described = available(Scheduling::ArrangingALook, Arming::Unavailable)
+                .into_iter()
+                .find(|t| t.function.name == "read_file")
+                .expect("read_file is offered")
+                .function
+                .description;
+            assert!(
+                !described.contains("watch_file"),
+                "a read names a tool this surface does not offer: {described}"
+            );
+            assert!(
+                described.contains("call schedule_next at the end of this turn"),
+                "a read stopped naming the answer that is left: {described}"
+            );
+        }
+
+        /// A reference names a file this conversation was never shown the name of, and a fire's
+        /// prompt carries the path it was armed on into the user's own role. Resolving one here
+        /// would put a name off an untrusted listing in the one position nothing can label.
+        #[test]
+        fn a_reference_is_refused_rather_than_resolved_into_a_watch() {
+            let scratch = Scratch::new("reference");
+            std::fs::write(scratch.path.join("a.txt"), "hello\n").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut count = 0;
+            let (produced, told) = armed(
+                &workspace,
+                Arming::Allowed { free: 8 },
+                &mut count,
+                json!({"path_ref": "file_1"}),
+            );
+
+            assert!(told.starts_with("refused:"), "{told}");
+            assert!(told.contains("and no reference"), "{told}");
+            assert_eq!(produced.watch, None);
+            assert_eq!(count, 0);
+        }
+
+        /// A surface that keeps no watches is offered no way to arm one, because a fire is a
+        /// turn nobody asked for arriving where nobody is reading.
+        #[test]
+        fn a_surface_that_keeps_no_watches_is_not_offered_the_tool() {
+            assert!(
+                !available(Scheduling::ArrangingALook, Arming::Unavailable)
+                    .iter()
+                    .any(|t| t.function.name == "watch_file"),
+                "the tool was offered to a caller that keeps no watches"
+            );
+            assert!(
+                !for_delegate(&CapabilitySet::from_iter([Capability::FileRead]))
+                    .iter()
+                    .any(|t| t.function.name == "watch_file"),
+                "a delegate was offered a way to arm a watch"
+            );
+        }
+    }
+
     /// Editing compares the planner's `old_text` against the file to find the passage to
     /// replace, and that comparison decides whether the write happens at all.
     mod editing {
@@ -6706,7 +7789,7 @@ mod tests {
         /// the same kind: an absolute rule would be dead here and the tests would be passing
         /// for a reason nobody wrote down.
         fn policy_vouching(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
-            let mut store = TrustStore::new();
+            let mut store = TrustStore::new("/work");
             store.trust(".");
             Policy::begin(
                 routing(),

@@ -1,6 +1,6 @@
 //! Linux confinement via Landlock.
 //!
-//! Filesystem restrictions are applied with Landlock, which needs kernel 5.13 or
+//! Filesystem restrictions are applied with Landlock, which needs kernel 5.19 or
 //! newer. Availability is probed at runtime rather than assumed: an older kernel, or a
 //! container that masks the syscall, means confinement is unavailable and the process
 //! is refused instead of run unconfined.
@@ -15,15 +15,22 @@
 use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
 use crate::{Sandbox, SandboxError};
 use landlock::{
-    ABI, Access, AccessFs, CompatLevel, Compatible, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
-    path_beneath_rules,
+    ABI, Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, RulesetAttr,
+    RulesetCreatedAttr, RulesetError, RulesetStatus, path_beneath_rules,
 };
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::Command;
 
-/// The Landlock ABI this backend targets. ABI v1 is the widest supported set, so
-/// confinement works on any kernel from 5.13 onwards rather than only the newest.
-const TARGET_ABI: ABI = ABI::V1;
+/// The Landlock ABI this backend targets. ABI v2 is the first carrying the right that
+/// governs moving a file between two directories, and a ruleset that does not handle
+/// that right denies the operation wherever it appears, so targeting v1 confines a
+/// program to less than its grants name. What v2 costs is the kernels between 5.13 and
+/// 5.19, which have Landlock without that right.
+const TARGET_ABI: ABI = ABI::V2;
+
+/// The Landlock ABI version [`TARGET_ABI`] needs from the kernel.
+const TARGET_ABI_VERSION: libc::c_long = 2;
 
 /// `landlock_create_ruleset`, stable since Linux 5.13.
 const SYS_LANDLOCK_CREATE_RULESET: libc::c_long = 444;
@@ -48,6 +55,76 @@ fn landlock_abi_version() -> libc::c_long {
     }
 }
 
+/// Whether a kernel reporting `version` can enforce [`TARGET_ABI`].
+///
+/// A version rather than the syscall, so every answer is decided by something a test can
+/// call: the kernel a suite runs on reports one of them and no test can make it report
+/// another.
+///
+/// A kernel too old for the target ABI is refused rather than confined under the rights
+/// it does carry. `BestEffort` compatibility is what lets a grant for a regular file drop
+/// the rights only a directory can hold, and it drops the whole target ABI just as
+/// quietly on a kernel that is merely old, which is silent degradation rather than a
+/// platform difference a caller can work with.
+///
+/// The two refusals are separate because the answer to them differs: a kernel with no
+/// Landlock at all is a machine to enable the LSM on, and an old one is a machine to
+/// upgrade.
+fn abi_supports_target(version: libc::c_long) -> Result<(), SandboxError> {
+    if version < 1 {
+        return Err(SandboxError::Unavailable {
+            platform: "linux",
+            detail: "the landlock syscall is not implemented on this kernel \
+                     (needs 5.19+ with the LSM enabled)"
+                .into(),
+        });
+    }
+    if version < TARGET_ABI_VERSION {
+        return Err(SandboxError::Unavailable {
+            platform: "linux",
+            detail: format!(
+                "this kernel implements landlock abi {version}, which has no right governing \
+                 the move of a file between two directories, so a ruleset built on it denies \
+                 every such move inside the paths a policy grants; refusing rather than \
+                 confining to less than a policy asks for (needs abi {TARGET_ABI_VERSION}, \
+                 kernel 5.19+)"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// A rule for every path in `paths`, or an error saying how many produced none.
+///
+/// A Landlock rule is a right attached to an open descriptor, so a path nothing can open
+/// cannot be named in one, and the rule builder skips such a path rather than reporting
+/// it. A ruleset built straight from that builder therefore confines the process to fewer
+/// paths than the policy listed while the policy reads as applied in full.
+fn rules_for_every_path(
+    paths: &[PathBuf],
+    access: BitFlags<AccessFs>,
+) -> std::io::Result<Vec<Result<PathBeneath<PathFd>, RulesetError>>> {
+    let rules: Vec<_> = path_beneath_rules(paths, access).collect();
+    if rules.len() != paths.len() {
+        // Which paths, found by asking again, since the builder reports only the rules it
+        // produced. The second pass is on the refusal path alone, and it names the grant
+        // that is missing rather than leaving a count for somebody to work back from.
+        let missing: Vec<_> = paths
+            .iter()
+            .filter(|path| PathFd::new(path).is_err())
+            .map(|path| path.display().to_string())
+            .collect();
+        return Err(std::io::Error::other(format!(
+            "landlock: {} of the {} paths the policy names have no rule ({}); refusing \
+             rather than confining to less than the policy asked for",
+            paths.len() - rules.len(),
+            paths.len(),
+            missing.join(", ")
+        )));
+    }
+    Ok(rules)
+}
+
 /// Landlock-based confinement.
 #[derive(Debug, Default)]
 pub struct LandlockSandbox;
@@ -62,15 +139,10 @@ impl LandlockSandbox {
     ///
     /// So the ABI is queried directly. `ENOSYS` means the syscall does not exist:
     /// the case on Docker Desktop's linuxkit kernel, which does not enable the LSM.
+    /// A kernel that has it but reports less than [`TARGET_ABI_VERSION`] is refused for
+    /// the same reason, since `BestEffort` would run it under the rights it does carry.
     pub fn new() -> Result<Self, SandboxError> {
-        if landlock_abi_version() < 0 {
-            return Err(SandboxError::Unavailable {
-                platform: "linux",
-                detail: "the landlock syscall is not implemented on this kernel \
-                         (needs 5.13+ with the LSM enabled)"
-                    .into(),
-            });
-        }
+        abi_supports_target(landlock_abi_version())?;
 
         landlock::Ruleset::default()
             .set_compatibility(CompatLevel::BestEffort)
@@ -129,6 +201,26 @@ impl Sandbox for LandlockSandbox {
             });
         }
 
+        // A path nothing can open is a grant this backend cannot install, and installing
+        // the rest of the policy instead would hand the caller a narrower confinement
+        // than the one it asked for with nothing saying so. The caller hears it here,
+        // before a process exists, rather than from a program refused a path the policy
+        // named.
+        if let Some(e) = policy
+            .readable
+            .iter()
+            .chain(policy.writable.iter())
+            .find_map(|path| PathFd::new(path).err())
+        {
+            return Err(SandboxError::SetupFailed {
+                mechanism: "landlock",
+                detail: format!(
+                    "the policy names a path no rule can be built for ({e}); refusing \
+                     rather than confining to less than it asked for"
+                ),
+            });
+        }
+
         let mut command = Command::new(program);
         command.args(args);
 
@@ -153,19 +245,19 @@ impl Sandbox for LandlockSandbox {
 
                 if !readable.is_empty() {
                     ruleset = ruleset
-                        .add_rules(path_beneath_rules(
+                        .add_rules(rules_for_every_path(
                             &readable,
                             AccessFs::from_read(TARGET_ABI),
-                        ))
+                        )?)
                         .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
                 }
 
                 if !writable.is_empty() {
                     ruleset = ruleset
-                        .add_rules(path_beneath_rules(
+                        .add_rules(rules_for_every_path(
                             &writable,
                             AccessFs::from_all(TARGET_ABI),
-                        ))
+                        )?)
                         .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
                 }
 
@@ -193,6 +285,7 @@ impl Sandbox for LandlockSandbox {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::os::unix::fs::MetadataExt;
     use std::process::Stdio;
 
     /// cat reporting that the file it was asked for could not be read. Any other code
@@ -207,18 +300,24 @@ mod tests {
     /// binary and the libraries it links, and Landlock has no exemption for that, while
     /// withholding the network or subprocesses is refused outright because neither
     /// denial is enforceable here.
+    ///
+    /// Only the library directories this machine has: naming one it does not is a policy
+    /// this backend refuses, and `/lib64` is absent on a distribution whose architecture
+    /// never had it.
     fn loadable_policy() -> SandboxPolicy {
-        SandboxPolicy::strict()
-            .allow_network_egress()
-            .allow_subprocesses()
-            .allow_read("/usr")
-            .allow_read("/lib")
-            .allow_read("/lib64")
-            .allow_read("/bin")
+        ["/usr", "/lib", "/lib64", "/bin"]
+            .into_iter()
+            .filter(|path| std::path::Path::new(path).exists())
+            .fold(
+                SandboxPolicy::strict()
+                    .allow_network_egress()
+                    .allow_subprocesses(),
+                SandboxPolicy::allow_read,
+            )
     }
 
-    /// Landlock is absent on kernels before 5.13 and in container runtimes that do not
-    /// enable the LSM, notably Docker Desktop's linuxkit kernel.
+    /// Landlock is unusable here on kernels before 5.19 and in container runtimes that do
+    /// not enable the LSM, notably Docker Desktop's linuxkit kernel.
     ///
     /// A kernel without it fails the tests that need real enforcement rather than
     /// skipping them. Those tests are the whole of what pins confinement on Linux, so a
@@ -380,9 +479,9 @@ mod tests {
             return;
         };
 
-        // The directory has to be there before the ruleset is built: a rule for a path that
-        // cannot be opened is dropped rather than refused, so a missing directory is no grant
-        // at all and the write below would fail for a reason that proves nothing.
+        // The directory has to be there before the policy is built: a path that cannot be
+        // opened is a grant this backend refuses, so a missing directory would produce no
+        // command at all and the write below would never be reached.
         let dir = crate::testutil::scratch_dir("bravebot-landlock-granted-write");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
@@ -447,5 +546,179 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The refusal before the spawn leaves a window: a path can go away between the check
+    /// and the exec, and the rules are built on the far side of a fork where no error can
+    /// reach the caller as anything but a failure to spawn. A dropped rule has to stop the
+    /// exec there too, or the window is a process running under a policy nobody applied in
+    /// full.
+    #[test]
+    fn a_ruleset_is_not_built_with_a_path_missing_from_it() {
+        let err = rules_for_every_path(
+            &[PathBuf::from("/bravebot-no-such-path")],
+            AccessFs::from_read(TARGET_ABI),
+        )
+        .expect_err("must refuse to build a ruleset short of a path");
+        assert!(
+            err.to_string().contains("/bravebot-no-such-path"),
+            "the refusal has to name the path that has no rule: {err}"
+        );
+    }
+
+    /// A policy is the list of paths a caller decided a program may reach, so a backend
+    /// granting fewer of them than it was given leaves nobody able to read the guarantee
+    /// off the policy: the process runs, the record says the policy was applied, and the
+    /// one path the caller cared about is the one that was dropped.
+    #[test]
+    fn a_path_that_cannot_be_opened_is_refused_rather_than_dropped() {
+        let dir = crate::testutil::scratch_dir("bravebot-landlock-absent-path");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let absent = dir.join("not-created-yet");
+
+        // Both lists, because a check over one of them leaves the other silently narrowing.
+        for policy in [
+            loadable_policy().allow_read(&absent),
+            loadable_policy().allow_write(&absent),
+        ] {
+            let err = LandlockSandbox
+                .command("/bin/true", &[], &policy)
+                .expect_err("must refuse a grant it cannot install");
+            match err {
+                SandboxError::SetupFailed { mechanism, detail } => {
+                    assert_eq!(mechanism, "landlock");
+                    assert!(
+                        detail.contains(&absent.display().to_string()),
+                        "the refusal has to name the path: {detail}"
+                    );
+                }
+                other => panic!("expected SetupFailed naming the path, got: {other:?}"),
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A kernel with Landlock but without the right that governs moving a file is one this
+    /// backend cannot hold a policy to, and `BestEffort` compatibility would run a process
+    /// under it anyway, reporting a policy that was applied without the operation every
+    /// build performs.
+    #[test]
+    fn a_kernel_that_cannot_govern_a_move_is_refused_rather_than_confining_without_it() {
+        let absent =
+            abi_supports_target(-1).expect_err("a kernel with no landlock cannot confine anything");
+        match absent {
+            SandboxError::Unavailable { platform, detail } => {
+                assert_eq!(platform, "linux");
+                assert!(
+                    detail.contains("not implemented"),
+                    "an absent syscall has to read as absent: {detail}"
+                );
+            }
+            other => panic!("expected Unavailable for an absent syscall, got: {other:?}"),
+        }
+
+        let old = abi_supports_target(TARGET_ABI_VERSION - 1)
+            .expect_err("an abi without the move right has to be refused");
+        match old {
+            SandboxError::Unavailable { platform, detail } => {
+                assert_eq!(platform, "linux");
+                assert!(
+                    detail.contains("abi 1") && detail.contains("5.19"),
+                    "the refusal has to name what the kernel has and what it needs: {detail}"
+                );
+            }
+            other => panic!("expected Unavailable for an old abi, got: {other:?}"),
+        }
+
+        abi_supports_target(TARGET_ABI_VERSION).expect("the abi this backend targets is enough");
+    }
+
+    /// Writing a temporary file and renaming it into place is how a compiler, a package
+    /// manager and an editor write anything at all, so a confinement that denies the move
+    /// holds an ordinary build to less than the paths its policy granted.
+    ///
+    /// The inode is what the assertion is on, because `mv` answers a refused rename by
+    /// copying the file and unlinking the original: the destination exists either way, and
+    /// only a preserved inode says the move happened rather than a copy that is neither
+    /// atomic nor cheap.
+    #[test]
+    fn a_confined_process_can_rename_a_file_between_two_granted_directories() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+
+        // Both directories have to be there before the policy is built, since a path that
+        // cannot be opened is a grant this backend refuses outright.
+        let dir = crate::testutil::scratch_dir("bravebot-landlock-rename");
+        let _ = std::fs::remove_dir_all(&dir);
+        let source = dir.join("from").join("moved");
+        let destination = dir.join("to").join("moved");
+        std::fs::create_dir_all(dir.join("from")).expect("the scratch directory is creatable");
+        std::fs::create_dir_all(dir.join("to")).expect("the scratch directory is creatable");
+        std::fs::write(&source, b"contents").expect("the file is writable");
+        let inode = std::fs::metadata(&source).expect("the file is there").ino();
+
+        let policy = loadable_policy().allow_write(&dir);
+        let mut child = sandbox
+            .command(
+                "/usr/bin/mv",
+                &[
+                    source.display().to_string(),
+                    destination.display().to_string(),
+                ],
+                &policy,
+            )
+            .expect("command builds")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("should spawn");
+        assert!(
+            child.wait().expect("should wait").success(),
+            "a move inside one granted directory failed"
+        );
+        assert_eq!(
+            std::fs::metadata(&destination)
+                .expect("the destination is there")
+                .ino(),
+            inode,
+            "the file was copied and unlinked rather than moved, so the move was denied"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What a program may be trusted with in the environment is the caller's decision and
+    /// not a backend's: a credential lives in a variable rather than in a file, so no
+    /// grant over paths either withholds one or hands one over, and the agent socket a
+    /// push signs through is named by a variable as well. A backend that emptied it would
+    /// take that decision away from the caller here and leave it with the caller on the
+    /// other platform, which is one policy meaning two things.
+    ///
+    /// `CARGO_MANIFEST_DIR` is the variable read back because cargo sets it in the
+    /// environment of a test process, so it is one this process holds and nothing else
+    /// invents.
+    #[test]
+    fn the_environment_a_confined_process_receives_is_the_callers() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let held = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets this for a test");
+
+        let printed = sandbox
+            .command("/usr/bin/env", &[], &loadable_policy())
+            .expect("command builds")
+            .output()
+            .expect("the confined process runs");
+
+        let environment = String::from_utf8_lossy(&printed.stdout);
+        assert!(
+            environment
+                .lines()
+                .any(|line| line == format!("CARGO_MANIFEST_DIR={held}")),
+            "a variable this process holds did not reach the confined process: {environment}"
+        );
     }
 }

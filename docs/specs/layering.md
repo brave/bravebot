@@ -34,7 +34,7 @@ this spec.
 | `bravebot-config` | Environment-derived configuration for the backend | none | The configuration surface, on the same footing as the endpoint and the model. Reads the settings layers, including one a checkout may carry, and hands on rule text without matching a rule. See [backends.md](backends.md) |
 | `bravebot-i18n` | Message catalogs for everything a person reads | none | Presentation text only. Holds nothing the planner is sent, and decides nothing: a message is named in the source, so no value can pick one. See [localization.md](localization.md) |
 | `bravebot-signing` | Brave services request signing, hs2019 HMAC-SHA256 over the body digest | none | Auth only. Carries no workspace content |
-| `bravebot-skus` | Imports a Leo Premium subscription by registering as a new device | none | Auth only. Carries no workspace content and no model output. See [premium-credentials.md](premium-credentials.md) |
+| `bravebot-skus` | Imports a Leo Premium subscription by registering as a new device | none | Auth only. Carries no workspace content and no model output. Keeps its own HTTP client, over a transport its caller states. See [premium-credentials.md](premium-credentials.md) |
 
 `verified-by: by-construction (bravebot-core declares no dependencies at all)`
 
@@ -73,10 +73,11 @@ there is one of the crate's own and is named the same way.
 **Why.** Nearly every crate here contains no `unsafe` at all. Undeclared, that is a property
 nothing records: it holds by accident, and the first `unsafe` to arrive arrives silently. Declared,
 the compiler decides it, and what a reviewer reads is the sites that name themselves rather than
-every crate in the workspace. Two crates name sites: `bravebot-sandbox`, whose landlock syscalls
-are its reason for existing, and `bravebot-skus`, whose tests point `HOME` at a scratch directory.
-Taking `deny` where `forbid` would do is the way the rule is kept in letter and lost in substance,
-because `deny` is the one an `allow` added later reopens.
+every crate in the workspace. Three crates name sites: `bravebot-sandbox`, whose landlock syscalls
+are its reason for existing, `bravebot-skus`, whose tests point `HOME` at a scratch directory, and
+`bravebot-agent`, which asks Windows for its own version ([INSTR-9](instructions.md#INSTR-9)) in
+the one call a platform states that in. Taking `deny` where `forbid` would do is the way the rule
+is kept in letter and lost in substance, because `deny` is the one an `allow` added later reopens.
 
 `verified-by: bravebot_cli::unsafe_code::every_crate_root_says_what_it_does_about_unsafe`
 `verified-by: bravebot_cli::unsafe_code::a_crate_that_exempts_nothing_forbids_rather_than_denies`
@@ -91,6 +92,14 @@ because `deny` is the one an `allow` added later reopens.
   is the accident LAYER-4 exists to remove.
 
 - **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds its own HTTP
-  client and talks to Brave's subscription service directly, without depending on `bravebot-net`. That traffic carries credentials and an order id, never workspace
+  client and talks to Brave's subscription service directly, without putting anything to the policy
+  gate. That traffic carries credentials and an order id, never workspace
   content or model output, so no labelled value escapes the gate. LAYER-3 is worded as "all agent
-  traffic" for that reason. A second egress that ever carried content would be a violation.
+  traffic" for that reason. A second egress that ever carried content would be a violation. What
+  that client trusts and what it goes through is not its own: `register` is handed a transport
+  configuration by the caller, which is `bravebot-agent` or `bravebot-cli` and depends on
+  `bravebot-net` already. That is the one thing about the two clients that must not differ
+  ([NET-7](network-egress.md#NET-7), [NET-8](network-egress.md#NET-8)), since a machine states one
+  certificate authority and one route off it, not one per client. Passing it in rather than
+  depending on `bravebot-net` keeps this crate at no dependencies, which is what makes "auth only"
+  checkable by reading its manifest.

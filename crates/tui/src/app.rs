@@ -10,12 +10,13 @@
 //! ever being in flight together.
 
 use bravebot_agent::conversation::Conversation;
+use bravebot_agent::lsp::LanguageServers;
 use bravebot_agent::turn::{self, PastedImage, Task};
 use bravebot_agent::{SessionScratch, Workspace};
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::permissions::Permissions;
-use bravebot_core::programs::TrustedPrograms;
+use bravebot_core::programs::{AskedAbout, TrustedPrograms};
 use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
 use bravebot_net::Egress;
@@ -104,6 +105,12 @@ const LOOP_COMMAND: &str = "/loop";
 /// argument.
 const GOAL_COMMAND: &str = "/goal";
 
+/// The line that lists the standing watches, and ends one by its number.
+///
+/// It cannot arm one. A watch is asked for in a prompt, and what a person needs a command for is
+/// the half they cannot read off the transcript: which watches are live, and how to end one.
+const WATCH_COMMAND: &str = "/watch";
+
 /// The one line that ends the session instead of starting a turn.
 const EXIT_COMMAND: &str = "/exit";
 
@@ -112,6 +119,20 @@ const EXPORT_COMMAND: &str = "/export";
 
 /// The line that rewinds the conversation and restores files changed in the last turn.
 const UNDO_COMMAND: &str = "/undo";
+
+/// The line that lists what a rewind would put back, and goes back to one of those points.
+///
+/// A word of its own rather than an argument to `/undo`, because `/undo` deliberately takes none:
+/// the table's empty argument column is what keeps `/undo the last thing I asked for` a prompt
+/// (CMD-2), and a command that takes a number cannot also do that.
+const REWIND_COMMAND: &str = "/rewind";
+
+/// The line that plans one task in full before anything is read, taking the task as its argument.
+///
+/// Not a mode the session holds. A session is several turns over one conversation and this is one
+/// run with a frozen plan, so the word starts a run and the session comes back to the turn loop
+/// when it ends. See [`manifest_animated`] and `docs/specs/manifest.md`.
+const MANIFEST_COMMAND: &str = "/manifest";
 
 /// One command, and what it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,7 +150,7 @@ pub struct Command {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 17] {
+pub fn commands() -> [Command; 20] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -202,6 +223,16 @@ pub fn commands() -> [Command; 17] {
             description: t!(command_goal),
         },
         Command {
+            name: WATCH_COMMAND,
+            argument: "[stop <n>]",
+            description: t!(command_watch),
+        },
+        Command {
+            name: MANIFEST_COMMAND,
+            argument: "<task>",
+            description: t!(command_manifest),
+        },
+        Command {
             name: EXPORT_COMMAND,
             argument: "[path]",
             description: t!(command_export),
@@ -210,6 +241,11 @@ pub fn commands() -> [Command; 17] {
             name: UNDO_COMMAND,
             argument: "",
             description: t!(command_undo),
+        },
+        Command {
+            name: REWIND_COMMAND,
+            argument: "[turns]",
+            description: t!(command_rewind),
         },
         Command {
             name: EXIT_COMMAND,
@@ -310,6 +346,9 @@ pub enum Action {
     /// Ask something beside the work, over a copy of the conversation. Needs the conversation and
     /// the network, which the loop owns, and gives the conversation nothing back.
     Aside(String),
+    /// Plan this task in full and then walk it. Needs the workspace, the trust map and the
+    /// network, which the loop owns, and gives the conversation nothing back.
+    Manifest(String),
     /// Start a new session here. Needs the conversation and the session record, which the loop owns.
     Clear,
     /// Call this session something else. Needs the session record, which the loop owns.
@@ -327,6 +366,10 @@ pub enum Action {
     Undo,
     /// Edit core memories on disk. Needs the terminal, which the loop owns.
     EditMemory,
+    /// List the points a rewind could reach, or go back to one. Needs the same as `Undo`, which
+    /// is why the argument is carried unparsed: a number that is not one is answered with a line
+    /// in the transcript, and the transcript is the loop's.
+    Rewind(String),
     Quit,
 }
 
@@ -881,6 +924,14 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             session.clear_goal();
             Action::Redraw
         }
+        // The last rung before leaving, for the reason the loop and the goal are rungs at all:
+        // every live watch is a thing still happening, and somebody pressing the key that stops
+        // things wants them stopped. Taking all of them rather than one, because picking which of
+        // eight survived is not a decision to make from a keystroke.
+        KeyCode::Char('c') if ctrl && !session.watches().is_empty() => {
+            session.stop_watches();
+            Action::Redraw
+        }
         KeyCode::Char('c') if ctrl => {
             session.quit();
             Action::Quit
@@ -1049,6 +1100,9 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
     if line.trim() == UNDO_COMMAND {
         return Action::Undo;
     }
+    if let Some(turns) = argument_to(line, REWIND_COMMAND) {
+        return Action::Rewind(turns.to_string());
+    }
     if let Some(directory) = argument_to(line, ADD_DIR_COMMAND) {
         return Action::AddDirectory(directory.to_string());
     }
@@ -1057,6 +1111,13 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
     }
     if let Some(name) = argument_to(line, RENAME_COMMAND) {
         return Action::Rename(name.to_string());
+    }
+    // The command that starts the other kind of run. The task is taken verbatim and is never sent
+    // as a prompt: the planner that reads it is a fresh one with nothing but the task and the
+    // driver's own words in its context, so the conversation neither goes into the run nor hears
+    // anything back from it.
+    if let Some(task) = argument_to(line, MANIFEST_COMMAND) {
+        return Action::Manifest(task.to_string());
     }
     // The command that sends a prompt rather than the line it was typed on. `/loop 5m check the
     // deploy` arms the loop and hands back "check the deploy", which is what every tick sends from
@@ -1084,6 +1145,19 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
                 }
             }
             crate::goals::Asked::Set(condition) => session.start_goal(condition),
+        }
+        return Action::Redraw;
+    }
+    // The command that sends nothing either. A watch is armed by asking for one in a prompt, so
+    // what is here is the reading and the ending: the two halves of a standing watch that a
+    // transcript cannot show.
+    if let Some(argument) = argument_to(line, WATCH_COMMAND) {
+        match crate::watches::parse(argument) {
+            crate::watches::Asked::List => session.report_watches(),
+            crate::watches::Asked::Stop(number) => {
+                session.stop_watch(number);
+            }
+            crate::watches::Asked::Unreadable => session.note(t!(watch_command_takes)),
         }
         return Action::Redraw;
     }
@@ -1292,17 +1366,56 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
 /// screenshot it is about. Without this the path was written out as prose, so the line said
 /// nothing about a file and the attachment was never staged.
 ///
-/// Nothing comes back, since both loops redraw every frame regardless of what the event was.
-pub fn handle_paste_while_working(session: &mut Session, text: &str) {
+/// What comes back is what [`act_while_working`] carries out, which is the clipboard read an empty
+/// paste asks for and nothing else.
+pub fn handle_paste_while_working(session: &mut Session, text: &str) -> Action {
     // The line is the scroller's to leave alone, and a paste is not a key: it arrives from the
     // terminal whatever mode is open, so the guard that holds the box still for a keystroke never
     // sees it. Nothing is said about it, because the scroller has the whole screen but its footer
     // and a sentence drawn nowhere is no answer.
     if session.scrolling() {
-        return;
+        return Action::None;
+    }
+    // A picture the terminal could not carry arrives as a paste of nothing, mid-turn exactly as at
+    // rest, and the answer is the same one: go and read the clipboard. Before the drop check, for
+    // the reason the idle path says it before anything looks at the text, since an empty paste is
+    // no more a drop than it is a prompt.
+    //
+    // Without this arm the empty paste reached `paste_text`, which writes nothing and says
+    // nothing, so a screenshot pasted while the turn it was about was running went nowhere and
+    // the key that would have carried it was never named.
+    if text.is_empty() {
+        let chord = session.bindings().paste_name();
+        session.note_once(t!(paste_arrived_empty, chord = chord));
+        return Action::Paste;
     }
     if !session.drop_files(text) {
         session.paste_text(text);
+    }
+    Action::Redraw
+}
+
+/// Carry out what a key or a paste answered with while a turn is running.
+///
+/// [`Action::Paste`] is the only answer either of the mid-turn handlers gives that the session
+/// cannot carry out itself, since reading the clipboard runs the platform's own tools. Everything
+/// else they return is a redraw the loops do every frame regardless.
+///
+/// Every working loop goes through here rather than answering the event and dropping what came
+/// back. Four of them did exactly that, so Ctrl-V mid-turn reached its arm, produced the right
+/// answer, and had it thrown away: the clipboard was never read and the picture never staged, on a
+/// key the idle path has always answered (INPUT-9, PASTE-7).
+///
+/// The read arrives as an argument for the reason [`take_from_clipboard`] takes one: a test can
+/// then say what the clipboard held and watch the picture land in the box, rather than assert only
+/// that the answer came back, which is what left the discard invisible.
+fn act_while_working(
+    session: &mut Session,
+    action: Action,
+    read: impl FnOnce() -> crate::clipboard::Pasted,
+) {
+    if action == Action::Paste {
+        take_from_clipboard(session, read());
     }
 }
 
@@ -1610,10 +1723,24 @@ pub fn run(
     start: Start,
     skip_permissions: bool,
 ) -> io::Result<Option<crate::sessions::Resumable>> {
+    // Before the terminal is taken, because the request for no colour decides whether it is asked
+    // about its background on the way in, and that question happens inside the takeover.
+    crate::theme::sense_no_color();
+    crate::indicator::sense_no_motion();
+
     let mut stdout = io::stdout();
     take_over_terminal(&mut stdout)?;
 
-    let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+    // Handed back on the way out, because the terminal is already taken by the line above and a
+    // failure here would otherwise return from a session that never started, leaving the person in
+    // raw mode on a screen they cannot get off.
+    let mut terminal = match Terminal::new(CrosstermBackend::new(stdout)) {
+        Ok(terminal) => terminal,
+        Err(failure) => {
+            hand_back_terminal(&mut io::stdout())?;
+            return Err(failure);
+        }
+    };
 
     // Asked before the session begins, so what it starts with is settled before anything is
     // drawn for it. Choosing nothing is an ordinary session rather than an error.
@@ -1678,6 +1805,15 @@ fn take_over_terminal<W: Write>(out: &mut W) -> io::Result<()> {
     // alternate screen, so the query is not painted into the session.
     crate::theme::sense(out);
     crate::theme::restore_saved();
+    ask_for_modes(out, enhanced_keys())
+}
+
+/// Ask the terminal for every mode the interface draws and reads in.
+///
+/// Separate from raw mode, and told rather than asked whether the terminal understands
+/// disambiguated keys, because both of those are properties of a real tty: what is left here is
+/// bytes, so a test can read back what was asked for and what was given up.
+fn ask_for_modes<W: Write>(out: &mut W, enhanced: bool) -> io::Result<()> {
     execute!(
         out,
         EnterAlternateScreen,
@@ -1689,7 +1825,7 @@ fn take_over_terminal<W: Write>(out: &mut W) -> io::Result<()> {
         EnableFocusChange
     )?;
 
-    if enhanced_keys() {
+    if enhanced {
         execute!(
             out,
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
@@ -1707,8 +1843,13 @@ fn take_over_terminal<W: Write>(out: &mut W) -> io::Result<()> {
 /// Put the terminal back the way it was found.
 fn hand_back_terminal<W: Write>(out: &mut W) -> io::Result<()> {
     disable_raw_mode()?;
+    give_back_modes(out, enhanced_keys())
+}
+
+/// Give back every mode [`ask_for_modes`] asked for.
+fn give_back_modes<W: Write>(out: &mut W, enhanced: bool) -> io::Result<()> {
     // Popped before the modes below, so the stack is unwound in the order it was built.
-    if enhanced_keys() {
+    if enhanced {
         execute!(out, PopKeyboardEnhancementFlags)?;
     }
     execute!(
@@ -1912,6 +2053,140 @@ fn rewind_point(
     }
 }
 
+/// Say what each point a rewind could reach wrote over, most recent first.
+///
+/// Most recent first because that is the order the numbers run in: `/rewind 1` is the turn that
+/// just ended, so a list starting at the far end would have somebody counting rows backwards to
+/// find the one they mean. It is also what lets each row carry one turn's paths rather than that
+/// turn's and every later turn's: going back to a row puts back every row above it as well,
+/// which the heading says, and repeating the same paths down the list would bury the new ones.
+///
+/// Every path is named rather than counted, for the reason a refused path is: deciding whether
+/// to go back is deciding about those files, and a count of them decides nothing.
+fn list_rewind_points(session: &mut Session) {
+    let lines: Vec<String> = session
+        .rewind_points()
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(back, point)| {
+            let turns = back + 1;
+            let turn = point.snapshot.turns + 1;
+            let asked = crate::sessions::title_from(&point.prompt);
+            if point.backups.is_empty() {
+                t!(
+                    session_rewind_point_wrote_nothing,
+                    turns = turns,
+                    turn = turn,
+                    asked = asked
+                )
+            } else {
+                let paths = point
+                    .backups
+                    .iter()
+                    .map(|backup| backup.path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                t!(
+                    session_rewind_point,
+                    turns = turns,
+                    turn = turn,
+                    asked = asked,
+                    paths = paths
+                )
+            }
+        })
+        .collect();
+    if lines.is_empty() {
+        session.note(t!(session_nothing_to_undo));
+        return;
+    }
+    session.note(t!(session_rewind_points));
+    for line in lines {
+        session.note(line);
+    }
+}
+
+/// Put the session back to where it stood `steps` turns ago, on disk and in the conversation.
+///
+/// Says what happened either way. A rewind that reported nothing would leave somebody who asked
+/// for three turns back and had two believing the tree in front of them is three turns older
+/// than it is.
+fn rewind(
+    session: &mut Session,
+    conversation: &mut Conversation,
+    trust: &mut TrustStore,
+    programs: &mut TrustedPrograms,
+    stored: &mut crate::sessions::Handle,
+    workspace: &Workspace,
+    steps: usize,
+) {
+    let Some((snapshot, backups)) = session.take_rewind(steps) else {
+        // Saying how far back it does go rather than refusing in the abstract, since the next
+        // thing the person types is that number.
+        match session.rewind_points().len() {
+            0 => session.note(t!(session_nothing_to_undo)),
+            kept => session.note(t!(session_rewind_goes_no_further, kept = kept)),
+        }
+        return;
+    };
+    let refused = workspace.restore_backups(backups);
+
+    *conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
+    session.turns = snapshot.turns;
+    session.tokens = snapshot.tokens;
+    session.restore_spend(snapshot.tokens, snapshot.spend);
+    session.restore_timing(snapshot.timing);
+    // With the spend, for the same reason clearing takes it: the figure describes a
+    // prompt that is no longer part of what this session sent.
+    session.restore_cache(snapshot.cached);
+    session.written = 0;
+    session.finished = None;
+    *trust = snapshot.trust;
+    *programs = snapshot.programs;
+
+    session.transcript.truncate(snapshot.transcript_len);
+    stored.truncate_audit(session.turns + 1);
+
+    if snapshot.turns == 0 && !snapshot.was_wrote {
+        stored.discard_unwritten(&snapshot.title);
+    } else {
+        stored.save(
+            &snapshot.title,
+            crate::sessions::Standing {
+                conversation: &conversation.snapshot(),
+                turns: session.turns,
+                tokens: session.tokens,
+                spend: session.spend_by_turn(),
+                timing: session.timing_by_turn(),
+                model: session.served_model(),
+                todos: &session.todos_by_turn(),
+                asides: session.asides(),
+                trust,
+                programs,
+                directories: workspace.added_directories(),
+                manifest: None,
+                rewind: session.rewind_points(),
+            },
+        );
+    }
+    // Where it landed rather than how far it came, because that is the fact a person checks the
+    // tree against, and a count of turns is one they would have to do the arithmetic on.
+    let turn = snapshot.turns + 1;
+    if refused.is_empty() {
+        session.note(t!(session_rewound, turn = turn));
+    } else {
+        // Named rather than counted. A person who has to go and put a file back by
+        // hand needs to know which one, and a count sends them looking.
+        let paths = refused
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        session.note(t!(session_rewound_partly, turn = turn, paths = paths));
+    }
+}
+
 /// Returns the session left behind, where there is one to pick up again.
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -1942,11 +2217,16 @@ fn event_loop(
 
     // What the session begins holding, which is what decides whether the startup question is put
     // to its user at all. Read off `start` before the match below consumes it.
-    let beginning = beginning_of(&start);
+    let beginning = beginning_of(&start, workspace.root());
 
     // Outlives every turn, which is the point: a turn begins with the exchange so far rather
     // than with nothing, so the user can say "try that again" and be understood. A resumed
     // session begins with an exchange that outlived the process it happened in.
+    // Every run prompt this session has drawn, so a second prompt for one binary under other
+    // arguments can say that a settings file is what ends the asking. It grants nothing and is not
+    // written down anywhere: a session that ends forgets what it asked, which is the same lifetime
+    // the list of programs it vouched for has.
+    let mut asked_about = AskedAbout::new();
     let (mut conversation, mut stored, mut programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
         Start::Fresh | Start::Choose => (
@@ -1989,13 +2269,17 @@ fn event_loop(
             // The programs go the way the map does and for the same reason: the person resuming
             // is the person who vouched for them. Unlike the map there is nothing to ask about an
             // absent list, since an empty one simply means every run asks.
-            let vouched = record.trusted_programs();
+            let vouched = record.trusted_programs(workspace.root());
             // The other half of `/add-dir`, which the map cannot carry: a directory has to be
             // open for an absolute path in it to resolve at all. Restored here so the rule and
             // the reach come back together, rather than the rule alone.
             for note in record.reopen_added_directories(&mut workspace) {
                 session.note(note);
             }
+            // After the transcript rather than before it, because each point's place in that
+            // transcript is worked out from it: a point is a turn number in the record and an
+            // index in the session, and the list it indexes has to exist first.
+            session.restore_rewind_points(record.rewind_points(workspace.root()), &conversation);
             (conversation, handle, vouched)
         }
     };
@@ -2013,6 +2297,14 @@ fn event_loop(
     // person who left at it has nothing created for a session they declined to have.
     let mut scratch = opened_scratch(&mut session, &mut workspace);
 
+    // The language servers this session has started, LSP-8. Held here rather than inside a turn
+    // because the process is the session's: one built per turn would be shut down at the end of
+    // the turn that started it, so the next message would ask the same person about the same
+    // language and wait for a second index of the same tree. `None` until the first turn builds
+    // one, and again after `/clear`, which ends the session the approval belonged to, and after
+    // `/cd`, which leaves the tree it was approved for.
+    let mut servers: Option<LanguageServers> = None;
+
     // After the trust answer, because that question is the first thing on the screen and an aside
     // about a newer release does not come before it. Nothing is fetched here: the line is read off
     // what an earlier launch wrote down, and the ask that answers the next launch runs behind the
@@ -2027,6 +2319,10 @@ fn event_loop(
     let settings = bravebot_config::Settings::load();
     // Settled before a key can be pressed, since this is what decides whether a letter is a letter.
     session.adopt_editing(settings.editor_mode());
+    // Settled here too, and once, for the reason the mode is read once per turn: what decides
+    // whether somebody is asked must not change under a prompt already on the screen. The command
+    // line's switch is read here and nowhere else in the interface.
+    session.adopt_vetting(bravebot_core::vetting::asked_for(), settings.auto_vetting());
     session.adopt_keybindings(settings.keybindings());
     let (permissions, rejected) = bravebot_agent::permissions::from_settings(
         &settings,
@@ -2046,6 +2342,12 @@ fn event_loop(
     // for the rest of the session, since a note scrolls away.
     if skip_permissions {
         session.note(t!(session_permissions_skipped));
+    }
+    // And for the same reason again: a mode that stops a prompt appearing has to be said before
+    // the first slot reaches it, since the one thing a person cannot read off the transcript is a
+    // question that was never put. `/status` says it too, for the rest of the session.
+    if session.auto_vetting() {
+        session.note(t!(session_vetting_in_force));
     }
     // After the startup question, and put rather than applied: naming a directory in a settings
     // file asks for it instead of granting it, so one the person accepts is opened on the same
@@ -2094,32 +2396,41 @@ fn event_loop(
         // sent again.
         let action = match session.loop_tick() {
             Some(prompt) => Action::Submit(prompt),
-            // Then what the queue is holding, before the interface settles down to wait, for the
-            // reason a tick is looked at here.
-            None => match queued_next(&mut session) {
-                Some(action) => action,
-                None => {
-                    if !event::poll(POLL)? {
-                        continue;
-                    }
-                    match event::read()? {
-                        // Presses only. Asking for disambiguated keys asks for releases as well, and a
-                        // release handled as a press types every character twice.
-                        TermEvent::Key(key) if key.kind == KeyEventKind::Release => Action::None,
-                        TermEvent::Key(key) => handle_key(&mut session, key),
-                        TermEvent::Mouse(mouse) => handle_mouse(&mut session, mouse),
-                        TermEvent::Paste(text) => handle_paste(&mut session, &text),
-                        // Coming back from copying something is the moment a picture appears on the
-                        // clipboard, and the cheapest moment to notice: once per switch away and back,
-                        // rather than a clipboard tool spawned on a timer for the whole life of the
-                        // session.
-                        TermEvent::FocusGained => {
-                            session.image_on_clipboard = crate::clipboard::holds_an_image();
-                            Action::Redraw
+            // Then the watches, looked at here for the same reason and in the same pass: a
+            // filesystem change is the one event in this program that nobody presses a key for.
+            // Only one of the two can produce a turn, and a session holds only one kind at a
+            // time, so the order between them decides nothing.
+            None => match session.watch_fired(Instant::now(), |path| workspace.look(path)) {
+                Some(prompt) => Action::Submit(prompt),
+                // Then what the queue is holding, before the interface settles down to wait, for
+                // the reason a tick is looked at here.
+                None => match queued_next(&mut session) {
+                    Some(action) => action,
+                    None => {
+                        if !event::poll(POLL)? {
+                            continue;
                         }
-                        _ => Action::None,
+                        match event::read()? {
+                            // Presses only. Asking for disambiguated keys asks for releases as well, and a
+                            // release handled as a press types every character twice.
+                            TermEvent::Key(key) if key.kind == KeyEventKind::Release => {
+                                Action::None
+                            }
+                            TermEvent::Key(key) => handle_key(&mut session, key),
+                            TermEvent::Mouse(mouse) => handle_mouse(&mut session, mouse),
+                            TermEvent::Paste(text) => handle_paste(&mut session, &text),
+                            // Coming back from copying something is the moment a picture appears on the
+                            // clipboard, and the cheapest moment to notice: once per switch away and back,
+                            // rather than a clipboard tool spawned on a timer for the whole life of the
+                            // session.
+                            TermEvent::FocusGained => {
+                                session.image_on_clipboard = crate::clipboard::holds_an_image();
+                                Action::Redraw
+                            }
+                            _ => Action::None,
+                        }
                     }
-                }
+                },
             },
         };
 
@@ -2148,61 +2459,33 @@ fn event_loop(
                 needs_draw = true;
             }
             Action::Undo => {
-                if let Some(snapshot) = session.previous_turn.take() {
-                    let refused =
-                        workspace.restore_backups(std::mem::take(&mut session.last_turn_backups));
-
-                    conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
-                    session.turns = snapshot.turns;
-                    session.tokens = snapshot.tokens;
-                    session.restore_spend(snapshot.tokens, snapshot.spend);
-                    session.restore_timing(snapshot.timing);
-                    // With the spend, for the same reason clearing takes it: the figure describes a
-                    // prompt that is no longer part of what this session sent.
-                    session.restore_cache(snapshot.cached);
-                    session.written = 0;
-                    session.finished = None;
-                    trust = snapshot.trust;
-                    programs = snapshot.programs;
-
-                    session.transcript.truncate(snapshot.transcript_len);
-                    stored.truncate_audit(session.turns + 1);
-
-                    if snapshot.turns == 0 && !snapshot.was_wrote {
-                        stored.discard_unwritten(&snapshot.title);
-                    } else {
-                        stored.save(
-                            &snapshot.title,
-                            crate::sessions::Standing {
-                                conversation: &conversation.snapshot(),
-                                turns: session.turns,
-                                tokens: session.tokens,
-                                spend: session.spend_by_turn(),
-                                timing: session.timing_by_turn(),
-                                model: session.served_model(),
-                                todos: &session.todos_by_turn(),
-                                asides: session.asides(),
-                                trust: &trust,
-                                programs: &programs,
-                                directories: workspace.added_directories(),
-                                manifest: None,
-                            },
-                        );
-                    }
-                    // Named rather than counted. A person who has to go and put a file back by
-                    // hand needs to know which one, and a count sends them looking.
-                    if refused.is_empty() {
-                        session.note(t!(session_last_turn_undone));
-                    } else {
-                        let paths = refused
-                            .iter()
-                            .map(|path| path.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        session.note(t!(session_last_turn_undone_partly, paths = paths));
-                    }
+                rewind(
+                    &mut session,
+                    &mut conversation,
+                    &mut trust,
+                    &mut programs,
+                    &mut stored,
+                    &workspace,
+                    1,
+                );
+                needs_draw = true;
+            }
+            Action::Rewind(turns) => {
+                if turns.is_empty() {
+                    list_rewind_points(&mut session);
                 } else {
-                    session.note(t!(session_nothing_to_undo));
+                    match turns.parse::<usize>() {
+                        Ok(steps) if steps > 0 => rewind(
+                            &mut session,
+                            &mut conversation,
+                            &mut trust,
+                            &mut programs,
+                            &mut stored,
+                            &workspace,
+                            steps,
+                        ),
+                        _ => session.note(t!(session_rewind_needs_a_number)),
+                    }
                 }
                 needs_draw = true;
             }
@@ -2248,7 +2531,13 @@ fn event_loop(
                 // The record moves with the working directory, so the snapshot describes a
                 // session that is no longer written where it was.
                 session.close_rewind_window();
-                if change_directory(&mut session, &mut workspace, &mut trust, &directory) {
+                if change_directory(
+                    &mut session,
+                    &mut workspace,
+                    &mut trust,
+                    &mut servers,
+                    &directory,
+                ) {
                     stored.move_to(
                         workspace.root(),
                         crate::sessions::Standing {
@@ -2264,6 +2553,7 @@ fn event_loop(
                             programs: &programs,
                             directories: workspace.added_directories(),
                             manifest: None,
+                            rewind: session.rewind_points(),
                         },
                     );
                 }
@@ -2300,6 +2590,7 @@ fn event_loop(
                     config,
                     confinement: &session.confinement,
                     permission_mode: session.permission_mode(),
+                    auto_vetting: session.auto_vetting(),
                     turns: session.turns,
                     tokens: session.tokens,
                     timing: session.timing_total(),
@@ -2307,6 +2598,7 @@ fn event_loop(
                     trust: &trust,
                     programs: &programs,
                     looping: session.looping(),
+                    watches: session.watches(),
                     goal: session.goal(),
                     remembered: record
                         .as_ref()
@@ -2343,6 +2635,7 @@ fn event_loop(
                         programs: &programs,
                         directories: workspace.added_directories(),
                         manifest: None,
+                        rewind: session.rewind_points(),
                     },
                 );
                 stored.append_audit(session.turns, &events);
@@ -2389,6 +2682,67 @@ fn event_loop(
                                 programs: &programs,
                                 directories: workspace.added_directories(),
                                 manifest: None,
+                                rewind: session.rewind_points(),
+                            },
+                        );
+                        stored.append_audit(session.turns, &events);
+                    }
+                }
+                needs_draw = true;
+            }
+            Action::Manifest(task) => {
+                if task.is_empty() {
+                    session.note(t!(manifest_needs_a_task));
+                } else {
+                    // The snapshot holds the spend and the timing as they were before the turn,
+                    // and this run is charged to that turn, exactly as an aside is: rewinding to
+                    // it would un-charge requests that really went out, and steps that really
+                    // wrote to the tree are not something the rewind window covers.
+                    session.close_rewind_window();
+                    let events = manifest_animated(
+                        terminal,
+                        &mut session,
+                        config,
+                        &workspace,
+                        &task,
+                        &trust,
+                        &permissions,
+                    )?;
+
+                    // Taken off the workspace rather than kept for anything: a run is not a turn of
+                    // this conversation, and `close_rewind_window` above already shut the window
+                    // that could have rewound to one, so nothing will put these back. What the
+                    // drain is for is the *next* turn, which takes whatever the workspace is
+                    // holding as its own. Left here, the run's writes would be attributed to that
+                    // turn and `/undo` on it would revert them.
+                    let _ = workspace.take_backups();
+
+                    // The session's own record, written for the reason an aside's is: the run is
+                    // the change, and a session that started one and then slept should resume
+                    // with the note saying where it went still in the transcript. The run's own
+                    // record is a separate file that `manifest_animated` already wrote.
+                    if session.turns > 0 {
+                        let title = stored.title().to_string();
+                        stored.save(
+                            &title,
+                            crate::sessions::Standing {
+                                conversation: &conversation.snapshot(),
+                                turns: session.turns,
+                                tokens: session.tokens,
+                                spend: session.spend_by_turn(),
+                                timing: session.timing_by_turn(),
+                                model: session.served_model(),
+                                todos: &session.todos_by_turn(),
+                                asides: session.asides(),
+                                trust: &trust,
+                                programs: &programs,
+                                directories: workspace.added_directories(),
+                                // None, and it stays none however many runs this session starts.
+                                // Its presence is what makes a record a manifest run, and this
+                                // record is a conversation that can be resumed; the run has a
+                                // record of its own where that field is filled.
+                                manifest: None,
+                                rewind: session.rewind_points(),
                             },
                         );
                         stored.append_audit(session.turns, &events);
@@ -2421,10 +2775,17 @@ fn event_loop(
                 // A new session vouches for no program, on the same reasoning as the map: the
                 // list is a standing permission, and this begins a session that was never asked.
                 programs = TrustedPrograms::new();
+                // And nothing has been asked about, since the questions this list holds were put
+                // in a session that is over.
+                asked_about = AskedAbout::new();
                 // And a new directory, since nothing in the old one outlives the session that
                 // wrote it. The old one is removed either way: what the cleared context wrote is
                 // not something the session after it should find lying there.
                 scratch = opened_scratch(&mut session, &mut workspace);
+                // The servers go with it, LSP-8: what was approved was a process for the session,
+                // so dropping the set shuts them down and the session beginning here is asked
+                // again before one starts.
+                servers = None;
                 needs_draw = true;
             }
             Action::Submit(prompt) => {
@@ -2434,18 +2795,27 @@ fn event_loop(
                 // press that nobody is there to make.
                 // Whose line each one is, which decides whether a `@path` in it vouches for a
                 // file. Everything the person typed or queued is theirs; the sentence a goal
-                // carries the work on with is this program's.
-                let mut sending = Some((prompt, Wrote::ThePerson));
+                // carries the work on with is this program's, and so is the one a watch fires
+                // with. A fire also must not leave a loop behind repeating itself, which is the
+                // other thing this answers.
+                let whose = if session.watch_is_firing() {
+                    Wrote::TheDriver
+                } else {
+                    Wrote::ThePerson
+                };
+                let mut sending = Some((prompt, whose));
                 while let Some((prompt, wrote)) = sending {
                     let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
-                    session.previous_turn = Some(point);
+                    session.open_rewind_point(point, prompt.clone());
                     let _ = workspace.take_backups();
 
-                    // Both are threaded through: a turn that writes untrusted data into a trusted
-                    // path records that, and the next turn must honour it, and a turn that has been
-                    // had is a turn the next one can be asked about.
-                    let events;
-                    (conversation, trust, programs, events) = run_turn_animated(
+                    // Everything the session holds is lent for the turn and taken back: a turn that
+                    // writes untrusted data into a trusted path records that, and the next turn must
+                    // honour it; a turn that has been had is a turn the next one can be asked about;
+                    // a server somebody approved answers the next question without asking again;
+                    // and a run prompt already read is what tells the next one to name a settings
+                    // file instead of a key.
+                    let continued = run_turn_animated(
                         terminal,
                         &mut session,
                         config,
@@ -2455,11 +2825,19 @@ fn event_loop(
                         conversation,
                         trust,
                         programs,
+                        servers,
+                        asked_about,
                         &permissions,
                         stored.id(),
                     )?;
+                    let events = continued.events;
+                    conversation = continued.conversation;
+                    trust = continued.trust;
+                    programs = continued.programs;
+                    servers = continued.servers;
+                    asked_about = continued.asked_about;
 
-                    session.last_turn_backups = workspace.take_backups();
+                    session.keep_backups(workspace.take_backups());
 
                     // Written after each turn rather than at the end, because the end may never
                     // come: the session worth resuming is the one whose machine slept and never
@@ -2479,6 +2857,7 @@ fn event_loop(
                             programs: &programs,
                             directories: workspace.added_directories(),
                             manifest: None,
+                            rewind: session.rewind_points(),
                         },
                     );
                     stored.append_audit(session.turns, &events);
@@ -2530,6 +2909,7 @@ fn event_loop(
                         programs: &programs,
                         directories: workspace.added_directories(),
                         manifest: None,
+                        rewind: session.rewind_points(),
                     },
                 );
                 stored.append_audit(session.turns, &events);
@@ -2603,6 +2983,7 @@ fn change_directory(
     session: &mut Session,
     workspace: &mut Workspace,
     trust: &mut TrustStore,
+    servers: &mut Option<LanguageServers>,
     directory: &str,
 ) -> bool {
     if directory.is_empty() {
@@ -2614,7 +2995,6 @@ fn change_directory(
     // command that only took an absolute path would refuse `/cd crates/tui` and `/cd ..`, which are
     // the two ways anybody would think to say it.
     let named = against_workspace(workspace.root(), &expand_home(directory));
-    let from = workspace.root().to_path_buf();
 
     let moved = match workspace.change_root(&named) {
         Ok(moved) => moved,
@@ -2628,8 +3008,14 @@ fn change_directory(
         }
     };
 
-    *trust = trust.rebased(&from, &moved.root);
+    *trust = trust.rebased(&moved.root);
     trust.trust(".");
+    // The servers go, and LSP-5 is why: what a person approved was a server reading *that* tree,
+    // and a set indexes the root it was built with. Kept across the move it would answer questions
+    // about the new directory out of the old one's index, and resolve the paths it opens against a
+    // root the session has left. Dropping it shuts the processes down, and the first question asked
+    // here starts one for this directory with the person asked again.
+    *servers = None;
     session.now_in_workspace(&moved.root);
     session.note(t!(
         session_directory_changed,
@@ -2786,14 +3172,23 @@ fn fetch_models(config: &Config) -> Result<Vec<bravebot_aichat::models::Model>, 
 /// What comes back names the gateway the same way a configured model from it does, so one service
 /// does not appear twice under two names in the same list.
 ///
-/// A gateway nothing holds a credential for is not asked. The listing would come back refused, and
-/// the useful thing to say about that gateway is what `doctor` already says: no credential found.
+/// A gateway whose block named a credential nothing holds is not asked. The listing would come back
+/// refused, and the useful thing to say about that gateway is what `doctor` already says: no
+/// credential found.
+///
+/// A block naming no credential at all is asked, unauthenticated. That is somebody saying the gateway
+/// wants none, and it is the block a local Ollama is configured with. That block lists no models
+/// either, so not asking leaves it offering nothing.
 fn fetch_gateway_models(
     provider: &bravebot_config::provider::Provider,
 ) -> Result<Vec<bravebot_aichat::models::Model>, String> {
-    let token = provider
-        .token(|name| std::env::var(name).ok())
-        .ok_or_else(|| format!("no credential for {}", provider.display_name()))?;
+    let token = match provider.credential(|name| std::env::var(name).ok()) {
+        bravebot_config::provider::Credential::Token(token) => Some(token),
+        bravebot_config::provider::Credential::NotNeeded => None,
+        bravebot_config::provider::Credential::Absent => {
+            return Err(format!("no credential for {}", provider.display_name()));
+        }
+    };
 
     let mut sink = Trail::new();
     let egress = Egress::new();
@@ -2814,7 +3209,7 @@ fn fetch_gateway_models(
     )
     .map_err(|denial| denial.to_string())
     .and_then(|mut policy| {
-        bravebot_aichat::models::list_from_gateway(&mut policy, provider, &token, &egress)
+        bravebot_aichat::models::list_from_gateway(&mut policy, provider, token.as_deref(), &egress)
             .map_err(|error| error.to_string())
     })
 }
@@ -2923,9 +3318,13 @@ fn provider_models(
             // Stated or assumed, never absent: a window is what the budget is taken from, and
             // reporting nothing would leave the session on a default chosen for a different service.
             conversation_tokens: Some(model.window()),
-            // A block names models and never their parameters, so nothing here states the subject
-            // and the level goes out to be judged at the far end.
-            reads_effort: true,
+            // A block names models and never their parameters, so the level goes out to be judged
+            // at the far end and the judgment is the only description there is: read one where
+            // this service has already refused the field for this model.
+            reads_effort: bravebot_aichat::reads_effort(
+                &provider.chat_completions_url(),
+                &model.id,
+            ),
         })
         .collect()
 }
@@ -2950,6 +3349,25 @@ fn adopt_budget_for_current_model(session: &mut Session, config: &mut Config) {
     // endpoint advertised: nothing changed for compaction, and what the hint line may claim did.
     session.update_budget(config.context_budget, config.budget_is_guessed());
     session.note_model_reads_effort(reads_effort(&models, session.model()));
+}
+
+/// Take the budget for the model in force where there is no session to tell about it.
+///
+/// A one-shot run puts a model in force without anybody picking one: the command line named it, or
+/// it was read back off disk from a session that has ended. The listing is the only place a window
+/// is ever reported, so this is the only place such a run can learn one, and without it the run
+/// compacts against the default: a figure a narrow window never reaches, so compaction cannot fire
+/// at all, and one a wide window passes three quarters of the way through the conversation it could
+/// have held.
+///
+/// Silent, where [`adopt_budget_for_current_model`] notes the new budget, because a run has nobody
+/// watching and no transcript to put a line in. A listing that cannot be fetched leaves the default
+/// in place for the same reason it does in a session.
+pub fn adopt_budget_for_model(config: &mut Config, model: &str) {
+    let Ok(models) = list_models(config, Some(model)) else {
+        return;
+    };
+    config.adopt_window(advertised_window(&models, Some(model)));
 }
 
 /// Whether the roster says `chosen` reads an effort level.
@@ -3256,11 +3674,13 @@ enum Beginning {
 /// up, so the answer honoured is the one that session's own user gave. The directory's other
 /// records are not read: a map taken from one of those would be standing permission granted on
 /// behalf of somebody who was never asked.
-fn beginning_of(start: &Start) -> Beginning {
+fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
     match start {
         // Choosing has already resolved into one of the other two by the time this runs.
         Start::Fresh | Start::Choose => Beginning::New,
-        Start::Resuming(record) => Beginning::Resumed(record.trust_map()),
+        // Read under the directory being resumed into rather than the one recorded, so a project
+        // that was moved or renamed since resumes with its rules about the same files.
+        Start::Resuming(record) => Beginning::Resumed(record.trust_map(root)),
     }
 }
 
@@ -3277,15 +3697,21 @@ enum Opening {
 ///
 /// Everything about the answer bar the terminal it is put on, separated from [`opening_trust`] so
 /// it can be decided without one, the way [`crate::trust_prompt::answered_by`] is.
-fn opening_for(beginning: Beginning, mode: bravebot_agent::PermissionMode) -> Opening {
+fn opening_for(
+    beginning: Beginning,
+    mode: bravebot_agent::PermissionMode,
+    root: &std::path::Path,
+) -> Opening {
     match beginning {
         // Before the mode is consulted, because the question is not being put in either case and
         // the map this session's own user gave is the more specific record.
         Beginning::Resumed(Some(trust)) => Opening::Settled(trust, Whence::Resumed),
-        Beginning::New | Beginning::Resumed(None) => match crate::trust_prompt::answered_by(mode) {
-            Some(trust) => Opening::Settled(trust, Whence::Unasked),
-            None => Opening::Ask,
-        },
+        Beginning::New | Beginning::Resumed(None) => {
+            match crate::trust_prompt::answered_by(mode, root) {
+                Some(trust) => Opening::Settled(trust, Whence::Unasked),
+                None => Opening::Ask,
+            }
+        }
     }
 }
 
@@ -3311,7 +3737,7 @@ fn opening_trust(
     root: &std::path::Path,
     beginning: Beginning,
 ) -> Option<(TrustStore, Whence)> {
-    let (trust, whence) = match opening_for(beginning, session.permission_mode()) {
+    let (trust, whence) = match opening_for(beginning, session.permission_mode(), root) {
         Opening::Settled(trust, whence) => (trust, whence),
         Opening::Ask => (crate::trust_prompt::ask(terminal, root)?, Whence::Asked),
     };
@@ -3439,7 +3865,8 @@ fn one_request_key(session: &mut Session, key: KeyEvent, uninterruptible: &str) 
     }
 
     if !stops_the_turn(session, key) {
-        handle_key_while_working(session, key);
+        let action = handle_key_while_working(session, key);
+        act_while_working(session, action, crate::clipboard::paste);
         return;
     }
 
@@ -3495,7 +3922,7 @@ fn compact_animated(
             &mut sink,
             worker_trust,
         )
-        .map_err(|e| e.to_string());
+        .map_err(|error| error.category().name().to_string());
         (done, conversation, sink)
     });
 
@@ -3513,7 +3940,10 @@ fn compact_animated(
                     TermEvent::Key(key) => {
                         one_request_key(session, key, t!(compact_uninterruptible));
                     }
-                    TermEvent::Paste(text) => handle_paste_while_working(session, &text),
+                    TermEvent::Paste(text) => {
+                        let action = handle_paste_while_working(session, &text);
+                        act_while_working(session, action, crate::clipboard::paste);
+                    }
                     TermEvent::Mouse(mouse) => {
                         let action = handle_mouse(session, mouse);
                         if action == Action::Copy {
@@ -3607,7 +4037,6 @@ fn aside_animated(
 
     session.begin_aside();
 
-    let streaming = to_main.clone();
     let worker = thread::spawn(move || {
         let mut sink = Trail::new();
         let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
@@ -3622,11 +4051,10 @@ fn aside_animated(
             &mut reporter,
             &mut sink,
             worker_trust,
-            |written| {
-                let _ = streaming.send(crate::remote_confirm::ToMain::Streaming(
-                    written.to_string(),
-                ));
-            },
+            // Taken and dropped. An answer has to be released to be looked at, and the one place
+            // this side could draw it as it arrives is the tail the turn's own half-written reply
+            // fills, which is among the turn's own lines.
+            |_written| {},
         )
         .map_err(|e| e.to_string());
         (done, sink)
@@ -3645,7 +4073,10 @@ fn aside_animated(
                     TermEvent::Key(key) => {
                         one_request_key(session, key, t!(btw_uninterruptible));
                     }
-                    TermEvent::Paste(text) => handle_paste_while_working(session, &text),
+                    TermEvent::Paste(text) => {
+                        let action = handle_paste_while_working(session, &text);
+                        act_while_working(session, action, crate::clipboard::paste);
+                    }
                     TermEvent::Mouse(mouse) => {
                         let action = handle_mouse(session, mouse);
                         if action == Action::Copy {
@@ -3657,11 +4088,8 @@ fn aside_animated(
             }
         }
 
-        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| match message {
-            crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
-            crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
-            crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
-            _ => {}
+        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
+            aside_reported(session, message);
         });
 
         if !carrying_on {
@@ -3674,20 +4102,7 @@ fn aside_animated(
         .unwrap_or_else(|_| (Err(t!(btw_ended_unexpectedly).to_string()), Trail::new()));
 
     match done {
-        Ok(answered) => {
-            session.end_aside(answered.usage.total());
-            // The row and the view carry the answer; the transcript carries a line saying it
-            // happened. Both are wanted: the view is what the person is reading a moment from
-            // now, and the note is what tells them afterwards that there was an aside here at
-            // all, since nothing else about it is in the transcript.
-            session.asked_aside(crate::state::Aside {
-                question: asked,
-                answer: Some(answered.shown),
-                kept: answered.kept.is_some(),
-            });
-            let chord = session.bindings().watch_name();
-            session.note(t!(btw_answered, chord = chord));
-        }
+        Ok(answered) => aside_answered(session, asked, answered),
         Err(message) => {
             session.end_aside(0);
             session.note(t!(btw_failed, problem = message));
@@ -3695,6 +4110,340 @@ fn aside_animated(
     }
 
     Ok(sink.events().to_vec())
+}
+
+/// Take what a question asked beside the work came back with.
+///
+/// WATCH-18: the row and the view are where an aside is read, and neither half of it is anywhere
+/// else. Apart from [`aside_animated`], which needs a terminal and a backend to reach, so that
+/// what an answer does to the session is somewhere a test can call.
+fn aside_answered(session: &mut Session, asked: String, answered: bravebot_agent::aside::Answered) {
+    session.end_aside(answered.usage.total());
+    // The row and the view are the whole of it, and nothing joins the transcript. A line there
+    // about an exchange the planner has read no part of is one a reader takes it to have had, and
+    // what says afterwards that an aside happened is the hint line, which counts the rows and
+    // names the key that opens them.
+    session.asked_aside(crate::state::Aside {
+        question: asked,
+        answer: Some(answered.shown),
+        kept: answered.kept.is_some(),
+    });
+}
+
+/// Take what the thread answering a question beside the work says while it works.
+///
+/// Apart from [`aside_animated`] for the reason [`aside_answered`] is, and under the same clause:
+/// an answer arriving as it is written is half of an aside, and the one place this side could draw
+/// it is the tail where the planner's own half-written reply goes.
+fn aside_reported(session: &mut Session, message: crate::remote_confirm::ToMain) {
+    match message {
+        crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
+        crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
+        _ => {}
+    }
+}
+
+/// Plan one task in full, put the frozen plan to the person, and walk it, redrawing throughout.
+///
+/// The other kind of run, started from a session rather than from the command line. Between
+/// [`run_turn_animated`] and [`aside_animated`] in what it needs: it asks about a plan and about
+/// every write a step reaches, so it has the turn's answer channel, and it gives the conversation
+/// nothing, so it takes none.
+///
+/// **The session is blocked for the duration.** A manifest run is one run with a frozen plan, and
+/// there is no planner in it to hand a line to: the person cannot interleave a turn with it, and
+/// the loop below refuses to send. What they can still do is everything the turn loop lets them do
+/// while a turn runs, which is read the transcript, edit the box, and stop what is in flight.
+///
+/// **The conversation is neither read nor written.** It is not lent here at all, which is stronger
+/// than an aside's promise to hand it back unchanged: the planner that reads the task is a fresh
+/// one whose context holds the task string and the driver's own words (MANIFEST-1), so sending the
+/// conversation would break the gate rather than merely widen it, and a step's result is
+/// quarantined (MANIFEST-8) so there is nothing it could give back. What the transcript shows is
+/// the goal as the planner understood it, the frozen plan, each step as it runs, and the reply, all
+/// of it released for a screen and none of it in the exchange a later turn resumes.
+///
+/// **The run is written down as its own record**, by the same function the command line uses, and
+/// the session notes the id. That keeps the presence of `manifest` in a record the thing that makes
+/// it a manifest run: this session's own record stays a conversation, so it still resumes, and the
+/// run's record still has no conversation, so the picker still refuses it for the right reason.
+///
+/// The trust map is lent and comes back unused. A grant a step was given belongs to the run, and
+/// travels into the run's own record with everything else it produced; folding it into the session
+/// would leave the conversation holding a yes that was given about a plan it never saw.
+#[allow(clippy::too_many_arguments)]
+fn manifest_animated(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
+    config: &Config,
+    workspace: &Workspace,
+    task: &str,
+    trust: &TrustStore,
+    permissions: &Permissions,
+) -> io::Result<Vec<Stamped>> {
+    // For the reason a turn does it: a sign-in needs the terminal, and this is the thread that has
+    // it. Left to the worker, the URL and code the AWS CLI prints would land nowhere anyone reads.
+    sign_in_if_needed(terminal, session, config)?;
+
+    let (to_main, from_worker) = mpsc::channel::<crate::remote_confirm::ToMain>();
+    let (answer_tx, answer_rx) = mpsc::channel::<crate::remote_confirm::Reply>();
+
+    // A fresh token, as a turn takes: reusing one could stop a run before it started.
+    let cancel = Cancel::new();
+    let worker_cancel = cancel.clone();
+
+    let worker_config = config.clone();
+    let worker_workspace = workspace.clone();
+    let worker_trust = trust.clone();
+    // The mode as it stands now. A run keeps the one it began with, for the reason a turn does: a
+    // key pressed while it walks describes what comes after it, and a plan already on the screen
+    // must not have the question withdrawn from under the person answering it.
+    let permission_mode = session.permission_mode();
+    // No files, no attachments and no pasted pictures. Every one of those is context, and this mode
+    // fixes its plan before it observes anything; the task string is the whole of the input, which
+    // is the same reason a pipe is refused (MANIFEST-9).
+    let worker_task = Task::new(task)
+        .with_home(bravebot_agent::home::directory())
+        .with_model(session.model().map(str::to_string))
+        .with_effort(session.effort_in_force())
+        .with_permissions(permissions.clone())
+        .with_permission_mode(permission_mode);
+    // Nothing is said about the standing form of a write answer, so nothing offers it. A plan has
+    // no standing answer at all (MANIFEST-10), and a run whose steps were fixed before anything was
+    // read is the worst place to record one: the key would be pressed about a step in a plan that
+    // is written afresh for every run.
+    let asked = task.to_string();
+
+    session.begin_aside();
+    session.note(t!(manifest_began));
+
+    let worker = thread::spawn(move || {
+        let mut sink = Trail::new();
+        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main.clone());
+        // A queue of its own, and empty. A line typed while a run walks is not something the run
+        // can take: there is no planner in it to hand one to, so the queue the session holds stays
+        // the session's and the next turn sends it.
+        let mut asking = crate::remote_confirm::RemoteConfirmer::new(
+            to_main,
+            answer_rx,
+            crate::remote_confirm::Interjections::new(),
+        );
+        let mut confirmer = bravebot_agent::Confining::new(&mut asking, permission_mode);
+        let egress = Egress::new();
+        let outcome = bravebot_agent::manifest::run(
+            &worker_config,
+            &egress,
+            &worker_workspace,
+            &worker_task,
+            &mut confirmer,
+            &mut reporter,
+            &mut sink,
+            worker_trust,
+            &worker_cancel,
+        );
+        (outcome, sink)
+    });
+
+    loop {
+        redraw(terminal, session)?;
+
+        // Read here rather than in the outer loop, which is blocked for the duration, and for the
+        // reason a turn reads it here: a run that walks for ten minutes must not leave the
+        // interface deaf, and the frame's waiting is done here so a key press wakes the loop.
+        if event::poll(FRAME)? {
+            while event::poll(Duration::ZERO)? {
+                match event::read()? {
+                    TermEvent::Key(key) if key.kind == KeyEventKind::Release => {}
+                    // Both keys stop the run and neither leaves, exactly as in a turn. A person
+                    // watching a plan go wrong is asking for the plan to stop; the next press, at
+                    // the box, is the one that leaves.
+                    TermEvent::Key(key) if stops_the_turn(session, key) => {
+                        cancel.cancel();
+                    }
+                    TermEvent::Key(key) => {
+                        let action = handle_key_while_working(session, key);
+                        act_while_working(session, action, crate::clipboard::paste);
+                    }
+                    TermEvent::Paste(text) => {
+                        let action = handle_paste_while_working(session, &text);
+                        act_while_working(session, action, crate::clipboard::paste);
+                    }
+                    TermEvent::Mouse(mouse) => {
+                        let action = handle_mouse(session, mouse);
+                        if action == Action::Copy {
+                            copy_selection(terminal, session)?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| match message {
+            // The one question this mode asks that a turn does not, and the reason the session
+            // prompt is worth reaching: it is drawn and scrolled rather than printed and read off
+            // a line, so a plan longer than the window can be walked back through before it is
+            // answered.
+            crate::remote_confirm::ToMain::Manifest(request) => {
+                let answer = crate::confirm::ask_manifest(terminal, &request);
+                if answer == crate::confirm::Answer::Interrupt {
+                    cancel.cancel();
+                }
+                // Nothing is noted on the transcript, for the reason a turn notes nothing: the
+                // answer covers this plan and no other, so there is no standing decision to
+                // record, and the plan is about to be walked in the open where the transcript
+                // shows every step of it.
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Manifest(answer.decision()));
+            }
+            // Approving the plan was not approving its writes, so each one is still put to the
+            // person as its step reaches it.
+            crate::remote_confirm::ToMain::Write(request) => {
+                let answer = crate::confirm::ask(terminal, &request);
+                if answer == crate::confirm::Answer::Interrupt {
+                    cancel.cancel();
+                }
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Write(answer.decision()));
+            }
+            crate::remote_confirm::ToMain::Fetch(request) => {
+                let answer = crate::confirm::ask_fetch(terminal, &request);
+                if answer == crate::confirm::Answer::Interrupt {
+                    cancel.cancel();
+                }
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Fetch(answer.decision()));
+            }
+            crate::remote_confirm::ToMain::Vouch(request) => {
+                let answer = crate::confirm::ask_vouch(terminal, &request);
+                if answer == crate::confirm::Answer::Interrupt {
+                    cancel.cancel();
+                }
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Vouch(answer.decision()));
+            }
+            // Progress, with no reply to give. The goal as the planner understood it and the frozen
+            // plan both arrive as narration, and each step as an activity, so the transcript of a
+            // run reads the way the transcript of a turn does.
+            crate::remote_confirm::ToMain::Spent(_) => {}
+            crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
+            crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
+            crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
+            crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
+            crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
+            crate::remote_confirm::ToMain::Started(activity) => session.start_activity(activity),
+            crate::remote_confirm::ToMain::Finished(activity) => session.finish_activity(activity),
+            crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
+            crate::remote_confirm::ToMain::Landed(landing) => session.landed(landing),
+            // The questions a turn asks that this mode cannot. There is no shell and no `run` in
+            // the schema (MANIFEST-5), so no pipeline is proposed and no output is read back;
+            // there is no step that asks to be shown a slot; and there is no planner left to pose
+            // a question. None of the four can arrive, and each
+            // of them is a question the worker is *blocked* on, so silence here would be a hang
+            // nothing can break: the loop would go round forever with the worker waiting on a
+            // reply and the cancel token never looked at. Answered the way every other failure to
+            // carry a question is answered, with the negative one.
+            crate::remote_confirm::ToMain::Run(_) => {
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Run(
+                    bravebot_agent::confirm::RunDecision::reject(),
+                ));
+            }
+            crate::remote_confirm::ToMain::ReadOutput(_) => {
+                let _ = answer_tx.send(crate::remote_confirm::Reply::ReadOutput(
+                    bravebot_agent::confirm::Decision::Reject,
+                ));
+            }
+            crate::remote_confirm::ToMain::Vet(_) => {
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Vet(
+                    bravebot_agent::confirm::Decision::Reject,
+                ));
+            }
+            crate::remote_confirm::ToMain::Server(_) => {
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Server(
+                    bravebot_agent::confirm::Decision::Reject,
+                ));
+            }
+            crate::remote_confirm::ToMain::Ask(_) => {
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Ask(Vec::new()));
+            }
+            // What is left announces rather than asks, so nothing waits on it. The manifest is the
+            // task list, so no list changes; there is no planner to delegate or to be interjected
+            // at; and a run's steps report through `Started` and `Finished` above.
+            _ => {}
+        });
+
+        if !carrying_on {
+            break;
+        }
+    }
+
+    let (outcome, sink) = worker.join().unwrap_or_else(|_| {
+        (
+            Err(bravebot_agent::TurnError::Precommit(
+                t!(manifest_ended_unexpectedly).to_string(),
+            )),
+            Trail::new(),
+        )
+    });
+
+    let stopped_by_the_person = was_stopped(&outcome, &cancel);
+
+    // Only from a run that finished. A run that stopped comes back as an error carrying what it
+    // produced (MANIFEST-3) and no figures, so the tokens it did spend are not recoverable here,
+    // and the breakdown is absent rather than guessed.
+    let (tokens, spent) = match &outcome {
+        Ok(finished) => (finished.tokens, Some(finished.timing)),
+        Err(_) => (0, None),
+    };
+    session.end_run(tokens, spent);
+
+    // Nothing for a run the person stopped, which is what the command line does with one too: it
+    // has nothing in it anybody needs to read, and a record per interrupted run would fill the
+    // picker with rows whose whole content is that somebody changed their mind. Every other
+    // outcome is written before anything is said, so the note can name it.
+    let recorded = match stopped_by_the_person {
+        true => None,
+        false => crate::sessions::record_manifest_run(workspace.root(), &asked, &outcome),
+    };
+
+    match &outcome {
+        Ok(finished) => {
+            // Released for a screen, exactly as a turn's reply is, and into the transcript rather
+            // than into the conversation: what this run said is not something a later turn holds.
+            // Nothing is said about that here. A reply that arrived is the run having worked, and a
+            // line under it announcing what did not happen reads as a complaint about the run.
+            session.narrate(finished.reply_for_display());
+        }
+        // Stopped by the person, so there is nothing to report. The transcript already holds the
+        // steps that ran, and a complaint about a run they turned off themselves is noise.
+        Err(_) if stopped_by_the_person => {}
+        Err(failure) => {
+            session.note(t!(manifest_failed, problem = failure.to_string()));
+        }
+    }
+    // Last, so it is the line under the reply or under what went wrong. The run's own record is
+    // where the plan, the proposal and the steps are kept in full, and the id is the only way in:
+    // the picker marks a run's row but refuses Enter on it, so naming the id on the command line is
+    // what reads one back, and a person who never saw this line has no way to ask for it.
+    if let Some(id) = recorded {
+        session.note(t!(manifest_recorded, id = &id));
+    }
+
+    Ok(sink.events().to_vec())
+}
+
+/// Whether a manifest run ended because the person stopped it.
+///
+/// Read off the token they set rather than off the error that came back, and that is the whole of
+/// why this is a function. The two keys that stop a run reach it as two different things: pressed at
+/// the plan prompt they are answered as a decline, so the run reports a plan nobody approved, and
+/// pressed a step later they are a cancellation. Matching on `Cancelled` would therefore make the
+/// same key mean two things depending on the moment it was pressed, and the person who pressed it
+/// asked for the same thing at both.
+///
+/// A run that finished is never this, however late the key arrived: the work is done, and throwing
+/// away the record of a run that completed would lose what it did.
+fn was_stopped(
+    outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
+    cancel: &Cancel,
+) -> bool {
+    outcome.is_err() && cancel.is_cancelled()
 }
 
 /// Interpret a key press while the goal check is out.
@@ -3716,7 +4465,8 @@ fn goal_check_key(session: &mut Session, key: KeyEvent) {
     }
 
     if !stops_the_turn(session, key) {
-        handle_key_while_working(session, key);
+        let action = handle_key_while_working(session, key);
+        act_while_working(session, action, crate::clipboard::paste);
         return;
     }
 
@@ -3753,7 +4503,7 @@ fn goal_check_animated(
     }
     // Read rather than assumed: `begin_aside` below sets the session working again, and after that
     // there is no telling a turn that answered from one that did not.
-    if session.finished.is_none_or(|turn| turn.failed) {
+    if session.finished.is_none_or(|turn| turn.ending.unanswered()) {
         return Ok((None, Vec::new()));
     }
     // An invariant of the branch above, not a runtime condition.
@@ -3810,7 +4560,10 @@ fn goal_check_animated(
                     // Which of the goal, a mode over the session, and the session itself a stop
                     // key is asking about is that function's to say.
                     TermEvent::Key(key) => goal_check_key(session, key),
-                    TermEvent::Paste(text) => handle_paste_while_working(session, &text),
+                    TermEvent::Paste(text) => {
+                        let action = handle_paste_while_working(session, &text);
+                        act_while_working(session, action, crate::clipboard::paste);
+                    }
                     TermEvent::Mouse(mouse) => {
                         let action = handle_mouse(session, mouse);
                         if action == Action::Copy {
@@ -3908,6 +4661,20 @@ fn remembered_record(
     Some((store, lines))
 }
 
+/// What the session gets back from a turn and carries into the next one.
+///
+/// A struct rather than a tuple because every field is something the session owns and lends for
+/// the length of one turn, and a caller taking six positional values back has no way of saying
+/// which is which.
+struct Continued {
+    conversation: Conversation,
+    trust: TrustStore,
+    programs: TrustedPrograms,
+    servers: Option<LanguageServers>,
+    asked_about: AskedAbout,
+    events: Vec<Stamped>,
+}
+
 /// Run a turn on a worker thread, redrawing while it works.
 ///
 /// The turn itself blocks on network requests, so running it here would freeze the indicator on
@@ -3927,12 +4694,18 @@ fn run_turn_animated(
     conversation: Conversation,
     trust: TrustStore,
     programs: TrustedPrograms,
+    // The servers this session has started, LSP-8, or `None` before the first turn has had the
+    // chance to start one. Owned here and handed back like the conversation, because it is the
+    // session that keeps it: built inside a turn it would be shut down at the end of that turn,
+    // and the next message would ask the same person about the same language.
+    servers: Option<LanguageServers>,
+    asked_about: AskedAbout,
     permissions: &Permissions,
     // This session's own identifier. It travels with the task because a run prompt may be answered
     // with the key whose grant outlives the session, and the record of that says which session
     // pressed it so that `/status` can tell a person which answers they are still carrying.
     session_id: &str,
-) -> io::Result<(Conversation, TrustStore, TrustedPrograms, Vec<Stamped>)> {
+) -> io::Result<Continued> {
     // The prompt is in the transcript by now, and drawn before anything that might take a moment:
     // a check that has to run the AWS CLI holds the frame for as long as the process takes, and
     // until this the line somebody typed is nowhere on their screen.
@@ -3968,6 +4741,10 @@ fn run_turn_animated(
     // goal carries it, the first one included: the round that sets the direction is the one that
     // most needs to know what it is aiming at.
     let working_towards = session.goal().map(|goal| goal.condition().to_string());
+    // And whether this turn may arm a standing watch. Read here for the reason the mode is read
+    // here: only the session can count what is live, and a tool answering out of a stale count
+    // would tell the planner about a watch the session then refused.
+    let arming = session.arming();
     // Read once, here, so the mode the planner is told about and the mode the confirmer enforces are
     // the same one: the person may press the key while this turn runs, and the two halves reading it
     // at different moments is how they would come to disagree.
@@ -3986,7 +4763,12 @@ fn run_turn_animated(
         .with_effort(session.effort_in_force())
         .with_permissions(permissions.clone())
         .with_permission_mode(permission_mode)
+        // Whether a check that finds nothing answers in the person's place. Read off the session
+        // for the reason the mode is: the `a` key can change it, and a turn keeps the answer it
+        // began with.
+        .with_auto_vetting(session.auto_vetting())
         .ticking(tick)
+        .arming(arming)
         .working_towards(working_towards);
     // Every file named with `@` becomes context, which a turn treats as trusted: the user typed the
     // path and their keystroke is what vouches for it, exactly as `--file` does on the command
@@ -4019,6 +4801,7 @@ fn run_turn_animated(
     // "always" in a turn that then failed is still an answer the user gave.
     let fallback = trust.clone();
     let fallback_programs = programs.clone();
+    let fallback_asked = asked_about.clone();
 
     let worker = thread::spawn(move || {
         let mut sink = Trail::new();
@@ -4039,6 +4822,14 @@ fn run_turn_animated(
         // succeeded or not. A failed turn is still part of the conversation, and the next one
         // is usually about it.
         let mut conversation = conversation;
+        // Built on the first turn of the session and handed back with the conversation. Nothing is
+        // started by building it: LSP-8 starts a server on the first question that needs one, so a
+        // session that asks about no symbol still starts no process and prompts about none.
+        let mut servers = servers.unwrap_or_else(|| {
+            // The task's home rather than a second look at the state directory, so an index is
+            // cached where the rest of this session's state goes.
+            LanguageServers::new(worker_workspace.root().to_path_buf(), task.home.clone())
+        });
         let outcome = turn::resume(
             &worker_config,
             &egress,
@@ -4050,9 +4841,10 @@ fn run_turn_animated(
             &mut sink,
             trust,
             programs,
+            Some(&mut servers),
             &worker_cancel,
         );
-        (outcome, conversation, sink)
+        (outcome, conversation, sink, Some(servers))
     });
 
     // Redraw until the turn finishes, answering approvals and watching for a cancel on the way.
@@ -4090,9 +4882,13 @@ fn run_turn_animated(
                         cancel.cancel();
                     }
                     TermEvent::Key(key) => {
-                        handle_key_while_working(session, key);
+                        let action = handle_key_while_working(session, key);
+                        act_while_working(session, action, crate::clipboard::paste);
                     }
-                    TermEvent::Paste(text) => handle_paste_while_working(session, &text),
+                    TermEvent::Paste(text) => {
+                        let action = handle_paste_while_working(session, &text);
+                        act_while_working(session, action, crate::clipboard::paste);
+                    }
                     TermEvent::Mouse(mouse) => {
                         // Bound rather than tested inline, because handling the event scrolls and
                         // moves the selection whatever it returns. A match guard would hide that.
@@ -4111,7 +4907,7 @@ fn run_turn_animated(
                 let answer = crate::confirm::ask(terminal, &request);
                 // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
                 // Set before the answer goes back, so the worker sees it as soon as it wakes.
-                if answer == crate::confirm::Answer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
                 }
                 // A closed channel means the worker is already gone, so there is nothing to
@@ -4122,7 +4918,7 @@ fn run_turn_animated(
                 let answer = crate::confirm::ask_run(terminal, &request);
                 // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
                 // Set before the answer goes back, so the worker sees it as soon as it wakes.
-                if answer == crate::confirm::RunAnswer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
                 }
                 // What was vouched for travels back with the turn's outcome, exactly as the
@@ -4133,14 +4929,42 @@ fn run_turn_animated(
             }
             crate::remote_confirm::ToMain::ReadOutput(request) => {
                 let answer = crate::confirm::ask_output(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
+                }
+                // The standing key, handled as at the other vetting prompt and for the same
+                // reasons: the approval itself leaves no rule behind, and turning the mode on is
+                // the interface's own standing decision rather than the turn's, so the answer the
+                // worker is waiting for is the same either way and this takes effect next turn.
+                if answer.turns_vetting_on() {
+                    session.choose_vetting(true);
+                    // Said on the transcript because the person will not otherwise see it
+                    // recorded anywhere, and what it changes is that later prompts do not appear.
+                    session.note(t!(session_vetting_on));
                 }
                 let _ = answer_tx.send(crate::remote_confirm::Reply::ReadOutput(answer.decision()));
             }
+            crate::remote_confirm::ToMain::Vet(request) => {
+                let answer = crate::confirm::ask_vet(terminal, &request);
+                if answer.stops_the_turn() {
+                    cancel.cancel();
+                }
+                // The approval itself is noted nowhere: it covers the bytes that were on the
+                // screen and leaves no rule behind, so there is no standing decision to record.
+                // Turning the mode on is a standing decision, and it is the interface's own rather
+                // than the turn's: the answer the worker is waiting for is the same either way,
+                // and what this adds takes effect from the next turn.
+                if answer.turns_vetting_on() {
+                    session.choose_vetting(true);
+                    // Said on the transcript because the person will not otherwise see it
+                    // recorded anywhere, and what it changes is that later prompts do not appear.
+                    session.note(t!(session_vetting_on));
+                }
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Vet(answer.decision()));
+            }
             crate::remote_confirm::ToMain::Fetch(request) => {
                 let answer = crate::confirm::ask_fetch(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
                 }
                 // Nothing is noted on the transcript: an approval covers this one URL and leaves
@@ -4156,7 +4980,7 @@ fn run_turn_animated(
             }
             crate::remote_confirm::ToMain::Vouch(request) => {
                 let answer = crate::confirm::ask_vouch(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
                 }
                 if answer == crate::confirm::Answer::Approve {
@@ -4168,7 +4992,7 @@ fn run_turn_animated(
             }
             crate::remote_confirm::ToMain::Server(request) => {
                 let answer = crate::confirm::ask_server(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
                 }
                 if answer == crate::confirm::Answer::Approve {
@@ -4185,7 +5009,7 @@ fn run_turn_animated(
             }
             crate::remote_confirm::ToMain::Manifest(request) => {
                 let answer = crate::confirm::ask_manifest(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
+                if answer.stops_the_turn() {
                     cancel.cancel();
                 }
                 // Nothing is noted on the transcript. The answer covers this plan and no other, so
@@ -4230,6 +5054,7 @@ fn run_turn_animated(
             // No reply: each of these is recorded and the next redraw, one iteration away,
             // shows it. That is what makes a long turn legible while it runs.
             crate::remote_confirm::ToMain::Todos(rows) => session.set_todos(rows),
+            crate::remote_confirm::ToMain::Spent(spent) => session.progressed(spent),
             crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
             crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
             crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
@@ -4267,35 +5092,34 @@ fn run_turn_animated(
         }
     }
 
-    let (outcome, conversation, sink) = worker.join().unwrap_or_else(|_| {
+    let (outcome, conversation, sink, servers) = worker.join().unwrap_or_else(|_| {
         // A panicked turn is reported rather than propagated: the session survives. The
-        // conversation does not, since the thread that held it is gone.
+        // conversation does not, since the thread that held it is gone, and neither do the
+        // servers: they went down with the thread that owned them, so the next turn starts and
+        // is asked about a fresh one.
         (
             Err(turn::TurnError::Precommit(
                 t!(turn_ended_unexpectedly).to_string(),
             )),
             Conversation::new(),
             Trail::new(),
+            None,
         )
     });
 
-    // A cancelled turn returns the prompt for editing instead of recording a failure: the user
-    // stopped it deliberately, so there is nothing to report.
+    // Record cancellation separately from failure, then restore the prompt when possible.
     let events = sink.events().to_vec();
 
-    if matches!(outcome, Err(turn::TurnError::Cancelled)) {
-        // Not when the cancel was somebody leaving. Restoring returns the session to idle, which
-        // would put it back in the loop it was on its way out of, and hand back a prompt to a box
-        // nobody is going to see.
-        if session.is_quitting() {
-            return Ok((conversation, fallback, fallback_programs, events));
-        }
-        session.restore(prompt);
-        // What was lined up behind it stays lined up, and the loop sends the next one as it does
-        // after any turn. A stop is aimed at the turn in flight: the prompts behind it are ones
-        // the person typed and has not taken back, and throwing them away made stopping a turn
-        // that had gone wrong cost every prompt they had queued while it did.
-        return Ok((conversation, fallback, fallback_programs, events));
+    if let Err(turn::TurnError::Cancelled { attempts }) = &outcome {
+        finish_cancelled_turn(session, prompt, *attempts);
+        return Ok(Continued {
+            conversation,
+            trust: fallback,
+            programs: fallback_programs,
+            servers,
+            asked_about: fallback_asked,
+            events,
+        });
     }
 
     // Whether a difference between the model asked for and the one reported means anything is the
@@ -4316,6 +5140,7 @@ fn run_turn_animated(
         Carried {
             trust: fallback,
             programs: fallback_programs,
+            asked: fallback_asked,
         },
         Occupied {
             budget: config.context_budget,
@@ -4327,8 +5152,16 @@ fn run_turn_animated(
             text: prompt,
             wrote,
         },
+        workspace,
     );
-    Ok((conversation, carried.trust, carried.programs, events))
+    Ok(Continued {
+        conversation,
+        trust: carried.trust,
+        programs: carried.programs,
+        servers,
+        asked_about: carried.asked,
+        events,
+    })
 }
 
 /// Hand the worker's messages to `handle`: the one this frame waited for, and then everything
@@ -4464,16 +5297,28 @@ struct Line<'a> {
     wrote: Wrote,
 }
 
-/// What a turn hands to the next one: paths the person vouched for, and programs they allowed.
+/// What a turn hands to the next one: paths the person vouched for, programs they allowed, and the
+/// run prompts they have read.
 ///
-/// One value rather than two because they travel together in both directions, and a turn that
-/// reported neither hands on exactly what it was given.
+/// One value rather than three because they travel together in both directions, and a turn that
+/// reported none of them hands on exactly what it was given. The third is not a grant and sits here
+/// only because it has the same lifetime as the other two.
 struct Carried {
     trust: TrustStore,
     programs: TrustedPrograms,
+    asked: AskedAbout,
+}
+
+/// A quit keeps the session quitting; an ordinary stop may return its prompt to the editor.
+fn finish_cancelled_turn(session: &mut Session, prompt: &str, attempts: Option<u32>) {
+    session.stopped(attempts);
+    if !session.is_quitting() {
+        session.restore(prompt);
+    }
 }
 
 /// Fold a finished turn into the session.
+#[allow(clippy::too_many_arguments)]
 fn fold_outcome(
     session: &mut Session,
     outcome: Result<turn::Outcome, turn::TurnError>,
@@ -4482,10 +5327,13 @@ fn fold_outcome(
     occupied: Occupied,
     asked: Asked,
     line: Line<'_>,
+    // Lent for the one thing a finished turn needs it for: the first look at a path the turn
+    // asked to have watched, which has to come from the same place every later look will.
+    workspace: &Workspace,
 ) -> Carried {
-    match outcome {
+    let carried = match outcome {
         Ok(outcome) => {
-            let trail = sink.bare();
+            let trail = sink.lines();
             session.complete(
                 outcome.reply_for_display().to_string(),
                 trail,
@@ -4510,8 +5358,8 @@ fn fold_outcome(
             session.measured(outcome.context_tokens, occupied.budget, occupied.guessed);
 
             // What was asked for against what answered. The endpoint substitutes rather than
-            // refusing: a premium model requested without a credential comes back as whatever the
-            // free tier serves, with a 200 and a perfectly ordinary reply. So the only trace is
+            // refusing: a premium model requested without a credential comes back answered by a
+            // weaker model, with a 200 and a perfectly ordinary reply. So the only trace is
             // this field, and a session that never compares them cannot tell a model it chose from
             // one chosen for it.
             //
@@ -4540,6 +5388,15 @@ fn fold_outcome(
             // asked to watch something gets the later look it needs. The line it repeats is this
             // turn's own, and only where the person wrote it: a loop repeats a line somebody
             // endorsed, and a sentence this program wrote carrying a goal on is not one.
+            // The watches this turn asked for, in the order it asked, and before the wait below:
+            // a session does one of a watch, a loop and a goal at a time, and a turn that asked
+            // for both meant the watch. Each has been through the gate a read of that path goes
+            // through; what is left is the session's own question, which is whether it has room
+            // and whether the first look sees anything.
+            for path in &outcome.watches {
+                session.arm_watch(path, workspace.look(path));
+            }
+
             if session.looping().is_some() {
                 session.loop_turn_ended(outcome.wakeup);
             } else if let Some(wakeup) = watch_to_start(outcome.wakeup, line.wrote) {
@@ -4552,14 +5409,20 @@ fn fold_outcome(
             Carried {
                 trust: outcome.trust,
                 programs: outcome.programs,
+                asked: outcome.asked_about,
             }
         }
         Err(error) => {
             // Stopping a turn stops the loop it was part of, and stops one the person was not
             // part way through: the key means "stop what is happening", and a schedule that
             // survived it would send the next prompt as though nothing had been said.
-            if matches!(error, turn::TurnError::Cancelled) {
+            if matches!(error, turn::TurnError::Cancelled { .. }) {
                 session.stop_loop();
+                // And the watch whose fire this turn was, since stopping a fire's turn is the
+                // most exact way anybody has to say which watch they are finished with: they are
+                // reading its prompt when they press the key. A turn that was not a fire ends no
+                // watch, because that press is a person steering their own work.
+                session.stop_firing_watch();
                 // Not the goal, which outlives one turn by design. A stopped turn is recorded as
                 // failed, so it is not judged and the work is not sent straight back, and the
                 // person who stops a turn going the wrong way keeps the condition they set: the
@@ -4573,16 +5436,16 @@ fn fold_outcome(
 
             // The trail is kept on failure too: a refusal is exactly when a user wants
             // to see what happened.
-            let trail = sink
-                .events()
-                .iter()
-                .map(|stamped| crate::audit::as_line(&stamped.event))
-                .collect();
-            session.fail(t!(session_error, problem = error));
-            // The panel reports the last turn's cache split, and this turn is now the last one. It
-            // measured nothing, so leaving the turn before it on the panel would report a figure
-            // against an exchange that never finished.
-            session.restore_cache(None);
+            let trail = sink.lines();
+            // Format safe fields instead of an error that may contain endpoint credentials.
+            let ending = error.ending();
+            match ending {
+                bravebot_agent::Ending::Failed(diagnosis) => {
+                    session.fail(crate::state::failure_reason(diagnosis), ending);
+                }
+                bravebot_agent::Ending::Stopped { attempts } => session.stopped(attempts),
+                bravebot_agent::Ending::Done => {}
+            }
             if let Some(last) = session.transcript.last_mut() {
                 last.trail = trail;
             }
@@ -4595,7 +5458,14 @@ fn fold_outcome(
             }
             fallback
         }
-    }
+    };
+
+    // A fire is a whole turn, so the gap to the next fire of that watch is measured from here:
+    // the turn's own length is what spaces fires out, exactly as it is for a tick. Outside the
+    // two arms because a turn that failed still ended, and a watch left marked as firing would
+    // never fire again and would make every prompt after it read as the driver's.
+    session.watch_turn_ended();
+    carried
 }
 
 #[cfg(test)]
@@ -4605,6 +5475,89 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    /// The private modes a run of bytes leaves turned on, in the order the terminal would read
+    /// them: a mode asked for and then given up again is not left on.
+    fn modes_left_on(written: &str) -> std::collections::BTreeSet<String> {
+        let mut on = std::collections::BTreeSet::new();
+        for request in written.split("\x1b[?").skip(1) {
+            let mode: String = request.chars().take_while(char::is_ascii_digit).collect();
+            match request[mode.len()..].chars().next() {
+                Some('h') => {
+                    on.insert(mode);
+                }
+                Some('l') => {
+                    on.remove(&mode);
+                }
+                _ => {}
+            }
+        }
+        on
+    }
+
+    fn asked_for(enhanced: bool) -> String {
+        let mut written = Vec::new();
+        ask_for_modes(&mut written, enhanced).expect("ask");
+        String::from_utf8(written).expect("utf8")
+    }
+
+    fn given_back(enhanced: bool) -> String {
+        let mut written = Vec::new();
+        give_back_modes(&mut written, enhanced).expect("give back");
+        String::from_utf8(written).expect("utf8")
+    }
+
+    /// A session draws on a screen of its own, so what was in the terminal before it started is
+    /// still there afterwards. Nothing else in this file can be checked against a terminal, and a
+    /// takeover that stopped happening would look like a working program.
+    #[test]
+    fn a_session_draws_on_a_screen_of_its_own() {
+        // 1049 is the alternate screen. Named as a number because that is what is sent.
+        assert!(modes_left_on(&asked_for(false)).contains("1049"));
+        assert!(!modes_left_on(&given_back(false)).contains("1049"));
+    }
+
+    /// Every mode is given back, whether the session ended by being left or by failing. A mode
+    /// kept past the last frame is a terminal the person has to repair by hand: mouse reporting
+    /// left on turns every click into unreadable bytes, and bracketed paste left on prints its
+    /// markers into whatever they type next.
+    #[test]
+    fn every_mode_a_session_asks_for_is_given_back() {
+        for enhanced in [false, true] {
+            let asked = modes_left_on(&asked_for(enhanced));
+            let handed_back = modes_left_on(&given_back(enhanced));
+            assert!(!asked.is_empty(), "nothing was asked for");
+            for mode in &asked {
+                assert!(
+                    !handed_back.contains(mode),
+                    "mode {mode} is left on: asked {asked:?}, handed back {handed_back:?}"
+                );
+            }
+        }
+    }
+
+    /// Disambiguated keys are pushed onto a stack the terminal keeps, so the one thing owed is a
+    /// pop: a push left on the stack outlives the process and changes what every later program
+    /// reads from the keyboard.
+    #[test]
+    fn a_pushed_keyboard_mode_is_popped_and_an_unpushed_one_is_not() {
+        assert!(asked_for(true).contains("\x1b[>"));
+        assert!(given_back(true).contains("\x1b[<"));
+
+        assert!(!asked_for(false).contains("\x1b[>"));
+        assert!(!given_back(false).contains("\x1b[<"));
+    }
+
+    /// The wheel scrolls the transcript, which is what mouse reporting is asked for, and a pointer
+    /// merely crossing the window is not reported: that arrives as an event and a redraw per pixel
+    /// of travel, for a gesture nothing here reads.
+    #[test]
+    fn the_session_reads_a_drag_and_not_every_pointer_movement() {
+        let on = modes_left_on(&asked_for(false));
+        assert!(on.contains("1000"), "buttons are not reported: {on:?}");
+        assert!(on.contains("1002"), "a drag is not reported: {on:?}");
+        assert!(!on.contains("1003"), "all motion is reported: {on:?}");
     }
 
     fn listed(key: &str, window: Option<u64>) -> bravebot_aichat::models::Model {
@@ -5058,6 +6011,56 @@ mod tests {
     fn a_model_that_advertises_nothing_has_no_window() {
         let models = [listed("quiet-model", None)];
         assert_eq!(advertised_window(&models, Some("quiet-model")), None);
+    }
+
+    /// A configuration whose roster is what a settings file named and whose Brave credentials are
+    /// blank, so the listing costs no request and the window under test is the one in the file.
+    fn a_config_with_a_named_roster() -> Config {
+        use bravebot_config::env_var;
+
+        Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            _ => None,
+        })
+        .expect("an account named on its own is a working configuration")
+    }
+
+    /// A run holds no session and opens no picker, so the window of the model it puts in force is
+    /// looked up here or nowhere. Left unlooked up, a run against a model advertising 131,072
+    /// tokens compacts at 24,000, and one advertising less than 24,000 cannot compact at all.
+    #[test]
+    fn a_run_with_no_session_adopts_the_window_of_the_model_in_force() {
+        let mut config = a_config_with_a_named_roster();
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::DEFAULT_CONTEXT_BUDGET
+        );
+
+        adopt_budget_for_model(&mut config, "opus-arn");
+
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::bedrock::CONTEXT_WINDOW
+        );
+        assert!(!config.budget_is_guessed());
+    }
+
+    /// A name no roster describes: a model withdrawn since it was chosen, or one a settings file
+    /// names and no listing offers. The default stands rather than the window of whichever entry
+    /// happened to be first, and the run says nothing about having looked.
+    #[test]
+    fn a_run_whose_model_no_roster_describes_keeps_the_default() {
+        let mut config = a_config_with_a_named_roster();
+
+        adopt_budget_for_model(&mut config, "a-model-nothing-lists");
+
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::DEFAULT_CONTEXT_BUDGET
+        );
+        assert!(config.budget_is_guessed());
     }
 
     /// A reply arrives as hundreds of messages and a draw rebuilds the whole transcript, so a
@@ -6011,14 +7014,64 @@ mod tests {
 
         /// A line can be typed while a turn runs, so it can be pasted into while a turn runs. What
         /// is refused mid-turn is sending, never writing.
+        ///
+        /// The picture rather than the answer, because the answer was right all along and every
+        /// working loop threw it away: the key reached its arm, produced `Action::Paste`, and the
+        /// clipboard was never read.
         #[test]
         fn ctrl_v_reads_the_clipboard_during_a_turn_too() {
             let mut session = Session::new("kernel-enforced");
             session.status = Status::Working;
+
+            let action = handle_key_while_working(&mut session, ctrl('v'));
+            assert_eq!(action, Action::Paste);
+            act_while_working(&mut session, action, || picture(b"pixels".to_vec()));
+
             assert_eq!(
-                handle_key_while_working(&mut session, ctrl('v')),
-                Action::Paste
+                session.input(),
+                "[Image #1]",
+                "the picture the key asked for was not staged"
             );
+        }
+
+        /// A picture pasted with the terminal's own chord arrives as a paste of nothing, and mid-turn
+        /// is when one is pasted: the person is watching the reply the screenshot is about. The empty
+        /// paste went into the box instead, which writes nothing and says nothing, so the picture was
+        /// dropped and the key that would have carried it was never named.
+        #[test]
+        fn an_empty_paste_mid_turn_goes_and_reads_the_clipboard_too() {
+            let mut session = Session::new("kernel-enforced");
+            session.status = Status::Working;
+
+            let action = handle_paste_while_working(&mut session, "");
+            assert!(
+                session.transcript[0].text.contains("ctrl-v"),
+                "the note did not name the key that works"
+            );
+            act_while_working(&mut session, action, || picture(b"pixels".to_vec()));
+
+            assert_eq!(
+                session.input(),
+                "[Image #1]",
+                "the picture the empty paste stood for was not staged"
+            );
+        }
+
+        /// Nothing is read for a paste that carried text, mid-turn as at rest: every Command-V of a
+        /// paragraph would otherwise spawn the platform's clipboard tools for an answer the paste
+        /// already had.
+        #[test]
+        fn a_paste_that_carried_text_mid_turn_is_left_alone() {
+            let mut session = Session::new("kernel-enforced");
+            session.status = Status::Working;
+
+            let action = handle_paste_while_working(&mut session, "some words");
+            assert_eq!(action, Action::Redraw);
+            act_while_working(&mut session, action, || {
+                panic!("the clipboard was read for a paste that carried text")
+            });
+
+            assert_eq!(session.input(), "some words");
         }
 
         /// A paste that arrives carrying nothing is a Command-V the terminal could not answer: it
@@ -7912,6 +8965,71 @@ mod tests {
         );
     }
 
+    /// Neither half of an aside is in the conversation, so an answer that arrives adds nothing to
+    /// the turn's own lines: a line about it there is one a reader takes the planner to have had,
+    /// and the planner has read neither the question nor the answer. The row the answer becomes,
+    /// and the hint line that counts it, are where an aside is said to have happened.
+    #[test]
+    fn answering_a_question_beside_the_work_leaves_the_transcript_alone() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+        let before = session.transcript.len();
+
+        aside_answered(
+            &mut session,
+            "why is the parser recursive?".to_string(),
+            bravebot_agent::aside::Answered {
+                shown: "because the grammar nests".to_string(),
+                kept: Some("because the grammar nests".to_string()),
+                usage: Default::default(),
+            },
+        );
+
+        assert_eq!(
+            session.watched_aside().and_then(|a| a.answer.as_deref()),
+            Some("because the grammar nests"),
+            "the answer did not reach the row that is the only place it is read"
+        );
+        let added: Vec<&str> = session.transcript[before..]
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert!(
+            added.is_empty(),
+            "an answered aside put a line among the turn's own: {added:?}"
+        );
+    }
+
+    /// The tail is where the planner's own half-written reply is drawn, so an answer arriving
+    /// there reads as the planner writing something it has not read. There is one model writing
+    /// at a time in that place, and an aside is not the one.
+    #[test]
+    fn an_answer_being_written_beside_the_work_is_not_drawn_over_the_turn() {
+        let mut session = Session::new("none");
+        session.streaming("the turn was saying this");
+        session.begin_aside();
+        let before = session.transcript.len();
+
+        aside_reported(
+            &mut session,
+            crate::remote_confirm::ToMain::Streaming("because the grammar".to_string()),
+        );
+
+        assert_eq!(
+            session.reply_so_far(),
+            "the turn was saying this",
+            "the answer reached the tail the turn's own reply is drawn in"
+        );
+        let added: Vec<&str> = session.transcript[before..]
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert!(
+            added.is_empty(),
+            "the answer was drawn among the turn's own lines: {added:?}"
+        );
+    }
+
     /// A person who has just typed /compact will reach for one of these, and nothing here can
     /// stop the one request a summary takes. Both are answered rather than swallowed: a key that
     /// does nothing and says nothing reads as an interface that has hung.
@@ -8153,6 +9271,98 @@ mod tests {
         assert!(session.goal().is_none());
     }
 
+    /// MANIFEST-9's other half: a session can reach the planning mode, so the word has to start a
+    /// run and carry the whole task. The task is a sentence, like a goal's condition, so nothing
+    /// may be cut off it: what the planner is shown is what it plans, and the planner is shown
+    /// this and nothing else.
+    #[test]
+    fn a_session_can_ask_for_a_manifest_run() {
+        let mut session = Session::new("none");
+        for c in "/manifest summarise every doc under docs/specs".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Manifest("summarise every doc under docs/specs".to_string())
+        );
+        assert!(
+            session.input().is_empty(),
+            "the command is still in the box"
+        );
+    }
+
+    /// The bare word plans nothing. There is no default task and there could not be one: the task
+    /// string is the whole of a manifest run's input, so a run started without one would plan
+    /// against nothing at all.
+    #[test]
+    fn a_manifest_run_needs_a_task_to_plan() {
+        let mut session = Session::new("none");
+        for c in MANIFEST_COMMAND.chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Manifest(String::new()),
+            "the bare word has to reach the loop, which says what it needs"
+        );
+        assert!(
+            t!(manifest_needs_a_task).contains(MANIFEST_COMMAND),
+            "the answer does not name the command it is about"
+        );
+    }
+
+    /// MANIFEST-11. Escape at the plan prompt is answered as a decline, so a run stopped there
+    /// comes back saying the plan was not approved rather than saying it was cancelled. Read off
+    /// the error, the key would mean "leave no record" one moment and "write one" the moment
+    /// before, for a person who pressed the same key asking for the same thing.
+    #[test]
+    fn a_run_the_person_stopped_is_read_off_the_key_and_not_off_the_error() {
+        let declined = || {
+            Err(bravebot_agent::TurnError::Precommit(
+                "the plan was not approved, so nothing ran".to_string(),
+            ))
+        };
+        let cancelled = || Err(bravebot_agent::TurnError::Cancelled { attempts: None });
+
+        let pressed = Cancel::new();
+        pressed.cancel();
+        assert!(
+            was_stopped(&declined(), &pressed),
+            "a decline the person's own key produced was not read as a stop"
+        );
+        assert!(was_stopped(&cancelled(), &pressed));
+
+        let untouched = Cancel::new();
+        assert!(
+            !was_stopped(&declined(), &untouched),
+            "a plan declined at the prompt is a run worth recording"
+        );
+    }
+
+    /// A sentence that merely mentions the word is a prompt. Starting a run from one would plan a
+    /// whole run's worth of effects off a line somebody meant to say.
+    #[test]
+    fn a_manifest_run_is_not_a_prompt() {
+        for line in [
+            "/manifests are the other mode",
+            "what does /manifest do",
+            "explain the /manifest command",
+        ] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string()),
+                "{line} started a run"
+            );
+        }
+    }
+
     /// The key that stops things has to stop this one too, or a person watching a goal go wrong
     /// has to leave the session to get out of it.
     #[test]
@@ -8168,6 +9378,124 @@ mod tests {
         );
 
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
+    }
+
+    /// A turn that failed still ended. A watch left marked as firing would never fire again, and
+    /// every prompt after it would be read as this program's rather than the person's, which
+    /// quietly stops `@path` from vouching for anything.
+    #[test]
+    fn a_fire_whose_turn_failed_stops_being_the_turn_in_flight() {
+        let mut session = Session::new("none");
+        session.arm_watch(
+            "notes.md",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+        session
+            .watch_fired(Instant::now() + Duration::from_secs(6), |_| {
+                bravebot_agent::watch::Looked::Saw("second".to_string())
+            })
+            .expect("a fire");
+        assert!(session.watch_is_firing());
+
+        fold_outcome(
+            &mut session,
+            Err(turn::TurnError::Precommit(
+                "the backend said no".to_string(),
+            )),
+            Trail::new(),
+            Carried {
+                trust: TrustStore::new("/work"),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+            },
+            Occupied {
+                budget: 100_000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            Asked {
+                name: "test-model".to_string(),
+                comparable: true,
+            },
+            Line {
+                text: "",
+                wrote: Wrote::TheDriver,
+            },
+            &workspace_for_test(),
+        );
+
+        assert!(!session.watch_is_firing(), "the watch is still firing");
+        assert_eq!(
+            session.watches().len(),
+            1,
+            "a failed request ended the watch"
+        );
+    }
+
+    /// Watches are the last rung before leaving, for the reason the loop and the goal are rungs:
+    /// somebody pressing the key that stops things wants the things stopped, and picking which of
+    /// eight survived is not a decision to make from a keystroke.
+    #[test]
+    fn interrupting_ends_every_watch_before_it_leaves() {
+        let mut session = Session::new("none");
+        session.arm_watch(
+            "a.md",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+        session.arm_watch(
+            "b.md",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
+        assert!(session.watches().is_empty());
+        assert!(
+            !session.is_quitting(),
+            "the press that stopped them also left"
+        );
+
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
+    }
+
+    /// The command cannot arm one: a watch is asked for in a prompt, and what a person needs a
+    /// command for is the half they cannot read off the transcript.
+    #[test]
+    fn the_watch_command_lists_and_stops_and_arms_nothing() {
+        let mut session = Session::new("none");
+        session.arm_watch(
+            "a.md",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+
+        for c in "/watch".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert_eq!(session.watches().len(), 1, "a report ended a watch");
+
+        for c in "/watch stop 1".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert!(session.watches().is_empty());
+
+        for c in "/watch src/main.rs".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert!(
+            session.watches().is_empty(),
+            "the command armed a watch of its own"
+        );
     }
 
     /// A sentence mentioning it is a thing to say to the planner.
@@ -10284,7 +11612,7 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new("/work");
 
         // Named the way a settings file names it, relative to the project.
         let asked = named_to_open(&mut session, &workspace, &["../shared".to_string()]);
@@ -10320,7 +11648,7 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new("/work");
 
         let asked = named_to_open(
             &mut session,
@@ -10469,6 +11797,11 @@ mod tests {
         );
     }
 
+    /// The directory those sessions ran in, which is the one their rules are read under.
+    fn here() -> &'static std::path::Path {
+        std::path::Path::new("/tmp/x")
+    }
+
     /// A session that ran in this directory and vouched for it, which is what an earlier answer
     /// of yes leaves behind in the directory's list of sessions.
     fn a_record_that_answered_yes_here() -> Box<crate::sessions::Record> {
@@ -10497,7 +11830,11 @@ mod tests {
 
         assert!(
             matches!(
-                opening_for(beginning_of(&Start::Fresh), PermissionMode::Ask),
+                opening_for(
+                    beginning_of(&Start::Fresh, here()),
+                    PermissionMode::Ask,
+                    here(),
+                ),
                 Opening::Ask
             ),
             "a session started fresh took an answer its own user never gave",
@@ -10512,7 +11849,11 @@ mod tests {
         use bravebot_agent::PermissionMode;
 
         let record = a_record_that_answered_yes_here();
-        match opening_for(beginning_of(&Start::Resuming(record)), PermissionMode::Ask) {
+        match opening_for(
+            beginning_of(&Start::Resuming(record), here()),
+            PermissionMode::Ask,
+            here(),
+        ) {
             Opening::Settled(trust, Whence::Resumed) => {
                 assert!(trust.is_trusted("."));
                 assert!(trust.is_trusted("src/main.rs"), "the rule covers the tree");
@@ -10532,7 +11873,11 @@ mod tests {
 
         assert!(
             matches!(
-                opening_for(beginning_of(&Start::Resuming(record)), PermissionMode::Ask),
+                opening_for(
+                    beginning_of(&Start::Resuming(record), here()),
+                    PermissionMode::Ask,
+                    here(),
+                ),
                 Opening::Ask
             ),
             "a record that answered nothing was resumed as an answer",
@@ -10559,8 +11904,9 @@ mod tests {
         ]);
 
         match opening_for(
-            beginning_of(&Start::Resuming(record)),
+            beginning_of(&Start::Resuming(record), here()),
             PermissionMode::Bypass,
+            here(),
         ) {
             Opening::Settled(trust, Whence::Resumed) => assert!(
                 !trust.is_trusted("vendor/lib.js"),
@@ -10581,7 +11927,7 @@ mod tests {
 
         let mut session = Session::new("none");
         let conversation = Conversation::new();
-        let trust = TrustStore::new();
+        let trust = TrustStore::new("/work");
         let programs = TrustedPrograms::new();
         let stored = crate::sessions::Handle::begin(&root);
 
@@ -10616,6 +11962,129 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The bare word is the list, which is the surface the command exists for: seeing what a
+    /// rewind would put back before running it.
+    #[test]
+    fn the_bare_rewind_command_asks_for_the_list() {
+        let mut session = Session::new("none");
+        for c in REWIND_COMMAND.chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Rewind(String::new())
+        );
+    }
+
+    /// A number after the word is how many turns to go back.
+    #[test]
+    fn the_rewind_command_carries_how_far_back_to_go() {
+        let mut session = Session::new("none");
+        for c in "/rewind 3".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Rewind("3".to_string())
+        );
+    }
+
+    /// `/rewinding the tape` is a longer word, so it is a prompt, as CMD-2 has it.
+    #[test]
+    fn a_longer_word_starting_with_rewind_is_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "/rewinding the tape".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/rewinding the tape".to_string())
+        );
+    }
+
+    /// `/undo` takes no argument, so a sentence that begins with it is still a prompt. The list
+    /// and the number went to a word of their own to keep that true.
+    #[test]
+    fn undo_with_something_after_it_is_still_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "/undo the last thing I asked for".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/undo the last thing I asked for".to_string())
+        );
+    }
+
+    /// Deciding whether to go back is deciding about the files a turn wrote, so the list names
+    /// them, and names what each turn was asked so the rows can be told apart.
+    #[test]
+    fn the_list_names_what_each_point_would_put_back() {
+        let mut session = Session::new("none");
+        session.open_rewind_point(a_point_before(0), "add a line to notes.md".into());
+        session.keep_backups(vec![bravebot_agent::workspace::Backup {
+            path: std::path::PathBuf::from("/work/notes.md"),
+            was: bravebot_agent::workspace::Before::Nothing,
+        }]);
+        session.open_rewind_point(a_point_before(1), "read the notes back".into());
+
+        list_rewind_points(&mut session);
+
+        let said = session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            said.contains("/work/notes.md"),
+            "the list did not say which file would go back: {said}"
+        );
+        assert!(
+            said.contains("add a line to notes.md"),
+            "the list did not say what the turn was asked: {said}"
+        );
+        let first = said.find("read the notes back").expect("the newest point");
+        let second = said
+            .find("add a line to notes.md")
+            .expect("the older point");
+        assert!(
+            first < second,
+            "the list did not begin at the turn that just ended: {said}"
+        );
+    }
+
+    /// A session with nothing to rewind says so, rather than printing an empty heading.
+    #[test]
+    fn the_list_of_a_session_with_no_points_says_there_is_nothing() {
+        let mut session = Session::new("none");
+
+        list_rewind_points(&mut session);
+
+        assert_eq!(session.transcript.len(), 1, "an empty list still had rows");
+    }
+
+    /// The state before some turn, for a test that only needs a point to exist.
+    fn a_point_before(turns: usize) -> crate::state::TurnSnapshot {
+        crate::state::TurnSnapshot {
+            conversation: Conversation::new().snapshot(),
+            turns,
+            tokens: 0,
+            spend: std::collections::BTreeMap::new(),
+            timing: std::collections::BTreeMap::new(),
+            cached: None,
+            trust: TrustStore::new("/work"),
+            programs: TrustedPrograms::new(),
+            transcript_len: turns,
+            title: "a session".to_string(),
+            was_wrote: true,
+        }
+    }
+
     /// Both halves of what `/cd` does, together: the working directory moves, and the directory
     /// moved to is vouched for, which is what a relative path means and what decides a write there.
     #[test]
@@ -10628,12 +12097,13 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new("/work");
 
         assert!(change_directory(
             &mut session,
             &mut workspace,
             &mut trust,
+            &mut None,
             other.to_str().expect("utf-8 path")
         ));
 
@@ -10642,6 +12112,43 @@ mod tests {
         assert!(
             trust.is_trusted("."),
             "the directory moved to was not vouched for"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// LSP-5 and LSP-8: a server is approved for one tree and indexes that tree, so the working
+    /// directory moving leaves it behind.
+    ///
+    /// Kept across the move it would answer questions about the new directory out of the old one's
+    /// index, and the paths it opens would be resolved against a root the session has left. Nobody
+    /// approved a server reading that directory from here.
+    #[test]
+    fn changing_directory_stops_the_servers_started_in_the_old_one() {
+        let root = crate::testutil::scratch_dir("bravebot-cd-servers-test");
+        let project = root.join("project");
+        let other = root.join("other");
+        std::fs::create_dir_all(&project).expect("scratch");
+        std::fs::create_dir_all(&other).expect("scratch");
+
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let mut session = Session::new("none");
+        let mut trust = TrustStore::new(workspace.root());
+        // Nothing is started by building the set, which is LSP-8: a server comes up on the first
+        // question that needs one. What is being asserted is who holds the set afterwards.
+        let mut servers = Some(LanguageServers::new(workspace.root().to_path_buf(), None));
+
+        assert!(change_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            &mut servers,
+            other.to_str().expect("utf-8 path")
+        ));
+
+        assert!(
+            servers.is_none(),
+            "the servers of the directory left behind are still the session's"
         );
 
         std::fs::remove_dir_all(&root).ok();
@@ -10660,7 +12167,7 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new(workspace.root());
         trust.trust(".");
         trust.distrust("vendor");
 
@@ -10669,6 +12176,7 @@ mod tests {
             &mut session,
             &mut workspace,
             &mut trust,
+            &mut None,
             other.to_str().expect("utf-8 path")
         ));
 
@@ -10700,7 +12208,7 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new(workspace.root());
         trust.trust(".");
         trust.distrust("src/vendor");
 
@@ -10708,6 +12216,7 @@ mod tests {
             &mut session,
             &mut workspace,
             &mut trust,
+            &mut None,
             "src"
         ));
 
@@ -10732,13 +12241,14 @@ mod tests {
 
         let mut workspace = Workspace::new(&root).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new();
+        let mut trust = TrustStore::new("/work");
         let before = workspace.root().to_path_buf();
 
         assert!(!change_directory(
             &mut session,
             &mut workspace,
             &mut trust,
+            &mut None,
             "nowhere"
         ));
         assert_eq!(workspace.root(), before);
@@ -10757,11 +12267,19 @@ mod tests {
         );
     }
 
+    /// A workspace for the tests below, which need one only because a finished turn takes the
+    /// first look at anything it asked to have watched.
+    fn workspace_for_test() -> Workspace {
+        let root = crate::testutil::scratch_dir("bravebot-fold-outcome-workspace");
+        std::fs::create_dir_all(&root).expect("scratch");
+        Workspace::new(&root).expect("workspace")
+    }
+
     #[test]
     fn a_failed_turn_measures_context_if_requests_were_sent() {
         let mut session = Session::new("none");
         let sink = Trail::new();
-        let fallback = TrustStore::new();
+        let fallback = TrustStore::new("/work");
         let fallback_programs = TrustedPrograms::new();
         let asked = Asked {
             name: "test-model".to_string(),
@@ -10775,6 +12293,7 @@ mod tests {
             Carried {
                 trust: fallback,
                 programs: fallback_programs,
+                asked: AskedAbout::new(),
             },
             Occupied {
                 budget: 100_000,
@@ -10786,6 +12305,7 @@ mod tests {
                 text: "",
                 wrote: Wrote::ThePerson,
             },
+            &workspace_for_test(),
         );
 
         assert_eq!(
@@ -10817,8 +12337,8 @@ mod tests {
 
     /// A goal is a condition for a session and not for one turn, so stopping a turn going the
     /// wrong way has to leave it: a person who has to retype the condition every time they
-    /// interrupt cannot steer the work at all. The stopped turn is recorded as failed, which is
-    /// what keeps it from being judged and sent straight back.
+    /// interrupt cannot steer the work at all. The stopped turn is recorded as stopped, which is
+    /// what keeps it from being judged and sent straight back: there is no answer to judge.
     #[test]
     fn stopping_a_turn_leaves_the_goal_set() {
         let mut session = Session::new("none");
@@ -10830,11 +12350,12 @@ mod tests {
 
         fold_outcome(
             &mut session,
-            Err(turn::TurnError::Cancelled),
+            Err(turn::TurnError::Cancelled { attempts: None }),
             Trail::new(),
             Carried {
-                trust: TrustStore::new(),
+                trust: TrustStore::new("/work"),
                 programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
             },
             Occupied {
                 budget: 100_000,
@@ -10846,6 +12367,7 @@ mod tests {
                 text: "",
                 wrote: Wrote::ThePerson,
             },
+            &workspace_for_test(),
         );
 
         assert_eq!(
@@ -10853,9 +12375,16 @@ mod tests {
             Some("cargo test exits 0"),
             "the stop took the goal off with the turn"
         );
+        assert_eq!(
+            session.finished.map(|turn| turn.ending),
+            Some(bravebot_agent::Ending::Stopped { attempts: None }),
+            "a stop was not recorded as one"
+        );
         assert!(
-            session.finished.is_some_and(|turn| turn.failed),
-            "a stopped turn was not recorded as failed, so it would be judged"
+            session
+                .finished
+                .is_some_and(|turn| turn.ending.unanswered()),
+            "a stopped turn looked answered, so it would be judged"
         );
     }
 
@@ -10875,8 +12404,9 @@ mod tests {
             Err(turn::TurnError::Precommit("failed".to_string())),
             Trail::new(),
             Carried {
-                trust: TrustStore::new(),
+                trust: TrustStore::new("/work"),
                 programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
             },
             Occupied {
                 budget: 100_000,
@@ -10888,6 +12418,7 @@ mod tests {
                 text: "",
                 wrote: Wrote::ThePerson,
             },
+            &workspace_for_test(),
         );
 
         assert!(
@@ -10900,7 +12431,7 @@ mod tests {
     fn a_failed_turn_with_no_requests_sent_remains_unmeasured() {
         let mut session = Session::new("none");
         let sink = Trail::new();
-        let fallback = TrustStore::new();
+        let fallback = TrustStore::new("/work");
         let fallback_programs = TrustedPrograms::new();
         let asked = Asked {
             name: "test-model".to_string(),
@@ -10914,6 +12445,7 @@ mod tests {
             Carried {
                 trust: fallback,
                 programs: fallback_programs,
+                asked: AskedAbout::new(),
             },
             Occupied {
                 budget: 100_000,
@@ -10925,9 +12457,229 @@ mod tests {
                 text: "",
                 wrote: Wrote::ThePerson,
             },
+            &workspace_for_test(),
         );
 
         assert_eq!(session.occupancy(), crate::state::Occupancy::Unmeasured);
         assert_eq!(session.fullness(), None);
+    }
+
+    #[test]
+    fn failure_reporting_uses_safe_fields_in_the_transcript_and_status() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "read a file");
+        session.submit().unwrap();
+        let error = bravebot_agent::backend::BackendError::Attempted {
+            usage: None,
+            context_tokens: None,
+            attempts: 3,
+            cause: Box::new(bravebot_agent::backend::BackendError::from(
+                bravebot_aichat::ChatError::Egress(bravebot_net::EgressError::Status {
+                    url: "https://example.test/PRIVATE_PATH?key=PRIVATE_QUERY".into(),
+                    status: 503,
+                }),
+            )),
+        };
+        fold_outcome(
+            &mut session,
+            Err(turn::TurnError::from(error)),
+            Trail::new(),
+            Carried {
+                asked: Default::default(),
+                trust: TrustStore::new("/work"),
+                programs: TrustedPrograms::new(),
+            },
+            Occupied {
+                budget: 1000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            Asked {
+                name: "test-model".into(),
+                comparable: true,
+            },
+            Line {
+                text: "read a file",
+                wrote: Wrote::ThePerson,
+            },
+            &workspace_for_test(),
+        );
+        let reason = session.failure_said().expect("visible reason");
+        assert!(reason.contains("503"), "{reason}");
+        assert!(reason.contains("3 attempts"), "{reason}");
+        let exported = render::as_markdown(&session, "test");
+        for secret in ["PRIVATE_PATH", "PRIVATE_QUERY", "example.test"] {
+            assert!(!reason.contains(secret), "{reason}");
+            assert!(!exported.contains(secret), "{exported}");
+        }
+        assert_eq!(exported.matches("503").count(), 1);
+        assert!(session.finished.unwrap().failed());
+    }
+    /// Repeated reports must not charge a stopped turn twice, even when restoring its prompt.
+    #[test]
+    fn the_cancellation_path_charges_progress_before_restoring_or_quitting() {
+        for quitting in [false, true] {
+            let mut session = Session::new("none");
+            type_line(&mut session, "work");
+            session.submit().unwrap();
+            let spent = bravebot_agent::Spent {
+                tokens: 37,
+                cached: bravebot_aichat::protocol::Cached {
+                    read_tokens: 5,
+                    ..Default::default()
+                },
+                timing: bravebot_agent::timing::Timing {
+                    inference_ms: 11,
+                    tools_ms: 7,
+                    stalled_ms: 3,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            session.progressed(bravebot_agent::Spent {
+                tokens: 17,
+                ..spent
+            });
+            session.progressed(spent);
+            session.progressed(spent);
+            if quitting {
+                session.quit();
+            }
+            finish_cancelled_turn(&mut session, "work", Some(1));
+            assert_eq!(session.tokens, 37);
+            assert_eq!(session.spend_by_turn().get(&1), Some(&37));
+            assert_eq!(session.finished.unwrap().tokens, 37);
+            assert_eq!(
+                session.finished.unwrap().ending,
+                bravebot_agent::Ending::Stopped { attempts: Some(1) }
+            );
+            assert_eq!(session.timing_total().inference_ms, 11);
+            assert_eq!(session.timing_total().tools_ms, 7);
+            assert_eq!(session.timing_total().stalled_ms, 3);
+            assert_eq!(session.cached().unwrap().read_tokens, 5);
+            assert_eq!(session.is_quitting(), quitting);
+            if !quitting {
+                assert_eq!(session.input(), "work");
+            }
+        }
+    }
+
+    /// The final outcome owns success accounting; progress must not charge the same work again.
+    #[test]
+    fn successful_outcomes_replace_progress_and_empty_following_turns_cost_nothing() {
+        for stopped in [false, true] {
+            let mut session = Session::new("none");
+            type_line(&mut session, "first");
+            session.submit().unwrap();
+            let spent = bravebot_agent::Spent {
+                tokens: 73,
+                timing: bravebot_agent::timing::Timing {
+                    inference_ms: 13,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            session.progressed(spent);
+            session.progressed(spent);
+            session.complete("done", vec![], 97);
+            session.spent_time(bravebot_agent::timing::Timing {
+                inference_ms: 19,
+                ..Default::default()
+            });
+            assert_eq!(session.tokens, 97);
+            assert_eq!(session.timing_total().inference_ms, 19);
+            type_line(&mut session, "second");
+            session.submit().unwrap();
+            if stopped {
+                finish_cancelled_turn(&mut session, "second", Some(0));
+            } else {
+                fold_outcome(
+                    &mut session,
+                    Err(turn::TurnError::Precommit("PRIVATE_ERROR".into())),
+                    Trail::new(),
+                    Carried {
+                        trust: TrustStore::new("/work"),
+                        programs: TrustedPrograms::new(),
+                        asked: AskedAbout::new(),
+                    },
+                    Occupied {
+                        budget: 1000,
+                        guessed: false,
+                        last_request_tokens: 0,
+                    },
+                    Asked {
+                        name: "test-model".into(),
+                        comparable: true,
+                    },
+                    Line {
+                        text: "second",
+                        wrote: Wrote::ThePerson,
+                    },
+                    &workspace_for_test(),
+                );
+            }
+            assert_eq!(session.tokens, 97);
+            assert_eq!(session.finished.unwrap().tokens, 0);
+            assert_eq!(session.timing_total().inference_ms, 19);
+            assert_eq!(session.spend_by_turn().get(&1), Some(&97));
+            assert_eq!(session.spend_by_turn().get(&2).copied().unwrap_or(0), 0);
+            assert!(!render::as_markdown(&session, "test").contains("PRIVATE_ERROR"));
+        }
+    }
+
+    /// Safe error reporting must retain completed usage without putting raw diagnostics in history.
+    #[test]
+    fn a_failed_outcome_charges_only_the_latest_progress() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "work");
+        session.submit().unwrap();
+        for tokens in [17, 43, 43] {
+            session.progressed(bravebot_agent::Spent {
+                tokens,
+                cached: bravebot_aichat::protocol::Cached {
+                    read_tokens: 7,
+                    ..Default::default()
+                },
+                timing: bravebot_agent::timing::Timing {
+                    inference_ms: 23,
+                    tools_ms: 11,
+                    stalled_ms: 5,
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+        }
+        fold_outcome(
+            &mut session,
+            Err(turn::TurnError::Precommit("PRIVATE_ERROR".into())),
+            Trail::new(),
+            Carried {
+                trust: TrustStore::new("/work"),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+            },
+            Occupied {
+                budget: 1000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            Asked {
+                name: "test-model".into(),
+                comparable: true,
+            },
+            Line {
+                text: "work",
+                wrote: Wrote::ThePerson,
+            },
+            &workspace_for_test(),
+        );
+        assert_eq!(session.tokens, 43);
+        assert_eq!(session.finished.unwrap().tokens, 43);
+        assert_eq!(session.spend_by_turn().get(&1), Some(&43));
+        assert_eq!(session.timing_total().inference_ms, 23);
+        assert_eq!(session.timing_total().tools_ms, 11);
+        assert_eq!(session.timing_total().stalled_ms, 5);
+        assert_eq!(session.cached().unwrap().read_tokens, 7);
+        assert!(!render::as_markdown(&session, "test").contains("PRIVATE_ERROR"));
     }
 }

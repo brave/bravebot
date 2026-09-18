@@ -20,6 +20,7 @@
 use crate::diff::Diff;
 use bravebot_core::Pipeline;
 use bravebot_core::ask::{Answer, Asking};
+use bravebot_core::vetting::Verdict;
 use std::fmt;
 
 /// How a proposed write came about.
@@ -59,6 +60,33 @@ pub struct WriteRequest {
     /// model never saw is a different act from reviewing the model's own work, and the screen
     /// should not make the two look alike.
     pub untrusted: bool,
+    /// What the isolated processor that produced the body said about it, where one produced it.
+    ///
+    /// The claim, drawn beside the evidence. A remark is free text a processor authors, nothing
+    /// checks it against the document it accompanies and nothing could, so it used to reach the
+    /// transcript when the processor returned and be some way up the screen by the time this
+    /// question arrived. A person then read the diff with no claim to check it against. Here the
+    /// two are one screen: a remark saying a typo was fixed sits above the lines that changed.
+    ///
+    /// It decides nothing. No gate reads it, the approval is given from the diff, and a write
+    /// goes the same way with it as without it.
+    pub remark: Option<Remark>,
+}
+
+/// What a processor said about the document it produced, released for the screen an approval is
+/// read on.
+///
+/// The same three things [`crate::report::Shown`] carries about any quarantined preview, and
+/// drawn the same way: the words are the interface's, since the only fixed parts of this are
+/// that it is untrusted and that no model may be sent to read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Remark {
+    /// The first lines of it, each already trimmed to a sensible width.
+    pub preview: Vec<String>,
+    /// How many lines there are altogether, so the drawing can say what it left out.
+    pub lines: usize,
+    /// The label it carries, in the same short form the trail uses.
+    pub label: String,
 }
 
 impl WriteRequest {
@@ -124,6 +152,17 @@ pub struct RunRequest {
     /// cannot endorse a record they were not shown, and deleting a line from that file is the way
     /// back from having pressed the key.
     pub record: Option<std::path::PathBuf>,
+    /// Where a pattern would be written, where this line's arguments will differ next time.
+    ///
+    /// `Some` exactly where the prompt says so: the same binary has already been put to this
+    /// person in this session under a different argument list, and there is a settings file to
+    /// name. `None` everywhere else, and nothing about patterns is drawn at all.
+    ///
+    /// The path rather than a flag, for the reason [`RunRequest::record`] carries one: the advice
+    /// is to edit a file, and advice that does not say which file is a chore handed over twice.
+    /// The two are independent. A line can repeat and vary in one session, so a prompt may offer
+    /// the key and give the advice together, and the key still covers only the line on screen.
+    pub pattern: Option<std::path::PathBuf>,
 }
 
 impl RunRequest {
@@ -143,6 +182,7 @@ impl RunRequest {
             .collect();
         Self {
             record: None,
+            pattern: None,
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),
@@ -171,9 +211,9 @@ impl RunRequest {
 
     /// Whether the line writes an environment assignment in front of one of its programs.
     ///
-    /// The second reason the prompt cannot offer to stop asking: an entry records a program and its
-    /// exact arguments, and an assignment is in neither, so [`RunRequest::would_vouch_for`] cannot
-    /// represent one. An entry made here would be a bare entry covering the same program under no
+    /// The second reason the prompt cannot offer to stop asking: an entry records a program, its
+    /// exact arguments and the tree they run in, and an assignment is in none of the three, so
+    /// [`RunRequest::would_vouch_for`] cannot represent one. An entry made here would be a bare entry covering the same program under no
     /// assignment at all, and the screen would be claiming a grant nothing recorded.
     ///
     /// Asked apart from [`RunRequest::can_be_remembered`] because that one decides whether to offer
@@ -195,6 +235,11 @@ impl RunRequest {
         self.record.is_some()
     }
 
+    /// Whether the prompt says a pattern in a settings file is what answers this line.
+    pub fn advises_a_pattern(&self) -> bool {
+        self.pattern.is_some()
+    }
+
     /// A short description for a prompt line.
     pub fn summary(&self) -> String {
         format!(
@@ -210,14 +255,16 @@ impl RunRequest {
     /// vouches for both, since a run that still had to ask about one of them would not have
     /// stopped asking, and its output would still be untrusted.
     ///
-    /// Each entry is a program **and its exact arguments**. Vouching for `git log` says nothing
-    /// about `git push`, and an entry can hold nothing else: an assignment written in front of a
-    /// step is not in it, which is why [`RunRequest::carries_an_assignment`] is asked separately
-    /// rather than answered from this list.
+    /// Each entry is a program, **its exact arguments**, and the tree this line runs in. Vouching
+    /// for `git log` says nothing about `git push`, and vouching for it in `sub/` says nothing
+    /// about it at the root, which is the third thing the prompt shows and so the third thing an
+    /// entry holds. An assignment written in front of a step is still not in it, which is why
+    /// [`RunRequest::carries_an_assignment`] is asked separately rather than answered from this
+    /// list.
     pub fn would_vouch_for(&self) -> Vec<bravebot_core::programs::Command> {
         let mut named: Vec<bravebot_core::programs::Command> = Vec::new();
         for step in self.plan.steps() {
-            let command = step.command();
+            let command = step.command(&self.plan.directory);
             if !named.contains(&command) {
                 named.push(command);
             }
@@ -239,6 +286,12 @@ pub struct OutputRequest {
     pub output: String,
     /// The reference the planner named, for the account given afterwards.
     pub reference: String,
+    /// What a check said about the same bytes, or that it did not complete.
+    ///
+    /// Advice beside them, never in place of them, on the footing [`VetRequest::verdict`] states.
+    pub verdict: Verdict,
+    /// The check's own sentence about why, where it wrote one.
+    pub reason: Option<String>,
 }
 
 impl OutputRequest {
@@ -252,6 +305,47 @@ impl OutputRequest {
             "let the model read {} of output from {}",
             tally(self.lines(), "line", "lines"),
             self.command
+        )
+    }
+}
+
+/// One quarantined slot the planner has asked to be shown, with what a check made of it.
+///
+/// The bytes are here in full, released for display, for the reason an output request carries
+/// them: a person deciding whether the model may read something has to be reading it themselves.
+/// The verdict is beside them rather than in place of them. It is advice from a second model that
+/// read the same bytes, and while it says which warning the prompt carries, it decides nothing:
+/// approving is the person's, and a check that said the content was safe promotes nothing on its
+/// own.
+///
+/// The reason is free text the check wrote about content an attacker may own, so it reaches a
+/// screen and stops. Nothing compares it, routes on it or gives it to a model, and it can lie.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VetRequest {
+    /// Where the content came from, as the driver recorded it: a path, or the command that
+    /// printed it. Never taken from the content.
+    pub origin: String,
+    /// What the planner said it expects the slot to hold, in its own words.
+    pub expects: String,
+    /// The content, in full.
+    pub content: String,
+    /// What the check said, or that it did not complete.
+    pub verdict: Verdict,
+    /// The check's own sentence about why, where it wrote one.
+    pub reason: Option<String>,
+}
+
+impl VetRequest {
+    pub fn lines(&self) -> usize {
+        self.content.lines().count()
+    }
+
+    /// A short description for a prompt line.
+    pub fn summary(&self) -> String {
+        format!(
+            "let the model read {} from {}",
+            tally(self.lines(), "line", "lines"),
+            self.origin
         )
     }
 }
@@ -350,6 +444,15 @@ pub struct VouchRequest {
     pub preview: String,
     /// Whether the preview is only part of the file.
     pub truncated: bool,
+    /// What a check said about the whole file, or that it did not complete.
+    ///
+    /// The whole file and not the preview: the person is being asked to trust the path, so a
+    /// verdict about the first few lines would be answering a smaller question than the one on the
+    /// screen. It is advice on the footing [`VetRequest::verdict`] states, and here it is advice
+    /// about a standing rule rather than about one read.
+    pub verdict: Verdict,
+    /// The check's own sentence about why, where it wrote one.
+    pub reason: Option<String>,
 }
 
 /// A frozen plan a manifest run is about to walk.
@@ -480,10 +583,23 @@ pub trait Confirmer {
     /// Ask whether the planner may read a command's output. Implementations must default to
     /// refusal when they cannot ask.
     ///
-    /// The one question in this trait whose answer rests on bytes rather than on a prediction, so
-    /// an implementation that cannot show them must refuse: approving unseen is the one thing this
-    /// question cannot mean.
+    /// The answer rests on bytes rather than on a prediction, so an implementation that cannot show
+    /// them must refuse: approving unseen is the one thing this question cannot mean. The verdict
+    /// does not rescue that, on the footing [`Confirmer::confirm_vetted_read`] states.
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision;
+
+    /// Ask whether the planner may read one quarantined slot that a check has looked at.
+    /// Implementations must default to refusal when they cannot ask.
+    ///
+    /// Separate from [`Confirmer::confirm_read_output`] because what a yes covers is different.
+    /// That one is about what a program printed, and only about that; this one is about any
+    /// quarantined slot, including a file, and still vouches for nothing but the bytes in front
+    /// of the reader: no trust rule is written, so the next read of the same file asks again.
+    ///
+    /// The verdict travels with the request and is not an answer to it. It says which warning the
+    /// prompt carries; whether the planner gets the bytes is the person's to say, and an
+    /// implementation that answered from the verdict would be letting a second model decide.
+    fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision;
 
     /// Ask about fetching a URL. Implementations must default to refusal when they cannot ask.
     ///
@@ -528,7 +644,8 @@ pub trait Confirmer {
     /// default to refusal when they cannot ask.
     ///
     /// A yes records a rule in the trust map, so it is a standing decision about the path rather
-    /// than about one read.
+    /// than about one read. That makes it the widest of the three questions a check runs before,
+    /// and the verdict travels with it for the same reason it travels with the other two.
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision;
 
     /// Put a series of questions to the person, one answer per question in the order they were
@@ -599,6 +716,13 @@ impl Confirmer for Unattended {
         Decision::Reject
     }
 
+    /// Refuses. A check that said the content looked safe is not a person, and a run with nobody
+    /// watching that promoted a slot on a second model's word would be the one place in the
+    /// system where an approval came from a model.
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+        Decision::Reject
+    }
+
     /// Refuses. Nothing about a test double is a person agreeing to talk to a host.
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
         Decision::Reject
@@ -656,6 +780,10 @@ impl Confirmer for ApproveWrites {
         Decision::Reject
     }
 
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+        Decision::Reject
+    }
+
     /// Refuses. Nothing about a test double is a person agreeing to talk to a host.
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
         Decision::Reject
@@ -703,6 +831,10 @@ impl Confirmer for ChoosesFirst {
     }
 
     fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
         Decision::Reject
     }
 
@@ -772,6 +904,10 @@ impl Confirmer for ApproveRuns {
         Decision::Reject
     }
 
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+        Decision::Reject
+    }
+
     /// Refuses. Nothing about a test double is a person agreeing to talk to a host.
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
         Decision::Reject
@@ -819,6 +955,10 @@ impl Confirmer for RemembersRuns {
     }
 
     fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
         Decision::Reject
     }
 
@@ -872,6 +1012,69 @@ impl Confirmer for ReadsOutput {
         Decision::Approve
     }
 
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Refuses. Nothing about a test double is a person agreeing to talk to a host.
+    fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_remember(&mut self, _request: &RememberRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
+        Vec::new()
+    }
+
+    /// Nobody is typing.
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// Approves a vetted read, and nothing else. Test-only, and named so its use is conspicuous.
+///
+/// Its own double rather than a wider reading of [`ReadsOutput`], because the two grants are
+/// different: one is about what a program printed and the other is about any quarantined slot.
+/// A test that used one for the other would be asserting that an answer to one question is taken
+/// for an answer to another, which is the thing the prompts exist not to do.
+#[derive(Debug, Default)]
+pub struct VetsContent;
+
+impl Confirmer for VetsContent {
+    /// Refuses: this double approves one vetted read and nothing else.
+    fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Refuses: this double approves one vetted read and nothing else.
+    fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
+        RunDecision::reject()
+    }
+
+    fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+        Decision::Approve
+    }
+
     /// Refuses. Nothing about a test double is a person agreeing to talk to a host.
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
         Decision::Reject
@@ -922,6 +1125,10 @@ impl Confirmer for ApproveFetches {
         Decision::Reject
     }
 
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
         Decision::Approve
     }
@@ -966,6 +1173,10 @@ impl Confirmer for ApprovePlans {
     }
 
     fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
         Decision::Reject
     }
 
@@ -1045,6 +1256,10 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
         self.timing(|inner| inner.confirm_read_output(request))
     }
 
+    fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+        self.timing(|inner| inner.confirm_vetted_read(request))
+    }
+
     fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
         self.timing(|inner| inner.confirm_fetch(request))
     }
@@ -1112,6 +1327,7 @@ mod tests {
             existing: None,
             intent: Intent::Overwrite,
             untrusted: false,
+            remark: None,
         }
     }
 
@@ -1120,6 +1336,8 @@ mod tests {
             command: "git log".to_string(),
             output: "one line\n".to_string(),
             reference: "output_1".to_string(),
+            verdict: Verdict::Safe,
+            reason: None,
         }
     }
 
@@ -1128,6 +1346,8 @@ mod tests {
             path: "vendor/lib.js".to_string(),
             preview: "// a library\n".to_string(),
             truncated: false,
+            verdict: Verdict::Safe,
+            reason: None,
         }
     }
 
@@ -1149,6 +1369,11 @@ mod tests {
         }
 
         fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+            std::thread::sleep(self.0);
+            Decision::Reject
+        }
+
+        fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
             std::thread::sleep(self.0);
             Decision::Reject
         }
@@ -1397,6 +1622,7 @@ mod tests {
             existing: None,
             intent: Intent::Create,
             untrusted: false,
+            remark: None,
         }
     }
 

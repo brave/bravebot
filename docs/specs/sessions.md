@@ -53,11 +53,20 @@ so what lands on disk is what the planner was allowed to hold: no untrusted byte
 rather than by filtering. Quarantined content is not written at all, and the trail is labels and
 gate names with no content in it.
 
+A rewind point is the one part of a record built from bytes no message carried: it keeps what the
+files a turn wrote over held, read off the disk rather than out of the conversation, so a later
+session can put them back. Those bytes are written down only where the map that stood before the
+turn vouched for the path, which is the map that labelled them. What a file nobody vouched for held
+is written down as contents this session did not keep, and a resumed session says that path did not
+go back rather than putting it back.
+
 **Why.** A record is read back into a later turn's context. Anything written that the planner could
 not have held would enter that context on the next resume, which is the laundering route the whole
 design exists to close.
 
-`verified-by: none`
+`verified-by: bravebot_tui::sessions::what_a_file_nobody_vouched_for_held_is_not_written_down`
+`verified-by: bravebot_tui::sessions::an_answer_the_planner_could_not_have_held_is_not_written_down`
+`verified-by: bravebot_agent::turn::the_trail_records_the_slot_and_the_path_rather_than_the_content`
 
 <a id="SESSION-3"></a>
 ### SESSION-3: the record carries what a resume needs and nothing more
@@ -203,6 +212,12 @@ manifest run has none. The picker marks the row and refuses Enter rather than lo
 session and asking the model to carry on from nothing. Naming one on the command line prints
 what it produced, and still does not continue it.
 
+That print is a report and not a refusal: it goes to stdout and exits successfully, because reading
+a run back is what naming one is for, and a session that started a run tells the person this is the
+command to read it with. Non-zero is for the failures [cli.md](cli.md) describes, and spending it
+here would make the session's own advice look broken to the person who followed it. Forking one is
+still refused, since a fork continues a conversation and there is none to continue.
+
 `verified-by: bravebot_tui::sessions::a_manifest_run_is_recorded_and_cannot_be_resumed`
 `verified-by: bravebot_tui::resume::a_manifest_session_cannot_be_resumed`
 `verified-by: bravebot_tui::resume::a_manifest_run_is_marked_in_the_list`
@@ -212,7 +227,15 @@ what it produced, and still does not continue it.
 
 The model the server reported answering with is written down, along with what each turn spent as
 well as the total. The breakdown adds up to the total, and a turn that compacted part way through
-is charged for that too, since it was asked for in the middle of that turn's work.
+is charged for that too, since it was asked for in the middle of that turn's work. Something asked
+for before the first turn, an aside or a run as the first thing a session does, is charged to a
+leading entry ahead of that turn rather than to no turn at all, so the breakdown still adds up to
+the total there as well.
+
+Failed and stopped turns charge their latest cumulative progress, including completed delegate
+work. Repeated reports replace the previous total. Successful turns charge the outcome alone,
+without adding progress again. Progress resets for each turn, so a turn with no completed requests
+cannot inherit the previous turn's usage. These totals use the existing session storage.
 
 The name recorded is the one that answered, not the one asked for: an endpoint may serve something
 other than the name it was given, and the record is an account of what happened. A record written
@@ -228,7 +251,14 @@ than the one in force at the time.
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
 `verified-by: bravebot_tui::state::each_turn_records_what_it_cost_on_its_own`
 `verified-by: bravebot_tui::state::an_aside_is_charged_to_the_turn_it_interrupted`
+`verified-by: bravebot_tui::state::an_aside_before_the_first_turn_is_charged_to_a_leading_entry`
+`verified-by: bravebot_tui::state::a_run_before_the_first_turn_is_charged_to_a_leading_entry`
 `verified-by: bravebot_tui::state::clearing_forgets_what_each_turn_cost`
+`verified-by: bravebot_tui::sessions::completed_failed_and_stopped_usage_survives_session_storage`
+`verified-by: bravebot_tui::app::a_failed_outcome_charges_only_the_latest_progress`
+`verified-by: bravebot_tui::app::the_cancellation_path_charges_progress_before_restoring_or_quitting`
+`verified-by: bravebot_tui::app::successful_outcomes_replace_progress_and_empty_following_turns_cost_nothing`
+`verified-by: bravebot_tui::remote_confirm::cumulative_usage_reaches_the_main_thread_unchanged`
 
 <a id="SESSION-12"></a>
 ### SESSION-12: the record says where each turn's time went, not only how long it took
@@ -239,11 +269,12 @@ over. The four are a partition rather than four independent measures, so the par
 whole and the remainder is meaningful. An approval prompt is drawn from inside a tool call, so what
 was spent waiting for a person is taken off the tool figure rather than counted in both.
 
-A turn that failed is recorded on the same footing as one that succeeded, and a `/compact` asked for
-mid-turn is charged to the turn it interrupted, as its tokens are. `/status` reports the session
-total and each part that actually happened; a part that did not happen is left out rather than shown
-as zero. A record written before this was kept reads as an empty breakdown, which is not the same as
-a session that took no time.
+A turn that failed or stopped records its elapsed wall time and the timing breakdown retained from
+its progress on the same footing as one that succeeded. A `/compact` asked for mid-turn is charged
+to the turn it interrupted, as its tokens are; one asked for before the first turn is charged to
+the leading entry its tokens go to. `/status` reports the session total and each part that actually
+happened; a part that did not happen is left out rather than shown as zero. A record written before
+this was kept reads as an empty breakdown, which is not the same as a session that took no time.
 
 **Why.** A duration alone is unactionable, and the three things it conflates want three different
 fixes. A turn that took four minutes on the model, one that took four minutes running a test suite,
@@ -254,7 +285,9 @@ harness's own overhead.
 
 `verified-by: bravebot_tui::state::each_turn_records_where_its_time_went`
 `verified-by: bravebot_tui::state::an_aside_charges_its_wait_to_the_turn_it_interrupted`
+`verified-by: bravebot_tui::state::an_aside_before_the_first_turn_records_its_wait_ahead_of_that_turn`
 `verified-by: bravebot_tui::state::a_failed_turn_still_accounts_for_its_wall_clock`
+`verified-by: bravebot_tui::state::unanswered_turns_keep_the_session_clock_and_the_completed_breakdown`
 `verified-by: bravebot_tui::state::a_resumed_session_carries_on_from_the_time_it_had_spent`
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
 `verified-by: bravebot_tui::sessions::a_record_written_before_timing_was_kept_still_loads`
@@ -391,27 +424,39 @@ the invariant that finished autonomous runs have a definite end.
 `verified-by: bravebot_tui::sessions::forking_a_manifest_session_is_refused`
 
 <a id="SESSION-19"></a>
-### SESSION-19: the last turn can be rewound, on disk and in the conversation together
+### SESSION-19: turns can be rewound, on disk and in the conversation together
 
-`/undo` puts the session back where it stood before the most recent turn. Every path that turn
-wrote through a file tool goes back to what it held first, and one the turn created is removed.
-The conversation returns to its pre-turn snapshot, and with it the turn count, the spend, the
-timing, the trust map, the trusted programs, and the transcript. The turn's audit lines are
-dropped, since they decided about a turn that is no longer in the conversation. A rewind that
-goes back past the session's first turn removes its record rather than leaving one with nothing
-in it, and a name the user gave the session before that turn stays with it: the name was not the
-turn's to give, so it is not the rewind's to take.
+`/undo` puts the session back where it stood before the most recent turn, and saying it again
+goes back another. Every path in the project that a rewound turn wrote through a file tool goes
+back to what it held first, and one such a turn created is removed; where two of the rewound
+turns wrote the same path, it goes back to what it held before the first of them. The
+conversation returns to the snapshot taken before the earliest rewound turn, and with it the turn
+count, the spend, the timing, the trust map, the trusted programs, and the transcript. Those
+turns' audit lines are dropped, since they decided about turns that are no longer in the
+conversation. A rewind that goes back past the session's first turn removes its record rather than
+leaving one with nothing in it, and a name the user gave the session before that turn stays with
+it: the name was not the turn's to give, so it is not the rewind's to take. The directory the
+session was given of its own is not in the project: what a turn wrote there is neither put back nor
+counted against the budget below, for the reasons [trust-map.md](trust-map.md) gives.
 
-What one turn keeps is bounded. Past that budget a path is still remembered, but what it held is
-not, and a rewind treats it as a path that will not go back rather than as a file that was never
-there. A path that will not go back is named on the line that reports the rewind, and the rest of
-the rewind still happens.
+A standing permission goes back with the turn that granted it. The map and the programs restored
+are the ones that stood before the earliest turn being rewound, so a path or a command vouched
+for during any of those turns is vouched for no longer, and one vouched for before them is
+untouched.
 
-One turn is as far back as it goes, and the window closes when the next turn begins. Anything
-else that changes the session outside a turn closes it as well: `/clear`, `/compact`, `/btw`,
-`/rename`, `/add-dir`, `/cd`, and a shell-mode command, whose writes the workspace never saw. `/undo` then
-says there is nothing left to undo rather than rewinding to a snapshot that describes a different
-session.
+What is kept is bounded twice over. A session remembers its last five turns, and what those turns
+wrote over is held to one budget between them rather than to one each: past it the turns furthest
+back are dropped whole, and the most recent is kept whatever it cost. Inside a turn the same
+budget decides a path: past it the path is still remembered, but what it held is not, and a
+rewind treats it as a path that will not go back rather than as a file that was never there. A
+path that will not go back is named on the line that reports the rewind, and the rest of the
+rewind still happens.
+
+Anything that changes the session outside a turn gives up every point at once: `/clear`,
+`/compact`, `/btw`, `/rename`, `/add-dir`, `/cd`, and a shell-mode command, whose writes the
+workspace never saw. `/undo` then says there is nothing left to undo rather than rewinding to a
+point that describes a different session. Every point goes rather than the most recent alone,
+since such a change lands after the most recent point and so before none of them.
 
 **Why.** A turn that went wrong is the case with no clean recovery: `git checkout` takes the
 user's own uncommitted work with it, and `/clear` throws away the context that was worth keeping.
@@ -420,7 +465,14 @@ tree that is not there, which is worse than neither. A file that would not go ba
 disagreement, so it is said out loud rather than swallowed: a person told a turn was undone will
 not go looking. The budget exists because the cost is paid by every turn that writes anything,
 not by the rare one that is rewound; unbounded, one write of a large file would hold it in memory
-until the turn after it.
+for as long as the turn is one a rewind can reach.
+
+**Why more than one turn back.** The turn that just ended is the one least likely to need
+rewinding, because it is the one still on the screen. What a person notices late is a mistake
+made two or three prompts ago, after approving several diffs in a row, and a session that
+remembers only the last turn is no help at exactly that moment. Depth stops at five because every
+point holds a copy of the conversation as well as the bytes, and is written after every turn
+whether or not it is ever read.
 
 `verified-by: bravebot_agent::workspace::a_rewind_puts_back_what_a_turn_overwrote`
 `verified-by: bravebot_agent::workspace::a_rewind_removes_a_file_the_turn_created`
@@ -435,6 +487,12 @@ until the turn after it.
 `verified-by: bravebot_tui::app::a_rewind_point_excludes_the_turn_it_undoes`
 `verified-by: bravebot_tui::state::clearing_drops_the_transcript_and_what_it_spent`
 `verified-by: bravebot_tui::state::closing_the_rewind_window_leaves_nothing_to_rewind_to`
+`verified-by: bravebot_tui::state::a_rewind_reaches_past_the_turn_that_just_ended`
+`verified-by: bravebot_tui::state::going_back_further_than_the_session_remembers_rewinds_nothing`
+`verified-by: bravebot_tui::state::a_path_written_in_two_undone_turns_goes_back_to_before_the_first`
+`verified-by: bravebot_tui::state::a_session_keeps_no_more_points_than_it_may`
+`verified-by: bravebot_tui::state::one_turns_writes_can_cost_the_session_the_turns_behind_it`
+`verified-by: bravebot_tui::state::backups_with_no_point_to_hang_them_on_are_dropped`
 
 <a id="SESSION-20"></a>
 ### SESSION-20: a question asked beside the work is recorded, and comes back into the view alone
@@ -470,6 +528,88 @@ run to arrive.
 `verified-by: bravebot_agent::turn::an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down`
 
 
+<a id="SESSION-21"></a>
+### SESSION-21: what a rewind would put back can be read before it happens
+
+`/rewind` with nothing after it lists the points the session can go back to, most recent first
+and numbered from one. Each row says how many turns back it is, which turn it would land before,
+what that turn was asked, and every path that turn wrote over, or that it wrote over none.
+`/rewind <n>` then goes back that many turns, which is what `/undo` said n times does, so what it
+puts back is every row from the first down to the one chosen: the list is read in the order it is
+printed, and the heading above it says so.
+
+`/rewind` given something that is not a number says what it takes. A number past what the session
+remembers rewinds nothing and says how far back it does go, rather than going as far as it can:
+somebody who asked for four turns and got two would be reading a tree two turns younger than they
+believe it is.
+
+**Why.** A rewind acts the moment it is typed, and it overwrites files, including edits a person
+made themselves since the turn. Deciding to run one is deciding about those files, so they have to
+be readable first, for the reason a write is shown as a diff before it is approved rather than
+reported after. Naming the paths rather than counting them is that same reason carried through: a
+count decides nothing.
+
+**Why a word of its own rather than an argument to `/undo`.** A command that takes no argument is
+only ever the bare word, which is what keeps `/undo the last thing I asked for` a prompt instead
+of a command with a six word argument; [commands.md](commands.md) owns that rule. A surface that
+takes a number cannot also have it, so the number is on a word that has one.
+
+`verified-by: bravebot_tui::app::the_bare_rewind_command_asks_for_the_list`
+`verified-by: bravebot_tui::app::the_rewind_command_carries_how_far_back_to_go`
+`verified-by: bravebot_tui::app::a_longer_word_starting_with_rewind_is_a_prompt`
+`verified-by: bravebot_tui::app::undo_with_something_after_it_is_still_a_prompt`
+`verified-by: bravebot_tui::app::the_list_names_what_each_point_would_put_back`
+`verified-by: bravebot_tui::app::the_list_of_a_session_with_no_points_says_there_is_nothing`
+`verified-by: bravebot_tui::state::going_back_further_than_the_session_remembers_rewinds_nothing`
+
+
+<a id="SESSION-22"></a>
+### SESSION-22: the turns a rewind can reach are kept with the record
+
+A session's rewind points are written into its record along with the conversation, and a resume
+brings them back: the exchange each one goes back to, the counts, the trust map and the programs
+that stood before its turn, what that turn was asked, and what its writes overwrote. `/undo` and
+`/rewind` after a resume reach the same turns they reached before the program was closed.
+
+What a path held is written base64 in the record, so the record carries the rewind budget as well
+as the conversation. Only for a path the map that stood before the turn vouched for: SESSION-2 is
+why one it did not vouch for is written down as a path whose contents this session did not keep,
+which the session itself still holds and can still put back. Paths inside the project are recorded
+relative to it and come back under the directory the resumed session works in, as trust rules do.
+
+Only the points a rewind can still reach are written. A record holds what the session holds, so a
+point that ages out of the session's depth or budget, and every point given up when something
+changes the session outside a turn, is gone from the record at the next write. What a turn
+overwrote therefore leaves the record a few turns after that turn rather than accumulating for the
+life of the session. SESSION-16's 0600 covers it while it is there, as it covers the conversation
+beside it.
+
+Anything read back that this build cannot make sense of means the path will not go back: a word
+for what was there that it does not know, and contents that will not decode, both land there
+rather than on the path having been absent. A resumed point's place in the transcript is worked
+out from its turn number rather than read from the record, since the transcript a resume draws is
+not the one the point was taken against.
+
+**Why.** A mistake is often noticed after closing the program and opening it again, which is the
+same case SESSION-19 exists for a few minutes later. A resume that brought back the transcript
+describing what those turns wrote, and nothing to put any of it back, made the record a
+description of a tree it could no longer restore.
+
+**Why in the record rather than beside it.** The record already holds the conversation, which is
+the bulk of a point, and it is written atomically and read privately (SESSION-16). A file of its
+own would need both of those again, and would let a session exist whose record and whose rewind
+points disagree about how many turns it has had.
+
+**Why the safe direction is "will not go back".** The two states a rewind can be wrong about are
+not symmetrical. Treating a path it cannot restore as one that was never there would delete a
+file somebody was working on; treating it as one that will not go back leaves the file alone and
+names it on the line that reports the rewind.
+
+`verified-by: bravebot_tui::sessions::a_rewind_point_survives_being_written_and_read_back`
+`verified-by: bravebot_tui::sessions::a_kept_file_this_build_cannot_read_will_not_go_back_rather_than_being_deleted`
+`verified-by: bravebot_tui::state::a_restored_point_finds_its_place_in_the_transcript_it_comes_back_into`
+
+
 ## Known costs
 
 - **Two working directories can share a session store.** The directory name is derived by mapping
@@ -481,6 +621,28 @@ run to arrive.
   The record does hold the true path, so the fix is to filter on it. `two_directories_do_not_share_a_key`
   does not cover this: it compares `/a/one` with `/a/two`, which differ before the mapping is
   applied.
+
+- **A record grows with what its turns wrote over.** Every rewind point carries a copy of the
+  conversation and the bytes the turn overwrote, and the whole record is rewritten after every
+  turn. A session whose turns rewrite large files therefore writes a large record repeatedly,
+  whether or not anything is ever rewound. The memory budget bounds it, and nothing smaller does:
+  storing diffs between consecutive points rather than copies would, at the cost of a mechanism
+  that has to be right about every write a turn makes.
+
+- **A record holds what the last few turns overwrote inside a directory somebody vouched for.** A
+  turn that replaces such a file puts that file's previous contents in the record, and vouching for
+  a directory is not saying that every file in it is worth copying anywhere: overwriting a file of
+  credentials inside a project the user trusts copies them out of it and into the state directory.
+  They leave the record once the point ages out, and 0600 covers them while they are there, but a
+  session that ends on such a turn leaves them in its record until the record is deleted. Nothing
+  here distinguishes a file worth keeping from one that is not, because nothing here reads the
+  bytes.
+
+- **A resumed session cannot rewind a file nobody vouched for.** What such a file held is kept in
+  memory for the session that took the backup and left out of the record, so after a resume that
+  path is reported as one that did not go back, beside the paths whose contents were past the
+  budget. The turn is still undone in every other respect and the file is left alone rather than
+  deleted. The alternative is those bytes on disk, which is what SESSION-2 refuses.
 
 - **A rewind sees file-tool writes and nothing else.** The backups are taken inside the workspace,
   so a turn that changed a file by running a program instead (`run`, per [run.md](tools/run.md))

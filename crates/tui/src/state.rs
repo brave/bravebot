@@ -7,7 +7,6 @@
 use crate::audit::TrailLine;
 use bravebot_agent::report::{Activity, Landing, Phase, Printed, Reported, Shown};
 use bravebot_aichat::protocol::Effort;
-use bravebot_core::event::Event;
 use bravebot_i18n::t;
 use std::time::{Duration, Instant};
 
@@ -45,6 +44,10 @@ pub enum Speaker {
     Assistant,
     /// A note from the program itself: an error, a refusal, a status.
     System,
+    /// A failure reason shown in the transcript and included in exports.
+    Failure,
+    /// A deliberate stop shown in the transcript and included in exports.
+    Stopped,
     /// A tool call the turn made. Shown as it happens, and kept afterwards.
     Tool,
     /// A command the user typed in shell mode. Trusted input, like their prompts.
@@ -168,9 +171,22 @@ impl Delegate {
         self.note.is_none()
     }
 
-    /// The last few of its lines, which is what the block where it started draws.
-    pub fn latest(&self) -> &[Entry] {
-        &self.lines[self.lines.len().saturating_sub(DELEGATE_SHOWN)..]
+    /// The last few of its calls, which is what the block where it started draws.
+    ///
+    /// Its calls rather than the last of its lines, because the two are not the same sequence: a
+    /// preview released for the person to read is held among them and carries no call, so the
+    /// last three lines of a delegate that has made three calls can hold one of them. The rows
+    /// the block draws are calls, and so is the number it counts them against.
+    pub fn latest(&self) -> Vec<&Entry> {
+        let mut latest: Vec<&Entry> = self
+            .lines
+            .iter()
+            .rev()
+            .filter(|entry| entry.activity.is_some())
+            .take(DELEGATE_SHOWN)
+            .collect();
+        latest.reverse();
+        latest
     }
 
     /// Keep one more of its lines, dropping the oldest where there are already enough.
@@ -247,6 +263,21 @@ impl Entry {
             shown: None,
             activity: None,
             delegate: None,
+        }
+    }
+
+    /// Why a turn failed, in words composed from what was known about the failure.
+    pub fn failure(text: impl Into<String>) -> Self {
+        Self {
+            speaker: Speaker::Failure,
+            ..Self::system(text)
+        }
+    }
+
+    pub fn stopped(text: impl Into<String>) -> Self {
+        Self {
+            speaker: Speaker::Stopped,
+            ..Self::system(text)
         }
     }
 
@@ -387,8 +418,44 @@ pub struct Finished {
     pub tokens: u64,
     /// How long it took, wall clock.
     pub took: Duration,
-    /// Whether it ended by failing, which is a different thing to report.
-    pub failed: bool,
+    /// Selects the success, cancellation, or failure status.
+    pub ending: bravebot_agent::Ending,
+}
+
+impl Finished {
+    /// Whether the turn ended by failing, as opposed to answering or being stopped.
+    pub fn failed(self) -> bool {
+        matches!(self.ending, bravebot_agent::Ending::Failed(_))
+    }
+}
+
+/// Compose a localized failure reason from safe fields, without raw backend error text.
+pub fn failure_reason(diagnosis: bravebot_agent::Diagnosis) -> String {
+    use bravebot_agent::Category;
+    let what = match diagnosis.category {
+        Category::Unauthorized => t!(failure_unauthorized),
+        Category::RateLimited => t!(failure_rate_limited),
+        Category::Unavailable => t!(failure_unavailable),
+        Category::Refused => t!(failure_refused),
+        Category::Transport => t!(failure_transport),
+        Category::Incomplete => t!(failure_incomplete),
+        Category::Undecodable => t!(failure_undecodable),
+        Category::TooLong => t!(failure_too_long),
+        Category::Unconfigured => t!(failure_unconfigured),
+        Category::Blocked => t!(failure_blocked),
+        Category::Workspace => t!(failure_workspace),
+        Category::Internal => t!(failure_internal),
+    };
+    let mut said = what.to_string();
+    if let Some(status) = diagnosis.status {
+        said = t!(failure_with_status, what = said, status = status);
+    }
+    // Said only where there was more than one, since "after 1 attempts" is a worse sentence than
+    // the silence it replaces, and one attempt is what an unremarkable failure took.
+    if let Some(attempts) = diagnosis.attempts.filter(|count| *count > 1) {
+        said = t!(failure_with_attempts, what = said, attempts = attempts);
+    }
+    t!(session_error, problem = said)
 }
 
 /// What a half-typed line could still become.
@@ -512,10 +579,14 @@ pub struct Laid {
     /// Empty unless the scroller is open, since working it out costs a wrap of every line and
     /// nothing at rest asks the question.
     pub prompts: Vec<u16>,
-    /// The rows holding a search match, top to bottom.
+    /// The row each search match is reached at, top to bottom.
     ///
-    /// One entry per row rather than per match: the view moves to a row, and two hits on one row
-    /// are one place to go.
+    /// One entry per match rather than per row, so two hits on one row are two entries holding
+    /// that row. The view has one place to go for both of them, but they are two matches: the
+    /// footer counts them and `n` steps through each one.
+    ///
+    /// A match is reached at the row the line holding it begins at, as a prompt is: a line the
+    /// width wraps is several rows of the screen and one entry here.
     pub matches: Vec<u16>,
 }
 
@@ -587,7 +658,9 @@ pub struct Watching {
     /// spawned, then the commands in the order they ran.
     ///
     /// A position rather than a name, because it is also where the highlight sits in the list, and
-    /// the two must not be able to disagree.
+    /// the two must not be able to disagree. What that costs is that a row arriving ahead of this
+    /// one moves it, so whatever inserts the row moves this with it: a position left where it was
+    /// is a different row from the one somebody opened.
     pub at: usize,
     /// Whether the list is what is on the screen, rather than the row at `at`.
     pub listing: bool,
@@ -670,6 +743,46 @@ pub struct TurnSnapshot {
     pub was_wrote: bool,
 }
 
+/// How many turns back a rewind may reach.
+///
+/// A point holds a copy of the conversation as well as the bytes the turn wrote over, and every
+/// one of them is written into the record after every turn, so depth is paid for continuously by
+/// sessions that never rewind at all. Five is set at the case a rewind exists for, which is a
+/// mistake noticed a few prompts after it was made rather than one noticed an hour later: past
+/// that the conversation has usually moved somewhere a wholesale rewind would not be wanted.
+pub const MAX_REWIND_POINTS: usize = 5;
+
+/// One point a session can be put back to, and what it would take to get there.
+///
+/// The snapshot is taken before the turn begins and the backups arrive when it ends, so a point
+/// exists for the whole of the turn it describes and is only complete afterwards.
+#[derive(Debug, Clone)]
+pub struct RewindPoint {
+    /// What the session held before the turn.
+    pub snapshot: TurnSnapshot,
+    /// What the files that turn wrote to held before it wrote to them.
+    pub backups: Vec<bravebot_agent::workspace::Backup>,
+    /// The prompt the turn began with.
+    ///
+    /// Kept here rather than read back out of the transcript, because the list is offered after
+    /// the transcript has been rewound past other points and a turn is named by what was asked
+    /// of it.
+    pub prompt: String,
+}
+
+/// What the rewind points are holding in memory, which is what the budget is spent on.
+fn held_bytes(points: &[RewindPoint]) -> usize {
+    points
+        .iter()
+        .flat_map(|point| &point.backups)
+        .map(|backup| match &backup.was {
+            bravebot_agent::workspace::Before::Bytes(bytes) => bytes.len(),
+            bravebot_agent::workspace::Before::Nothing
+            | bravebot_agent::workspace::Before::NotKept => 0,
+        })
+        .sum()
+}
+
 /// Everything the interface needs to draw itself.
 #[derive(Debug)]
 pub struct Session {
@@ -709,6 +822,12 @@ pub struct Session {
     /// A choice about the person rather than about the session, so it is read from `~/.bravebot` at
     /// startup and written back when one is made, the same as the model and the theme.
     editing: crate::vim::Editing,
+    /// Whether a check that finds nothing may promote a slot without the person being asked.
+    ///
+    /// A choice about the person rather than about the session, read at startup the same way the
+    /// editing style is, and off until one of the three routes says otherwise. Held on the session
+    /// because a turn is built from it and because the `a` key changes it mid-session.
+    vetting: bool,
     /// Configurable keybindings for navigation and shortcuts.
     bindings: crate::keybindings::Keybindings,
     /// Which vi mode the box is in, where vi is the style.
@@ -816,11 +935,16 @@ pub struct Session {
     pub turns: usize,
     /// Tokens spent across the whole session.
     pub tokens: u64,
-    /// What each turn cost, by turn number.
+    /// What each turn cost, by turn number, and what was spent before the first turn under zero.
     ///
     /// The session total answers "what has this cost me"; this answers "where did it go", which is
     /// the question when one turn spent most of it. A total alone cannot distinguish a session of
     /// twenty even turns from one turn that ran away, and those want different fixes.
+    ///
+    /// Zero is the leading entry, and holds what an aside or a run asked for as the first thing a
+    /// session did cost. Those are charged somewhere rather than nowhere because they are in the
+    /// total either way, and a breakdown that does not add up to the total answers neither
+    /// question. See [`Session::end_aside`].
     spend: std::collections::BTreeMap<usize, u64>,
     /// Where each turn's wall clock went, by turn number.
     ///
@@ -904,6 +1028,8 @@ pub struct Session {
     /// Reset when a turn starts, since it measures the reply being written now. The session total
     /// lives in `tokens` and accumulates instead.
     pub written: u64,
+    /// Latest cumulative usage, charged when this turn ends.
+    progress: bravebot_agent::Spent,
     /// The task list for the turn in flight, as the model last reported it.
     ///
     /// Already shaped and released: these rows came out of the kernel's render gate, so drawing
@@ -915,15 +1041,13 @@ pub struct Session {
     /// Cleared between turns. `None` before the first request goes out, which is the only
     /// moment the generic word is all there is to say.
     pub phase: Option<Phase>,
-    /// What the files the last turn wrote to held before it wrote to them.
+    /// The points this session can be put back to, oldest first.
     ///
-    /// Taken off the workspace when the turn ends, so `/undo` can put them back.
-    pub last_turn_backups: Vec<bravebot_agent::workspace::Backup>,
-    /// The state before the most recent turn.
-    ///
-    /// Captured in memory right before a turn starts, and kept here so `/undo` can rebuild
-    /// the session to match it.
-    pub previous_turn: Option<TurnSnapshot>,
+    /// Private, because the depth and the budget hold over the whole list rather than over any
+    /// one point: a caller that could push onto it would be a caller that could grow it without
+    /// bound. Written with [`Session::open_rewind_point`] and [`Session::keep_backups`], read
+    /// with [`Session::rewind_points`].
+    rewind_points: Vec<RewindPoint>,
     /// Where the turn in flight began, for the snapshot that rewinds to it.
     ///
     /// Private, because it records what [`Session::begin_turn`] found rather than a figure anybody
@@ -963,6 +1087,16 @@ pub struct Session {
     /// conversation somebody resumed to read and keep working it, with nothing in the transcript
     /// to say why.
     goal: Option<crate::goals::Running>,
+    /// The standing watches this session holds, where a turn armed any.
+    ///
+    /// Private for the reason the loop and the goal are: a watch is looked at, fires, and has the
+    /// gap to its next fire measured from the end of the turn the last one started, and a field
+    /// anybody could set would let those three disagree.
+    ///
+    /// Not in [`crate::sessions::Standing`] either, and more strongly than the other two: a watch
+    /// that outlived its session would start sending prompts at somebody who opened a
+    /// conversation to read it, about a file that moved while nobody was here.
+    watches: crate::watches::Watches,
     /// The same prompts, resolved, for the turn in flight to take between rounds.
     ///
     /// Shared with the worker rather than sent down a channel, because a queued prompt can be
@@ -1093,6 +1227,9 @@ impl Session {
             // The box everybody has, until a settings file or a choice says otherwise. A session
             // constructed by a test reads nothing from disk and edits the ordinary way.
             editing: crate::vim::Editing::default(),
+            // Asking, until a flag, a recorded choice or a settings key says otherwise. A session
+            // constructed by a test reads nothing from disk and asks.
+            vetting: false,
             bindings: crate::keybindings::Keybindings::default(),
             mode: crate::vim::Mode::default(),
             half_typed: None,
@@ -1116,9 +1253,9 @@ impl Session {
             // the only thing that can: the flag is the record that somebody accepted the cost.
             permission_mode: bravebot_agent::PermissionMode::default(),
             bypass_available: false,
-            // The free tier until a caller says otherwise, which is what a build with no premium
+            // No subscription until a caller says otherwise, which is what a build with no premium
             // host has and what a test that does not care about tiers should see.
-            tier: t!(status_free_tier).to_string(),
+            tier: t!(status_no_subscription).to_string(),
             turns: 0,
             tokens: 0,
             spend: std::collections::BTreeMap::new(),
@@ -1136,14 +1273,15 @@ impl Session {
             cleared_by_interrupt: false,
             image_on_clipboard: false,
             written: 0,
+            progress: Default::default(),
             todos: Vec::new(),
             phase: None,
             running: None,
             queued: Vec::new(),
             looping: None,
+            watches: crate::watches::Watches::new(),
             goal: None,
-            last_turn_backups: Vec::new(),
-            previous_turn: None,
+            rewind_points: Vec::new(),
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
             streaming: String::new(),
@@ -1402,15 +1540,135 @@ impl Session {
     ///
     /// Deliberately not touching the input line, so a prompt half-typed when the user cleared is
     /// still there to send.
-    /// Give up the rewind the last turn left available.
+    /// Give up every rewind the turns so far left available.
     ///
-    /// A snapshot describes the session as it stood before the last turn, so anything that
-    /// changes the session outside a turn leaves it describing something else. Rewinding to a
-    /// stale snapshot would undo that change as well, silently and under a line saying one turn
-    /// was rewound.
+    /// A point describes the session as it stood before some turn, so anything that changes the
+    /// session outside a turn leaves every one of them describing something else. Rewinding to a
+    /// stale point would undo that change as well, silently and under a line saying the session
+    /// went back to a turn. All of them go rather than the newest, since the change lands after
+    /// the newest and therefore before none of them.
     pub fn close_rewind_window(&mut self) {
-        self.previous_turn = None;
-        self.last_turn_backups.clear();
+        self.rewind_points.clear();
+    }
+
+    /// Open a point for the turn about to begin.
+    pub fn open_rewind_point(&mut self, snapshot: TurnSnapshot, prompt: String) {
+        self.rewind_points.push(RewindPoint {
+            snapshot,
+            backups: Vec::new(),
+            prompt,
+        });
+        self.hold_rewind_points();
+    }
+
+    /// Keep what the turn that just ended wrote over, against the point it opened.
+    ///
+    /// Dropped where no point is open, which is a turn whose window something closed while it
+    /// ran: the backups belong to a point nothing can rewind to, and holding them would spend
+    /// the budget on bytes no rewind will ever read.
+    pub fn keep_backups(&mut self, backups: Vec<bravebot_agent::workspace::Backup>) {
+        let Some(point) = self.rewind_points.last_mut() else {
+            return;
+        };
+        point.backups = backups;
+        self.hold_rewind_points();
+    }
+
+    /// The points this session can be put back to, oldest first.
+    pub fn rewind_points(&self) -> &[RewindPoint] {
+        &self.rewind_points
+    }
+
+    /// Put back the points a record was holding, oldest first, into the transcript `conversation`
+    /// was just replayed into.
+    ///
+    /// Each point's place in the transcript is found again here rather than read off the record.
+    /// An index into the transcript is a fact about the list one process drew, and a resumed
+    /// session draws another: it opens with a line saying it was resumed, and it carries each
+    /// turn's trail where the live session carried events.
+    ///
+    /// It is found by measuring the point's own conversation against the one replayed, rather
+    /// than by counting turns. The transcript holds one entry per thing the conversation
+    /// recounts, so a point whose conversation recounts that many fewer begins that many entries
+    /// from the end, whatever else is above it. Turn numbers do not answer it: a shell-mode
+    /// command puts a line in the conversation without being a turn, so a replayed transcript can
+    /// hold more prompts than the session ever counted turns.
+    pub fn restore_rewind_points(
+        &mut self,
+        points: Vec<RewindPoint>,
+        conversation: &bravebot_agent::Conversation,
+    ) {
+        let whole = conversation.recounted().len();
+        let places: Vec<usize> = points
+            .iter()
+            .map(|point| {
+                let theirs =
+                    bravebot_agent::Conversation::restored(point.snapshot.conversation.clone())
+                        .recounted()
+                        .len();
+                self.transcript
+                    .len()
+                    .saturating_sub(whole.saturating_sub(theirs))
+            })
+            .collect();
+        self.rewind_points = points;
+        for (point, at) in self.rewind_points.iter_mut().zip(places) {
+            point.snapshot.transcript_len = at;
+        }
+        self.hold_rewind_points();
+    }
+
+    /// Take the last `steps` turns' points, and everything needed to put the tree back.
+    ///
+    /// `None` where the session holds fewer than `steps` points, so asking to go further back
+    /// than it remembers rewinds nothing: landing on the furthest point it happens to hold would
+    /// report a session put back somewhere it is not.
+    ///
+    /// One backup per path, the oldest, since that is the state being asked for. A path written
+    /// in two of the undone turns goes back to what it held before the first of them, and
+    /// carrying the later copy as well would write the middle state over the answer, or report a
+    /// path as refused when the copy that mattered did go back.
+    pub fn take_rewind(
+        &mut self,
+        steps: usize,
+    ) -> Option<(TurnSnapshot, Vec<bravebot_agent::workspace::Backup>)> {
+        if steps == 0 || steps > self.rewind_points.len() {
+            return None;
+        }
+        let mut undone = self
+            .rewind_points
+            .split_off(self.rewind_points.len() - steps);
+        let mut seen = std::collections::HashSet::new();
+        let mut backups = Vec::new();
+        for point in &mut undone {
+            for backup in std::mem::take(&mut point.backups) {
+                if seen.insert(backup.path.clone()) {
+                    backups.push(backup);
+                }
+            }
+        }
+        undone
+            .into_iter()
+            .next()
+            .map(|point| (point.snapshot, backups))
+    }
+
+    /// Hold the points to what a session may keep: the depth, and the bytes.
+    ///
+    /// The oldest go first. A rewind is reached for about the turn just gone or one of the few
+    /// before it, so the point furthest back is the one whose loss costs least, and dropping a
+    /// newer point to keep an older one would leave a stack with a hole nothing can walk past.
+    /// The newest is never dropped: a turn whose own writes fill the budget still has to be
+    /// undoable, which is the turn most likely to be worth undoing.
+    fn hold_rewind_points(&mut self) {
+        while self.rewind_points.len() > MAX_REWIND_POINTS {
+            self.rewind_points.remove(0);
+        }
+        while self.rewind_points.len() > 1
+            && held_bytes(&self.rewind_points) > bravebot_agent::workspace::MAX_REWIND_BYTES
+        {
+            self.rewind_points.remove(0);
+        }
     }
 
     pub fn clear(&mut self) {
@@ -1427,6 +1685,7 @@ impl Session {
         self.cached = None;
         self.occupancy = Occupancy::Unmeasured;
         self.written = 0;
+        self.progress = Default::default();
         self.todos.clear();
         self.phase = None;
         self.running = None;
@@ -1447,6 +1706,10 @@ impl Session {
         // judged against an exchange that has been thrown away is judged against nothing, and the
         // first turn of the new session would be sent back for failing a test nobody set here.
         self.goal = None;
+        // And the watches, for the sharper version of the same reason again: a fire is a sentence
+        // this program writes about a file, and one arriving in a conversation that never asked
+        // for it has nothing above it to explain itself by.
+        self.watches.stop_all();
         // The delegates went with the transcript that held them, so the mode standing over one
         // is standing over nothing. What the commands printed is kept beside the transcript rather
         // than in it, so it is dropped here by name: a conversation nobody remembers leaving its
@@ -1511,7 +1774,19 @@ impl Session {
             return;
         }
         self.streaming.push_str(text);
-        self.scroll = 0;
+        self.back_to_the_tail();
+    }
+
+    /// Put the turn's own view back at its tail for something the turn has just done.
+    ///
+    /// Nothing while the delegate view is open, because `scroll` is that view's position then and
+    /// the turn's own is held aside until it closes. A person who went to read a delegate or what
+    /// a command printed asked for that screen, and a row arriving under the turn is not them
+    /// asking for another.
+    fn back_to_the_tail(&mut self) {
+        if self.watching.is_none() {
+            self.scroll = 0;
+        }
     }
 
     /// The part of the reply taking shape that is meant for the person watching.
@@ -1580,8 +1855,19 @@ impl Session {
     }
 
     /// A delegate has begun, drawn where the call that started it happened.
+    ///
+    /// Nothing about the view moves for it. Where the view is open, the row it is on is a place
+    /// in a list this inserts a row into, so a place at or after the new delegate's moves with
+    /// it: without that, a delegate starting takes the screen from somebody reading a command,
+    /// since the commands are listed after the delegates.
     pub fn delegate_started(&mut self, delegation: bravebot_agent::report::Delegation) {
-        self.scroll = 0;
+        let inserted = self.asides.len() + self.delegates().len();
+        if let Some(watching) = &mut self.watching
+            && watching.at >= inserted
+        {
+            watching.at += 1;
+        }
+        self.back_to_the_tail();
         let mut entry = Entry::system("");
         entry.speaker = Speaker::Delegate;
         entry.delegate = Some(Delegate {
@@ -1911,7 +2197,7 @@ impl Session {
     /// on its own rather than being dropped: content released for a screen and then not drawn is
     /// the worst of both.
     pub fn show(&mut self, shown: Shown) {
-        self.scroll = 0;
+        self.back_to_the_tail();
         match self.working_lines().last_mut() {
             Some(entry) if entry.speaker == Speaker::Tool && entry.shown.is_none() => {
                 entry.shown = Some(shown);
@@ -2045,6 +2331,44 @@ impl Session {
         self.editing = chosen
             .or_else(|| configured.and_then(crate::vim::Editing::named))
             .unwrap_or_default();
+    }
+
+    /// Settle whether a check that finds nothing may promote a slot without anybody being asked.
+    ///
+    /// The three routes resolved into one answer, by
+    /// [`bravebot_core::vetting::auto`], which is the whole of the rule. `asked` is the
+    /// command line's, taken as an argument rather than read here so a test decides it; `configured`
+    /// is the `vetting.auto` key from the home settings layer.
+    ///
+    /// The recorded choice is read only for a session that persists, which is the rule
+    /// [`Session::adopt_editing`] follows and matters more here: a test, and a session asked to
+    /// leave nothing behind, must not pick up a developer's standing answer to whether somebody is
+    /// asked before content nobody vouched for reaches the planner.
+    pub fn adopt_vetting(&mut self, asked: bool, configured: Option<bool>) {
+        let chosen = self.persist.then(crate::store::load_vetting).flatten();
+        self.vetting = bravebot_core::vetting::auto(asked, chosen, configured);
+    }
+
+    /// Whether a check that finds nothing may promote a slot without the person being asked.
+    pub fn auto_vetting(&self) -> bool {
+        self.vetting
+    }
+
+    /// Record the answer about auto-vetting the person gave at a prompt.
+    ///
+    /// Written through to disk only for a session that persists, the same rule the editing style
+    /// follows and for the same reason: a test, and a session asked to leave nothing behind, must
+    /// not rewrite the developer's own answer.
+    ///
+    /// Takes effect from the next turn. The turn in flight keeps the mode it began with, which is
+    /// the rule the permission mode already follows: a key pressed while a turn runs describes what
+    /// comes after it, and a question already on the screen must not be withdrawn from under the
+    /// person answering it.
+    pub fn choose_vetting(&mut self, auto: bool) {
+        if self.persist {
+            crate::store::save_vetting(auto);
+        }
+        self.vetting = auto;
     }
 
     /// Adopt configured keybindings from settings.
@@ -3965,7 +4289,6 @@ impl Session {
         self.started = None;
         self.phase = None;
         self.running = None;
-        self.scroll = 0;
         // A prompt is English and a command line is not, so the line coming back must not land
         // behind a marker that would run it. Belt and braces with the guard in
         // [`Session::type_char`]: this is the state the returning text lands in, and it has to be
@@ -3998,7 +4321,7 @@ impl Session {
             // and no box, with nothing left to ask for it back with.
             let todos = std::mem::take(&mut self.todos);
             self.transcript
-                .push(Entry::system("stopped").with_todos(todos));
+                .push(Entry::stopped(t!(turn_cancelled, turn = self.turns)).with_todos(todos));
             return;
         }
 
@@ -4175,6 +4498,16 @@ impl Session {
             true => None,
             false => Some(self.workspace.display().to_string()),
         }
+    }
+
+    /// Reuse the latest failed turn's transcript reason in the fixed status area.
+    pub fn failure_said(&self) -> Option<&str> {
+        self.finished.filter(|finished| finished.failed())?;
+        self.transcript
+            .iter()
+            .rev()
+            .find(|entry| entry.speaker == Speaker::Failure)
+            .map(|entry| entry.text.as_str())
     }
 
     /// The spinner glyph for this moment, for a command in flight.
@@ -4428,6 +4761,10 @@ impl Session {
         if self.goal.take().is_some() {
             self.note(t!(loop_replaces_goal));
         }
+        // A person typing `/loop` is present and means it, so their request stands and the
+        // watches end saying so. A turn asking for a watch under a loop is refused instead: a
+        // turn that silently took somebody's loop off would be ending work they are waiting on.
+        self.end_watches_for_another_kind();
 
         match request.adjusted {
             Some(crate::loops::Held::Raised(every)) => {
@@ -4461,6 +4798,14 @@ impl Session {
     pub fn watch_again(&mut self, prompt: &str, wakeup: crate::loops::Wakeup) {
         if self.goal.is_some() {
             self.note(t!(loop_not_armed_under_a_goal));
+            return;
+        }
+        // And refused while a standing watch is live, for the same reason: a session does one
+        // thing at a time that happens without anybody typing, and a turn that took somebody's
+        // watch off to start a loop would be ending the standing answer to replace it with the
+        // repeating one.
+        if !self.watches.is_empty() {
+            self.note(t!(loop_not_armed_under_a_watch));
             return;
         }
         let after = crate::loops::spell(wakeup.after);
@@ -4502,6 +4847,7 @@ impl Session {
         if self.looping.take().is_some() {
             self.note(t!(goal_replaces_loop));
         }
+        self.end_watches_for_another_kind();
         self.note(t!(goal_set, condition = &condition));
         self.goal = Some(crate::goals::Running::begin(condition));
     }
@@ -4583,6 +4929,187 @@ impl Session {
         // not a message from the catalog: it goes to a model rather than to a reader.
         let prompt = bravebot_agent::goal::carry_on(&condition, &reason);
         Some(self.begin_turn(prompt, (Vec::new(), Vec::new())))
+    }
+
+    /// Every live watch, oldest first, for the report that lists them.
+    pub fn watches(&self) -> &[crate::watches::Watch] {
+        self.watches.live()
+    }
+
+    /// Whether this turn may arm a standing watch, and why not where it may not.
+    ///
+    /// Read once, as the turn is started, and handed to it: the tool answers out of this rather
+    /// than guessing, so what the planner is told matches what the session will actually do.
+    pub fn arming(&self) -> bravebot_agent::watch::Arming {
+        use bravebot_agent::watch::Arming;
+        if self.looping.is_some() {
+            return Arming::UnderALoop;
+        }
+        if self.goal.is_some() {
+            return Arming::UnderAGoal;
+        }
+        match crate::watches::MAX_LIVE.saturating_sub(self.watches.live().len()) {
+            0 => Arming::Full,
+            free => Arming::Allowed { free },
+        }
+    }
+
+    /// Arm a standing watch on a path the turn that has just ended asked to be told about.
+    ///
+    /// The turn already went through the gate a read of the path goes through, so nothing here
+    /// asks a second time. What is decided here is what only the session can decide: whether it
+    /// is already doing something that happens without anybody typing, whether it has room, and
+    /// what the first look at the path saw.
+    pub fn arm_watch(&mut self, path: &str, first: bravebot_agent::watch::Looked) {
+        if self.looping.is_some() {
+            self.note(t!(watch_not_armed_under_a_loop));
+            return;
+        }
+        if self.goal.is_some() {
+            self.note(t!(watch_not_armed_under_a_goal));
+            return;
+        }
+        match self
+            .watches
+            .arm(path.to_string(), self.turns, first, Instant::now())
+        {
+            Ok(number) => self.note(t!(watch_armed, number = number, path = path)),
+            Err(crate::watches::Refused::Full) => {
+                self.note(t!(watch_not_armed_full, count = crate::watches::MAX_LIVE))
+            }
+            Err(crate::watches::Refused::NothingToLookAt) => {
+                self.note(t!(watch_not_armed_unreadable, path = path))
+            }
+        }
+    }
+
+    /// Look at every watched path, and send the fire that is due where one is.
+    ///
+    /// The sibling of [`Session::loop_tick`], and called from the same place for the same reason:
+    /// nobody is going to press anything to make a fire happen, so a pass taken only after input
+    /// arrives would sit there until somebody typed something unrelated.
+    ///
+    /// A fire waits for an idle session and for the queue to empty, exactly as a tick does. A
+    /// filesystem event is not a licence to interrupt: the person is still the one using this
+    /// session.
+    ///
+    /// `look` is the caller's, because what this session may still reach is the workspace's
+    /// question rather than this one's. `now` is the caller's for the same reason the registry
+    /// takes one: the interval between two looks is five seconds, and a test that had to wait
+    /// them out would be a test nobody runs.
+    pub fn watch_fired(
+        &mut self,
+        now: Instant,
+        look: impl FnMut(&str) -> bravebot_agent::watch::Looked,
+    ) -> Option<String> {
+        for (number, why) in self.watches.look(now, look) {
+            match why {
+                crate::watches::Reaped::Aged => self.note(t!(watch_aged_out, number = number)),
+                crate::watches::Reaped::OutOfReach => {
+                    self.note(t!(watch_out_of_reach, number = number))
+                }
+            }
+        }
+        if self.status != Status::Idle || !self.queued.is_empty() {
+            return None;
+        }
+        let watch = self.watches.due(now)?;
+        let (number, path) = (watch.number(), watch.path().to_string());
+        self.watches.dispatched(number);
+        self.note(t!(watch_fired, number = number, path = &path));
+        let prompt = bravebot_agent::watch::fired(number, &path);
+        Some(self.begin_turn(prompt, (Vec::new(), Vec::new())))
+    }
+
+    /// Whether the turn running now is a watch's fire.
+    ///
+    /// What makes a fire's prompt the driver's rather than the person's: an `@` in the sentence
+    /// this program wrote names nothing, and a wait the turn asks for leaves no loop repeating
+    /// it.
+    pub fn watch_is_firing(&self) -> bool {
+        self.watches.firing().is_some()
+    }
+
+    /// Record that the turn a fire started has ended, which is where the gap to the next fire is
+    /// measured from.
+    pub fn watch_turn_ended(&mut self) {
+        self.watches.turn_ended(Instant::now());
+    }
+
+    /// End the watch whose fire is the turn being stopped, and say whether there was one.
+    ///
+    /// Without this the key never reaches a watch that fires often: every press lands on a turn,
+    /// and the next fire arrives seconds later. A turn that was not a fire ends no watch, because
+    /// that press is a person steering their own work.
+    pub fn stop_firing_watch(&mut self) -> bool {
+        let Some(number) = self.watches.stop_firing() else {
+            return false;
+        };
+        self.note(t!(watch_stopped_with_its_turn, number = number));
+        true
+    }
+
+    /// End one watch because somebody named it, and say whether there was one.
+    pub fn stop_watch(&mut self, number: usize) -> bool {
+        let stopped = self.watches.stop(number);
+        if stopped {
+            self.note(t!(watch_stopped, number = number));
+        } else {
+            self.note(t!(watch_no_such, number = number));
+        }
+        stopped
+    }
+
+    /// End every live watch because somebody pressed the key that stops things, and say whether
+    /// there were any.
+    pub fn stop_watches(&mut self) -> bool {
+        let stopped = self.watches.stop_all();
+        if stopped > 0 {
+            self.note(t!(watches_stopped, count = stopped));
+        }
+        stopped > 0
+    }
+
+    /// End every live watch because the session is about to do one of the other two things that
+    /// happen without anybody typing.
+    ///
+    /// Silent where there are none, so a person who never armed one is not told about a feature
+    /// every time they type `/loop`.
+    fn end_watches_for_another_kind(&mut self) {
+        let stopped = self.watches.stop_all();
+        if stopped > 0 {
+            self.note(t!(watches_replaced, count = stopped));
+        }
+    }
+
+    /// Say what is being watched, or that nothing is.
+    ///
+    /// What the bare command answers, and the same list `/status` draws. A watch that ended in
+    /// silence is indistinguishable from one that is live and has seen nothing, so the way to
+    /// tell them apart has to be askable.
+    pub fn report_watches(&mut self) {
+        let now = Instant::now();
+        let lines: Vec<String> = self
+            .watches
+            .live()
+            .iter()
+            .map(|watch| {
+                t!(
+                    watch_listed,
+                    number = watch.number(),
+                    path = watch.path(),
+                    turn = watch.armed_by(),
+                    left = crate::loops::spell(watch.left(now))
+                )
+            })
+            .collect();
+        if lines.is_empty() {
+            self.note(t!(watch_none));
+            return;
+        }
+        for line in lines {
+            self.note(line);
+        }
     }
 
     /// Send the next tick, if one is due and the session is free to take it.
@@ -4733,6 +5260,7 @@ impl Session {
         // though the new turn had it outstanding.
         self.todos.clear();
         self.written = 0;
+        self.progress = Default::default();
         self.phase = None;
         self.running = None;
         self.started = Some(Instant::now());
@@ -4744,9 +5272,30 @@ impl Session {
         self.turn_start
     }
 
+    /// Use the session's clock, which starts when Enter is pressed, even without an outcome.
+    fn finish_turn(&mut self, tokens: u64, ending: bravebot_agent::Ending) {
+        let took = self.elapsed();
+        self.finished = Some(Finished {
+            turn: self.turns,
+            tokens,
+            took,
+            ending,
+        });
+        self.timing.entry(self.turns).or_default().wall_ms +=
+            u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
+        self.started = None;
+        self.phase = None;
+        self.running = None;
+        self.streaming.clear();
+    }
+
     /// Record a completed turn, and what it cost.
-    pub fn complete(&mut self, reply: impl Into<String>, trail: Vec<Event>, tokens: u64) {
-        let trail = trail.iter().map(crate::audit::as_line).collect();
+    pub fn complete(
+        &mut self,
+        reply: impl Into<String>,
+        trail: Vec<crate::audit::TrailLine>,
+        tokens: u64,
+    ) {
         // The list moves onto the entry rather than being dropped, so what the turn set out to do
         // stays in the scrollback next to the answer it produced.
         let todos = std::mem::take(&mut self.todos);
@@ -4754,34 +5303,13 @@ impl Session {
         self.transcript
             .push(Entry::assistant(crate::reasoning::spoken(&reply), trail).with_todos(todos));
         self.status = Status::Idle;
-        self.scroll = 0;
-        self.finished = Some(Finished {
-            turn: self.turns,
-            tokens,
-            took: self.elapsed(),
-            failed: false,
-        });
-        self.started = None;
-        self.phase = None;
-        self.running = None;
-        self.streaming.clear();
+        self.finish_turn(tokens, bravebot_agent::Ending::Done);
         // Accumulated across the session: the figure answers "what has this cost me", which is
         // about the session rather than the last turn.
         self.tokens += tokens;
         // Added to rather than set, since a turn that compacted part way through has already put
         // that cost here under the same number.
         *self.spend.entry(self.turns).or_insert(0) += tokens;
-        // The wall clock is taken here because this is the last moment it can be: the timer is
-        // cleared two lines up. It is also the better of the two available figures. The turn loop
-        // measures its own span, but a turn runs on a worker and the person was waiting from the
-        // moment they pressed Enter, which is what this clock started on.
-        //
-        // Recorded whether or not the breakdown ever arrives, so a turn always accounts for its own
-        // wall clock and a missing breakdown reads as time nothing has claimed rather than as a turn
-        // that never happened. See [`Session::spent_time`].
-        self.timing.entry(self.turns).or_default().wall_ms += self
-            .finished
-            .map_or(0, |f| u64::try_from(f.took.as_millis()).unwrap_or(u64::MAX));
     }
 
     /// Record how the turn just finished divided its time up.
@@ -4799,34 +5327,46 @@ impl Session {
         entry.stalled_ms += timing.stalled_ms;
     }
 
+    /// Cumulative usage from the worker, retained until this turn ends.
+    pub fn progressed(&mut self, spent: bravebot_agent::Spent) {
+        self.progress = spent;
+    }
+
+    fn charge_progress(&mut self) -> u64 {
+        let spent = std::mem::take(&mut self.progress);
+        self.tokens += spent.tokens;
+        *self.spend.entry(self.turns).or_default() += spent.tokens;
+        self.spent_time(spent.timing);
+        self.served_from_cache(spent.cached);
+        spent.tokens
+    }
+
+    /// Mark a deliberate stop before returning its prompt to the editor.
+    pub fn stopped(&mut self, attempts: Option<u32>) {
+        let tokens = self.charge_progress();
+        self.finish_turn(tokens, bravebot_agent::Ending::Stopped { attempts });
+        if self.is_quitting() {
+            let todos = std::mem::take(&mut self.todos);
+            self.transcript
+                .push(Entry::stopped(t!(turn_cancelled, turn = self.turns)).with_todos(todos));
+        } else {
+            self.status = Status::Idle;
+        }
+    }
+
     /// Record a failure. The turn is over either way, so the session returns to idle.
     ///
     /// The list is kept on the entry as it stood, unfinished. A failed turn that had got three of
     /// five tasks done is more useful shown that way than blank.
-    pub fn fail(&mut self, message: impl Into<String>) {
+    pub fn fail(&mut self, message: impl Into<String>, ending: bravebot_agent::Ending) {
+        let tokens = self.charge_progress();
         let todos = std::mem::take(&mut self.todos);
         self.transcript
-            .push(Entry::system(message).with_todos(todos));
+            .push(Entry::failure(message).with_todos(todos));
         self.status = Status::Idle;
-        self.scroll = 0;
         // Reported as a failure rather than left to the success line, which would put a tick
         // beside a turn that did not finish.
-        self.finished = Some(Finished {
-            turn: self.turns,
-            tokens: 0,
-            took: self.elapsed(),
-            failed: true,
-        });
-        // A turn that failed after ten minutes still spent them, and it is the turn most worth
-        // reading afterwards. Recorded on the same footing as a turn that succeeded, so a session
-        // whose figures are being added up does not quietly omit the expensive failures.
-        self.timing.entry(self.turns).or_default().wall_ms += self
-            .finished
-            .map_or(0, |f| u64::try_from(f.took.as_millis()).unwrap_or(u64::MAX));
-        self.started = None;
-        self.phase = None;
-        self.running = None;
-        self.streaming.clear();
+        self.finish_turn(tokens, ending);
     }
 
     /// Record how full the context is, against the budget it is compacted at.
@@ -4893,8 +5433,7 @@ impl Session {
     /// Put back what an earlier turn read, or forget the figure with `None`.
     ///
     /// The figure is the last turn's, so anything that changes which turn that is has to say so:
-    /// undoing a turn puts back the one before it, and a turn that failed leaves no measurement to
-    /// report at all.
+    /// undoing a turn puts back the one before it.
     pub fn restore_cache(&mut self, cached: Option<bravebot_aichat::protocol::Cached>) {
         self.cached = cached;
     }
@@ -4961,6 +5500,11 @@ impl Session {
     /// Charged to the turn in flight, since `/compact` is asked for in the middle of one and its
     /// cost is part of what that turn spent. Attributing it to no turn would lose it from the
     /// per-turn figures while still counting it in the total, so the two would not add up.
+    ///
+    /// An aside asked before the session's first turn has no turn in flight to charge, and is
+    /// charged to a leading entry instead: the breakdown is keyed by turn number, and the number
+    /// before the first turn is one nothing else ever writes to. Skipping the breakdown there
+    /// would be the same disagreement by another route, since the total is added to either way.
     pub fn end_aside(&mut self, tokens: u64) {
         self.status = Status::Idle;
         // An aside that wrote something as it went has been drawing it at the tail, where the
@@ -4977,11 +5521,43 @@ impl Session {
         self.phase = None;
         self.running = None;
         self.tokens += tokens;
-        if self.turns > 0 {
-            *self.spend.entry(self.turns).or_insert(0) += tokens;
-            let entry = self.timing.entry(self.turns).or_default();
-            entry.wall_ms += took;
-            entry.inference_ms += took;
+        // Zero before the first turn, which is the leading entry: whatever is spent there is spent
+        // outside every turn, and that is what the number says.
+        *self.spend.entry(self.turns).or_insert(0) += tokens;
+        let entry = self.timing.entry(self.turns).or_default();
+        entry.wall_ms += took;
+        entry.inference_ms += took;
+    }
+
+    /// Leave a manifest run the session started, adding what it cost to the session's total.
+    ///
+    /// [`Session::end_aside`] in every respect but the breakdown, and charged to the same turn for
+    /// the same reason. What differs is that an aside is one model call, so all of its wall clock is
+    /// inference, while a run plans, walks steps and waits at prompts and comes back having measured
+    /// that split itself. Charging the whole of it to inference would report the minutes a person
+    /// spent reading a plan as minutes a model spent thinking, and the plan prompt is the longest
+    /// wait this mode has.
+    ///
+    /// `spent` is `None` from a run that stopped, which carries no breakdown back. Then only the
+    /// wall clock is charged and the breakdown is left absent, exactly as [`Session::fail`] does:
+    /// time nothing has claimed reads better than time claimed by the wrong thing.
+    pub fn end_run(&mut self, tokens: u64, spent: Option<bravebot_agent::timing::Timing>) {
+        self.status = Status::Idle;
+        self.streaming.clear();
+        // Read before the timer is cleared, as an aside's is.
+        let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.started = None;
+        self.phase = None;
+        self.running = None;
+        self.tokens += tokens;
+        // To the leading entry before the first turn, for the reason an aside is.
+        *self.spend.entry(self.turns).or_insert(0) += tokens;
+        let entry = self.timing.entry(self.turns).or_default();
+        entry.wall_ms += took;
+        if let Some(spent) = spent {
+            entry.inference_ms += spent.inference_ms;
+            entry.tools_ms += spent.tools_ms;
+            entry.stalled_ms += spent.stalled_ms;
         }
     }
 
@@ -5411,18 +5987,41 @@ impl Session {
     }
 
     /// Walk to the next match or the previous one, wrapping at either end.
+    ///
+    /// `rows` holds the row each match was drawn on, one entry per match, so two matches on one
+    /// row are two presses: the view stays where it is for the second and the footer says which
+    /// of the two it is on. That is what makes the count reachable, since a step that moved the
+    /// view would have nowhere to go.
+    ///
+    /// Counting from the match the view last landed on where it is still there, and from the view
+    /// otherwise: somebody who has scrolled away means the next match from what they are looking
+    /// at rather than from where the key last took them.
     pub fn to_a_match(&mut self, rows: &[u16], forwards: bool) {
         let top = self.top_row();
-        let landing = if forwards {
-            rows.iter()
+        let landing = match self.on_a_match(rows) {
+            Some(at) if forwards => Some((at + 1) % rows.len()),
+            Some(at) => Some(at.checked_sub(1).unwrap_or(rows.len() - 1)),
+            None if forwards => rows
+                .iter()
                 .position(|row| *row > top)
-                .or(if rows.is_empty() { None } else { Some(0) })
-        } else {
-            rows.iter()
+                .or(if rows.is_empty() { None } else { Some(0) }),
+            None => rows
+                .iter()
                 .rposition(|row| *row < top)
-                .or(rows.len().checked_sub(1))
+                .or(rows.len().checked_sub(1)),
         };
         self.land_at(rows, landing);
+    }
+
+    /// Which match the view is on, where it is still on the one it last landed on.
+    ///
+    /// Landing on a row nearer the end than a screen leaves the view a screen short of it, so
+    /// what the view is on is the row landing there would have reached rather than the row
+    /// itself.
+    fn on_a_match(&self, rows: &[u16]) -> Option<usize> {
+        let at = self.scroller.as_ref()?.at;
+        let row = *rows.get(at)?;
+        (row.min(self.furthest()) == self.top_row()).then_some(at)
     }
 
     fn land_at(&mut self, rows: &[u16], landing: Option<usize>) {
@@ -5469,6 +6068,14 @@ fn along(line: &str, column: usize) -> usize {
 mod tests {
     use super::*;
     use bravebot_core::ask::Answer;
+
+    /// A failure with nothing interesting known about it, for the tests that care that a turn
+    /// failed rather than what it failed of.
+    fn went_wrong() -> bravebot_agent::Ending {
+        bravebot_agent::Ending::Failed(bravebot_agent::Diagnosis::of(
+            bravebot_agent::Category::Internal,
+        ))
+    }
 
     mod delegates {
         use super::*;
@@ -5717,6 +6324,86 @@ mod tests {
                 session.watched_delegate().map(|delegate| delegate.kind),
                 Some("reader"),
                 "a delegate starting took the screen from the one being read"
+            );
+        }
+
+        /// The rows are grouped by kind, so a delegate starting arrives ahead of every command in
+        /// the list. A person reading what a command printed was moved onto that delegate by an
+        /// event they did not ask for.
+        #[test]
+        fn a_new_delegate_does_not_take_the_screen_from_a_command_being_read() {
+            let mut session = Session::new("none");
+            ran(&mut session, "cargo test", false);
+            assert!(session.watch(), "a command was not something to look at");
+
+            spawn(&mut session, "reader", "find the parser");
+            assert_eq!(
+                session
+                    .watched_output()
+                    .map(|output| output.command.as_str()),
+                Some("cargo test"),
+                "a delegate starting took the screen from the command being read"
+            );
+        }
+
+        /// The same shift under the list: the highlight is the row somebody moved it to, and a
+        /// delegate arriving above it must not leave them pointed at a different row.
+        #[test]
+        fn a_new_delegate_does_not_move_the_lists_highlight() {
+            let mut session = Session::new("none");
+            ran(&mut session, "cargo test", false);
+            ran(&mut session, "cargo build", false);
+            session.watch();
+            session.watch_previous();
+
+            spawn(&mut session, "reader", "find the parser");
+            assert_eq!(
+                session
+                    .watched_output()
+                    .map(|output| output.command.as_str()),
+                Some("cargo test"),
+                "a delegate starting moved the list's highlight to another row"
+            );
+        }
+
+        /// Somebody reading back up an open view is reading; a delegate they did not ask for
+        /// starting must not drop them at its tail.
+        #[test]
+        fn a_new_delegate_leaves_an_open_view_where_its_reader_put_it() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.watch();
+            session.scroll_up(6);
+
+            spawn(&mut session, "checker", "run the build");
+            assert_eq!(
+                session.scroll, 6,
+                "a delegate starting pulled the open view back to its tail"
+            );
+        }
+
+        /// The same rule for everything else the turn reports while the view is open: content
+        /// released for the person to read, and the reply taking shape under it. Both land
+        /// several times a second during a turn, so either one moving the view is the run
+        /// somebody opened being the run they cannot keep on the screen.
+        #[test]
+        fn nothing_the_turn_reports_moves_an_open_view() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.watch();
+            session.scroll_up(6);
+
+            session.show(quarantined("notes0.md"));
+            assert_eq!(
+                session.scroll, 6,
+                "a released preview pulled the open view back to its tail"
+            );
+
+            session.reporting_for(None);
+            session.streaming("the turn is thinking");
+            assert_eq!(
+                session.scroll, 6,
+                "the reply taking shape pulled the open view back to its tail"
             );
         }
 
@@ -6146,6 +6833,54 @@ mod tests {
             );
         }
 
+        /// Content released for the person to read is held among the delegate's lines and is not
+        /// a call. A block drawing the last three lines therefore drew one call row for a
+        /// delegate that had made three calls, and read as a delegate doing nearly nothing.
+        #[test]
+        fn a_preview_does_not_take_a_calls_place_in_the_block() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "worker", "summarise the notes");
+            for round in 0..4 {
+                let call = Activity::running("Isolated processor", format!("notes{round}.md"));
+                session.start_activity(call.clone());
+                session.finish_activity(call.done("wrote 1 line"));
+                // What the processor said about the file, and then the file it wrote: two
+                // released previews for the one call, as a spawn_processor result reports.
+                session.show(quarantined("what the isolated processor said"));
+                session.show(quarantined(&format!("notes{round}.md")));
+            }
+
+            let held = session.delegates();
+            assert_eq!(held[0].calls, 4, "the delegate forgot the calls it made");
+            let latest = held[0].latest();
+            assert_eq!(
+                latest.len(),
+                DELEGATE_SHOWN,
+                "a preview took the row one of the delegate's calls is drawn on"
+            );
+            assert!(
+                latest.iter().all(|entry| entry.activity.is_some()),
+                "the block was given a row that is not a call to draw"
+            );
+            assert_eq!(
+                latest.last().unwrap().activity.as_ref().unwrap().target,
+                "notes3.md",
+                "the block drew the oldest of its calls rather than the newest"
+            );
+        }
+
+        /// Quarantined content as the driver reports it, for the tests about where a preview of
+        /// it lands.
+        fn quarantined(origin: &str) -> Shown {
+            Shown {
+                origin: origin.to_string(),
+                reach: bravebot_agent::report::Reach::NoModel,
+                label: "(U,priv)".to_string(),
+                preview: vec!["a line nobody vouched for".to_string()],
+                lines: 1,
+            }
+        }
+
         /// What the block draws is a window on what is kept. Keeping only the three drawn is what
         /// left the mode that opens over a delegate with three rows to show for an hour's work.
         #[test]
@@ -6321,6 +7056,51 @@ mod tests {
         assert_eq!(session.top_row(), 80, "walking back did not wrap round");
         session.to_a_match(&rows, false);
         assert_eq!(session.top_row(), 50);
+    }
+
+    /// The footer counts matches, so the walk has to have that many places to stop. A row holding
+    /// two of them is two presses: the second leaves the view where it is and moves which match
+    /// the footer says the view is on. A walk that stepped by row would leave the second match
+    /// unreachable and the count a number nothing answers.
+    #[test]
+    fn two_matches_on_one_row_are_two_steps_of_the_walk() {
+        let mut session = Session::new("kernel-enforced");
+        session.open_scroller();
+        session.note_layout(Laid {
+            width: 80,
+            height: 10,
+            rows: 100,
+            ..Laid::default()
+        });
+        // Two matches drawn on row 20, one on row 50.
+        let rows = [20u16, 20, 50];
+        let walked = |session: &Session| {
+            (
+                session.top_row(),
+                session.scroller().expect("the scroller is open").at,
+            )
+        };
+
+        session.scroller_to_first_row();
+        session.to_a_match(&rows, true);
+        assert_eq!(walked(&session), (20, 0));
+        session.to_a_match(&rows, true);
+        assert_eq!(
+            walked(&session),
+            (20, 1),
+            "the second match on the row was stepped over"
+        );
+        session.to_a_match(&rows, true);
+        assert_eq!(walked(&session), (50, 2));
+        session.to_a_match(&rows, true);
+        assert_eq!(walked(&session), (20, 0), "the walk did not wrap round");
+
+        session.to_a_match(&rows, false);
+        assert_eq!(walked(&session), (50, 2), "walking back did not wrap round");
+        session.to_a_match(&rows, false);
+        assert_eq!(walked(&session), (20, 1));
+        session.to_a_match(&rows, false);
+        assert_eq!(walked(&session), (20, 0));
     }
 
     /// A search run while a match is already at the top of the view has found that one, and
@@ -7267,7 +8047,7 @@ mod tests {
         let finished = s.finished.expect("a finished turn");
         assert_eq!(finished.turn, 1);
         assert_eq!(finished.tokens, 4_200);
-        assert!(!finished.failed);
+        assert!(!finished.failed());
     }
 
     /// A tick beside a turn that did not finish would be the wrong thing to say about it.
@@ -7276,10 +8056,10 @@ mod tests {
         let mut s = Session::new("none");
         s.set_input("do the thing".to_string());
         s.submit();
-        s.fail("the model could not be reached");
+        s.fail("the model could not be reached", went_wrong());
 
         let finished = s.finished.expect("a finished turn");
-        assert!(finished.failed);
+        assert!(finished.failed());
     }
 
     /// A line reporting a finished turn while the next one runs is a line about the wrong turn.
@@ -7439,6 +8219,314 @@ mod tests {
 
         assert_eq!(s.start_loop(request).as_deref(), Some("/status"));
         assert_eq!(s.looping().expect("a loop").prompt(), "/status");
+    }
+
+    /// What a watch is armed with, for the tests below: a look that saw something, so the watch
+    /// has a first token to compare a later one against.
+    fn saw(token: &str) -> bravebot_agent::watch::Looked {
+        bravebot_agent::watch::Looked::Saw(token.to_string())
+    }
+
+    /// The whole of what this feature is for. Nothing is running, nobody typed anything, and a
+    /// file that moved still begins a turn.
+    #[test]
+    fn a_change_begins_a_turn_with_no_turn_running_to_notice_it() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+
+        let later = Instant::now() + Duration::from_secs(6);
+        let prompt = s
+            .watch_fired(later, |_| saw("second"))
+            .expect("a change with nothing running did not begin a turn");
+
+        assert!(prompt.contains("notes.md"), "{prompt}");
+        assert_eq!(s.status, Status::Working);
+    }
+
+    /// The injection regression test, at the level a fire actually reaches the conversation: the
+    /// line goes into the transcript in the user's own role, which is the one position nothing
+    /// can label, so it carries the driver's sentence and nothing off the filesystem.
+    #[test]
+    fn a_fires_prompt_carries_the_watch_and_the_path_and_nothing_else() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+
+        let later = Instant::now() + Duration::from_secs(6);
+        let prompt = s.watch_fired(later, |_| saw("second")).expect("a fire");
+
+        assert_eq!(prompt, bravebot_agent::watch::fired(1, "notes.md"));
+        let sent = s
+            .transcript
+            .iter()
+            .find(|entry| entry.speaker == Speaker::User)
+            .expect("the fire's prompt is in the transcript");
+        assert_eq!(sent.text, prompt);
+    }
+
+    /// A filesystem event is not a licence to interrupt: the person is still the one using this
+    /// session, and what they queued was typed before the file moved.
+    #[test]
+    fn a_fire_waits_for_the_turn_in_flight_and_for_what_is_queued() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+        let later = Instant::now() + Duration::from_secs(6);
+
+        for c in "their own question".chars() {
+            s.type_char(c);
+        }
+        s.submit();
+        assert!(
+            s.watch_fired(later, |_| saw("second")).is_none(),
+            "a fire interrupted a running turn"
+        );
+
+        for c in "and another".chars() {
+            s.type_char(c);
+        }
+        s.queue();
+        s.complete("done", Vec::new(), 0);
+        assert!(
+            s.watch_fired(later, |_| saw("second")).is_none(),
+            "a fire jumped the queue"
+        );
+    }
+
+    /// A turn that silently took somebody's loop off would be ending work they are waiting on in
+    /// order to watch a file, so the watch is what gives way and the turn is told why.
+    #[test]
+    fn a_watch_asked_for_under_a_loop_or_a_goal_is_refused_and_says_why() {
+        let mut under_a_loop = session();
+        under_a_loop.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        under_a_loop.arm_watch("notes.md", saw("first"));
+        assert!(under_a_loop.watches().is_empty());
+        assert!(
+            under_a_loop
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_not_armed_under_a_loop)),
+            "the turn was not told why"
+        );
+
+        let mut under_a_goal = session();
+        under_a_goal.start_goal("cargo test exits 0".to_string());
+        under_a_goal.arm_watch("notes.md", saw("first"));
+        assert!(under_a_goal.watches().is_empty());
+        assert!(
+            under_a_goal
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_not_armed_under_a_goal)),
+            "the turn was not told why"
+        );
+    }
+
+    /// A person typing `/loop` or setting a goal is present and means it, so their request stands
+    /// and the watches end saying so. A watch that ended in silence is indistinguishable from one
+    /// that is live and has seen nothing.
+    #[test]
+    fn a_person_starting_a_loop_or_a_goal_is_told_the_watches_have_ended() {
+        for start in [
+            &mut (|s: &mut Session| {
+                s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+            }) as &mut dyn FnMut(&mut Session),
+            &mut |s: &mut Session| s.start_goal("cargo test exits 0".to_string()),
+        ] {
+            let mut s = session();
+            s.arm_watch("notes.md", saw("first"));
+            assert_eq!(s.watches().len(), 1);
+
+            start(&mut s);
+            assert!(s.watches().is_empty(), "a watch outlived the other kind");
+            assert!(
+                s.transcript
+                    .iter()
+                    .any(|entry| entry.text == t!(watches_replaced, count = 1)),
+                "the watches ended in silence"
+            );
+        }
+    }
+
+    /// A turn asking for a later look while a watch is live would be replacing the standing
+    /// answer with the repeating one, which is the trade the person made when they asked to be
+    /// told about the file rather than asked again.
+    #[test]
+    fn a_later_look_a_turn_asked_for_is_refused_while_a_watch_is_live() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+        s.watch_again(
+            "tell me when notes.md changes",
+            crate::loops::Wakeup::asked(900, false),
+        );
+
+        assert!(s.looping().is_none(), "a turn started a loop under a watch");
+        assert_eq!(s.watches().len(), 1);
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_not_armed_under_a_watch)),
+            "the turn was not told why"
+        );
+    }
+
+    /// A turn that may not arm one is told which of the reasons it is, because that is what it
+    /// has to say to the person.
+    #[test]
+    fn what_a_turn_is_told_about_arming_is_read_off_the_session() {
+        use bravebot_agent::watch::Arming;
+
+        let mut s = session();
+        assert_eq!(s.arming(), Arming::Allowed { free: 8 });
+
+        s.arm_watch("notes.md", saw("first"));
+        assert_eq!(s.arming(), Arming::Allowed { free: 7 });
+
+        let mut looping = session();
+        looping.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        assert_eq!(looping.arming(), Arming::UnderALoop);
+
+        let mut goal = session();
+        goal.start_goal("cargo test exits 0".to_string());
+        assert_eq!(goal.arming(), Arming::UnderAGoal);
+    }
+
+    /// The ninth is refused rather than dropping one, and the session says so where the turn will
+    /// read it.
+    #[test]
+    fn a_session_holding_as_many_watches_as_it_keeps_reports_itself_full() {
+        use bravebot_agent::watch::Arming;
+
+        let mut s = session();
+        for n in 0..crate::watches::MAX_LIVE {
+            s.arm_watch(&format!("{n}.md"), saw("first"));
+        }
+        assert_eq!(s.arming(), Arming::Full);
+
+        s.arm_watch("ninth.md", saw("first"));
+        assert_eq!(s.watches().len(), crate::watches::MAX_LIVE);
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text
+                    == t!(watch_not_armed_full, count = crate::watches::MAX_LIVE)),
+            "a refused ninth watch said nothing"
+        );
+    }
+
+    /// Nothing to compare a later look against is nothing to watch, and the turn is told rather
+    /// than left believing a watch exists.
+    #[test]
+    fn a_path_that_cannot_be_looked_at_is_refused_and_said_so() {
+        let mut s = session();
+        s.arm_watch("gone.md", bravebot_agent::watch::Looked::Absent);
+        assert!(s.watches().is_empty());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_not_armed_unreadable, path = "gone.md")),
+            "a refused watch said nothing"
+        );
+    }
+
+    /// A watch that outlived its session would start sending prompts at somebody who opened a
+    /// conversation to read it, about a file that moved while nobody was here.
+    #[test]
+    fn clearing_a_session_ends_every_watch() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+        s.clear();
+        assert!(s.watches().is_empty());
+    }
+
+    /// A number a person read off the screen ends the watch it named and leaves the others.
+    #[test]
+    fn a_watch_is_ended_by_the_number_the_report_gave_it() {
+        let mut s = session();
+        s.arm_watch("a.md", saw("first"));
+        s.arm_watch("b.md", saw("first"));
+
+        assert!(s.stop_watch(1));
+        assert_eq!(
+            s.watches().iter().map(|w| w.path()).collect::<Vec<_>>(),
+            vec!["b.md"]
+        );
+        assert!(!s.stop_watch(1), "a watch that had ended was ended again");
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_no_such, number = 1)),
+            "a number naming nothing said nothing"
+        );
+    }
+
+    /// Stopping the turn a fire started is the most exact way anybody has to say which watch they
+    /// have finished with, since they are reading its prompt when they press the key.
+    #[test]
+    fn stopping_a_fires_turn_ends_the_watch_that_fired() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+        s.watch_fired(Instant::now() + Duration::from_secs(6), |_| saw("second"))
+            .expect("a fire");
+
+        assert!(s.watch_is_firing());
+        assert!(s.stop_firing_watch());
+        assert!(s.watches().is_empty());
+    }
+
+    /// A turn that was not a fire ends no watch: that press is a person steering their own work.
+    #[test]
+    fn stopping_a_turn_that_was_not_a_fire_ends_no_watch() {
+        let mut s = session();
+        s.arm_watch("notes.md", saw("first"));
+        s.set_input("their own question".to_string());
+        s.submit();
+
+        assert!(!s.watch_is_firing());
+        assert!(!s.stop_firing_watch());
+        assert_eq!(s.watches().len(), 1);
+    }
+
+    /// A watch that ended in silence is indistinguishable from one that is live and has seen
+    /// nothing, and the difference between those two is the whole of what a person armed it to
+    /// learn.
+    #[test]
+    fn a_watch_that_ends_itself_says_which_of_the_two_endings_it_was() {
+        let mut aged = session();
+        aged.arm_watch("notes.md", saw("first"));
+        aged.watch_fired(
+            Instant::now() + Duration::from_secs(8 * 24 * 60 * 60),
+            |_| saw("first"),
+        );
+        assert!(aged.watches().is_empty());
+        assert!(
+            aged.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_aged_out, number = 1))
+        );
+
+        let mut gone = session();
+        gone.arm_watch("notes.md", saw("first"));
+        gone.watch_fired(Instant::now() + Duration::from_secs(6), |_| {
+            bravebot_agent::watch::Looked::OutOfReach
+        });
+        assert!(gone.watches().is_empty());
+        assert!(
+            gone.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_out_of_reach, number = 1))
+        );
+    }
+
+    /// A session with no live watch says so when asked, rather than answering with nothing: the
+    /// question is whether anything is going to happen without anybody typing.
+    #[test]
+    fn a_session_with_no_watch_says_so_when_asked() {
+        let mut s = session();
+        s.report_watches();
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_none))
+        );
     }
 
     /// A schedule is a request to be asked again, not a licence to interrupt. A tick that fired
@@ -7744,7 +8832,7 @@ mod tests {
         );
         assert_eq!(
             s.transcript.last().map(|entry| entry.text.as_str()),
-            Some("stopped"),
+            Some("turn 1 cancelled"),
             "the prompt that stayed sent was not marked stopped"
         );
         assert_eq!(
@@ -7775,10 +8863,10 @@ mod tests {
         let mut s = session();
         s.type_char('a');
         s.submit();
-        s.fail("something went wrong");
+        s.fail("something went wrong", went_wrong());
 
         assert_eq!(s.status, Status::Idle);
-        assert_eq!(s.transcript[1].speaker, Speaker::System);
+        assert_eq!(s.transcript[1].speaker, Speaker::Failure);
     }
 
     #[test]
@@ -7788,10 +8876,13 @@ mod tests {
         s.submit();
         s.complete(
             "reply",
-            vec![Event::Observed {
-                capability: bravebot_core::capability::Capability::FileRead,
-                label: Label::untrusted_private(),
-            }],
+            vec![crate::audit::as_line(
+                &bravebot_core::event::Event::Observed {
+                    capability: bravebot_core::capability::Capability::FileRead,
+                    label: Label::untrusted_private(),
+                },
+                None,
+            )],
             0,
         );
         assert_eq!(s.transcript[1].trail.len(), 1);
@@ -7843,28 +8934,245 @@ mod tests {
     #[test]
     fn closing_the_rewind_window_leaves_nothing_to_rewind_to() {
         let mut s = session();
-        s.previous_turn = Some(TurnSnapshot {
+        s.open_rewind_point(snapshot_before(0), "the first thing".into());
+        s.keep_backups(vec![held("/tmp/whatever", Before::Nothing)]);
+        s.open_rewind_point(snapshot_before(1), "the second thing".into());
+
+        s.close_rewind_window();
+
+        assert!(s.rewind_points().is_empty());
+    }
+
+    /// The state before some turn, for a test that only needs a point to exist.
+    fn snapshot_before(turns: usize) -> TurnSnapshot {
+        TurnSnapshot {
             conversation: bravebot_agent::Conversation::new().snapshot(),
-            turns: 1,
+            turns,
             tokens: 10,
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
             cached: None,
-            trust: bravebot_core::trust::TrustStore::new(),
+            trust: bravebot_core::trust::TrustStore::new("/work"),
             programs: bravebot_core::programs::TrustedPrograms::default(),
-            transcript_len: 0,
+            transcript_len: turns,
             title: "a session".to_string(),
             was_wrote: true,
-        });
-        s.last_turn_backups.push(bravebot_agent::workspace::Backup {
-            path: std::path::PathBuf::from("/tmp/whatever"),
-            was: bravebot_agent::workspace::Before::Nothing,
-        });
+        }
+    }
 
-        s.close_rewind_window();
+    use bravebot_agent::workspace::{Backup, Before};
 
-        assert!(s.previous_turn.is_none());
-        assert!(s.last_turn_backups.is_empty());
+    /// What a path held before a turn wrote to it.
+    fn held(path: &str, was: Before) -> Backup {
+        Backup {
+            path: std::path::PathBuf::from(path),
+            was,
+        }
+    }
+
+    /// The point the issue is about: a mistake is usually noticed a turn or two after it was
+    /// made, so a session that remembers only the turn that just ended remembers the one case
+    /// least likely to need it.
+    #[test]
+    fn a_rewind_reaches_past_the_turn_that_just_ended() {
+        let mut s = session();
+        s.open_rewind_point(snapshot_before(0), "the first thing".into());
+        s.keep_backups(vec![held("/work/one", Before::Nothing)]);
+        s.open_rewind_point(snapshot_before(1), "the second thing".into());
+        s.keep_backups(vec![held("/work/two", Before::Nothing)]);
+
+        let (snapshot, backups) = s.take_rewind(2).expect("two turns to go back");
+
+        assert_eq!(snapshot.turns, 0, "two turns back is not before the first");
+        assert_eq!(backups.len(), 2, "one of the two turns' writes was dropped");
+        assert!(
+            s.rewind_points().is_empty(),
+            "a point that was rewound past is still offered"
+        );
+    }
+
+    /// Going back further than the session remembers has no honest answer, and landing on the
+    /// furthest point it happens to hold would report a tree put back somewhere it is not.
+    #[test]
+    fn going_back_further_than_the_session_remembers_rewinds_nothing() {
+        let mut s = session();
+        s.open_rewind_point(snapshot_before(0), "the only thing".into());
+
+        assert!(s.take_rewind(2).is_none());
+        assert_eq!(
+            s.rewind_points().len(),
+            1,
+            "the point that could not be reached was consumed anyway"
+        );
+    }
+
+    /// A path two of the undone turns wrote to goes back to what it held before the first of
+    /// them. Carrying the later copy as well would write the middle state over the answer.
+    #[test]
+    fn a_path_written_in_two_undone_turns_goes_back_to_before_the_first() {
+        let mut s = session();
+        s.open_rewind_point(snapshot_before(0), "the first thing".into());
+        s.keep_backups(vec![held(
+            "/work/notes",
+            Before::Bytes(b"original".to_vec()),
+        )]);
+        s.open_rewind_point(snapshot_before(1), "the second thing".into());
+        s.keep_backups(vec![held(
+            "/work/notes",
+            Before::Bytes(b"after the first turn".to_vec()),
+        )]);
+
+        let (_, backups) = s.take_rewind(2).expect("two turns to go back");
+
+        assert_eq!(backups.len(), 1, "the same path is put back twice");
+        assert_eq!(
+            backups[0].was,
+            Before::Bytes(b"original".to_vec()),
+            "the path went back to the middle of the rewind"
+        );
+    }
+
+    /// The depth is what bounds a record written after every turn, so it holds however many
+    /// turns the session has had. The oldest goes, since a rewind walks back from the newest and
+    /// a stack with a hole in it cannot be walked past one.
+    #[test]
+    fn a_session_keeps_no_more_points_than_it_may() {
+        let mut s = session();
+        for turn in 0..MAX_REWIND_POINTS + 2 {
+            s.open_rewind_point(snapshot_before(turn), format!("thing {turn}"));
+        }
+
+        assert_eq!(s.rewind_points().len(), MAX_REWIND_POINTS);
+        assert_eq!(
+            s.rewind_points()[0].snapshot.turns,
+            2,
+            "the points dropped were not the oldest"
+        );
+    }
+
+    /// The budget is what is held at once rather than what each turn may add, so a turn that
+    /// spends it takes the room from the turns behind it. The newest survives whatever it costs:
+    /// a turn whose own writes fill the budget is the one most likely to be worth undoing.
+    #[test]
+    fn one_turns_writes_can_cost_the_session_the_turns_behind_it() {
+        let mut s = session();
+        s.open_rewind_point(snapshot_before(0), "the first thing".into());
+        s.keep_backups(vec![held("/work/one", Before::Bytes(vec![0; 1024]))]);
+        s.open_rewind_point(snapshot_before(1), "the second thing".into());
+        s.keep_backups(vec![held(
+            "/work/two",
+            Before::Bytes(vec![0; bravebot_agent::workspace::MAX_REWIND_BYTES]),
+        )]);
+
+        assert_eq!(s.rewind_points().len(), 1, "the budget was not held to");
+        assert_eq!(
+            s.rewind_points()[0].snapshot.turns,
+            1,
+            "the turn that spent the budget is the one that was dropped"
+        );
+    }
+
+    /// An index into the transcript belongs to the process that drew it. A resumed session draws
+    /// another, opening with a line saying it was resumed, so a point read off a record has to
+    /// find its place again or a rewind would take the transcript back further than the turn.
+    #[test]
+    fn a_restored_point_finds_its_place_in_the_transcript_it_comes_back_into() {
+        use bravebot_aichat::protocol::Message;
+
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(Message::user("add a line to notes.md"));
+        conversation.push(Message::assistant("added"));
+        conversation.push(Message::user("add a second line"));
+        conversation.push(Message::assistant("added"));
+
+        let mut s = session();
+        s.replay(
+            &conversation,
+            "a title",
+            &crate::sessions::Recalled {
+                trails: Default::default(),
+                todos: Default::default(),
+                asides: Vec::new(),
+            },
+        );
+
+        // Recorded against a transcript that opened with the prompt, where the second turn
+        // began at entry two. This one opens with the resumed line, so it begins at entry three.
+        let mut point = RewindPoint {
+            snapshot: snapshot_before(1),
+            backups: Vec::new(),
+            prompt: "add a second line".into(),
+        };
+        let mut before = bravebot_agent::Conversation::new();
+        before.push(Message::user("add a line to notes.md"));
+        before.push(Message::assistant("added"));
+        point.snapshot.conversation = before.snapshot();
+        point.snapshot.transcript_len = 2;
+
+        s.restore_rewind_points(vec![point], &conversation);
+
+        let at = s.rewind_points()[0].snapshot.transcript_len;
+        assert_eq!(
+            s.transcript[at].speaker,
+            Speaker::User,
+            "the point did not land on the prompt of the turn it undoes"
+        );
+        assert_eq!(s.transcript[at].text, "add a second line");
+    }
+
+    /// A shell-mode command puts a line in the conversation without being a turn, so a replayed
+    /// transcript holds more prompts than the session counted turns. Placing a restored point by
+    /// counting prompts would land it on the shell line and rewind a turn too far.
+    #[test]
+    fn a_shell_command_in_the_conversation_does_not_move_a_restored_point() {
+        use bravebot_aichat::protocol::Message;
+
+        let mut before = bravebot_agent::Conversation::new();
+        before.push(Message::user("add a line to notes.md"));
+        before.push(Message::assistant("added"));
+        before.push(Message::user(
+            "I ran `ls` in the shell myself. It printed: notes.md",
+        ));
+
+        let mut conversation = bravebot_agent::Conversation::restored(before.snapshot());
+        conversation.push(Message::user("add a second line"));
+        conversation.push(Message::assistant("added"));
+
+        let mut s = session();
+        s.replay(
+            &conversation,
+            "a title",
+            &crate::sessions::Recalled {
+                trails: Default::default(),
+                todos: Default::default(),
+                asides: Vec::new(),
+            },
+        );
+
+        let mut point = RewindPoint {
+            snapshot: snapshot_before(1),
+            backups: Vec::new(),
+            prompt: "add a second line".into(),
+        };
+        point.snapshot.conversation = before.snapshot();
+
+        s.restore_rewind_points(vec![point], &conversation);
+
+        let at = s.rewind_points()[0].snapshot.transcript_len;
+        assert_eq!(
+            s.transcript[at].text, "add a second line",
+            "the point landed on the shell line rather than the prompt"
+        );
+    }
+
+    /// A turn whose window something closed while it ran has no point to hang its writes on, and
+    /// keeping them would spend the budget on bytes no rewind can ever read.
+    #[test]
+    fn backups_with_no_point_to_hang_them_on_are_dropped() {
+        let mut s = session();
+        s.keep_backups(vec![held("/work/one", Before::Bytes(vec![0; 1024]))]);
+
+        assert!(s.rewind_points().is_empty());
     }
 
     /// Clearing drops the exchange, which is the whole point: a fresh context.
@@ -7882,10 +9190,9 @@ mod tests {
         assert_eq!(s.tokens, 0, "the spend survived");
         assert_eq!(s.status, Status::Idle);
         assert!(
-            s.previous_turn.is_none(),
-            "the previous turn survived clear"
+            s.rewind_points().is_empty(),
+            "the rewind points survived clear"
         );
-        assert!(s.last_turn_backups.is_empty(), "the backups survived clear");
     }
 
     /// A cache figure describes the exchange that clearing throws away, and the panel prints it
@@ -8133,7 +9440,7 @@ mod tests {
         let mut s = session();
         s.type_char('a');
         s.submit();
-        s.fail("error");
+        s.fail("error", went_wrong());
         assert_eq!(s.elapsed(), Duration::ZERO);
         assert!(s.indicator().is_none());
     }
@@ -8354,7 +9661,7 @@ mod tests {
         assert!(
             s.transcript
                 .last()
-                .is_some_and(|entry| entry.text == "stopped"),
+                .is_some_and(|entry| entry.speaker == Speaker::Stopped),
             "nothing recorded that it stopped"
         );
     }
@@ -8676,7 +9983,7 @@ mod tests {
                 ("done", Status::Done),
                 ("not done", Status::Active),
             ]));
-            s.fail("the model call failed");
+            s.fail("the model call failed", went_wrong());
 
             let entry = s.transcript.last().expect("an entry");
             assert_eq!(entry.todos.len(), 2);
@@ -8910,7 +10217,7 @@ mod tests {
             assert!(s.streaming.is_empty(), "a finished turn left its tail up");
 
             s.streaming("half a thought");
-            s.fail("error: something went wrong");
+            s.fail("error: something went wrong", went_wrong());
             assert!(s.streaming.is_empty(), "a failed turn left its tail up");
 
             // A session of its own for the stop, because the tail matters most where the prompt
@@ -9459,6 +10766,61 @@ mod tests {
             assert_eq!(s.tokens, 650, "the breakdown and the total disagreed");
         }
 
+        /// An aside asked as the first thing a session does sends a request like any other, and a
+        /// total the breakdown cannot account for makes the record unreadable as an account of what
+        /// each turn spent: the two figures disagree and neither of them says which is wrong.
+        #[test]
+        fn an_aside_before_the_first_turn_is_charged_to_a_leading_entry() {
+            let mut s = session();
+
+            s.begin_aside();
+            s.end_aside(250);
+
+            assert_eq!(
+                s.spend_by_turn(),
+                &std::collections::BTreeMap::from([(0, 250)]),
+                "a cost incurred before the first turn was charged to no turn at all"
+            );
+
+            s.type_char('a');
+            s.submit();
+            s.complete("reply", Vec::new(), 1_000);
+
+            assert_eq!(s.tokens, 1_250);
+            assert_eq!(
+                s.spend_by_turn(),
+                &std::collections::BTreeMap::from([(0, 250), (1, 1_000)]),
+                "the first turn absorbed what was spent before it, or lost it"
+            );
+            assert_eq!(
+                s.spend_by_turn().values().sum::<u64>(),
+                s.tokens,
+                "the breakdown and the total disagreed"
+            );
+        }
+
+        /// A manifest run started as the first thing a session does is the same case as an aside
+        /// asked then: it spends tokens with no turn to charge them to, and the breakdown has to
+        /// hold them or it stops adding up to the total.
+        #[test]
+        fn a_run_before_the_first_turn_is_charged_to_a_leading_entry() {
+            let mut s = session();
+
+            s.begin_aside();
+            s.end_run(250, None);
+
+            assert_eq!(
+                s.spend_by_turn(),
+                &std::collections::BTreeMap::from([(0, 250)]),
+                "a cost incurred before the first turn was charged to no turn at all"
+            );
+            assert_eq!(
+                s.spend_by_turn().values().sum::<u64>(),
+                s.tokens,
+                "the breakdown and the total disagreed"
+            );
+        }
+
         /// The whole point of keeping the split: a turn's wall clock alone cannot say whether it was
         /// slow because the model was, or because it stopped and waited for a person.
         #[test]
@@ -9519,6 +10881,103 @@ mod tests {
             );
         }
 
+        /// An aside asked before the first turn waits on the model exactly as one asked during a
+        /// turn does. Charged to no turn, that wait is in none of the figures the session adds up,
+        /// so a session that sat for a minute on its first question reports having taken no time.
+        ///
+        /// The entry is what this asserts rather than the figure in it, as
+        /// `a_failed_turn_still_accounts_for_its_wall_clock` does and for the same reason: the
+        /// clock is the real one, so a test's aside is over in well under the millisecond every
+        /// figure here is measured in.
+        #[test]
+        fn an_aside_before_the_first_turn_records_its_wait_ahead_of_that_turn() {
+            let mut s = session();
+
+            s.begin_aside();
+            s.end_aside(250);
+
+            let leading = s
+                .timing_by_turn()
+                .get(&0)
+                .copied()
+                .expect("the wait was recorded ahead of the first turn");
+            assert_eq!(
+                leading.inference_ms, leading.wall_ms,
+                "an aside's wait was not counted as time spent on the model"
+            );
+            assert_eq!(
+                s.timing_total().wall_ms,
+                leading.wall_ms,
+                "the wait is not in what the session adds up"
+            );
+        }
+
+        /// A manifest run measures its own split, and the longest thing in it is usually a person
+        /// reading a whole plan before answering for it. Charged as an aside's wait is, that wait
+        /// would be reported as time a model spent thinking.
+        #[test]
+        fn a_run_charges_its_wait_to_the_person_rather_than_to_the_model() {
+            use bravebot_agent::timing::Timing;
+            let mut s = session();
+
+            s.type_char('a');
+            s.submit();
+            s.complete("reply", Vec::new(), 400);
+
+            s.begin_aside();
+            s.end_run(
+                250,
+                Some(Timing {
+                    wall_ms: 999_999,
+                    inference_ms: 300,
+                    tools_ms: 100,
+                    stalled_ms: 600_000,
+                }),
+            );
+
+            let turn = s
+                .timing_by_turn()
+                .get(&1)
+                .copied()
+                .expect("turn 1 recorded");
+            assert_eq!(turn.inference_ms, 300);
+            assert_eq!(turn.tools_ms, 100);
+            assert_eq!(
+                turn.stalled_ms, 600_000,
+                "the ten minutes at the plan prompt were not kept as a wait"
+            );
+            assert_ne!(
+                turn.wall_ms, 999_999,
+                "the worker's wall figure overwrote the session's own"
+            );
+            assert_eq!(s.tokens, 650, "the run's tokens are not in the total");
+        }
+
+        /// A run that stopped brings no breakdown back, so the wall clock is charged and the split
+        /// is left absent. Time nothing has claimed reads better than time claimed by the wrong
+        /// thing, which is what `fail` already does for a turn.
+        #[test]
+        fn a_run_that_stopped_still_accounts_for_its_wall_clock() {
+            let mut s = session();
+
+            s.type_char('a');
+            s.submit();
+            s.complete("reply", Vec::new(), 400);
+
+            s.begin_aside();
+            s.end_run(0, None);
+
+            let turn = s
+                .timing_by_turn()
+                .get(&1)
+                .copied()
+                .expect("turn 1 recorded");
+            assert_eq!(
+                turn.inference_ms, 0,
+                "a run with no breakdown was charged as inference anyway"
+            );
+        }
+
         /// A turn that failed after ten minutes still spent them, and it is the turn most worth
         /// reading afterwards. A session adding up its own figures must not omit its failures.
         #[test]
@@ -9527,7 +10986,7 @@ mod tests {
 
             s.type_char('a');
             s.submit();
-            s.fail("it went wrong");
+            s.fail("it went wrong", went_wrong());
 
             assert!(
                 s.timing_by_turn().contains_key(&1),
@@ -9786,6 +11245,51 @@ mod tests {
             1,
             "the picture did not survive the round trip"
         );
+    }
+
+    /// Off is what a session opens with, so a prompt appears for every slot until somebody says
+    /// otherwise. A session constructed here records nothing, so `adopt_vetting` reads no file and
+    /// the two arguments are the whole of what decides.
+    #[test]
+    fn a_session_asks_until_something_says_otherwise() {
+        let mut s = Session::new("none");
+        assert!(!s.auto_vetting(), "a fresh session did not ask");
+        s.adopt_vetting(false, None);
+        assert!(
+            !s.auto_vetting(),
+            "nothing said anything and it stopped asking"
+        );
+        s.adopt_vetting(false, Some(false));
+        assert!(!s.auto_vetting(), "a settings key saying no turned it on");
+    }
+
+    /// Either of the two arguments turns it on, which is the rule
+    /// `bravebot_core::vetting::auto` states; this pins that the interface passes them through
+    /// rather than deciding for itself.
+    #[test]
+    fn the_flag_and_the_settings_key_each_reach_the_session() {
+        let mut s = Session::new("none");
+        s.adopt_vetting(true, None);
+        assert!(s.auto_vetting(), "the flag did not reach the session");
+
+        let mut s = Session::new("none");
+        s.adopt_vetting(false, Some(true));
+        assert!(
+            s.auto_vetting(),
+            "the settings key did not reach the session"
+        );
+    }
+
+    /// The standing key at a vetting prompt turns it on from the next turn. Written through to
+    /// disk only for a session that persists, which this one is not, so nothing here touches the
+    /// developer's own answer.
+    #[test]
+    fn pressing_the_standing_key_turns_vetting_on_for_the_session() {
+        let mut s = Session::new("none");
+        s.choose_vetting(true);
+        assert!(s.auto_vetting());
+        s.choose_vetting(false);
+        assert!(!s.auto_vetting(), "turning it back off did not take");
     }
 
     /// A session editing vi's way, with the choice recorded nowhere: `adopt_editing` reads the store
@@ -10860,5 +12364,41 @@ mod tests {
             s.pasted_named(&s.input).is_empty(),
             "the picture is still named by a line that has no marker"
         );
+    }
+    /// A stopped turn still occupies wall time when no request has completed.
+    #[test]
+    fn unanswered_turns_keep_the_session_clock_and_the_completed_breakdown() {
+        for stopped in [false, true] {
+            let mut session = Session::new("none");
+            session.type_char('x');
+            session.submit().unwrap();
+            session.started = Some(Instant::now() - Duration::from_secs(2));
+            session.progressed(bravebot_agent::Spent {
+                timing: bravebot_agent::timing::Timing {
+                    wall_ms: 999_999,
+                    inference_ms: 31,
+                    tools_ms: 13,
+                    stalled_ms: 7,
+                },
+                ..Default::default()
+            });
+            if stopped {
+                session.stopped(None);
+            } else {
+                session.fail(
+                    "failed",
+                    bravebot_agent::Ending::Failed(bravebot_agent::Diagnosis::of(
+                        bravebot_agent::Category::Transport,
+                    )),
+                );
+            }
+            let timing = session.timing_total();
+            assert!(timing.wall_ms >= 2_000);
+            assert_ne!(timing.wall_ms, 999_999);
+            assert_eq!(
+                (timing.inference_ms, timing.tools_ms, timing.stalled_ms),
+                (31, 13, 7)
+            );
+        }
     }
 }

@@ -70,6 +70,11 @@ impl StdioServer {
         let mut child = sandbox
             .command(program, args, policy)
             .map_err(|e| McpError::Confinement(e.to_string()))?
+            // A server is code we did not write, and a credential this process
+            // authenticates with sits in a variable rather than in a file, so no
+            // confinement policy over paths withholds one. Emptied here rather than left
+            // to the backend, which would make it a different answer on each platform.
+            .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // stderr is inherited so server diagnostics reach the user.

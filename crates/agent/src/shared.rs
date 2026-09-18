@@ -17,11 +17,12 @@
 //! # What this does not do
 //!
 //! It carries no content and reads none. Every method here takes what it was handed, takes the
-//! lock, and passes it straight through. Nothing is compared, matched or routed, and a value's
-//! label is the label it arrived with.
+//! lock, and passes it through. Usage totals stay with the delegate until collection; labelled
+//! content keeps the label it arrived with.
 
 use crate::confirm::{
-    Confirmer, Decision, OutputRequest, RunDecision, RunRequest, VouchRequest, WriteRequest,
+    Confirmer, Decision, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
+    WriteRequest,
 };
 use crate::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Shown,
@@ -51,6 +52,7 @@ impl<'a, T: ?Sized> Lent<'a, T> {
         Borrowed {
             lent: self,
             from: None,
+            spent: Default::default(),
         }
     }
 
@@ -59,6 +61,7 @@ impl<'a, T: ?Sized> Lent<'a, T> {
         Borrowed {
             lent: self,
             from: Some(id),
+            spent: Default::default(),
         }
     }
 
@@ -92,6 +95,7 @@ pub struct Borrowed<'m, 'a, T: ?Sized> {
     lent: &'m Lent<'a, T>,
     /// Whose work goes through this handle, where it is a delegate's.
     from: Option<DelegateId>,
+    spent: crate::outcome::Spent,
 }
 
 impl<T: ?Sized> Clone for Borrowed<'_, '_, T> {
@@ -103,9 +107,18 @@ impl<T: ?Sized> Clone for Borrowed<'_, '_, T> {
 impl<T: ?Sized> Copy for Borrowed<'_, '_, T> {}
 
 impl<T: Sink + ?Sized> Sink for Borrowed<'_, '_, T> {
+    /// Both under one lock, so a record and the run it belongs to cannot be separated by another
+    /// run recording in between. The same reason the reports below announce whose they are.
     fn emit(&mut self, event: Event) {
-        self.lent.hold().emit(event);
+        let mut held = self.lent.hold();
+        held.recording_for(self.from);
+        held.emit(event);
     }
+
+    /// Passed on rather than remembered, so a handle for a delegate cannot be talked into
+    /// recording as the turn. A delegate's own turn lends this handle onward and hands its own
+    /// work a handle for the turn, which is that turn rather than this one.
+    fn recording_for(&mut self, _delegate: Option<DelegateId>) {}
 }
 
 /// Forward one report, saying whose it is first.
@@ -141,6 +154,18 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn delegate_started(&mut self, delegation: Delegation);
     }
 
+    /// Retain delegate totals until collection. Forwarding them would replace the parent's
+    /// cumulative total with one delegate's smaller total.
+    fn spent(&mut self, spent: crate::outcome::Spent) {
+        self.spent = spent;
+        if self.from.is_some() {
+            return;
+        }
+        let mut held = self.lent.hold();
+        held.reporting_for(None);
+        held.spent(spent);
+    }
+
     /// Not through the macro: whose report this is was settled when the handle was made, and a
     /// delegate finishing is the turn's news rather than the delegate's own.
     fn delegate_finished(
@@ -171,6 +196,10 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
         self.lent.hold().confirm_read_output(request)
+    }
+
+    fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+        self.lent.hold().confirm_vetted_read(request)
     }
 
     fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
@@ -206,5 +235,46 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
     /// question it did not ask. What was typed keeps until the next poll.
     fn interjection(&mut self) -> Option<String> {
         self.lent.try_hold()?.interjection()
+    }
+}
+
+impl<T: ?Sized> Borrowed<'_, '_, T> {
+    /// Keep completed usage available when a delegate returns an error without an outcome.
+    pub fn last_spent(&self) -> crate::outcome::Spent {
+        self.spent
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::outcome::Spent;
+    use crate::report::RecordingReporter;
+
+    fn a_total(tokens: u64) -> Spent {
+        Spent {
+            tokens,
+            ..Default::default()
+        }
+    }
+
+    /// A delegate must not overwrite parent progress while cancellation is still possible.
+    #[test]
+    fn what_a_delegate_has_spent_is_not_reported_as_what_the_turn_has() {
+        let mut recording = RecordingReporter::default();
+        {
+            let lent = Lent::new(&mut recording);
+            let mut turn = lent.turn();
+            let mut delegate = lent.delegate(DelegateId::nth(1));
+            turn.spent(a_total(1_000));
+            delegate.spent(a_total(5));
+            delegate.spent(a_total(10));
+            turn.spent(a_total(1_200));
+        }
+        assert_eq!(
+            recording.spent,
+            vec![a_total(1_000), a_total(1_200)],
+            "a delegate's own total was reported as the turn's"
+        );
     }
 }

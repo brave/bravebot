@@ -183,42 +183,48 @@ struct ListedByGateway {
 /// The destination is the gateway's own endpoint, which came from configuration rather than from
 /// anything fetched.
 ///
-/// Bearer-authenticated because some gateways refuse the listing otherwise, and because a roster is a
-/// per-account fact wherever a gateway offers different models to different keys.
+/// Bearer-authenticated where the block named a credential, because some gateways refuse the listing
+/// otherwise, and because a roster is a per-account fact wherever a gateway offers different models to
+/// different keys. A block naming none is asked without one, which is what a local Ollama wants.
 ///
 /// What this account may reach is asked for first, where the gateway answers such a question, and the
 /// service-wide roster is the fallback. The narrower answer is the better one: a model the credential
 /// cannot reach is a row that fails the moment somebody picks it, and the wide list is nearly three
 /// times the size here. Only the fallback is guaranteed to exist, since the account-scoped route is a
 /// gateway's own extension rather than part of the shape.
+///
+/// With no credential there is no account to scope an answer to, so that request is not made at all.
+/// It would spend a round trip to be told the same thing the wide roster says.
 pub fn list_from_gateway<S: Sink>(
     policy: &mut Policy<'_, S>,
     provider: &bravebot_config::provider::Provider,
-    token: &str,
+    token: Option<&str>,
     egress: &Egress,
 ) -> Result<Vec<Model>, ChatError> {
-    match fetch_listing(policy, provider.account_models_url(), token, egress) {
-        Ok(listed) => Ok(offered_by_gateway(provider, listed)),
+    if token.is_some() {
         // Any failure falls through to the wide roster: a gateway with no such route answers 404,
         // one that has it under another name answers something undecodable, and neither is a reason
         // to offer nothing when a list that does work is one request away.
-        Err(_) => {
-            let listed = fetch_listing(policy, provider.models_url(), token, egress)?;
-            Ok(offered_by_gateway(provider, listed))
+        if let Ok(listed) = fetch_listing(policy, provider.account_models_url(), token, egress) {
+            return Ok(offered_by_gateway(provider, listed));
         }
     }
+
+    let listed = fetch_listing(policy, provider.models_url(), token, egress)?;
+    Ok(offered_by_gateway(provider, listed))
 }
 
 /// One roster request, decoded.
 fn fetch_listing<S: Sink>(
     policy: &mut Policy<'_, S>,
     url: String,
-    token: &str,
+    token: Option<&str>,
     egress: &Egress,
 ) -> Result<Vec<ListedByGateway>, ChatError> {
-    let request = Request::get(&url)
-        .header("accept", "application/json")
-        .header("authorization", format!("Bearer {token}"));
+    let mut request = Request::get(&url).header("accept", "application/json");
+    if let Some(token) = token {
+        request = request.header("authorization", format!("Bearer {token}"));
+    }
 
     let response = egress.fetch(policy, request, Label::untrusted_public())?;
     let label = response.body.label();
@@ -284,9 +290,13 @@ fn offered_by_gateway(
             // A gateway states its parameters per model, and reasoning is not one field but two:
             // many rows take the gateway's own reasoning parameter and not this one, so a model
             // that reasons is not thereby a model that reads a level sent this way.
+            // A roster that says nothing about the field describes it no better than a settings
+            // block does, so the answer is the one this service has already given: a model whose
+            // service refused the field reads no level, and one that has refused nothing takes
+            // the level to be read until it says otherwise.
             reads_effort: match entry.supported_parameters.as_ref() {
                 Some(parameters) => parameters.iter().any(|it| it == EFFORT_PARAMETER),
-                None => true,
+                None => crate::reads_effort(&provider.chat_completions_url(), &entry.id),
             },
         })
         .collect()
@@ -633,6 +643,46 @@ mod tests {
     fn a_gateway_that_states_no_parameters_is_not_taken_to_read_no_level() {
         let models = from_gateway(&gateway(), r#"{"data": [{"id": "unstated"}]}"#);
         assert!(models[0].reads_effort);
+    }
+
+    /// A roster describing no parameters leaves the level to be judged by the service, and the
+    /// judgment is the only description of the field there is. A row that went on claiming a level
+    /// is read after the service refused it would show somebody a charge they chose and stopped
+    /// getting, which is what consulting a listing is for in the first place.
+    #[test]
+    fn a_row_whose_service_refused_a_level_reads_none_however_silent_the_roster() {
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"refuser": {
+                "options": {"baseURL": "https://refuser.example.invalid/v1"}
+            }}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        let provider = bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider");
+        crate::remember(
+            &crate::learned_key(&provider.chat_completions_url(), "refused-the-field"),
+            crate::Refusals {
+                caching: true,
+                effort: true,
+            },
+        );
+
+        let models = from_gateway(
+            &provider,
+            r#"{"data": [{"id": "refused-the-field"}, {"id": "refused-nothing"}]}"#,
+        );
+
+        assert!(
+            !models[0].reads_effort,
+            "a model whose service refused the field was still offered as reading a level"
+        );
+        assert!(
+            models[1].reads_effort,
+            "one model's refusal was read as the whole gateway refusing"
+        );
     }
 
     #[test]

@@ -114,11 +114,6 @@ impl Sandbox for SeatbeltSandbox {
         wrapped.arg(program);
         wrapped.args(args);
 
-        // The caller's environment is deliberately not inherited: credentials must never
-        // reach a confined process. A caller that needs a variable sets it on the
-        // returned command explicitly.
-        wrapped.env_clear();
-
         Ok(wrapped)
     }
 }
@@ -128,6 +123,7 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::os::unix::fs::MetadataExt;
     use std::process::Stdio;
 
     /// `CURLE_COULDNT_CONNECT`: curl reached the connection and was refused it. Any other code
@@ -162,6 +158,36 @@ mod tests {
         let profile = SeatbeltSandbox::profile(&policy);
         assert!(profile.contains(r#"(allow file-read* (subpath "/workspace"))"#));
         assert!(profile.contains(r#"(allow file-write* (subpath "/workspace/target"))"#));
+    }
+
+    /// A grant here is a name in a profile rather than a right on an open descriptor, so a
+    /// path that does not exist yet is one this backend can grant, and what a policy names
+    /// is what the profile carries. That is the half of the shared rule this backend
+    /// answers: the other cannot name such a path at all and refuses the policy rather
+    /// than granting less than it asked for, so a caller that meets a refusal there knows
+    /// it is the platform and not the policy.
+    ///
+    /// The command is built as well as the profile, so validation added here later has to
+    /// be decided rather than inherited from the other backend.
+    #[test]
+    fn a_path_that_is_not_there_yet_is_granted_as_named() {
+        let absent = "/bravebot-no-such-path/known_hosts";
+        assert!(
+            !Path::new(absent).exists(),
+            "the path has to be absent for this to say anything"
+        );
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_write(absent);
+        let profile = SeatbeltSandbox::profile(&policy);
+        assert!(
+            profile.contains(&format!(r#"(allow file-write* (subpath "{absent}"))"#)),
+            "the grant the policy named is not in the profile: {profile}"
+        );
+        SeatbeltSandbox
+            .command("/usr/bin/true", &[], &policy)
+            .expect("a path that is not there yet is a grant, not a refusal");
     }
 
     #[test]
@@ -317,12 +343,21 @@ mod tests {
         let permitted = denied.clone().allow_network_egress();
 
         // An address, so no resolver is involved, and stdout is discarded, so curl needs no file
-        // to write the body to.
+        // to write the body to. The proxy is refused in the argument vector because the
+        // environment here is this process's own: a machine whose shell exports `http_proxy`
+        // would otherwise have both halves of this test measure a connection to somewhere else.
         let curl = |policy: &SandboxPolicy| {
-            let args: Vec<String> = ["-s", "-m", "5", &format!("http://127.0.0.1:{port}/")]
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+            let args: Vec<String> = [
+                "-s",
+                "--noproxy",
+                "*",
+                "-m",
+                "5",
+                &format!("http://127.0.0.1:{port}/"),
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
             sandbox
                 .command("/usr/bin/curl", &args, policy)
                 .expect("command builds")
@@ -345,6 +380,99 @@ mod tests {
             refused.wait().expect("should wait").code(),
             Some(CURL_COULDNT_CONNECT),
             "the connection was not what failed, so this says nothing about network denial"
+        );
+    }
+
+    /// Writing a temporary file and renaming it into place is how a compiler, a package
+    /// manager and an editor write anything at all, so a confinement that denies the move
+    /// holds an ordinary build to less than the paths its policy granted. A write grant
+    /// here is a subpath rule covering every operation on what is under it, so this
+    /// backend needs nothing beyond the grant to permit the move; the other one needs the
+    /// kernel right that governs it, and the two are held to one rule.
+    ///
+    /// The inode is what the assertion is on, because `mv` answers a refused rename by
+    /// copying the file and unlinking the original: the destination exists either way, and
+    /// only a preserved inode says the move happened rather than a copy that is neither
+    /// atomic nor cheap.
+    #[test]
+    fn a_confined_process_can_rename_a_file_between_two_granted_directories() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-rename");
+        let _ = std::fs::remove_dir_all(&dir);
+        let source = dir.join("from").join("moved");
+        let destination = dir.join("to").join("moved");
+        std::fs::create_dir_all(dir.join("from")).expect("the scratch directory is creatable");
+        std::fs::create_dir_all(dir.join("to")).expect("the scratch directory is creatable");
+        std::fs::write(&source, b"contents").expect("the file is writable");
+        let inode = std::fs::metadata(&source).expect("the file is there").ino();
+
+        // Read as well as write: mv stats both ends before it moves anything, so a profile
+        // granting only the write fails over the stat and says nothing about the move.
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&dir)
+            .allow_write(&dir);
+        let mut child = sandbox
+            .command(
+                "/bin/mv",
+                &[
+                    source.display().to_string(),
+                    destination.display().to_string(),
+                ],
+                &policy,
+            )
+            .expect("command builds")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("should spawn");
+        assert!(
+            child.wait().expect("should wait").success(),
+            "a move inside one granted directory failed"
+        );
+        assert_eq!(
+            std::fs::metadata(&destination)
+                .expect("the destination is there")
+                .ino(),
+            inode,
+            "the file was copied and unlinked rather than moved, so the move was denied"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What a program may be trusted with in the environment is the caller's decision and
+    /// not a backend's: a credential lives in a variable rather than in a file, so no
+    /// grant over paths either withholds one or hands one over, and the agent socket a
+    /// push signs through is named by a variable as well. A backend that emptied it would
+    /// take that decision away from the caller here and leave it with the caller on the
+    /// other platform, which is one policy meaning two things.
+    ///
+    /// `CARGO_MANIFEST_DIR` is the variable read back because cargo sets it in the
+    /// environment of a test process, so it is one this process holds and nothing else
+    /// invents.
+    #[test]
+    fn the_environment_a_confined_process_receives_is_the_callers() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let held = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets this for a test");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin");
+
+        let printed = sandbox
+            .command("/usr/bin/env", &[], &policy)
+            .expect("command builds")
+            .output()
+            .expect("the confined process runs");
+
+        let environment = String::from_utf8_lossy(&printed.stdout);
+        assert!(
+            environment
+                .lines()
+                .any(|line| line == format!("CARGO_MANIFEST_DIR={held}")),
+            "a variable this process holds did not reach the confined process: {environment}"
         );
     }
 }

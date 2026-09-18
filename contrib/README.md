@@ -149,3 +149,26 @@ default is a hundred thousand tokens and a scripted session will not reach it.
 
 Sessions it runs are real: they are written to `~/.bravebot/sessions` like any other, and a script that
 approves a write will write the file. Run it somewhere disposable.
+
+## terminal-screenshot.py
+
+Turns a raw capture back into the screen a person would have seen, as text.
+
+`--squash` is for a substring check and is unreadable as a picture: the interface draws by moving
+the cursor and overwriting cells, so the bytes it wrote are not the frame it painted. Replaying
+those bytes against a grid of the same size gives the frame itself, which is what a bug report
+needs. A reader can act on a screen; nobody can act on a paragraph describing one.
+
+```sh
+contrib/drive_tui.py session.txt --raw capture.txt -- target/debug/bravebot
+contrib/terminal-screenshot.py capture.txt
+```
+
+`--cols` and `--rows` default to the 120x40 `drive_tui.py` runs at and must match the capture
+otherwise, since a frame laid out for one width replayed at another is wrong in a way that still
+looks like a screen. Colour is dropped, so the output survives being quoted and searched.
+
+Anything it does not model is named on stderr rather than dropped, and `--strict` exits non-zero on
+one, which is the flag to use before pasting a screen into an issue. `--selftest` checks the replay
+against captures whose screen is known and renders nothing; `make check-spec` runs it, because the
+[check-spec skill](../agents/skills/check-spec/SKILL.md) pastes what this prints into issue bodies.

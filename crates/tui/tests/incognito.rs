@@ -210,10 +210,11 @@ fn no_session_record_is_written() {
             model: None,
             todos: &BTreeMap::new(),
             asides: &[],
-            trust: &bravebot_core::trust::TrustStore::new(),
+            trust: &bravebot_core::trust::TrustStore::new("/work"),
             programs: &bravebot_core::programs::TrustedPrograms::from_iter([]),
             directories: &[],
             manifest: None,
+            rewind: &[],
         },
     );
 
@@ -259,6 +260,7 @@ fn no_audit_trail_is_written() {
         1,
         &[bravebot_tui::audit::Stamped {
             at: 1_700_000_000,
+            from: None,
             event: bravebot_core::event::Event::GatePassed {
                 gate: "a-gate",
                 detail: "a decision worth recording".to_string(),

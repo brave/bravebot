@@ -192,7 +192,7 @@ and do not let anything else mint an entry.
 `verified-by: bravebot_core::policy::a_turn_inherits_what_the_session_vouched_for`
 
 <a id="RUN-8"></a>
-### RUN-8: an entry is keyed by resolved path and exact arguments
+### RUN-8: an entry is keyed by resolved path, exact arguments, and the tree it was given in
 
 `git log` says nothing about `git push`, and nothing about `git log --all`. `$PATH` and aliases
 decide what a name means, so an assertion must not follow a name onto a different binary. Never
@@ -200,13 +200,29 @@ widen an entry to a program alone. In a pipeline **every** stage must be vouched
 output is untrusted, since an unvouched stage in the middle is a transformation nobody answered
 for and its output is what the next stage read.
 
-An entry also says nothing about **where** the command runs, because nothing in it records a
-directory. So it grants neither of RUN-7's two things outside the workspace root: a line naming a
-directory ([CMDLINE-12](command-line.md#CMDLINE-12)) is asked about however often it was vouched
-for, and what it prints is `(U,priv)`. `git log` pointed at a vendored dependency prints commit
-messages from a repository the person never answered a question about. Widening the key to include
-the directory would grant the shortcut there, and it is not done: it would put a tree into an entry
-the session record and `/status` (RUN-9) describe as a program and its arguments.
+An entry also records **where** the command runs, and grants RUN-7's two things in that one
+directory and nowhere else. The tree is the third thing a run prompt shows, beside the resolved
+binary and the argv ([CMDLINE-12](command-line.md#CMDLINE-12)), and an entry holding two of the
+three would record less than the question asked: `sh check.sh` designates a different file in every
+tree it is read in, so an answer given about the one in `sub/` is not an answer about a `check.sh`
+that appears at the root afterwards, and `git clean -fd` is a different proposition in two different
+trees. `git log` pointed at a vendored dependency is asked about however often `git log` was vouched
+for at the root, and what it prints is `(U,priv)`, because no entry names `vendor/dependency`.
+
+**One directory, and not the tree beneath it.** An entry given in `sub/` grants nothing in
+`sub/nested/`. Matching a prefix would put this same hole one level down, since the relative
+argument that designates a different file at the root designates a different file in a subdirectory
+too.
+
+**The canonical absolute path, as the only spelling.** `sub`, `./sub` and a symlink pointing at
+`sub` are one tree, and three keys for it would be three chances for a prompt somebody has already
+answered to appear again. Resolution happens where the I/O does, before a plan exists, for the
+reason the program is the resolved path.
+
+Nothing else a person settled in advance reaches a tree of its own: the trust map's relative rules,
+a rule in a settings file, and a line remembered past the session ([RUN-19](#RUN-19)) are spelled
+against the workspace root, and a remembered line records no tree at all. So a line running outside
+the root is asked about unless an entry names the tree it runs in.
 
 An entry says nothing about the **environment** either, because nothing in it records a `NAME=value`
 assignment written in front of a program. So it grants neither of RUN-7's two things for a line
@@ -216,9 +232,9 @@ arguments are looked at, so the line is a different proposition from the one the
 what it printed was written by whatever that assignment brought in. `a` is not offered for such a
 line at all, and the refusal is made twice, once where the prompt is drawn and again where an answer
 is acted on: an entry made there would be a bare entry, covering the same program under no
-assignment, so the list would end up holding something nobody was shown. Widening the key to include
-the environment is not done for the reason the directory is not: it would put a set of assignments
-into an entry the session record and `/status` (RUN-9) describe as a program and its arguments. The
+assignment, so the list would end up holding something nobody was shown. The directory is not the
+precedent for widening the key here: a tree has no other spelling, and an assignment has one
+already, which is the paragraph below. The
 question is put before a rule in a settings file is consulted, as
 [permissions.md](../permissions.md) requires: a rule is matched against the program and its arguments
 run together, a rendering an assignment is not in, so no rule anybody could write tells the two lines
@@ -237,6 +253,16 @@ meaning is not in its argv, not the setting of a variable.
 `verified-by: bravebot_core::policy::output_of_a_vouched_line_run_outside_the_root_is_untrusted`
 `verified-by: bravebot_core::policy::a_vouched_line_is_asked_about_when_no_root_is_known`
 `verified-by: bravebot_agent::turn::a_vouched_line_is_asked_about_again_when_a_directory_is_named`
+`verified-by: bravebot_core::policy::an_entry_given_outside_the_root_does_not_cover_the_same_line_at_the_root`
+`verified-by: bravebot_core::policy::output_at_the_root_of_a_line_vouched_for_outside_it_is_untrusted`
+`verified-by: bravebot_core::policy::an_entry_given_outside_the_root_grants_both_things_in_that_tree`
+`verified-by: bravebot_core::policy::an_entry_does_not_cover_a_directory_below_the_one_it_names`
+`verified-by: bravebot_core::policy::a_remembered_line_is_still_asked_about_outside_the_root_when_nothing_is_vouched_for`
+`verified-by: bravebot_core::programs::vouching_in_one_tree_says_nothing_about_the_same_command_in_another`
+`verified-by: bravebot_agent::turn::a_line_vouched_for_outside_the_root_is_asked_about_again_at_the_root`
+`verified-by: bravebot_agent::turn::a_symlinked_spelling_of_the_vouched_tree_is_the_same_entry`
+`verified-by: bravebot_agent::turn::a_second_spelling_of_the_vouched_tree_is_the_same_entry`
+`verified-by: bravebot_tui::confirm::a_run_prompt_names_the_tree_the_entry_would_be_given_in`
 `verified-by: bravebot_core::policy::a_vouched_line_carrying_an_environment_assignment_is_asked_about`
 `verified-by: bravebot_core::policy::output_of_a_vouched_line_carrying_an_environment_assignment_is_untrusted`
 `verified-by: bravebot_tui::confirm::a_run_carrying_an_environment_assignment_offers_no_standing_permission`
@@ -247,15 +273,35 @@ meaning is not in its argv, not the setting of a variable.
 ### RUN-9: the vouched list belongs to the session
 
 Empty at the start of every session, written into the session record, restored by `--resume`,
-never inherited by a fresh session in the same directory. `/status` lists what was granted. A line
-somebody asked to be remembered past the session is a separate record holding less, which
-[RUN-19](#RUN-19) governs, and it puts no entry in this list.
+never inherited by a fresh session in the same directory. `/status` lists every entry it holds
+rather than a count of them, and names the tree each one covers ([RUN-8](#RUN-8)): two entries for
+one command in two directories are two grants, and a report drawing them as one line twice says
+nothing about which of the two is held. A line somebody asked to be remembered past the session is a
+separate record holding less, which [RUN-19](#RUN-19) governs, and it puts no entry in this list.
+
+A tree inside the project is written into the record relative to it and comes back under the
+directory the resumed session works in, as a rewind's paths and the trust map's rules are
+([SESSION-22](../sessions.md#SESSION-22)); a tree outside the project is written in full, there
+being nothing to write it against. So a checkout that is moved or renamed keeps its entries, and an
+unrelated checkout standing where it used to be inherits none of them. Records are found by the
+directory a session ran in, which a second checkout at that path inherits, so a tree written in full
+would be an entry answering in a tree nobody vouched for: the hole this clause's own key exists to
+close, one checkout out.
+
+A record written before an entry held a tree restores as one given at the workspace root, which is
+the only place such an entry could ever have been spent. Nothing else is migrated: reading it any
+other way would either widen a permission nobody gave or drop one they did.
 
 **Why.** The same reason the trust map belongs to a session. Its effect is invisible until a prompt
 does not appear, so it has to be readable back.
 
 `verified-by: bravebot_core::policy::a_fresh_policy_vouches_for_no_command`
 `verified-by: bravebot_core::policy::a_line_remembered_past_the_session_vouches_for_nothing`
+`verified-by: bravebot_tui::status::every_vouched_command_is_listed_however_many_there_are`
+`verified-by: bravebot_tui::status::the_report_names_the_tree_each_vouched_command_runs_unasked_in`
+`verified-by: bravebot_tui::sessions::an_entry_recorded_without_a_tree_comes_back_scoped_to_the_root`
+`verified-by: bravebot_tui::sessions::a_tree_inside_the_project_is_written_down_relative`
+`verified-by: bravebot_tui::sessions::a_tree_written_down_relative_comes_back_under_the_resumed_root`
 
 <a id="RUN-10"></a>
 ### RUN-10: the vouched-for list is not an allowlist and must never become one
@@ -271,7 +317,10 @@ output, not a belief about the binary. The audited table in [command-line.md](co
 not one: a program absent from it is neither refused nor confined, only asked about, and what the
 table establishes is what an output may be labelled rather than what may run.
 
-`verified-by: none`
+`verified-by: bravebot_core::policy::a_command_nobody_vouched_for_is_put_to_a_person`
+`verified-by: bravebot_core::policy::a_fresh_policy_vouches_for_no_command`
+`verified-by: bravebot_agent::turn::an_approved_run_executes_and_the_user_saw_what_it_was`
+`verified-by: bravebot_agent::exec::the_users_own_environment_still_reaches_a_program`
 
 <a id="RUN-11"></a>
 ### RUN-11: a run has a wall-clock limit, and reaching it ends the run rather than failing it
@@ -887,14 +936,70 @@ asking, and it makes nothing readable. A file they edited is also one they can r
 Saying nothing
 would be the worse answer, for the reason [RUN-14](#RUN-14) says what would lift a quarantine rather
 than leaving it to be found: somebody answering the same shape of prompt all day learns nothing from
-the prompt about the durable form.
+the prompt about the durable form. No pattern is put on the screen, for the reason a box with one in
+it is refused above: naming the file is the fact they cannot get from anywhere else, and composing
+the rule is the judgment only they can make.
+
+**How a prompt knows which line that is.** The person has already read a run prompt for the same
+binary, in this session, under a different argument list. Two argument lists for one program is the
+variation itself rather than a reading of the argv, and nothing in it says which position moved, so
+this establishes what the clause needs without making the judgment the clause refuses. It is read
+off the run prompts this session has drawn, which is a list that grants nothing: membership stops no
+prompt, raises no label, vouches for nothing and reaches no file. It is written nowhere, not even
+into the session record that carries the vouched list across a `--resume` ([RUN-9](#RUN-9)), because
+what it holds is questions somebody read rather than anything they are carrying. So the first prompt
+of a session says nothing about patterns, and so does the first prompt of a resumed one. Neither does
+any prompt on a machine that names no home directory, since there is no file to name and advice that
+cannot say which file is a chore handed over without the one fact it needs.
+
+The whole line is compared at once, and the argument lists the line itself holds are not what it
+differs from. `grep TODO src | grep -v test` names one binary under two argument lists, so a
+step-by-step reading would have that line, asked about a second time, varying from itself.
+
+**Only where a rule would decide the line.** The advice says that editing a file ends the asking, so
+it is given only where that is true. A line releasing private input, naming a file to write, running
+anywhere but the workspace root, or writing an assignment in front of a program is put to a person
+before any rule is read ([RUN-6](#RUN-6), [RUN-8](#RUN-8)), so no pattern reaches one and saying
+otherwise would have somebody change the wrong thing about the line. These are the same four
+refusals [RUN-19](#RUN-19)'s key is withheld for, and for the same reason: each is made before the
+thing being offered is consulted. Where a rule already matches the line, nothing is said either,
+since the person has found the file and what their rule says is what happens.
+
+**Why not on every prompt.** [RUN-19](#RUN-19)'s key is the whole of the answer for a line that
+repeats, so the advice there would send somebody to edit a file where a keypress would do. It is
+drawn beside that key rather than instead of it, because a line can repeat and vary in one session
+and both answers are then true of it.
 
 **A known cost.** A line whose arguments change every time is asked about every time, in this session
 and in the next. A commit message and a new branch name are the two that do this in ordinary work.
 The answer for them is a pattern the person writes or a prompt each time, and this clause chooses the
 prompt.
 
-`verified-by: none`
+**A second known cost.** Two different jobs for one program read as one job whose arguments moved.
+`git log` followed by `git push` draws the advice, because telling those apart means deciding which
+argument names something to run, which is what this clause refuses to decide for a grant and cannot
+decide here either. What it costs is a sentence of advice where a person did not need one, against
+the alternative of withholding it from the case it exists for.
+
+`verified-by: bravebot_core::programs::a_second_argument_list_for_one_binary_is_a_line_whose_arguments_vary`
+`verified-by: bravebot_core::programs::a_line_asked_about_twice_is_not_a_line_whose_arguments_vary`
+`verified-by: bravebot_core::programs::a_line_nothing_has_been_asked_about_has_no_arguments_that_have_varied`
+`verified-by: bravebot_core::programs::a_second_binary_is_not_the_first_ones_arguments_varying`
+`verified-by: bravebot_core::programs::asking_about_a_line_vouches_for_nothing`
+`verified-by: bravebot_core::policy::a_binary_asked_about_under_two_argument_lists_is_one_whose_arguments_have_varied`
+`verified-by: bravebot_core::policy::a_line_asked_about_again_unchanged_has_not_varied`
+`verified-by: bravebot_core::policy::a_line_asked_about_is_not_thereby_vouched_for_or_remembered`
+`verified-by: bravebot_core::policy::a_line_the_rules_are_never_read_for_is_one_no_pattern_would_answer`
+`verified-by: bravebot_core::programs::a_line_naming_one_binary_twice_does_not_vary_from_itself`
+`verified-by: bravebot_agent::turn::a_line_no_rule_is_ever_read_for_is_advised_no_pattern`
+`verified-by: bravebot_core::policy::vouching_for_one_command_does_not_cover_another_of_the_same_program`
+`verified-by: bravebot_core::remembered::no_entry_reaches_a_second_argument_list`
+`verified-by: bravebot_agent::turn::a_binary_asked_about_under_two_argument_lists_is_advised_to_a_settings_file`
+`verified-by: bravebot_agent::turn::a_line_asked_about_again_unchanged_is_advised_no_pattern`
+`verified-by: bravebot_tui::confirm::a_prompt_for_a_line_whose_arguments_vary_names_the_settings_file`
+`verified-by: bravebot_tui::confirm::a_prompt_for_a_line_whose_arguments_vary_says_what_a_pattern_costs`
+`verified-by: bravebot_tui::confirm::advising_a_pattern_offers_no_key_that_grants_one`
+`verified-by: bravebot_tui::confirm::a_prompt_for_a_line_nothing_has_varied_says_nothing_about_a_pattern`
 
 ## Open questions
 

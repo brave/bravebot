@@ -12,7 +12,6 @@
 use crate::diff::Change;
 use bravebot_core::todo::Row;
 use bravebot_i18n::t;
-use std::fmt;
 
 /// One thing the turn did, shaped for the person watching.
 ///
@@ -29,6 +28,12 @@ pub struct Activity {
     pub verb: &'static str,
     /// What is being acted on, as the model named it. Empty where there is nothing to name.
     pub target: String,
+    /// The tool's own name, as dispatch matched it. Empty where nothing set one.
+    ///
+    /// Beside [`Activity::verb`] rather than instead of it, because the two have different
+    /// audiences: the verb is a word in the reader's own language, and this is what a program
+    /// matches on. A surface that offered only the verb would have a script keying off French.
+    pub tool: String,
     /// What came of it, in a few words. `None` while the call is still running, which is what
     /// makes an unfinished line distinguishable from one that finished with nothing to say.
     pub note: Option<String>,
@@ -53,11 +58,18 @@ impl Activity {
         Self {
             verb,
             target: target.into(),
+            tool: String::new(),
             note: None,
             failed: false,
             changes: Vec::new(),
             untrusted: false,
         }
+    }
+
+    /// Say which tool this is, by the name dispatch matched rather than the word shown.
+    pub fn of_tool(mut self, tool: &str) -> Self {
+        self.tool = tool.to_string();
+        self
     }
 
     /// The same call, finished, with what came of it.
@@ -417,36 +429,9 @@ impl Landing {
 
 /// Which run a report describes.
 ///
-/// Minted by the driver, one per delegate, counting from one in the order they were spawned. It
-/// is the driver's own number and nothing a model wrote: several delegates report at once, and an
-/// interface working out whose line it was holding would be taking that decision from prose.
-///
-/// Small and copyable because everything carrying one is on a hot path, and ordered because the
-/// order they were spawned in is the order anything showing them uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DelegateId(u32);
-
-impl DelegateId {
-    /// The `n`th delegate of a turn, counting from one.
-    pub fn nth(n: u32) -> Self {
-        Self(n)
-    }
-
-    /// Its position, counting from one.
-    pub fn position(self) -> u32 {
-        self.0
-    }
-}
-
-/// How a planner names one when it asks about it again.
-///
-/// Short because it is typed back into a tool call, and prefixed because a bare number in an
-/// argument reads as a count of something.
-impl fmt::Display for DelegateId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "d{}", self.0)
-    }
-}
+/// The kernel's own number, because a gate records under it too: the audit trail names the run
+/// whose decision it holds with the same number the screen names the run whose work it shows.
+pub use bravebot_core::delegate::DelegateId;
 
 /// One delegate, for the person watching it work.
 ///
@@ -465,6 +450,9 @@ pub struct Delegation {
 }
 
 pub trait Reporter {
+    /// Cumulative usage from completed requests. Each report replaces the previous total.
+    fn spent(&mut self, _spent: crate::outcome::Spent) {}
+
     /// The task list changed. Rows are already shaped for display and released.
     fn todos(&mut self, rows: Vec<Row>);
 
@@ -606,6 +594,7 @@ pub struct RecordingReporter {
     pub updates: Vec<Vec<Row>>,
     /// Every output-token count reported, in order.
     pub written: Vec<u64>,
+    pub spent: Vec<crate::outcome::Spent>,
     /// Every tool call announced as starting, in order.
     pub started: Vec<Activity>,
     /// Every tool call announced as finished, in order.
@@ -637,6 +626,10 @@ pub struct RecordingReporter {
 }
 
 impl Reporter for RecordingReporter {
+    fn spent(&mut self, spent: crate::outcome::Spent) {
+        self.spent.push(spent);
+    }
+
     fn todos(&mut self, rows: Vec<Row>) {
         self.updates.push(rows);
     }
@@ -727,6 +720,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "ask_user" => t!(verb_ask_user),
         "run" => t!(verb_run),
         "read_output" => t!(verb_read_output),
+        "vet_content" => t!(verb_vet_content),
         "fetch_url" => t!(verb_fetch_url),
         "remember" => t!(verb_remember),
         "job_output" => t!(verb_job_output),
@@ -734,6 +728,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         // watching a line go by should be able to see that the work moved somewhere else.
         "spawn_agent" => t!(verb_spawn_agent),
         "schedule_next" => t!(verb_schedule_next),
+        "watch_file" => t!(verb_watch_file),
         _ => t!(verb_unknown),
     }
 }
@@ -867,12 +862,15 @@ mod tests {
     /// shows up in the transcript as the fallback, which tells the user nothing.
     #[test]
     fn every_offered_tool_has_its_own_verb() {
-        for tool in crate::tools::available(crate::tools::Scheduling::ArrangingALook)
-            .into_iter()
-            .chain(crate::tools::available(
-                crate::tools::Scheduling::PacingALoop,
-            ))
-        {
+        for tool in crate::tools::available(
+            crate::tools::Scheduling::ArrangingALook,
+            crate::watch::Arming::Allowed { free: 1 },
+        )
+        .into_iter()
+        .chain(crate::tools::available(
+            crate::tools::Scheduling::PacingALoop,
+            crate::watch::Arming::Allowed { free: 1 },
+        )) {
             let name = &tool.function.name;
             assert_ne!(
                 verb_for(name),

@@ -20,6 +20,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod transport;
+
+pub use transport::{Transport, TrustError, TrustRoots};
+
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
@@ -326,6 +330,15 @@ impl Egress {
     /// Exists so the bounds can be exercised in a test at a scale a test can wait for. Nothing in
     /// the product changes them: the defaults are the product's.
     pub fn with_timeouts(timeouts: Timeouts) -> Self {
+        Self::with_transport(timeouts, Transport::shared())
+    }
+
+    /// As [`Egress::with_timeouts`], against trust roots and a proxy the caller states.
+    ///
+    /// Private, because the product has one answer to both and it is the environment's. A test
+    /// states them so that what the environment resolves to can be pinned without setting a
+    /// variable for every other test in the process.
+    fn with_transport(timeouts: Timeouts, transport: &Transport) -> Self {
         // ureq gives a phase the earliest of its own deadline and the deadlines of the phases
         // before it (`Timeout::preceeding`, ureq 3.4 src/timings.rs), which its configuration
         // does not say. A number handed over here therefore bounds the phase it names *and* the
@@ -333,7 +346,8 @@ impl Egress {
         // `send` straight to the send phases instead would bound the wait for the reply by
         // `send`, and an endpoint that took longer than that to start answering would be
         // reported as a failed send and the request sent again.
-        let config = ureq::Agent::config_builder()
+        let config = transport
+            .agent_config_builder()
             // Redirects are handled here so each hop can be revalidated; letting the
             // client follow them silently would defeat the gate.
             .max_redirects(0)
@@ -703,6 +717,25 @@ fn read_capped(mut reader: Box<dyn std::io::Read>) -> Result<(Vec<u8>, bool), st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The one way out is built from the shared transport, so the certificate authorities and the
+    /// proxy a machine states reach the gated path rather than only whichever client happened to
+    /// be configured with them. A client built from the library's own defaults here would leave
+    /// every agent request on a different trust set from the rest of the process.
+    #[test]
+    fn the_one_way_out_is_built_against_the_stated_transport_rather_than_a_default_client() {
+        let egress = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, Some("http://proxy.corp:3128"), None),
+        );
+
+        let config = egress.agent.config();
+        assert_eq!(config.proxy().map(|proxy| proxy.port()), Some(3128));
+        assert!(matches!(
+            config.tls_config().root_certs(),
+            ureq::tls::RootCerts::WebPki
+        ));
+    }
 
     /// The classification a retry rests on. Getting it wrong in one direction repeats a request
     /// that will fail identically, and in the other abandons one that would have worked.

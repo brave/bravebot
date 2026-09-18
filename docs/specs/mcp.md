@@ -119,3 +119,22 @@ nothing about what went wrong, and what went wrong is usually a person's own ser
 `verified-by: bravebot_mcp::lib::a_failing_tools_detail_stays_out_of_the_error_message`
 `verified-by: bravebot_mcp::stdio::a_tool_level_error_is_reported_as_a_failure`
 `verified-by: bravebot_mcp::http::a_tool_level_error_is_reported_as_a_failure`
+
+<a id="MCP-9"></a>
+### MCP-9: a stdio server is started with no environment
+
+The environment this process holds is emptied before a server starts, on every platform.
+
+**Why.** A server is code we did not write, and a credential this process authenticates with sits
+in a variable rather than in a file, so confinement over paths withholds none of it. A program
+`run` starts keeps the rest of the environment because a person typed the line and it is meant to
+behave as their own terminal does ([tools/run.md](tools/run.md)); nobody types a server, so there
+is no such expectation to meet here. Emptying it where the server is launched rather than leaving
+it to whichever backend confines the process is what makes the answer the same on both platforms.
+
+**A known cost.** A server that reads a variable to work at all is one that does not work: a
+command resolved through `PATH`, and a server wanting a token of a person's own, are both left to
+whatever names variables for a server when servers are reachable from something
+(issue #83).
+
+`verified-by: bravebot_mcp::stdio::a_server_does_not_receive_this_processes_environment`

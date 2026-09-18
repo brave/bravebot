@@ -21,7 +21,7 @@
 
 use bravebot_agent::confirm::{
     Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RememberRequest,
-    RunDecision, RunRequest, ServerRequest, VouchRequest, WriteRequest,
+    RunDecision, RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Shown,
@@ -87,6 +87,9 @@ pub enum ToMain {
     /// A command's output needs a person to read it before the planner may. The main thread
     /// must reply.
     ReadOutput(OutputRequest),
+    /// A quarantined slot the planner asked to be shown, with what a check made of it. The main
+    /// thread must reply.
+    Vet(VetRequest),
     /// A URL the planner wants fetched. The main thread must reply.
     Fetch(FetchRequest),
     /// A row the planner wants remembered. The main thread must reply.
@@ -103,6 +106,8 @@ pub enum ToMain {
     Todos(Vec<Row>),
     /// The model has written this many output tokens so far. No reply.
     Written(u64),
+    /// Cumulative usage from completed requests.
+    Spent(bravebot_agent::Spent),
     /// The turn is waiting on the model again. No reply.
     Phase(Phase),
     /// The model said something between tool calls. No reply.
@@ -145,6 +150,7 @@ pub enum Reply {
     Write(Decision),
     Run(RunDecision),
     ReadOutput(Decision),
+    Vet(Decision),
     Fetch(Decision),
     Remember(Decision),
     Vouch(Decision),
@@ -205,6 +211,15 @@ impl Confirmer for RemoteConfirmer {
             Some(Reply::ReadOutput(decision)) => decision,
             // A reply to a different question is not consent to put these bytes in the planner's
             // context.
+            _ => Decision::Reject,
+        }
+    }
+
+    fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+        match self.exchange(ToMain::Vet(request.clone())) {
+            Some(Reply::Vet(decision)) => decision,
+            // A reply to a different question is not consent to put these bytes in the planner's
+            // context, and neither is the verdict that travelled out with the question.
             _ => Decision::Reject,
         }
     }
@@ -279,6 +294,10 @@ impl RemoteReporter {
 }
 
 impl Reporter for RemoteReporter {
+    fn spent(&mut self, spent: bravebot_agent::Spent) {
+        let _ = self.outbound.send(ToMain::Spent(spent));
+    }
+
     fn todos(&mut self, rows: Vec<Row>) {
         // Deliberately ignored. Unlike a write, there is no decision resting on this arriving,
         // so a closed channel means the display is gone, not that the turn should stop.
@@ -367,6 +386,7 @@ mod tests {
             existing: None,
             intent: Intent::Create,
             untrusted: false,
+            remark: None,
         }
     }
 
@@ -524,6 +544,54 @@ mod tests {
         assert!(
             !answer.remember,
             "a standing permission was inferred from a channel nobody answered"
+        );
+    }
+
+    fn a_vetting() -> VetRequest {
+        VetRequest {
+            origin: "example.com/notes".into(),
+            expects: "the release notes".into(),
+            content: "the notes".into(),
+            verdict: bravebot_core::vetting::Verdict::Safe,
+            reason: None,
+        }
+    }
+
+    /// An approval to read what a program printed is not an approval to promote a slot. The two
+    /// cover different things, so a reply tagged as answering one must not settle the other.
+    #[test]
+    fn an_approved_output_read_does_not_approve_a_vetted_read() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let (answer_tx, answer_rx) = channel();
+
+        let responder = thread::spawn(move || {
+            inbound.recv().expect("a message arrived");
+            answer_tx
+                .send(Reply::ReadOutput(Decision::Approve))
+                .expect("answered");
+        });
+
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        assert_eq!(
+            confirmer.confirm_vetted_read(&a_vetting()),
+            Decision::Reject,
+            "consent to read a command's output was taken as consent to promote a slot"
+        );
+        responder.join().expect("responder finished");
+    }
+
+    /// Nobody is there to ask, so nothing is promoted. The verdict travelling out with the
+    /// question does not answer it: a word from a model is not a person having read something.
+    #[test]
+    fn a_closed_channel_refuses_a_vetted_read() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let (_answer_tx, answer_rx) = channel::<Reply>();
+        drop(inbound);
+
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        assert_eq!(
+            confirmer.confirm_vetted_read(&a_vetting()),
+            Decision::Reject
         );
     }
 
@@ -729,12 +797,14 @@ mod tests {
                     ToMain::Ask(_) => seen.push("ask"),
                     ToMain::Run(_) => seen.push("run"),
                     ToMain::ReadOutput(_) => seen.push("read_output"),
+                    ToMain::Vet(_) => seen.push("vet"),
                     ToMain::Fetch(_) => seen.push("fetch"),
                     ToMain::Remember(_) => seen.push("remember"),
                     ToMain::Vouch(_) => seen.push("vouch"),
                     ToMain::Server(_) => seen.push("server"),
                     ToMain::Manifest(_) => seen.push("manifest"),
                     ToMain::Todos(_) => seen.push("todos"),
+                    ToMain::Spent(_) => seen.push("spent"),
                     ToMain::Written(_) => seen.push("written"),
                     ToMain::Phase(_) => seen.push("phase"),
                     ToMain::Narration(_) => seen.push("narration"),
@@ -808,5 +878,22 @@ mod tests {
 
         let mut reporter = RemoteReporter::new(outbound);
         reporter.output_tokens(7);
+    }
+    /// A worker can finish with an error after sending progress, so totals travel on their own.
+    #[test]
+    fn cumulative_usage_reaches_the_main_thread_unchanged() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let mut reporter = RemoteReporter::new(outbound);
+        let spent = bravebot_agent::Spent {
+            tokens: 120,
+            ..Default::default()
+        };
+        reporter.spent(spent);
+        reporter.spent(spent);
+        drop(reporter);
+        for _ in 0..2 {
+            assert!(matches!(inbound.recv().unwrap(), ToMain::Spent(total) if total == spent));
+        }
+        assert!(inbound.recv().is_err());
     }
 }

@@ -50,6 +50,7 @@ rules here.
 | when a person is asked, and what an answer grants | [prompting.md](docs/specs/prompting.md) |
 | answering those prompts in advance: accepting edits, planning, bypassing | [permission-modes.md](docs/specs/permission-modes.md) |
 | `AGENTS.md` and skills | [skills.md](docs/specs/skills.md) |
+| running a command of a person's own when something happens | [hooks.md](docs/specs/hooks.md) |
 | which crate may do what | [layering.md](docs/specs/layering.md) |
 | shortening a long conversation | [compaction.md](docs/specs/compaction.md) |
 | what is recorded about every decision | [trace.md](docs/specs/trace.md) |
@@ -59,6 +60,10 @@ Before adding a tool, ask what its routing field is and whether a person could a
 alone. If they could not, it does not get built.
 
 ## Working here
+
+Before changing behaviour or adding, removing, or weakening test assertions, use
+[testing-preflight](agents/skills/testing-preflight/SKILL.md). Apply it before choosing the
+test approach, and use its evidence requirements when reporting the result.
 
 [docs/development/](docs/development/README.md) is how this repository is worked on: what to run
 before a commit and before a push, what one commit contains, the specs the code is developed

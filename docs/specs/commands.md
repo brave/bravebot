@@ -5,7 +5,7 @@ status: normative
 governs:
   - crates/tui/src/app.rs
 guards:
-  - symbol: COMMANDS
+  - symbol: commands
 ---
 
 ## Scope
@@ -17,8 +17,9 @@ the line once it is.
 Not what any particular command then does. `/add-dir`, `/cd` and `/status` are the trust map's, in
 [trust-map.md](trust-map.md); `/compact` is [compaction.md](compaction.md)'s; `/clear` begins a
 session, which is [sessions.md](sessions.md)'s; `/btw` asks something the conversation never sees,
-and where its answer is drawn is [watching.md](watching.md)'s. The `!` prompt is a different
-surface entirely and is [shell-mode.md](shell-mode.md).
+and where its answer is drawn is [watching.md](watching.md)'s; `/manifest` starts the other kind of
+run, which is [manifest.md](manifest.md)'s. The `!` prompt is a different surface entirely and is
+[shell-mode.md](shell-mode.md).
 
 **Skills are not on this surface.** Other agents let a person type a skill's name after a slash,
 and this one does not: a skill is advertised to the planner by name and description, and its body
@@ -150,6 +151,7 @@ exactly those characters have to arrive.
 `verified-by: bravebot_tui::app::the_add_dir_command_carries_its_directory`
 `verified-by: bravebot_tui::app::the_cd_command_carries_its_directory`
 `verified-by: bravebot_tui::app::the_btw_command_carries_its_question`
+`verified-by: bravebot_tui::app::a_session_can_ask_for_a_manifest_run`
 `verified-by: bravebot_tui::app::a_tilde_is_expanded_only_as_a_whole_first_segment`
 
 

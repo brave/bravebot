@@ -12,7 +12,7 @@ use bravebot_mcp::{McpError, StdioServer};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::{Sandbox, Unavailable};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// Serialises the tests in this binary, which all write a script and then execute it.
@@ -90,6 +90,31 @@ while IFS= read -r line; do
 done
 "#;
 
+/// A server that reports one variable of its own environment, so a test can say whether
+/// this process's environment reached it.
+///
+/// `CARGO_MANIFEST_DIR` is the variable asked for because cargo sets it in the environment
+/// of a test process, and no shell invents one for itself: an empty answer is the
+/// environment having been emptied rather than the variable never having existed.
+const ENVIRONMENT_REPORTING_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/call"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"[%s]"}]}}\n' "$id" "$CARGO_MANIFEST_DIR"
+      ;;
+    *'"notifications/initialized"'*)
+      ;;
+  esac
+done
+"#;
+
+/// The variable the server above reports, and the one this process is asked for.
+const REPORTED_VARIABLE: &str = "CARGO_MANIFEST_DIR";
+
 fn routing() -> Routing {
     let mut r = Routing::new();
     r.insert_trusted("task", "use a tool");
@@ -102,18 +127,28 @@ fn routing() -> Routing {
 /// backend refuses a policy requiring network denial because that is not implemented
 /// there yet, and refusing is the correct behaviour, so a test that wants a successful
 /// spawn on both platforms has to ask for the weaker policy the backend can honour.
+///
+/// The list names both platforms' directories and grants the ones this machine has: the
+/// temporary directory is under `/private/var` on macOS and `/tmp` on Linux, and a path
+/// that is not there is a grant a backend may refuse the whole policy over.
 fn sandbox_policy() -> SandboxPolicy {
-    SandboxPolicy::strict()
-        .allow_network_egress()
-        .allow_read("/usr")
-        .allow_read("/bin")
-        .allow_read("/lib")
-        .allow_read("/lib64")
-        // macOS puts the temporary directory under /private/var; Linux uses /tmp.
-        .allow_read("/private/var/folders")
-        .allow_read("/tmp")
-        .allow_read("/var")
-        .allow_subprocesses()
+    [
+        "/usr",
+        "/bin",
+        "/lib",
+        "/lib64",
+        "/private/var/folders",
+        "/tmp",
+        "/var",
+    ]
+    .into_iter()
+    .filter(|path| Path::new(path).exists())
+    .fold(
+        SandboxPolicy::strict()
+            .allow_network_egress()
+            .allow_subprocesses(),
+        SandboxPolicy::allow_read,
+    )
 }
 
 /// Skip where no real backend exists, since these tests need a spawn to succeed.
@@ -363,6 +398,57 @@ fn a_server_that_exits_early_is_an_error() {
         .initialize("bravebot", "0.1.0")
         .expect_err("a dead server cannot handshake");
     assert!(matches!(error, McpError::Transport(_)), "got: {error}");
+
+    let _ = std::fs::remove_file(&script);
+}
+
+/// A server is code from outside, and a variable this process holds is not something a
+/// policy over paths can withhold from it: an API key lives in the environment rather
+/// than on disk, so a server that inherits it has been handed it whatever the profile
+/// names. The environment is emptied here rather than by whichever backend happens to be
+/// in use, so both platforms hand a server the same nothing.
+#[test]
+fn a_server_does_not_receive_this_processes_environment() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    assert!(
+        std::env::var_os(REPORTED_VARIABLE).is_some(),
+        "this test needs a variable the parent holds, and cargo sets {REPORTED_VARIABLE} \
+         for a test process"
+    );
+    let script = fake_server("environment", ENVIRONMENT_REPORTING_SERVER);
+
+    let mut server = StdioServer::launch(
+        "fake",
+        script.to_str().expect("path"),
+        &[],
+        sandbox.as_ref(),
+        &sandbox_policy(),
+    )
+    .expect("server launches");
+    server.initialize("bravebot", "0.1.0").expect("handshake");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::McpCall]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let reported = server
+        .call_tool(&mut policy, "echo", serde_json::json!({}))
+        .expect("tool call succeeds");
+
+    let proof = policy.authorise_display_release("test reads what the server was given");
+    assert_eq!(
+        reported.declassify(&proof),
+        "[]",
+        "the server was handed a variable this process holds"
+    );
 
     let _ = std::fs::remove_file(&script);
 }

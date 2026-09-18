@@ -16,8 +16,8 @@ governs:
 
 ## Scope
 
-What the user types into: how the box behaves, which keys do what, and where a terminal's own
-limits show through. What is drawn back is [terminal-transcript.md](terminal-transcript.md), and
+What the user types into: how the box behaves, which keys do what, what the session takes from the
+terminal to make any of it work, and where a terminal's own limits show through. What is drawn back is [terminal-transcript.md](terminal-transcript.md), and
 pasting is [pasting.md](pasting.md).
 
 ## Clauses
@@ -75,6 +75,8 @@ sent nothing. What lingered was the row, which is the only place a person can se
 the marker out worked: left drawn, it says a file is going that is not.
 
 `verified-by: bravebot_tui::drop::deleting_the_marker_takes_the_attachment_off`
+`verified-by: bravebot_tui::state::deleting_a_marker_takes_the_picture_back`
+`verified-by: bravebot_tui::state::deleting_the_marker_takes_the_paste_back`
 `verified-by: bravebot_tui::drop::several_files_dropped_together_each_get_a_marker`
 `verified-by: bravebot_tui::drop::sending_a_line_clears_what_was_attached_to_it`
 `verified-by: bravebot_tui::render::an_attached_file_is_named_under_the_box`
@@ -108,9 +110,10 @@ offer lives for exactly one press, since it answers the press just made and the 
 answer to it. Nothing is said where the box was already empty: that press leaves, and a press that
 leaves is not one to explain.
 
-**Stopping is silent, and the prompt comes back.** Neither key says that it is stopping. A reply
-still arriving stops arriving, the prompt that was sent returns to the box for editing, and that
-is the whole of the answer. There is nothing to wait through and so nothing to report waiting on.
+**Stopping shows a cancelled status, and the prompt comes back when the box can take it.**
+The reply stops arriving. When no work followed the prompt, no prompts are queued, and the box is
+empty, the prompt returns for editing. The status identifies a deliberate cancellation rather than
+a failure or a completed answer.
 
 The prompt stays sent, marked stopped, where any of three things is true: the turn had already
 done something that is on the screen, there are prompts waiting behind it, or the box is not empty.
@@ -286,6 +289,7 @@ attached to no press.
 `verified-by: bravebot_tui::app::a_long_paste_folds_while_a_turn_is_running`
 `verified-by: bravebot_tui::app::a_file_dropped_while_a_turn_is_running_is_attached`
 `verified-by: bravebot_tui::app::ctrl_j_is_not_swallowed_while_a_turn_runs`
+`verified-by: bravebot_tui::app::ctrl_v_reads_the_clipboard_during_a_turn_too`
 
 <a id="INPUT-10"></a>
 ### INPUT-10: a prompt sent while a turn runs goes into that turn, at its next round boundary
@@ -457,8 +461,11 @@ all: what is drawn is a mode somebody chose, named in [permission-modes.md](perm
 marker standing there on every session is one people stop reading, and being read is the whole of
 what this one is for.
 
-**What does not fit is dropped whole, at a separator.** The parts are given up in order (the way to
-the bindings, then the trail key, then the figures), and the mode is the last to go. Left to the
+**What does not fit is dropped whole, at a separator.** The parts are given up in order (a reading
+with no figure in it, then the way to the bindings, then the trail key, then the figures), and the
+mode is the last to go. A note about what a press just did, drawn at the right of the same row,
+takes its room ahead of all of them: the parts are fitted against the width it leaves, since a part
+fitted against the whole width is one the note writes over the middle of. Left to the
 terminal, the line is cut wherever the final column falls, which puts half a word under the box:
 that reads as a rendering fault, where a part that is simply absent reads as a line with no room,
 which is the truth.
@@ -500,6 +507,8 @@ prevent, and a mode read off `/status` after the write is a mode read too late.
 `verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_the_ordinary_mode`
 `verified-by: bravebot_tui::render::a_narrow_terminal_gives_up_the_bindings_rather_than_the_mode`
 `verified-by: bravebot_tui::render::what_does_not_fit_is_dropped_whole_rather_than_cut_mid_word`
+`verified-by: bravebot_tui::render::a_reading_with_no_figure_in_it_is_given_up_before_a_binding`
+`verified-by: bravebot_tui::render::a_note_at_the_right_takes_its_room_from_the_parts_rather_than_over_them`
 `verified-by: bravebot_tui::shell_mode::the_shortcuts_offer_shell_mode`
 
 <a id="INPUT-14"></a>
@@ -547,6 +556,7 @@ unchanged with nothing anywhere saying why, which is neither a failure nor an ed
 `verified-by: bravebot_tui::editor::visual_answers_before_editor`
 `verified-by: bravebot_tui::editor::an_empty_variable_is_not_a_configured_editor`
 `verified-by: bravebot_tui::editor::a_full_editor_is_preferred_to_the_last_resort`
+`verified-by: bravebot_tui::editor::the_fallback_list_is_the_same_on_every_platform`
 `verified-by: bravebot_tui::editor::a_configured_editor_that_will_not_start_ends_the_search`
 `verified-by: bravebot_tui::editor::a_gui_editor_is_told_to_wait`
 `verified-by: bravebot_tui::editor::the_flag_follows_the_program_through_a_path`
@@ -573,6 +583,8 @@ started rather than approved, and for it the name is part of what the user asked
 `verified-by: bravebot_tui::editor::the_name_is_looked_for_on_the_path_not_beside_the_resolved_file`
 `verified-by: bravebot_tui::editor::an_empty_path_entry_is_not_searched`
 `verified-by: bravebot_tui::editor::a_name_that_is_no_longer_the_same_program_falls_back_to_the_resolved_path`
+`verified-by: bravebot_tui::editor::a_name_the_path_holds_under_another_spelling_still_starts_the_program`
+`verified-by: bravebot_tui::editor::a_name_is_looked_for_under_every_spelling_it_may_be_filed_under`
 
 <a id="INPUT-17"></a>
 ### INPUT-17: Ctrl-S puts the line away, and puts it back
@@ -697,6 +709,22 @@ flight, which is aimed at something else entirely and costs the answer being wri
   and it buys a selection that is a pair of offsets rather than a rectangle every operator would have
   to understand separately. A box ten rows tall holding one prompt is also not where somebody edits
   columns of a table.
+- **A panic leaves the terminal taken.** Every path that returns hands it back (INPUT-33), and a
+  panic returns through none of them: the process ends on the alternate screen, in raw mode, with
+  mouse reporting on, and the shell that started it is left needing `reset`. The message that says
+  what went wrong is on the screen thrown away with it, which is the worse half. A process-wide
+  hook is not the answer on its own: a turn runs off the main thread, and a panic there is a turn
+  that failed rather than a session that ended, so a hook that handed the terminal back would do it
+  underneath an interface still drawing on it.
+- **This interface owns the whole terminal while it runs.** The transcript is a viewport repainted
+  in place on a screen of its own rather than lines added to the terminal's scrollback (INPUT-33),
+  so what leaves the top of it is reachable through this program's own scroller and through nothing
+  else, and a screen repainted in place is not a document a screen reader can follow. What that
+  costs is a mode rather than the program: `--plain` is the same session in lines
+  ([cli.md](cli.md)), and what it gives up is everything this interface draws, the scroller and its
+  search, the key list, the slash commands, `@` naming a file, a picture on the clipboard, and a
+  session record to pick up again. So the cost is having to choose, and neither half is the whole
+  program.
 - **Vi's editing is what this box does with the keys, not what vi does with a file.** There is one
   register rather than named ones, undo is a single step (INPUT-28), counts do not prefix a command,
   and there is no `:` line. Each of those is machinery for a file being edited over an afternoon,
@@ -826,7 +854,14 @@ reaches for it before reading anything.
 A session that has measured a request states how full the context is, as a percentage of the budget
 the conversation is compacted at, capped at a hundred. A conversation shortened underneath that
 figure says it was compacted rather than a percentage, because the number it held describes an
-exchange that is not the one on screen. A session that has measured nothing says nothing.
+exchange that is not the one on screen. A session that has measured nothing says that it has not
+measured anything.
+
+**No state of the session is drawn as a blank.** A count that arrived with no budget to divide it
+by states no percentage, and the session then knows no more about how full the context is than one
+that has measured nothing, so it reads the same. A reading absent from the line is the width rule
+of INPUT-13 dropping it whole, or the line belonging to the shell (INPUT-2), and neither is
+something the session knows about the context.
 
 **A percentage against a budget nobody advertised is marked as approximate.** The budget is a
 window the endpoint reported for the model in force, a figure somebody set by hand, or a default
@@ -840,9 +875,10 @@ where it was, which for a session that has sent nothing at all is absent.
 
 **Why.** This reading is what a person uses to decide whether to compact, and it is the only
 account of the size of a conversation that exists here: the server reports what a request cost and
-never what it had room for, and there is no tokeniser to count with. Three states drawn as one
-blank line make the figure look intermittent, and a figure that comes and goes is one people stop
-reading.
+never what it had room for, and there is no tokeniser to count with. A state drawn as a blank is
+indistinguishable from the other state drawn as a blank, from a line too narrow to hold the figure,
+and from a reading that has stopped working, so it makes the figure look intermittent, and a figure
+that comes and goes is one people stop reading.
 
 The mark on a guessed budget is the difference between two readings of a hundred per cent that ask
 for opposite things. Against a window the endpoint stated, it means shorten the conversation.
@@ -859,7 +895,8 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_tui::render::the_hint_line_says_how_full_the_context_is`
 `verified-by: bravebot_tui::render::the_hint_line_marks_a_guessed_budget`
 `verified-by: bravebot_tui::render::the_hint_line_reports_a_compacted_context`
-`verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_an_unmeasured_context`
+`verified-by: bravebot_tui::render::the_hint_line_says_an_unmeasured_context_has_not_been_measured`
+`verified-by: bravebot_tui::render::a_measurement_with_no_budget_to_state_it_against_reads_as_unmeasured`
 `verified-by: bravebot_tui::app::a_failed_turn_measures_context_if_requests_were_sent`
 `verified-by: bravebot_tui::app::a_failed_turn_with_no_requests_sent_remains_unmeasured`
 `verified-by: bravebot_agent::conversation::a_restored_conversation_remembers_what_its_last_request_came_to`
@@ -1391,3 +1428,40 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`
 `verified-by: bravebot_tui::app::vi_mode_search_prompts_uses_configured_history_chord`
 `verified-by: bravebot_tui::app::configured_keybinding_overrides_readline_editing`
+
+<a id="INPUT-33"></a>
+### INPUT-33: a session takes the terminal for its length, and gives every part of it back
+
+Starting a session in the interface that draws puts the terminal in raw mode and moves it to a
+screen of its own, so what was in the terminal beforehand is untouched and is back on the screen
+afterwards. A session in lines ([cli.md](cli.md)) takes none of what follows, and this
+clause is about the one that draws. With that screen the
+session asks for mouse reporting, narrowed to the buttons, the wheel and motion while a button is
+held; bracketed paste; focus reporting; and, only where the terminal says it understands the
+request, disambiguated keys.
+
+Every one of those is given back when the session ends, including when it ends by failing rather
+than by being left, and again around each handover of the terminal to another program: the editor
+a prompt is written in and the viewer a transcript is read in both get the terminal as it was
+found, and the same set is taken again on the way back.
+
+**Why.** Each mode is asked for because something here cannot work without it. The wheel scrolls
+the transcript only while the mouse is reported, and all-motion reporting is narrowed away because
+a pointer merely crossing the window is an event and a redraw per pixel of travel, for a gesture
+nothing here reads. Bracketed paste is what stops a pasted prompt sending itself, since without it
+the newline most clipboards carry arrives as Enter. Focus reporting is what makes the clipboard
+worth a look at the one moment a picture appears on it, rather than polled for ever. Disambiguated
+keys are what make Shift-Enter arrive at all, a terminal otherwise sending the same byte however
+Enter was pressed.
+
+Giving them back is owed because none of them is this program's to keep. A mode left on outlives
+the process: mouse reporting turns a later click into unreadable bytes, bracketed paste prints its
+markers into whatever is typed next, and a keyboard enhancement pushed and never popped sits on a
+stack the terminal keeps for every program after this one. The failing exit is the case that
+matters most, since a terminal left in raw mode on a screen that is not its own is worse for the
+person than whatever error put it there.
+
+`verified-by: bravebot_tui::app::a_session_draws_on_a_screen_of_its_own`
+`verified-by: bravebot_tui::app::every_mode_a_session_asks_for_is_given_back`
+`verified-by: bravebot_tui::app::a_pushed_keyboard_mode_is_popped_and_an_unpushed_one_is_not`
+`verified-by: bravebot_tui::app::the_session_reads_a_drag_and_not_every_pointer_movement`

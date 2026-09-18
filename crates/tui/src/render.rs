@@ -277,7 +277,7 @@ fn delegate_lines(delegate: &Delegate, width: usize) -> Vec<Line<'static>> {
         // says which of them a row belongs to.
         None => {
             let latest = delegate.latest();
-            for entry in latest {
+            for entry in &latest {
                 if let Some(activity) = &entry.activity {
                     for line in activity_lines(activity, entry.landing, width.saturating_sub(2)) {
                         lines.push(indented(line));
@@ -285,7 +285,9 @@ fn delegate_lines(delegate: &Delegate, width: usize) -> Vec<Line<'static>> {
                 }
             }
             // Said only where there were more than are drawn, since "3 calls" over three rows is
-            // a row spent saying what the reader can already see.
+            // a row spent saying what the reader can already see. Against the calls drawn rather
+            // than the lines held, so a delegate whose lines also hold a preview still says how
+            // many calls the block left out.
             if delegate.calls > latest.len() {
                 lines.push(Line::from(Span::styled(
                     format!(
@@ -414,12 +416,27 @@ fn activity_lines(
 fn quarantined_lines(shown: &Shown, width: usize) -> Vec<Line<'static>> {
     let marked = Style::default().fg(theme::running());
     let margin = Span::styled(format!("  {QUARANTINE_BAR} "), marked);
+    quarantined_rows(shown, &margin, width)
+}
+
+/// The same block against a margin the caller owns.
+///
+/// The transcript indents its blocks under the line they belong to and a prompt draws its own
+/// from the edge of the box, and a screen with two margin columns on it is a screen where the
+/// column stops meaning anything. Everything that makes the block a block is here, so a caller
+/// choosing where the margin sits cannot choose anything else about it.
+pub(crate) fn quarantined_rows(
+    shown: &Shown,
+    margin: &Span<'static>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let marked = Style::default().fg(theme::running());
 
     // The heading goes through [`marked_rows`] like the content does, because the origin is not
     // the renderer's text: it can be a filename read out of a quarantined listing. So it is
     // neutralised, and a long one continues on another marked row rather than outside the block.
     let mut lines = marked_rows(
-        &margin,
+        margin,
         &[
             Span::styled(
                 t!(
@@ -436,7 +453,7 @@ fn quarantined_lines(shown: &Shown, width: usize) -> Vec<Line<'static>> {
 
     for line in &shown.preview {
         lines.extend(marked_rows(
-            &margin,
+            margin,
             &[Span::styled(line.clone(), dim())],
             width,
         ));
@@ -445,7 +462,7 @@ fn quarantined_lines(shown: &Shown, width: usize) -> Vec<Line<'static>> {
     // Said rather than silently dropped, for the same reason a truncated diff says so.
     if shown.lines > shown.preview.len() {
         lines.extend(marked_rows(
-            &margin,
+            margin,
             &[Span::styled(
                 t!(
                     transcript_more_lines,
@@ -553,7 +570,7 @@ pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
 
     // What is running sits above the box rather than in place of it, so the two are measured
     // together: whatever the indicator takes is height the input no longer has.
-    let status_height = status_height(session, frame.area().height);
+    let status_height = status_height(session, frame.area().width, frame.area().height);
 
     // The input's height depends on how far the text wraps, so it is measured before the layout
     // rather than fixed: a fixed height is what made typing past the edge disappear.
@@ -913,7 +930,10 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
     };
 
     let mut spans = vec![
-        Span::styled(format!("  {name}"), Style::default().fg(Color::Cyan)),
+        Span::styled(
+            format!("  {name}"),
+            Style::default().fg(theme::brand_primary()),
+        ),
         Span::styled(format!("  ·  {standing}"), Style::default().fg(colour)),
     ];
 
@@ -1098,7 +1118,7 @@ fn session_row(highlighted: bool, width: usize) -> Line<'static> {
         Span::styled(about, detail),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1157,7 +1177,7 @@ fn aside_row(aside: &crate::state::Aside, highlighted: bool, width: usize) -> Li
         Span::styled(format!("{standing:<STANDING_COLUMN$}"), standing_style),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1210,7 +1230,7 @@ fn delegate_row(delegate: &Delegate, highlighted: bool, width: usize) -> Line<'s
         Span::styled(calls, detail),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1272,7 +1292,7 @@ fn output_row(output: &Output, highlighted: bool, width: usize) -> Line<'static>
         Span::styled(count, detail),
     ]);
     match highlighted {
-        true => line.style(Style::default().bg(theme::brand_primary())),
+        true => line.style(theme::picked_out()),
         false => line,
     }
 }
@@ -1379,7 +1399,10 @@ fn scroller_exit(bindings: &Keybindings) -> (String, &'static str) {
 fn draw_scroller_help(frame: &mut Frame, area: Rect, session: &Session) {
     let row = |(key, what): (&str, &str)| {
         Line::from(vec![
-            Span::styled(format!(" {key:<18}"), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!(" {key:<18}"),
+                Style::default().fg(theme::brand_primary()),
+            ),
             Span::styled(what.to_string(), dim()),
         ])
     };
@@ -1442,7 +1465,10 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
     if let Some(typing) = &scroller.typing {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(format!("  /{typing}"), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("  /{typing}"),
+                    Style::default().fg(theme::brand_primary()),
+                ),
                 Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
                 Span::styled(format!("  ·  {}", t!(scroller_searching)), dim()),
             ])),
@@ -1467,7 +1493,7 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
             Paragraph::new(Line::from(vec![
                 Span::styled(
                     format!("  /{}", scroller.needle),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme::brand_primary()),
                 ),
                 Span::styled(format!("  ·  {standing}"), dim()),
                 Span::styled(format!("  ·  {}", t!(scroller_search_keys)), dim()),
@@ -1490,7 +1516,7 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
     let running = session.indicator().map(|indicator| {
         Span::styled(
             format!("  ·  {}…", indicator.verb),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme::running()),
         )
     });
 
@@ -1500,7 +1526,7 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
     let mut spans = vec![
         Span::styled(
             format!("  {}", t!(scroller_footer)),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme::brand_primary()),
         ),
         Span::styled(format!("  ·  {}", t!(scroller_footer_keys)), dim()),
     ];
@@ -1620,6 +1646,20 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
                         format!("{:LEAD$}{text}", ""),
                         Style::default().fg(theme::note()),
                     )));
+                }
+            }
+            // In the same column as a note and in the colour of a failure, wrapped rather than
+            // clipped: a reason is the one line in the transcript somebody reads to the end.
+            Speaker::Failure | Speaker::Stopped => {
+                for text in entry.text.lines() {
+                    for row in
+                        wrap::wrap(text, (width as usize).saturating_sub(LEAD).max(8), 0).rows
+                    {
+                        lines.push(Line::from(Span::styled(
+                            format!("{:LEAD$}{row}", ""),
+                            Style::default().fg(theme::fail()),
+                        )));
+                    }
                 }
             }
             // Echoed with the marker the user typed it behind, so the scrollback reads back the way
@@ -1769,7 +1809,11 @@ fn marked() -> Style {
     Style::default().add_modifier(Modifier::REVERSED)
 }
 
-/// Highlight every occurrence of `needle`, and say which lines held one.
+/// Highlight every occurrence of `needle`, and say which line each one was found on.
+///
+/// One entry per occurrence rather than per line, repeating the line where it held several, so
+/// that what comes back is the matches and not the rows: a line holding two of them is counted
+/// twice and walked twice, which is what the footer says and what `n` steps through.
 ///
 /// The spans are split where a match begins and ends and the pieces restyled. Nothing on the
 /// screen moves and nothing leaves the block it was drawn in: a match inside a quarantined
@@ -1791,7 +1835,7 @@ fn highlight(lines: &mut [Line<'static>], needle: &str) -> Vec<usize> {
         if found.is_empty() {
             continue;
         }
-        held.push(index);
+        held.extend(std::iter::repeat_n(index, found.len()));
 
         let mut rebuilt: Vec<Span<'static>> = Vec::new();
         let mut at = 0;
@@ -1877,7 +1921,7 @@ fn lay_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, L
             laid.prompts.push(at);
             prompts.next();
         }
-        if held.peek() == Some(&index) {
+        while held.peek() == Some(&index) {
             laid.matches.push(at);
             held.next();
         }
@@ -1959,7 +2003,18 @@ pub fn as_markdown(session: &Session, title: &str) -> String {
                     }
                 }
             }
+            // Notes are left out: they are this program talking about itself, and an export is a
+            // record of the exchange.
             crate::state::Speaker::System => {}
+            // Include outcomes so an unanswered prompt has an explanation in the export.
+            crate::state::Speaker::Failure | Speaker::Stopped => {
+                out.push_str(if entry.speaker == crate::state::Speaker::Stopped {
+                    "## Cancelled\n\n"
+                } else {
+                    "## Failed\n\n"
+                });
+                out.push_str(&format!("{}\n\n", entry.text.trim()));
+            }
         }
 
         if let Some(shown) = &entry.shown {
@@ -1994,16 +2049,16 @@ fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) -> Laid {
     let total = paragraph.line_count(area.width) as u16;
     let max_offset = total.saturating_sub(area.height);
 
-    // While the scroller is open the view is drawn from the row it is holding, counted from the
+    // Any view scrolled away from the tail is drawn from the row it is holding, counted from the
     // top, and not from the offset the last frame left behind. The end of the transcript moves
     // with every token a turn writes, so a frame drawn by counting back from it puts the view
     // wherever the rows that arrived since the last frame have pushed it: the anchor is correct
     // and the arithmetic reaching it is a frame out of date. Read from the top, nothing a turn
     // appends below can move what is above it.
-    let offset = if session.scrolling() {
+    let offset = if session.scrolling() || session.scroll > 0 {
         session.top_row().min(max_offset)
     } else {
-        max_offset.saturating_sub(session.scroll.min(max_offset))
+        max_offset
     };
 
     frame.render_widget(paragraph.scroll((offset, 0)), area);
@@ -2048,7 +2103,7 @@ fn input_text_width(total: u16) -> usize {
 /// Zero when nothing is running. Bounded so a long list cannot take the transcript and the box
 /// with it: the point of showing what is happening is lost if the box it is happening above has
 /// been squeezed off the screen.
-fn status_height(session: &Session, height: u16) -> u16 {
+fn status_height(session: &Session, width: u16, height: u16) -> u16 {
     // A row of transcript, three of box, and the hint line are what has to survive this.
     let ceiling = (height as usize).saturating_sub(5).max(1);
 
@@ -2057,11 +2112,27 @@ fn status_height(session: &Session, height: u16) -> u16 {
         Status::Working => (1 + session.todos.len()).min(ceiling) as u16,
         // A command spends no tokens and keeps no task list, so one line says everything.
         Status::Running => 1,
-        // Idle, but with a turn just finished to report. One line, and only until the next turn
-        // starts: the row is what says a turn ended, which the indicator going out does not.
-        Status::Idle if session.finished.is_some() => 1,
+        // Keep the failure reason visible even when its transcript entry is off screen.
+        Status::Idle if session.finished.is_some() => {
+            (1 + failure_rows(session, width).len()).min(ceiling) as u16
+        }
         Status::Idle | Status::Quitting => 0,
     }
+}
+
+/// Limit the reason's height so the turn status and input remain visible.
+const REASON_ROWS: usize = 3;
+
+/// Why the turn that just ended failed, wrapped for the status area, or nothing.
+fn failure_rows(session: &Session, width: u16) -> Vec<String> {
+    let Some(reason) = session.failure_said() else {
+        return Vec::new();
+    };
+    // Indented to the width the row above it starts at, so the reason reads as belonging to it.
+    let room = (width as usize).saturating_sub(4).max(8);
+    let mut rows = wrap::wrap(reason, room, 0).rows;
+    rows.truncate(REASON_ROWS);
+    rows
 }
 
 /// Rows the input box needs, borders included.
@@ -2191,18 +2262,20 @@ fn draw_status(frame: &mut Frame, area: Rect, session: &Session) {
         // words were "now let me look at the dispatch code" is over, and nothing on the screen
         // used to say so: the indicator was simply gone, and a user reads that as a session that
         // has stopped responding rather than one waiting for them.
-        let (glyph, colour, word) = if finished.failed {
-            ("✗", theme::fail(), t!(turn_failed, turn = finished.turn))
-        } else {
-            ("✓", theme::ok(), t!(turn_done, turn = finished.turn))
+        let (glyph, colour, word) = match finished.ending {
+            bravebot_agent::Ending::Failed(_) => {
+                ("✗", theme::fail(), t!(turn_failed, turn = finished.turn))
+            }
+            bravebot_agent::Ending::Stopped { .. } => {
+                ("■", theme::fail(), t!(turn_cancelled, turn = finished.turn))
+            }
+            bravebot_agent::Ending::Done => ("✓", theme::ok(), t!(turn_done, turn = finished.turn)),
         };
         let mut spans = vec![
             Span::styled(format!("  {glyph} "), Style::default().fg(colour)),
             Span::styled(format!("{word} "), Style::default().fg(colour)),
         ];
-        // Cost is worth reporting, and a failed turn's is not: it is counted as the turn is
-        // abandoned rather than as it finishes, so the figure would be a guess.
-        if !finished.failed {
+        if matches!(finished.ending, bravebot_agent::Ending::Done) {
             spans.push(Span::styled(
                 format!(
                     "({}, {})",
@@ -2224,6 +2297,13 @@ fn draw_status(frame: &mut Frame, area: Rect, session: &Session) {
     if working {
         lines.extend(todo_lines(&session.todos).into_iter().take(room));
     }
+    // Fit the reason below the status; the transcript and export retain the full text.
+    lines.extend(
+        failure_rows(session, area.width)
+            .into_iter()
+            .take(room)
+            .map(|row| Line::from(Span::styled(format!("    {row}"), dim()))),
+    );
 
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -2466,7 +2546,7 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
             Span::styled(
                 " QUEUED ",
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(theme::on_primary())
                     .bg(theme::brand_primary())
                     .add_modifier(Modifier::BOLD),
             ),
@@ -2589,6 +2669,14 @@ fn command_lines(session: &Session, offered: &[crate::app::Command]) -> Vec<Line
 
 /// How the hint line says where the rest of the bindings went.
 const SHORTCUTS_HINT: &str = "? for shortcuts";
+
+/// What the context reading says where the session has none to give.
+///
+/// Two states reach it: nothing measured yet, and a count that arrived with no budget to divide it
+/// by. Said rather than left blank, because a blank is also the other state with no reading, a
+/// line with no room for the figure, and a reading that has stopped working, and nothing on the
+/// line tells those apart.
+const UNMEASURED_CONTEXT: &str = "context not yet measured";
 
 /// Every key and marker, and what it does, in the order they are listed.
 ///
@@ -2817,16 +2905,21 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         return;
     }
 
-    // How the context currently stands: unmeasured, compacted, or measured as a percentage.
+    // How the context currently stands: unmeasured, compacted, or measured as a percentage. Each of
+    // them says which it is, and none of them is drawn as nothing: a reading that comes and goes is
+    // one people stop reading, and this is the only account of the size of a conversation there is.
     let context = match session.occupancy() {
-        crate::state::Occupancy::Unmeasured => String::new(),
+        crate::state::Occupancy::Unmeasured => UNMEASURED_CONTEXT.to_string(),
         crate::state::Occupancy::Compacted => "context compacted".to_string(),
         crate::state::Occupancy::Measured { guessed, .. } => match session.fullness() {
             Some(percent) if guessed => format!("context ~{percent}%"),
             Some(percent) => format!("context {percent}%"),
-            None => String::new(),
+            // A count with no budget to divide it by is no reading of how full the context is, so
+            // the session knows no more here than one that has measured nothing and says the same.
+            None => UNMEASURED_CONTEXT.to_string(),
         },
     };
+    let context_is_unmeasured = context == UNMEASURED_CONTEXT;
 
     // The way into the view, for as long as it holds anything. The row that reports what the turn
     // is doing names the key too, but that row goes when the turn ends, and what the view holds is
@@ -2883,7 +2976,24 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // Indices into `parts`, in the order they are given up: the way to the bindings first, then the
     // trail toggle, both being things somebody learns once. Then the figures. Neither mode is ever
     // listed, because of everything here they are what changes what the next keystroke does.
-    let kept = fitted(&parts, &[5, 2, 3, 4], area.width);
+    //
+    // A reading with no figure in it goes before any of them. The readings are kept late because a
+    // figure is the one thing on this line nothing else can tell somebody, and a sentence saying
+    // there is no figure yet is not one: it would be holding the room against two working bindings.
+    let expendable: &[usize] = if context_is_unmeasured {
+        &[3, 5, 2, 4]
+    } else {
+        &[5, 2, 3, 4]
+    };
+    // A note is drawn over the right of this same row, so what the parts may occupy is the width
+    // less that note. Fitted against the whole width instead, the last part that fits is one the
+    // note then writes over the middle of, which is the half a word that dropping a part whole
+    // exists to avoid.
+    let note = note_at_the_right(session);
+    let reserved = note.as_deref().map_or(0, |note| {
+        u16::try_from(note.chars().count()).unwrap_or(u16::MAX)
+    });
+    let kept = fitted(&parts, expendable, area.width.saturating_sub(reserved));
 
     // The modes lead the line and are the only coloured part of it, so what is marked is exactly what
     // changes the meaning of a keystroke. Drawn from `kept` like everything else, so a terminal with
@@ -2911,34 +3021,38 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 
-    // The line the person was writing has just gone, so the press that took it is the one thing
-    // worth explaining: without this, a key they pressed to stop something emptied the box and
-    // said nothing, and the next press of it ends the session.
-    if session.cleared_by_interrupt {
+    if let Some(note) = note {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "ctrl-c again to exit  ",
+                note,
                 Style::default().fg(theme::brand_primary()),
             )))
             .alignment(Alignment::Right),
             area,
         );
-        return;
+    }
+}
+
+/// What a press just did, drawn at the right of the hint row, where there is anything to say.
+///
+/// One note at a time, in this order, since they share the room: the parts of the line are fitted
+/// against the width this leaves.
+fn note_at_the_right(session: &Session) -> Option<String> {
+    // The line the person was writing has just gone, so the press that took it is the one thing
+    // worth explaining: without this, a key they pressed to stop something emptied the box and
+    // said nothing, and the next press of it ends the session.
+    if session.cleared_by_interrupt {
+        return Some("ctrl-c again to exit  ".to_string());
     }
 
     // A copy is silent otherwise, and a clipboard that may or may not have taken something is
     // worse than no clipboard: the user pastes to find out. Right-aligned, out of the way of the
     // hints, where the answer to "did that work" belongs.
     if let Some(characters) = session.copied {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!("{} to clipboard  ", tally(characters, "char", "chars")),
-                Style::default().fg(theme::brand_primary()),
-            )))
-            .alignment(Alignment::Right),
-            area,
-        );
-        return;
+        return Some(format!(
+            "{} to clipboard  ",
+            tally(characters, "char", "chars")
+        ));
     }
 
     // Command-V cannot carry a picture and cannot say so: the chord never reaches this process, and
@@ -2946,18 +3060,13 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // has none. So the only way anyone finds out which key does work is being told before they try
     // the one that does not.
     if session.image_on_clipboard {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!(
-                    "image on clipboard  ·  {} to paste  ",
-                    session.bindings().paste_name()
-                ),
-                Style::default().fg(theme::brand_primary()),
-            )))
-            .alignment(Alignment::Right),
-            area,
-        );
+        return Some(format!(
+            "image on clipboard  ·  {} to paste  ",
+            session.bindings().paste_name()
+        ));
     }
+
+    None
 }
 
 /// A count with the right noun, so a line does not read "1 chars".
@@ -3793,6 +3902,49 @@ mod tests {
                 "the block did not say how much it had done: {screen}"
             );
         }
+
+        /// A delegate reading untrusted files has a preview of each held among its lines, and a
+        /// preview is not a call. Counting lines rather than calls drew one row for a delegate
+        /// that had made four, and left the count off too, since the count is said only where
+        /// there are more calls than rows drawn.
+        #[test]
+        fn a_delegates_previews_do_not_cost_its_block_the_rows_and_the_count() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "worker", "summarise the notes");
+            for round in 0..4 {
+                let call = Activity::running("Isolated processor", format!("notes{round}.md"));
+                session.start_activity(call.clone());
+                session.finish_activity(call.done("wrote 1 line"));
+                // The two previews one spawn_processor result releases: what the processor said
+                // about the file, and the file it wrote.
+                session.show(Shown {
+                    origin: "what the isolated processor said".to_string(),
+                    reach: bravebot_agent::report::Reach::NoModel,
+                    label: "(U,priv)".to_string(),
+                    preview: vec!["a line nobody vouched for".to_string()],
+                    lines: 1,
+                });
+                session.show(Shown {
+                    origin: format!("notes{round}.md"),
+                    reach: bravebot_agent::report::Reach::NoModel,
+                    label: "(U,priv)".to_string(),
+                    preview: vec!["a line nobody vouched for".to_string()],
+                    lines: 1,
+                });
+            }
+
+            let screen = rendered(&session);
+            for drawn in ["notes1.md", "notes2.md", "notes3.md"] {
+                assert!(
+                    screen.contains(drawn),
+                    "the block left out the call on {drawn}: {screen}"
+                );
+            }
+            assert!(
+                screen.contains("4 calls"),
+                "the block did not say how many calls it had made: {screen}"
+            );
+        }
     }
 
     /// Render into a test backend and return the visible text.
@@ -3913,14 +4065,42 @@ mod tests {
             (drawn, marked)
         }
 
-        /// Search a session for `needle`, the way the keys do it.
-        fn searching(needle: &str) -> Session {
-            let mut session = reading();
+        /// A session reading back over a quarantined block whose one preview line is `preview`,
+        /// with the scroller open over it.
+        fn reading_a_block(preview: &str) -> Session {
+            let mut session = Session::new("kernel-enforced");
+            let mut read = Entry::tool(Activity::running("read", "notes.md").done("40 lines"));
+            read.shown = Some(Shown {
+                origin: "notes.md".to_string(),
+                reach: bravebot_agent::report::Reach::NotThePlanner,
+                label: "(U,priv)".to_string(),
+                preview: vec![preview.to_string()],
+                lines: 40,
+            });
+            session.transcript.push(read);
+            session.note_layout(Laid {
+                width: 90,
+                height: 24,
+                rows: 24,
+                ..Laid::default()
+            });
+            session.open_scroller();
+            session
+        }
+
+        /// Search `session` for `needle`, the way the keys do it.
+        fn search(session: &mut Session, needle: &str) {
             session.begin_search();
             for c in needle.chars() {
                 session.type_into_search(c);
             }
             session.run_search();
+        }
+
+        /// The session [`reading`] gives back, searched for `needle`.
+        fn searching(needle: &str) -> Session {
+            let mut session = reading();
+            search(&mut session, needle);
             session
         }
 
@@ -3946,35 +4126,46 @@ mod tests {
         ///
         /// A ratio rather than a wall clock, because what matters is that the pass is of the same
         /// order as the one beside it and not that either takes a particular number of milliseconds.
+        ///
+        /// The shortest of several passes, and the two interleaved. A pass that lost the processor to
+        /// something else on the machine only ever reads long, so one sample of each compares the
+        /// contention of one moment against that of another, and a loaded machine fails this on the
+        /// draw it happened to interrupt. Three passes because the load measured here stalled about
+        /// one sample in fifteen, and each pass costs laying the transcript out twice.
         #[test]
         fn measuring_where_the_rows_are_stays_in_proportion_to_drawing_them() {
             let at_rest = a_long_session();
-            let started = std::time::Instant::now();
-            let (lines, plain) = lay_out(&at_rest, 90, 24);
-            // The wrap a frame at rest already pays for, and the one this is in proportion to.
-            // Laying the lines out is the cheaper half of drawing them, and measuring against it
-            // alone compares the new pass with something no frame has ever consisted of.
-            let rows = Paragraph::new(lines)
-                .wrap(Wrap { trim: false })
-                .line_count(90);
-            let baseline = started.elapsed();
-            assert!(rows > 2000, "the transcript is not long: {rows}");
-
             let mut scrolling = a_long_session();
             scrolling.open_scroller();
-            let started = std::time::Instant::now();
-            let (_, laid) = lay_out(&scrolling, 90, 24);
-            let took = started.elapsed();
 
+            let mut drawing = std::time::Duration::MAX;
+            let mut measuring = std::time::Duration::MAX;
+            let mut rows = 0;
+            let mut measured = 0;
+
+            for _ in 0..3 {
+                let started = std::time::Instant::now();
+                let (lines, plain) = lay_out(&at_rest, 90, 24);
+                // The wrap a frame at rest already pays for, and the one this is in proportion to.
+                // Laying the lines out is the cheaper half of drawing them, and measuring against it
+                // alone compares the new pass with something no frame has ever consisted of.
+                rows = Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .line_count(90);
+                drawing = drawing.min(started.elapsed());
+                assert_eq!(plain.rows, 0, "the rows were counted with nobody asking");
+
+                let started = std::time::Instant::now();
+                let (_, laid) = lay_out(&scrolling, 90, 24);
+                measuring = measuring.min(started.elapsed());
+                measured = laid.rows;
+            }
+
+            assert!(rows > 2000, "the transcript is not long: {rows}");
+            assert!(measured > 2000, "the transcript is not long: {measured}");
             assert!(
-                laid.rows > 2000,
-                "the transcript is not long: {}",
-                laid.rows
-            );
-            assert_eq!(plain.rows, 0, "the rows were counted with nobody asking");
-            assert!(
-                took < baseline * 4,
-                "measuring took {took:?} against {baseline:?} to draw, which is out of proportion"
+                measuring < drawing * 4,
+                "measuring took {measuring:?} against {drawing:?} to draw, which is out of proportion"
             );
         }
 
@@ -4109,6 +4300,45 @@ mod tests {
             assert!(
                 drawn.contains("1 of 3"),
                 "the footer does not say where in the matches the view is: {drawn}"
+            );
+        }
+
+        /// What is counted is matches, not the lines holding one. A person shown `1 of 1` beside
+        /// two highlighted words has been told a number the screen contradicts, and `n` has
+        /// nowhere to take them for the second.
+        #[test]
+        fn a_line_holding_two_matches_is_counted_as_two() {
+            let (drawn, marked) = screen(&searching("there"));
+
+            assert_eq!(
+                marked.matches("there").count(),
+                2,
+                "not every occurrence on the line was marked: {marked:?}"
+            );
+            assert!(
+                drawn.contains("1 of 2"),
+                "the footer counted the line rather than the matches: {drawn}"
+            );
+        }
+
+        /// A count that said `1 of 1` over two highlighted words inside a quarantined block would
+        /// be the interface under-reporting what the content holds, which is the whole of what
+        /// bounds the cost of a search over untrusted bytes: `n` reaches every match and the
+        /// footer says how many there are.
+        #[test]
+        fn two_matches_in_one_quarantined_row_are_counted_as_two() {
+            let mut session = reading_a_block("the haystack holds a haystack");
+            search(&mut session, "haystack");
+            let (drawn, marked) = screen(&session);
+
+            assert_eq!(
+                marked.matches("haystack").count(),
+                2,
+                "not every occurrence in the block was marked: {marked:?}"
+            );
+            assert!(
+                drawn.contains("1 of 2"),
+                "the footer counted the row rather than the matches: {drawn}"
             );
         }
 
@@ -5387,6 +5617,7 @@ mod tests {
                 assert!(
                     part == "⏵⏵ bypass permissions on"
                         || part == "ctrl-t show trail"
+                        || part == UNMEASURED_CONTEXT
                         || part == SHORTCUTS_HINT,
                     "at width {width} a part was cut: {part:?} in {drawn:?}"
                 );
@@ -5730,12 +5961,73 @@ mod tests {
         assert!(output.contains("context ~62%"), "{output}");
     }
 
-    /// Before anything has been measured there is no figure, and a gauge at zero would be a claim
-    /// about a context nobody counted.
+    /// A session that has measured nothing says so rather than drawing nothing. A blank is also
+    /// what a terminal with no room for the figure looks like and what the reading looks like once
+    /// it has stopped working, so an absence leaves a person guessing which of the three it is. No
+    /// figure is claimed either: a gauge at zero would be a claim about a context nobody counted.
     #[test]
-    fn the_hint_line_says_nothing_about_an_unmeasured_context() {
-        let output = rendered_at(&Session::new("none"), 120, 24);
-        assert!(!output.contains("context"), "{output}");
+    fn the_hint_line_says_an_unmeasured_context_has_not_been_measured() {
+        let hint = hint_row_at(&Session::new("none"), 120, 24);
+        assert!(hint.contains(UNMEASURED_CONTEXT), "{hint}");
+        assert!(
+            !hint.contains('%'),
+            "a figure was drawn for a context nobody counted: {hint}"
+        );
+    }
+
+    /// A count that arrived with no budget to divide it by yields no percentage, which left the
+    /// line blank for a second reason and gave a person no way to tell the two apart. The session
+    /// knows no more about how full the context is than one that has measured nothing, so it reads
+    /// the same.
+    #[test]
+    fn a_measurement_with_no_budget_to_state_it_against_reads_as_unmeasured() {
+        let mut session = Session::new("none");
+        session.measured(62_000, 0, false);
+        assert_eq!(
+            session.fullness(),
+            None,
+            "a percentage was formed after all"
+        );
+
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains(UNMEASURED_CONTEXT), "{hint}");
+        assert!(
+            !hint.contains('%'),
+            "a figure was drawn against no budget: {hint}"
+        );
+    }
+
+    /// The readings are given up after the bindings because a figure is the one thing on this line
+    /// nothing else can tell somebody. A sentence saying there is no figure yet is not that, so it
+    /// goes first: holding the room against two working keys is the trade the wrong way round.
+    #[test]
+    fn a_reading_with_no_figure_in_it_is_given_up_before_a_binding() {
+        let session = turn_that_left_a_trail();
+        assert_eq!(session.occupancy(), crate::state::Occupancy::Unmeasured);
+
+        // Narrow enough that the reading and the two bindings cannot all fit, which is the case
+        // worth pinning.
+        let hint = hint_row_at(&session, 45, 24);
+        assert!(hint.contains("ctrl-t show trail"), "{hint}");
+        assert!(hint.contains(SHORTCUTS_HINT), "{hint}");
+        assert!(
+            !hint.contains(UNMEASURED_CONTEXT),
+            "the reading was kept over a working key: {hint}"
+        );
+    }
+
+    /// A note about what a press just did is drawn over the right of the hint row, so the parts are
+    /// fitted against the width it leaves rather than the whole of it. Fitted against the whole,
+    /// the last part that fits is one the note writes over the middle of, and half a word under the
+    /// box reads as a rendering fault.
+    #[test]
+    fn a_note_at_the_right_takes_its_room_from_the_parts_rather_than_over_them() {
+        let mut session = turn_that_left_a_trail();
+        session.copied = Some(12);
+
+        let hint = hint_row_at(&session, 80, 24);
+        assert!(hint.contains("12 chars to clipboard"), "{hint}");
+        assert!(hint.contains(SHORTCUTS_HINT), "the line was cut: {hint}");
     }
 
     /// After compaction the line reports that the context was compacted.
@@ -5890,11 +6182,16 @@ mod tests {
         let mut session = Session::new("partial");
         session.type_char('a');
         session.submit();
-        session.fail("the model could not be reached");
+        session.fail(
+            "the model could not be reached",
+            bravebot_agent::Ending::Failed(bravebot_agent::Diagnosis::of(
+                bravebot_agent::Category::Transport,
+            )),
+        );
 
         let output = rendered(&session);
         assert!(
-            output.contains("turn 1 stopped"),
+            output.contains("turn 1 failed"),
             "the failure was not reported: {output}"
         );
         assert!(
@@ -6079,10 +6376,13 @@ mod tests {
         session.submit();
         session.complete(
             "reply",
-            vec![Event::Observed {
-                capability: Capability::FileRead,
-                label: Label::untrusted_private(),
-            }],
+            vec![crate::audit::as_line(
+                &Event::Observed {
+                    capability: Capability::FileRead,
+                    label: Label::untrusted_private(),
+                },
+                None,
+            )],
             0,
         );
 
@@ -6162,10 +6462,13 @@ mod tests {
 
         session.complete(
             "reply",
-            vec![Event::Observed {
-                capability: Capability::FileRead,
-                label: Label::untrusted_private(),
-            }],
+            vec![crate::audit::as_line(
+                &Event::Observed {
+                    capability: Capability::FileRead,
+                    label: Label::untrusted_private(),
+                },
+                None,
+            )],
             0,
         );
         assert!(
@@ -6181,10 +6484,13 @@ mod tests {
         session.submit();
         session.complete(
             "reply",
-            vec![Event::Observed {
-                capability: Capability::FileRead,
-                label: Label::untrusted_private(),
-            }],
+            vec![crate::audit::as_line(
+                &Event::Observed {
+                    capability: Capability::FileRead,
+                    label: Label::untrusted_private(),
+                },
+                None,
+            )],
             0,
         );
         session
@@ -6199,11 +6505,15 @@ mod tests {
         session.submit();
         session.complete(
             "refused",
-            vec![Event::GateBlocked {
-                gate: "action",
-                detail: String::new(),
-                reason: "injection blocked".into(),
-            }],
+            vec![crate::audit::as_line(
+                &Event::GateBlocked {
+                    gate: "action",
+                    detail: String::new(),
+                    reason: "injection blocked".into(),
+                    principle: bravebot_core::event::Principle::IntegrityGate,
+                },
+                None,
+            )],
             0,
         );
 
@@ -6234,6 +6544,64 @@ mod tests {
         assert!(
             !inks.contains(&theme::running()),
             "the note is still yellow"
+        );
+    }
+
+    /// The word that names the mode carries meaning, so it is a shade this interface mixes rather
+    /// than one of the sixteen slots a terminal repaints. Cyan is not one of the three slots whose
+    /// meaning is the terminal's own, so a scheme that remapped it decided how this row read, and
+    /// a person who chose a theme was not drawn in it at all.
+    #[test]
+    fn the_scroller_names_the_mode_in_a_shade_and_not_a_slot() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+
+        let mut session = Session::new("none");
+        session.note_layout(crate::state::Laid {
+            width: 120,
+            height: 24,
+            rows: 24,
+            ..crate::state::Laid::default()
+        });
+        session.open_scroller();
+
+        let inks = inks_on_row_containing(&session, "scroller");
+        assert!(
+            inks.contains(&theme::brand_primary()),
+            "the mode is not named in the interface's own ink: {inks:?}"
+        );
+        assert!(
+            !inks.contains(&Color::Cyan),
+            "a slot the terminal repaints is still carrying it: {inks:?}"
+        );
+    }
+
+    /// Shell mode is told from ordinary mode by the colour of the line being typed, its border and
+    /// the row under it, so that colour carries a meaning this interface owns rather than one the
+    /// terminal owns. Magenta is a slot a scheme repaints, and it is not one of the three whose
+    /// meaning belongs to the terminal, so what the distinction looked like was somebody else's
+    /// choice: a scheme painting slot 5 near its brand primary collapsed it altogether.
+    #[test]
+    fn shell_mode_is_marked_in_a_shade_and_not_a_slot() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+
+        let mut session = Session::new("none");
+        session.shell = true;
+
+        let inks = inks_on_row_containing(&session, "esc to cancel");
+        assert!(
+            inks.contains(&theme::accent()),
+            "shell mode is not marked in the interface's own ink: {inks:?}"
+        );
+        assert!(
+            matches!(theme::accent(), Color::Rgb(..)),
+            "shell mode is marked in a named colour, which the terminal chooses: {:?}",
+            theme::accent()
+        );
+        assert!(
+            !inks.contains(&Color::Magenta),
+            "a slot the terminal repaints is still carrying it: {inks:?}"
         );
     }
 
@@ -6294,15 +6662,34 @@ mod tests {
     }
 
     /// A narrow terminal is a normal condition, not a crash.
+    ///
+    /// And not a reason to drop the box either: the transcript can be squeezed to nothing, since
+    /// what it holds has scrolled past anyway, but a session drawn without the line somebody is
+    /// typing into is a session they cannot use.
     #[test]
     fn a_tiny_terminal_renders() {
-        let session = Session::new("none");
+        let mut session = Session::new("none");
+        for c in "hello".chars() {
+            session.type_char(c);
+        }
         let mut terminal = Terminal::new(TestBackend::new(10, 5)).expect("terminal");
         terminal
             .draw(|frame| {
                 draw(frame, &session);
             })
             .expect("draw must not panic on a small area");
+
+        let drawn: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            drawn.contains("> hello"),
+            "the box the person is typing into was drawn out of view: {drawn}"
+        );
     }
 
     /// The end of a reply that wraps must be on the screen when it arrives.
@@ -6723,7 +7110,7 @@ mod tests {
     /// Nothing is running, so nothing is said about it and the whole height goes to the rest.
     #[test]
     fn an_idle_session_shows_no_indicator_row() {
-        assert_eq!(status_height(&typed("hi"), 24), 0);
+        assert_eq!(status_height(&typed("hi"), 80, 24), 0);
     }
     /// The position belongs in the border, where it labels the box without costing a row.
     #[test]
@@ -6798,8 +7185,8 @@ mod tests {
         /// away.
         #[test]
         fn the_indicator_area_grows_to_hold_the_list() {
-            let bare = status_height(&working_with(Vec::new()), 24);
-            let with_list = status_height(&working_with(three()), 24);
+            let bare = status_height(&working_with(Vec::new()), 80, 24);
+            let with_list = status_height(&working_with(three()), 80, 24);
             assert_eq!(
                 with_list as usize,
                 bare as usize + 3,
@@ -6817,7 +7204,7 @@ mod tests {
             let borrowed: Vec<_> = many.iter().map(|(t, s)| (t.as_str(), *s)).collect();
             let session = working_with(list(&borrowed));
             let height = 10;
-            let status = status_height(&session, height);
+            let status = status_height(&session, 80, height);
             let input = input_height(&session, 60, height - status);
             assert!(
                 status + input < height - 1,

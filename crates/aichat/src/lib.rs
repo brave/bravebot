@@ -80,7 +80,7 @@ impl fmt::Display for ChatError {
             Self::Subscription(detail) => write!(
                 f,
                 "the Leo subscription could not be used: {detail}. Run `bravebot import-leo-creds` to \
-                 refresh it, or unset the premium endpoint to use the free tier"
+                 refresh it, or unset the premium endpoint to send requests without one"
             ),
         }
     }
@@ -114,7 +114,9 @@ pub struct Completion {
     /// The arguments are model output and therefore untrusted; a caller must gate them
     /// before letting any of it direct an operation.
     pub calls: Vec<protocol::ToolCall>,
-    /// What this round cost, as the server counted it.
+    /// Prompt size of the final reply, excluding costs retained from earlier attempts.
+    pub context_tokens: u64,
+    /// What this call cost, including reported usage from completed retry attempts.
     pub usage: protocol::Usage,
 }
 
@@ -126,7 +128,7 @@ pub struct Completion {
 pub trait Subscription {
     /// The cookie value presenting the next credential.
     ///
-    /// An error here fails the request. It deliberately does not fall back to the free tier: a
+    /// An error here fails the request. It deliberately does not fall back to sending none: a
     /// configured subscription that silently stops being used looks like the model got worse for
     /// no reason, and the one thing worse than an error is an unexplained downgrade.
     fn next_credential(&mut self) -> Result<SubscriptionCredential, String>;
@@ -149,6 +151,9 @@ impl fmt::Debug for SubscriptionCredential {
 }
 
 pub struct AichatClient<'a> {
+    attempts: u32,
+    completed_usage: Option<protocol::Usage>,
+    retried_usage: Option<protocol::Usage>,
     config: &'a Config,
     egress: &'a Egress,
     subscription: Option<&'a mut dyn Subscription>,
@@ -161,12 +166,23 @@ pub struct AichatClient<'a> {
     /// extra round trip against a service that refuses, once per process; not asking costs the
     /// whole prompt on every request against every service that would have cached it.
     breakpoints: bool,
+    /// Whether to send the level somebody asked for, where they asked for one.
+    ///
+    /// On until a service refuses the field, for the same reason breakpoints are: a settings block
+    /// names its models and never their parameters, so nothing can be consulted before the level is
+    /// sent and it goes out to be judged. Leaving it out costs the level on a service that would
+    /// have read it; sending it to a service that refuses the field costs every turn.
+    effort: bool,
 }
 
 /// Where a request goes when a configured gateway serves the model, rather than Brave's endpoint.
 ///
 /// Holds the resolved token rather than the means of resolving one, because a caller has already
 /// had to find it to know whether the request can be sent at all.
+///
+/// Optional, because a gateway block may name nowhere for a credential to live, and one that names
+/// none is somebody saying none is needed. The caller has decided that too: a block naming a
+/// credential nothing holds never reaches here.
 struct Gateway<'a> {
     provider: &'a bravebot_config::provider::Provider,
     /// What this gateway calls the model, which is the name the request carries.
@@ -175,27 +191,56 @@ struct Gateway<'a> {
     /// qualified by the provider's own id to say which service was meant, and that qualified form is
     /// one the gateway has never heard of.
     model: String,
-    token: String,
+    token: Option<String>,
 }
 
 impl<'a> AichatClient<'a> {
+    /// Requests handed to egress in the last call, including capability probes.
+    pub fn attempts(&self) -> u32 {
+        self.attempts
+    }
+
+    /// Total reported usage of completed attempts in the last call, including retries.
+    /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
+    pub fn completed_usage(&self) -> Option<protocol::Usage> {
+        match (self.retried_usage, self.completed_usage) {
+            (Some(mut earlier), Some(current)) => {
+                earlier.add(current);
+                Some(earlier)
+            }
+            (earlier, current) => earlier.or(current),
+        }
+    }
+
+    /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
+    pub fn last_request_tokens(&self) -> Option<u64> {
+        self.completed_usage.map(|usage| usage.prompt_tokens)
+    }
+
     pub fn new(config: &'a Config, egress: &'a Egress) -> Self {
         Self {
+            attempts: 0,
+            completed_usage: None,
+            retried_usage: None,
             config,
             egress,
             subscription: None,
             cancel: None,
             gateway: None,
             breakpoints: true,
+            effort: true,
         }
     }
 
-    /// Send this request to a configured gateway, bearer-authenticated, instead of to Brave.
+    /// Send this request to a configured gateway instead of to Brave, bearer-authenticated where the
+    /// gateway's block named a credential.
     ///
     /// The model has already decided this: a caller reaches for it because the name it holds is one
-    /// the provider offers. Nothing here re-decides that, and a token is required rather than
-    /// optional because an unauthenticated request to a gateway is one that fails at the far end for
-    /// a reason nothing local could explain.
+    /// the provider offers. Nothing here re-decides that, and neither is the token re-derived: `None`
+    /// is the caller saying the block named nowhere for one to live, which a local Ollama's block
+    /// does, and not a token it could not find. A block that named a credential nothing holds is
+    /// refused before this, because such a request fails at the far end for a reason nothing local
+    /// could explain.
     ///
     /// `model` is what this gateway calls it, taken rather than derived for the same reason the token
     /// is: the caller resolved the provider and the name together, and deriving one of them again
@@ -204,12 +249,12 @@ impl<'a> AichatClient<'a> {
         mut self,
         provider: &'a bravebot_config::provider::Provider,
         model: impl Into<String>,
-        token: impl Into<String>,
+        token: Option<String>,
     ) -> Self {
         self.gateway = Some(Gateway {
             provider,
             model: model.into(),
-            token: token.into(),
+            token,
         });
         self
     }
@@ -234,17 +279,17 @@ impl<'a> AichatClient<'a> {
     /// Where this request goes, and any credential to attach.
     ///
     /// The premium host and the credential travel together: a credential belongs to the premium
-    /// deployment, so a build with no premium host stays on the free tier rather than sending the
-    /// credential somewhere it does not belong.
+    /// deployment, so a build with no premium host sends no credential rather than sending one
+    /// somewhere it does not belong.
     ///
     /// With both a premium host and a subscription, this is premium or nothing. A credential that
-    /// cannot be produced fails the request rather than quietly reverting to the free tier, because
-    /// a downgrade nobody was told about is indistinguishable from the service getting worse.
+    /// cannot be produced fails the request rather than quietly sending none, because a downgrade
+    /// nobody was told about is indistinguishable from the service getting worse.
     fn route(&mut self) -> Result<(String, Option<SubscriptionCredential>), ChatError> {
-        let free = self.config.chat_completions_url();
+        let base = self.config.chat_completions_url();
 
         let Some(premium_url) = self.config.premium_chat_completions_url() else {
-            return Ok((free, None));
+            return Ok((base, None));
         };
 
         match self.subscription.as_mut() {
@@ -252,46 +297,46 @@ impl<'a> AichatClient<'a> {
                 Ok(credential) => Ok((premium_url, Some(credential))),
                 Err(detail) => Err(ChatError::Subscription(detail)),
             },
-            // Premium is configured but nothing has been imported, which is not an error: the free
-            // tier is what an unsubscribed caller gets.
-            None => Ok((free, None)),
+            // Premium is configured but nothing has been imported, which is not an error: a caller
+            // who has imported nothing sends no credential.
+            None => Ok((base, None)),
         }
     }
 
-    /// The body this request goes out as, asking the service to cache the prefix unless it has
-    /// already refused to.
+    /// The body this request goes out as, asking the service to cache the prefix and carrying the
+    /// level somebody asked for, less whichever of those it has already refused.
     ///
     /// Marked on a copy on its way out rather than in the request the caller holds, so nothing a
     /// turn built and nothing a session records carries a breakpoint: the mark belongs to this
-    /// request only.
+    /// request only. The level is dropped from the encoded body for the same reason, the request the
+    /// caller holds still being the level they asked for.
     fn body(&self, request: &ChatRequest) -> Result<serde_json::Value, ChatError> {
-        match self.breakpoints {
+        let mut body = match self.breakpoints {
             true => request.marked_body(),
             false => serde_json::to_value(request),
         }
-        .map_err(|e| ChatError::Encode(e.to_string()))
+        .map_err(|e| ChatError::Encode(e.to_string()))?;
+        if !self.effort
+            && let Some(fields) = body.as_object_mut()
+        {
+            fields.remove(protocol::EFFORT_FIELD);
+        }
+        Ok(body)
     }
 
     /// What a refusal is remembered against: the service, and the name the model goes out under.
-    ///
-    /// The service as well as the model, because a model id is only unique within one of them. Two
-    /// gateways can serve the same id, and one gateway refusing would otherwise stop the asking
-    /// everywhere, Brave's endpoint included. Both of Brave's tiers answer to the free host here,
-    /// being one deployment rather than two services.
     fn refusal_key(&self, request: &ChatRequest) -> String {
-        let (service, model) = match self.gateway.as_ref() {
-            Some(gateway) => (
-                gateway.provider.chat_completions_url(),
-                gateway.model.as_str(),
-            ),
-            None => (self.config.chat_completions_url(), request.model.as_str()),
-        };
-        format!("{service}\n{model}")
+        match self.gateway.as_ref() {
+            Some(gateway) => learned_key(&gateway.provider.chat_completions_url(), &gateway.model),
+            None => learned_key(&self.config.chat_completions_url(), &request.model),
+        }
     }
 
-    /// Ask for no breakpoint from a service that has already refused one for this model.
+    /// Ask this service for nothing it has already refused for this model.
     fn recall(&mut self, key: &str) {
-        self.breakpoints = !refused(key);
+        let refusals = remembered(key);
+        self.breakpoints = !refusals.caching;
+        self.effort = !refusals.effort;
     }
 
     /// Whether this failure is worth sending the request again without the breakpoints.
@@ -302,16 +347,38 @@ impl<'a> AichatClient<'a> {
         self.breakpoints && refuses_the_body(error)
     }
 
-    /// Record what dropping the breakpoints proved, once the request has finished either way.
+    /// Whether this failure is worth sending the request again without the level.
     ///
-    /// Only a probe that answered says anything: the service took the request without the
-    /// breakpoints, having refused it with them. A probe that failed too proves nothing, an
+    /// Only where the request carries a level to drop, so a service that answers this status for its
+    /// own reasons cannot make a retry loop out of it. Second in both loops rather than competing
+    /// with the breakpoints: either field is refused with the same status, so a request still
+    /// carrying breakpoints gives up those first, and reading a breakpoint refusal as a refusal of
+    /// the level would stop sending a level to a model that reads one.
+    fn worth_dropping_effort(&self, request: &ChatRequest, error: &ChatError) -> bool {
+        self.effort && request.effort.is_some() && refuses_the_body(error)
+    }
+
+    /// Record what dropping a field proved, once the request has finished either way.
+    ///
+    /// Only a probe that answered says anything: the service took the request without what it was
+    /// sent again without, having refused it with. A probe that failed too proves nothing, an
     /// invalid-request status being also what a prompt too long for the model is answered with, and
     /// concluding a refusal from one would stop asking a service that caches happily. Nothing is
-    /// remembered from one, so the next request marks its prefixes and asks again.
+    /// remembered from one, so the next request marks its prefixes, carries its level, and asks
+    /// again.
+    ///
+    /// Both fields are recorded as the answering request found them, because the status names no
+    /// field: where the level went only after the breakpoints had already gone, a service that reads
+    /// a breakpoint and refuses a level gives up both for the life of the process.
     fn probe_settled(&self, key: &str, probed: bool, failed: bool) {
         if probed && !failed {
-            remember_refusal(key);
+            remember(
+                key,
+                Refusals {
+                    caching: !self.breakpoints,
+                    effort: !self.effort,
+                },
+            );
         }
     }
 
@@ -355,11 +422,12 @@ impl<'a> AichatClient<'a> {
                     object.entry(key.clone()).or_insert_with(|| value.clone());
                 }
             }
-            return Ok(
-                Request::post(gateway.provider.chat_completions_url(), encode(&body)?)
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {}", gateway.token)),
-            );
+            let mut http = Request::post(gateway.provider.chat_completions_url(), encode(&body)?)
+                .header("content-type", "application/json");
+            if let Some(token) = gateway.token.as_deref() {
+                http = http.header("authorization", format!("Bearer {token}"));
+            }
+            return Ok(http);
         }
 
         let body = encode(&body)?;
@@ -391,6 +459,9 @@ impl<'a> AichatClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
+        self.attempts = 0;
+        self.completed_usage = None;
+        self.retried_usage = None;
         let refusal_key = self.refusal_key(request);
         self.recall(&refusal_key);
         let mut probed = false;
@@ -403,13 +474,25 @@ impl<'a> AichatClient<'a> {
                     self.breakpoints = false;
                     probed = true;
                 }
+                // Then the level, the body having been refused without the breakpoints as well.
+                Err(error) if self.worth_dropping_effort(request, &error) => {
+                    self.effort = false;
+                    probed = true;
+                }
                 Err(error) if worth_another_attempt(attempt, &error) => {
-                    std::thread::sleep(backoff(attempt));
+                    if !self.wait(backoff(attempt)) {
+                        return Err(ChatError::Cancelled);
+                    }
                     attempt += 1;
                 }
                 result => {
                     self.probe_settled(&refusal_key, probed, result.is_err());
-                    return result;
+                    return result.map(|mut completion| {
+                        if let Some(usage) = self.retried_usage {
+                            completion.usage.add(usage);
+                        }
+                        completion
+                    });
                 }
             }
         }
@@ -421,8 +504,15 @@ impl<'a> AichatClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
+        // Move the last completed bill into the call total before clearing attempt state.
+        self.retried_usage = self.completed_usage();
+        self.completed_usage = None;
+        if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
+            return Err(ChatError::Cancelled);
+        }
         let http = self.prepare(request)?;
 
+        self.attempts += 1;
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // Decoding the transport envelope needs the raw bytes, so the kernel releases them
@@ -432,6 +522,12 @@ impl<'a> AichatClient<'a> {
         let label = response.body.label();
         let (bytes, label) = policy.decode_transport("chat", label).decode(response.body);
 
+        let envelope: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| ChatError::Decode {
+                detail: format!("{e} (received {} bytes)", bytes.len()),
+            })?;
+        // Usage belongs to the completed transport response, even if its tool calls are invalid.
+        self.completed_usage = reported_usage(&envelope);
         let parsed: ChatResponse =
             serde_json::from_slice(&bytes).map_err(|e| ChatError::Decode {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
@@ -452,6 +548,7 @@ impl<'a> AichatClient<'a> {
             content: Labelled::new(content, label),
             model: parsed.model.unwrap_or_else(|| "unreported".to_string()),
             calls,
+            context_tokens: usage.prompt_tokens,
             usage,
         })
     }
@@ -472,6 +569,9 @@ impl<'a> AichatClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
+        self.attempts = 0;
+        self.completed_usage = None;
+        self.retried_usage = None;
         let request = request.clone().streamed();
         let refusal_key = self.refusal_key(&request);
         self.recall(&refusal_key);
@@ -485,11 +585,16 @@ impl<'a> AichatClient<'a> {
                     self.breakpoints = false;
                     probed = true;
                 }
+                // Then the level, the body having been refused without the breakpoints as well.
+                Err(error) if self.worth_dropping_effort(&request, &error) => {
+                    self.effort = false;
+                    probed = true;
+                }
                 Err(error) if worth_another_attempt(attempt, &error) => {
                     attempt += 1;
                     // Announced before the wait rather than after it, so the pause is explained
-                    // while it is happening. Nothing of the abandoned attempt survives: the reply
-                    // starts again from nothing, and the count says so.
+                    // while it is happening. Reply content and progress start again from nothing;
+                    // completed costs remain in the call total.
                     progress(Progress {
                         written: Labelled::new("", Label::untrusted_public()),
                         output_tokens: 0,
@@ -502,7 +607,12 @@ impl<'a> AichatClient<'a> {
                 }
                 result => {
                     self.probe_settled(&refusal_key, probed, result.is_err());
-                    return result;
+                    return result.map(|mut completion| {
+                        if let Some(usage) = self.retried_usage {
+                            completion.usage.add(usage);
+                        }
+                        completion
+                    });
                 }
             }
         }
@@ -543,6 +653,9 @@ impl<'a> AichatClient<'a> {
         attempt: u32,
         progress: &mut impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
+        // Move the last completed bill into the call total before clearing attempt state.
+        self.retried_usage = self.completed_usage();
+        self.completed_usage = None;
         // Before the request is built, let alone sent. A stop that landed while the last attempt
         // was failing is a stop, and spending a credential on a reply nobody wants is worse than
         // slow.
@@ -552,6 +665,7 @@ impl<'a> AichatClient<'a> {
 
         let http = self.prepare(request)?.header("accept", "text/event-stream");
 
+        self.attempts += 1;
         let stream = self.egress.fetch_streaming(
             policy,
             http,
@@ -593,6 +707,8 @@ impl<'a> AichatClient<'a> {
 
         let mut decoder = SseDecoder::new();
         let mut accumulated = StreamAccumulator::new();
+        let mut reported = None;
+        let mut malformed = false;
         // One envelope, arriving in frames, so it is authorised once rather than once a frame.
         let decoding = policy.decode_transport("chat stream", Label::untrusted_public());
 
@@ -634,19 +750,48 @@ impl<'a> AichatClient<'a> {
                     accumulated.mark_ended();
                     continue;
                 }
-                // A chunk that will not parse is skipped rather than failing the turn: servers
-                // send keepalives and comments, and one unreadable frame should not discard a
-                // reply that is otherwise arriving fine.
+                // Ignore non-JSON keepalives. Decode protocol metadata separately so a malformed
+                // tool call cannot discard usage or a completion marker in the same frame.
+                let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&payload) else {
+                    if payload.trim_start().starts_with(['{', '[']) {
+                        malformed = true;
+                    }
+                    continue;
+                };
+                reported = reported_usage(&envelope).or(reported);
+                let ended = envelope
+                    .get("choices")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|choices| {
+                        choices.iter().any(|choice| {
+                            choice
+                                .get("finish_reason")
+                                .and_then(serde_json::Value::as_str)
+                                .is_some()
+                        })
+                    });
                 let Ok(chunk) = serde_json::from_str::<ChatChunk>(&payload) else {
+                    malformed = true;
+                    if ended {
+                        accumulated.mark_ended();
+                    }
                     continue;
                 };
                 accumulated.push(chunk);
             }
 
+            // Protocol completion establishes usage even if the server keeps the socket open.
+            if accumulated.ended() {
+                self.completed_usage = reported;
+            }
+
             progress(Progress {
                 written: Labelled::new(&accumulated.content()[written_before..], label),
-                output_tokens: accumulated.output_tokens(),
-                counted_by_server: accumulated.usage_is_reported(),
+                output_tokens: reported.map_or_else(
+                    || accumulated.output_tokens(),
+                    |usage| usage.completion_tokens,
+                ),
+                counted_by_server: reported.is_some(),
                 attempt,
             });
         }
@@ -661,6 +806,13 @@ impl<'a> AichatClient<'a> {
         }
 
         let (content, model, calls, usage) = accumulated.finish();
+        let usage = reported.unwrap_or(usage);
+        self.completed_usage = reported;
+        if malformed {
+            return Err(ChatError::Decode {
+                detail: "the completed stream contained a malformed response frame".to_string(),
+            });
+        }
 
         if content.is_empty() && calls.is_empty() {
             return Err(ChatError::NoContent);
@@ -670,9 +822,18 @@ impl<'a> AichatClient<'a> {
             content: Labelled::new(content, label),
             model: model.unwrap_or_else(|| "unreported".to_string()),
             calls,
+            context_tokens: usage.prompt_tokens,
             usage,
         })
     }
+}
+
+/// Validate usage without decoding assistant content or tool calls.
+fn reported_usage(envelope: &serde_json::Value) -> Option<protocol::Usage> {
+    let value = envelope.get("usage")?;
+    value.get("prompt_tokens")?.as_u64()?;
+    value.get("completion_tokens")?.as_u64()?;
+    serde_json::from_value(value.clone()).ok()
 }
 
 /// How far a streamed reply has got.
@@ -764,28 +925,67 @@ fn refuses_the_body(error: &ChatError) -> bool {
     )
 }
 
-/// The service-and-model pairs a breakpoint has been refused for.
+/// What a service has refused to be asked for, for one of the models it serves.
+///
+/// Nothing a service declares: what it answered a request with. Both fields are concessions nobody
+/// asked for, so a refusal costs the concession rather than the turn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Refusals {
+    /// It will not take a request that marks a prefix to cache.
+    pub caching: bool,
+    /// It will not take a request that names how hard to think.
+    pub effort: bool,
+}
+
+/// What each service-and-model pair has refused.
 ///
 /// Process-wide, because a client is built per request and would otherwise re-learn the same
 /// refusal for every turn, which is the round trip this is here to spend once. Forgotten when the
-/// process ends, which is also when a service that has since started reading breakpoints gets
-/// asked again.
-fn refusers() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
-    static REFUSERS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
-        std::sync::OnceLock::new();
-    REFUSERS.get_or_init(Default::default)
+/// process ends, which is also when a service that has since started reading one of these fields
+/// gets asked again.
+fn learned() -> &'static std::sync::Mutex<std::collections::HashMap<String, Refusals>> {
+    static LEARNED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Refusals>>,
+    > = std::sync::OnceLock::new();
+    LEARNED.get_or_init(Default::default)
 }
 
-fn refused(key: &str) -> bool {
-    refusers()
+/// What a refusal is remembered against: the service, and the name the model goes out under.
+///
+/// The service as well as the model, because a model id is only unique within one of them. Two
+/// gateways can serve the same id, and one gateway refusing would otherwise stop the asking
+/// everywhere, Brave's endpoint included. Both of Brave's hosts answer to the base host here,
+/// being one deployment rather than two services.
+fn learned_key(service: &str, model: &str) -> String {
+    format!("{service}\n{model}")
+}
+
+fn remembered(key: &str) -> Refusals {
+    learned()
         .lock()
-        .is_ok_and(|refusers| refusers.contains(key))
+        .ok()
+        .and_then(|learned| learned.get(key).copied())
+        .unwrap_or_default()
 }
 
-fn remember_refusal(key: &str) {
-    if let Ok(mut refusers) = refusers().lock() {
-        refusers.insert(key.to_string());
+fn remember(key: &str, refusals: Refusals) {
+    if let Ok(mut learned) = learned().lock() {
+        learned.insert(key.to_string(), refusals);
     }
+}
+
+/// What this service has refused for this model, in the name the model goes out under.
+pub fn refusals(service: &str, model: &str) -> Refusals {
+    remembered(&learned_key(service, model))
+}
+
+/// Whether a level sent to this model at this service is read, as far as anything here knows.
+///
+/// True until the service has refused one, because a settings block names its models and never
+/// their parameters: a refusal is the only answer such a service gives, and reporting a level as
+/// unread before there is one would report a charge as off on a model that reads it.
+pub fn reads_effort(service: &str, model: &str) -> bool {
+    !refusals(service, model).effort
 }
 
 #[cfg(test)]
@@ -808,13 +1008,18 @@ mod tests {
     }
 
     fn provider(models: &str) -> bravebot_config::provider::Provider {
-        let text = format!(
+        provider_block(&format!(
             r#"{{"provider": {{"openrouter": {{
                 "options": {{"baseURL": "https://openrouter.example.invalid/api/v1"}},
                 "models": {models}
             }}}}}}"#
-        );
-        let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        ))
+    }
+
+    /// The one provider a whole settings block configures, for a test that varies more than the
+    /// models.
+    fn provider_block(text: &str) -> bravebot_config::provider::Provider {
+        let serde_json::Value::Object(root) = serde_json::from_str(text).expect("json") else {
             panic!("not an object");
         };
         bravebot_config::provider::Provider::all(&root)
@@ -845,7 +1050,7 @@ mod tests {
         let egress = Egress::new();
         let provider = provider(r#"{"z-ai/glm-4.6": {}}"#);
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "z-ai/glm-4.6", "a-token")
+            .for_gateway(&provider, "z-ai/glm-4.6", Some("a-token".to_string()))
             .prepare(&request("openrouter/z-ai/glm-4.6"))
             .expect("prepared");
 
@@ -865,7 +1070,7 @@ mod tests {
             r#"{"z-ai/glm-4.6": {"options": {"provider": {"order": ["amazon-bedrock"]}}}}"#,
         );
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "z-ai/glm-4.6", "a-token")
+            .for_gateway(&provider, "z-ai/glm-4.6", Some("a-token".to_string()))
             .prepare(&request("openrouter/z-ai/glm-4.6"))
             .expect("prepared");
 
@@ -883,7 +1088,7 @@ mod tests {
         let egress = Egress::new();
         let provider = provider(r#"{"z-ai/glm-4.6": {}}"#);
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "z-ai/glm-4.6", "a-token")
+            .for_gateway(&provider, "z-ai/glm-4.6", Some("a-token".to_string()))
             .prepare(&request("z-ai/glm-4.6"))
             .expect("prepared");
 
@@ -894,6 +1099,37 @@ mod tests {
         assert_eq!(header(&http, "authorization"), Some("Bearer a-token"));
         assert_eq!(header(&http, "digest"), None);
         assert_eq!(header(&http, "Brave-Product"), None);
+    }
+
+    /// A local Ollama wants no credential, and `Bearer` with nothing after it is not the same request
+    /// as one carrying no credential at all: some services read the empty value as a bad token and
+    /// refuse, which is the failure this exists to avoid.
+    ///
+    /// Its own block rather than the shared fixture, because the fixture names the one service this
+    /// system has an endpoint compiled in for, and that service always wants a token. A test reading
+    /// as though OpenRouter were asked without one asserts the opposite of what it is named for.
+    #[test]
+    fn a_gateway_needing_no_credential_sends_no_authorization_header() {
+        let config = config();
+        let egress = Egress::new();
+        let provider = provider_block(
+            r#"{"provider": {"ollama": {
+                "name": "Ollama (local)",
+                "options": {"baseURL": "http://localhost:11434/v1"},
+                "models": {"qwen3-coder-oc:latest": {}}
+            }}}"#,
+        );
+        let http = AichatClient::new(&config, &egress)
+            .for_gateway(&provider, "qwen3-coder-oc:latest", None)
+            .prepare(&request("qwen3-coder-oc:latest"))
+            .expect("prepared");
+
+        assert_eq!(http.url, "http://localhost:11434/v1/chat/completions");
+        assert_eq!(header(&http, "authorization"), None);
+        assert_eq!(
+            body(&http).get("model"),
+            Some(&serde_json::json!("qwen3-coder-oc:latest"))
+        );
     }
 
     /// Nothing changes for Brave's endpoint, which is every existing request. A gateway is additive,
@@ -918,6 +1154,29 @@ mod tests {
         assert_eq!(header(&http, "Brave-Product"), Some("brave-bot"));
     }
 
+    /// The interface reports what a request carries, and once a service has refused the field no
+    /// request to that model carries a level. Reporting one as in force names a charge somebody
+    /// chose and stopped getting, and the refusal is the only description a settings-declared
+    /// gateway offers.
+    #[test]
+    fn a_model_whose_service_refused_a_level_is_reported_as_reading_none() {
+        let service = "https://reported.example.invalid/v1/chat/completions";
+        remember(
+            &learned_key(service, "the-model-that-refused"),
+            Refusals {
+                caching: true,
+                effort: true,
+            },
+        );
+
+        assert!(!reads_effort(service, "the-model-that-refused"));
+        assert!(reads_effort(service, "a-model-that-has-not"));
+        assert!(reads_effort(
+            "https://elsewhere.example.invalid/v1/chat/completions",
+            "the-model-that-refused"
+        ));
+    }
+
     /// The escape hatch the block exists for: a gateway's routing controls are its own invention, so
     /// they reach the body whole rather than through a schema that has to know what they mean.
     #[test]
@@ -930,7 +1189,11 @@ mod tests {
             }}}"#,
         );
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "anthropic/claude-sonnet-4.5", "a-token")
+            .for_gateway(
+                &provider,
+                "anthropic/claude-sonnet-4.5",
+                Some("a-token".to_string()),
+            )
             .prepare(&request("anthropic/claude-sonnet-4.5"))
             .expect("prepared");
 
@@ -956,7 +1219,7 @@ mod tests {
             r#"{"m": {"options": {"model": "something/else", "messages": [], "stream": true}}}"#,
         );
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "m", "a-token")
+            .for_gateway(&provider, "m", Some("a-token".to_string()))
             .prepare(&request("m"))
             .expect("prepared");
 
@@ -979,7 +1242,7 @@ mod tests {
         let provider =
             provider(r#"{"z-ai/glm-4.6": {"limit": {"context": 131072, "output": 8192}}}"#);
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "z-ai/glm-4.6", "a-token")
+            .for_gateway(&provider, "z-ai/glm-4.6", Some("a-token".to_string()))
             .prepare(&request("z-ai/glm-4.6"))
             .expect("prepared");
 

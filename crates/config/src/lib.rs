@@ -16,12 +16,15 @@ pub mod env_var {
     include!("env_var.rs");
 }
 
+pub mod hooks;
+mod managed;
 mod obfuscate;
 mod settings;
 #[cfg(test)]
 mod testutil;
 
-pub use settings::Settings;
+pub use managed::{Managed, managed_file};
+pub use settings::{Settings, name_a_settings_file, user_settings_file};
 
 pub mod bedrock;
 pub mod provider;
@@ -297,30 +300,49 @@ impl Config {
     /// Read configuration from the process environment, falling back to the values
     /// built into this binary.
     ///
-    /// The environment wins, so a developer can point a released binary at a local
-    /// backend without rebuilding it.
+    /// The environment wins over both, so a developer can point a released binary at a local
+    /// backend without rebuilding it. What the machine-level file pinned wins over the environment,
+    /// which is the one thing that does.
     pub fn from_env() -> Result<Self, ConfigError> {
-        Self::from_env_and_settings(&Settings::load())
+        Self::from_env_and_settings(&Settings::load(), &Managed::load())
     }
 
-    /// Read configuration from the environment, with a settings file underneath it.
+    /// Read configuration from the environment, with a settings file underneath it and the
+    /// machine-level layer above it.
     ///
-    /// The environment wins over the file for the same reason it wins over a baked-in value: a
-    /// variable someone exported for one session is the most specific thing they said, and a file
-    /// that overrode it would make `AWS_PROFILE=other bravebot` do nothing.
+    /// The environment wins over the settings file for the same reason it wins over a baked-in
+    /// value: a variable someone exported for one session is the most specific thing they said, and
+    /// a file that overrode it would make `AWS_PROFILE=other bravebot` do nothing.
     ///
-    /// The `model` key is the exception, and sits above the baked-in value rather than below it.
-    /// Every release bakes in a default model, so a `model` key ranked like the `env` block would
-    /// lose to it on every binary anybody was given: the key would parse, be reported by `doctor`,
-    /// and change nothing outside a source build. An exported variable still outranks it.
-    pub fn from_env_and_settings(settings: &Settings) -> Result<Self, ConfigError> {
+    /// A name the managed layer pinned is the exception, and the inversion is the point of that
+    /// layer: everything else here is the individual's to change, so a pin an exported variable
+    /// outranked would pin nothing. It answers for the names it pinned and for no others, which is
+    /// [`Managed`]'s to decide.
+    ///
+    /// The `model` key is the other exception, and sits above the baked-in value rather than below
+    /// it. Every release bakes in a default model, so a `model` key ranked like the `env` block
+    /// would lose to it on every binary anybody was given: the key would parse, be reported by
+    /// `doctor`, and change nothing outside a source build. An exported variable still outranks it.
+    pub fn from_env_and_settings(
+        settings: &Settings,
+        managed: &Managed,
+    ) -> Result<Self, ConfigError> {
         Self::from_lookup_with_providers(
-            |key| match key {
-                env_var::DEFAULT_MODEL => resolve_model(env::var(key).ok(), settings, built_in),
-                _ => resolve(key, env::var(key).ok(), built_in)
-                    .or_else(|| settings.get(key).map(str::to_string)),
+            |key| match managed.get(key) {
+                Some(pinned) => Some(pinned.to_string()),
+                None => match key {
+                    env_var::DEFAULT_MODEL => resolve_model(env::var(key).ok(), settings, built_in),
+                    _ => resolve(key, env::var(key).ok(), built_in)
+                        .or_else(|| settings.get(key).map(str::to_string)),
+                },
             },
-            settings.providers().to_vec(),
+            // A gateway is a destination too, so an approved endpoint pins nothing while anybody can
+            // add one beside it. The managed block replaces the person's rather than merging with
+            // it, empty included, which is the only way to say that there are to be none.
+            match managed.gateways() {
+                Some(gateways) => gateways.to_vec(),
+                None => settings.providers().to_vec(),
+            },
         )
     }
 
@@ -872,7 +894,10 @@ mod tests {
             let (provider, model) = config.provider_for(&config.default_model).expect("gateway");
             assert_eq!(model, "z-ai/glm-4.6");
             assert_eq!(provider.base_url, "https://openrouter.ai/api/v1");
-            assert_eq!(provider.token(|_| None).as_deref(), Some("test-token"));
+            assert_eq!(
+                provider.credential(|_| None),
+                provider::Credential::Token("test-token".to_string())
+            );
             assert!(provider.models.is_empty());
         }
     }
@@ -888,16 +913,14 @@ mod tests {
             .expect("gateway configured before its token is resolved");
         let provider = &config.providers[0];
         assert_eq!(
-            provider
-                .token(|name| match name {
-                    "OPENROUTER_API_KEY" => Some("environment-token".into()),
-                    _ => None,
-                })
-                .as_deref(),
-            Some("environment-token")
+            provider.credential(|name| match name {
+                "OPENROUTER_API_KEY" => Some("environment-token".into()),
+                _ => None,
+            }),
+            provider::Credential::Token("environment-token".to_string())
         );
         // Missing gateway tokens are reported by the gateway client, not as missing Brave keys.
-        assert_eq!(provider.token(|_| None), None);
+        assert_eq!(provider.credential(|_| None), provider::Credential::Absent);
         assert!(!config.serves_aichat());
     }
 
@@ -1125,6 +1148,278 @@ mod tests {
         let chosen = resolve(env_var::AWS_REGION, None, |_| None)
             .or_else(|| settings.get(env_var::AWS_REGION).map(str::to_string));
         assert_eq!(chosen.as_deref(), Some("from-the-file"));
+    }
+
+    /// The resolution [`Config::from_env_and_settings`] performs, gateways included, over sources a
+    /// test names rather than over the process environment, whatever this binary was built with, and
+    /// a file only root can write.
+    fn resolved(
+        settings: &Settings,
+        exported: impl Fn(&str) -> Option<String>,
+        baked: impl Fn(&str) -> Option<String>,
+    ) -> Result<Config, ConfigError> {
+        resolved_under(&Managed::default(), settings, exported, baked)
+    }
+
+    /// As [`resolved`], with a machine-level layer over it.
+    fn resolved_under(
+        managed: &Managed,
+        settings: &Settings,
+        exported: impl Fn(&str) -> Option<String>,
+        baked: impl Fn(&str) -> Option<String>,
+    ) -> Result<Config, ConfigError> {
+        Config::from_lookup_with_providers(
+            |key| match managed.get(key) {
+                Some(pinned) => Some(pinned.to_string()),
+                None => match key {
+                    env_var::DEFAULT_MODEL => resolve_model(exported(key), settings, &baked),
+                    _ => resolve(key, exported(key), &baked)
+                        .or_else(|| settings.get(key).map(str::to_string)),
+                },
+            },
+            match managed.gateways() {
+                Some(gateways) => gateways.to_vec(),
+                None => settings.providers().to_vec(),
+            },
+        )
+    }
+
+    /// The names a settings file may set are the names something reads, and this is all of them. A
+    /// configuration surface described but never named is one nobody can use without reading this
+    /// crate, which is how a whole backend reached people undocumented.
+    #[test]
+    fn every_name_a_settings_block_may_set_reaches_the_configuration() {
+        let settings = Settings::parse(
+            r#"{"env": {
+                "SERVICES_KEY_AICHAT": "signing-key-from-the-file",
+                "BRAVE_SERVICES_KEY_ID": "key-id-from-the-file",
+                "BRAVE_AI_CHAT_ENDPOINT": "https://endpoint.invalid",
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT": "https://premium.invalid",
+                "BRAVE_AI_CHAT_DEFAULT_MODEL": "model-from-the-file",
+                "BRAVEBOT_CONTEXT_BUDGET": "4096",
+                "BRAVEBOT_USE_BEDROCK": "1",
+                "AWS_REGION": "eu-west-1",
+                "AWS_PROFILE": "profile-from-the-file",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-arn",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-arn"
+            }}"#,
+        );
+        let config = resolved(&settings, |_| None, |_| None).expect("configured");
+
+        assert_eq!(config.signing_key.expose(), "signing-key-from-the-file");
+        assert_eq!(config.key_id, "key-id-from-the-file");
+        assert_eq!(config.endpoint, "https://endpoint.invalid");
+        assert_eq!(
+            config.premium_endpoint.as_deref(),
+            Some("https://premium.invalid")
+        );
+        assert_eq!(config.default_model, "model-from-the-file");
+        assert_eq!(config.context_budget, 4096);
+
+        let bedrock = config.bedrock.expect("an aws block");
+        assert_eq!(bedrock.region, "eu-west-1");
+        assert_eq!(bedrock.profile.as_deref(), Some("profile-from-the-file"));
+        for (tier, named) in [
+            (bedrock::Tier::Opus, "opus-arn"),
+            (bedrock::Tier::Sonnet, "sonnet-arn"),
+            (bedrock::Tier::Haiku, "haiku-arn"),
+        ] {
+            assert_eq!(bedrock.model_for(tier), Some(named));
+        }
+    }
+
+    /// The inversion the machine-level layer exists for. Everything else a person can set, the
+    /// environment included, so a pin an exported variable outranked would be a pin an organisation
+    /// could not rely on for anything.
+    #[test]
+    fn a_managed_pin_outranks_an_exported_variable() {
+        let managed = managed::scratch(
+            "resolve-pin-over-the-environment",
+            r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://approved.example"}}"#,
+        );
+        let settings = Settings::parse(
+            r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://from-the-file.invalid"}}"#,
+        );
+        let config = resolved_under(
+            &managed,
+            &settings,
+            |name| match name {
+                env_var::ENDPOINT => Some("https://exported.invalid".into()),
+                _ => None,
+            },
+            |name| match name {
+                env_var::ENDPOINT => Some("https://baked.invalid".into()),
+                other => complete_env(other),
+            },
+        )
+        .expect("configured");
+        assert_eq!(config.endpoint, "https://approved.example");
+    }
+
+    /// A name it did not pin is resolved exactly as it would be with no such file, so deploying one
+    /// to pin a host does not quietly take over the rest of somebody's configuration.
+    #[test]
+    fn a_name_the_managed_layer_did_not_pin_resolves_as_it_would_have() {
+        let managed = managed::scratch(
+            "resolve-pin-leaves-other-names",
+            r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://approved.example"}}"#,
+        );
+        let settings = Settings::parse(r#"{"env": {"AWS_REGION": "from-the-file"}}"#);
+        let config = resolved_under(
+            &managed,
+            &settings,
+            |name| match name {
+                env_var::USE_BEDROCK => Some("1".into()),
+                env_var::AWS_PROFILE => Some("from-the-environment".into()),
+                _ => None,
+            },
+            complete_env,
+        )
+        .expect("configured");
+        let bedrock = config.bedrock.expect("an aws block");
+        assert_eq!(bedrock.region, "from-the-file");
+        assert_eq!(bedrock.profile.as_deref(), Some("from-the-environment"));
+    }
+
+    /// The switch is one of the pinned names, so the exported one stops deciding.
+    #[test]
+    fn a_pinned_switch_outranks_the_exported_one() {
+        let managed = managed::scratch(
+            "resolve-refuse-bedrock",
+            r#"{"env": {"BRAVEBOT_USE_BEDROCK": "0"}}"#,
+        );
+        let config = resolved_under(
+            &managed,
+            &Settings::default(),
+            |name| match name {
+                env_var::USE_BEDROCK => Some("1".into()),
+                env_var::AWS_REGION => Some("us-west-2".into()),
+                _ => None,
+            },
+            complete_env,
+        )
+        .expect("configured");
+        assert!(
+            config.bedrock.is_none(),
+            "the pinned switch decides, not the exported one"
+        );
+    }
+
+    /// "Our account or nothing" takes both halves. A gateway entry can name an AWS account as well,
+    /// so pinning the switch off while leaving the gateways alone refuses nothing.
+    #[test]
+    fn refusing_a_personal_cloud_account_takes_the_switch_and_the_gateways() {
+        let mine = Settings::parse(
+            r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "mine"}}}}"#,
+        );
+
+        let switch_alone = managed::scratch(
+            "resolve-switch-alone",
+            r#"{"env": {"BRAVEBOT_USE_BEDROCK": "0"}}"#,
+        );
+        let config =
+            resolved_under(&switch_alone, &mine, |_| None, complete_env).expect("configured");
+        assert!(
+            config
+                .bedrock_providers()
+                .any(|(_, bedrock)| bedrock.profile.as_deref() == Some("mine")),
+            "the switch alone leaves a gateway naming an account reachable"
+        );
+
+        let both = managed::scratch(
+            "resolve-switch-and-gateways",
+            r#"{"env": {"BRAVEBOT_USE_BEDROCK": "0"}, "provider": {}}"#,
+        );
+        let config = resolved_under(&both, &mine, |_| None, complete_env).expect("configured");
+        assert!(config.bedrock.is_none());
+        assert_eq!(config.bedrock_providers().count(), 0);
+    }
+
+    /// An approved endpoint pins nothing while a gateway somebody configured is still reachable, so
+    /// the managed block replaces the person's rather than adding to it.
+    #[test]
+    fn a_managed_gateway_block_replaces_the_one_in_the_settings() {
+        let managed = managed::scratch(
+            "resolve-gateways-replaced",
+            r#"{"provider": {"approved": {"options": {"baseURL": "https://approved.example/v1"}}}}"#,
+        );
+        let settings = Settings::parse(
+            r#"{"provider": {"mine": {"options": {"baseURL": "https://mine.invalid/v1"}}}}"#,
+        );
+        let config =
+            resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
+        let ids: Vec<&str> = config.providers.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["approved"]);
+    }
+
+    /// The only way to say there are to be no gateways at all, which is half of what pinning a
+    /// destination means.
+    #[test]
+    fn an_empty_managed_gateway_block_leaves_no_gateways() {
+        let managed = managed::scratch("resolve-gateways-none", r#"{"provider": {}}"#);
+        let settings = Settings::parse(
+            r#"{"provider": {"mine": {"options": {"baseURL": "https://mine.invalid/v1"}}}}"#,
+        );
+        let config =
+            resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
+        assert!(config.providers.is_empty());
+    }
+
+    /// A file that says nothing about gateways must leave them alone, or every managed layer would
+    /// silently take away a gateway it never mentioned.
+    #[test]
+    fn a_managed_layer_silent_on_gateways_keeps_the_configured_ones() {
+        let managed = managed::scratch(
+            "resolve-gateways-untouched",
+            r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://approved.example"}}"#,
+        );
+        let settings = Settings::parse(
+            r#"{"provider": {"mine": {"options": {"baseURL": "https://mine.invalid/v1"}}}}"#,
+        );
+        let config =
+            resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
+        let ids: Vec<&str> = config.providers.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["mine"]);
+    }
+
+    /// Every name but the top-level `model` key ranks below what the build baked in, so a released
+    /// binary reaches the host it was built for rather than one a file in a checkout named.
+    #[test]
+    fn a_baked_in_value_outranks_the_settings_file() {
+        let settings = Settings::parse(
+            r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://from-the-file.invalid"}}"#,
+        );
+        let config = resolved(
+            &settings,
+            |_| None,
+            |name| match name {
+                env_var::ENDPOINT => Some("https://baked.invalid".into()),
+                other => complete_env(other),
+            },
+        )
+        .expect("configured");
+        assert_eq!(config.endpoint, "https://baked.invalid");
+    }
+
+    /// A name nothing reads is kept so that a file written for another tool, or for a later
+    /// version, does not stop a session. Kept is the whole of it: the switch that hands this
+    /// agent's credentials back to a subprocess is read from the environment alone, and a file
+    /// spelling it changes nothing. Compared whole, so a field added later is covered too.
+    #[test]
+    fn a_name_nothing_consults_changes_nothing() {
+        let named = Settings::parse(
+            r#"{"env": {"BRAVEBOT_SUBPROCESS_ENV_SCRUB": "0", "SOMETHING_ELSE": "a value"}}"#,
+        );
+        assert_eq!(named.get(env_var::SUBPROCESS_ENV_SCRUB), Some("0"));
+
+        let with_the_names = resolved(&named, |_| None, complete_env).expect("configured");
+        let without = resolved(&Settings::default(), |_| None, complete_env).expect("configured");
+        assert_eq!(
+            with_the_names.signing_key.expose(),
+            without.signing_key.expose()
+        );
+        assert_eq!(format!("{with_the_names:?}"), format!("{without:?}"));
     }
 
     /// The point of reading the key: a file naming a model is what decides, without the variable
