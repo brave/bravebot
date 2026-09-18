@@ -2465,7 +2465,8 @@ mod preserved_history {
         );
     }
 
-    /// Older records carry totals but provide no evidence for a failure reason or a measured zero.
+    /// Older records carry totals but provide no evidence for a turn boundary, a failure reason
+    /// or a measured zero, and saving one back invents none of them.
     #[test]
     fn old_history_keeps_unknown_outcomes_and_missing_measurements() {
         let scratch = Scratch::new("history-old");
@@ -2484,12 +2485,7 @@ mod preserved_history {
         assert!(!markdown.contains("**Outcome:**"));
         assert!(session.spend_by_turn().is_empty());
         assert!(session.timing_by_turn().is_empty());
-        assert!(
-            session
-                .turn_history()
-                .iter()
-                .all(|turn| turn.outcome.is_none())
-        );
+        assert!(session.turn_history().is_empty());
         assert!(
             !session
                 .transcript
@@ -2507,12 +2503,7 @@ mod preserved_history {
         assert!(!markdown.contains("**Outcome:**"));
         assert!(session.spend_by_turn().is_empty());
         assert!(session.timing_by_turn().is_empty());
-        assert!(
-            session
-                .turn_history()
-                .iter()
-                .all(|turn| turn.outcome.is_none())
-        );
+        assert!(session.turn_history().is_empty());
     }
 
     /// Legacy user messages do not identify turns, even when spend and timing survived.
