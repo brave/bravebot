@@ -77,3 +77,18 @@ is the same thing that makes a real violation hard to spot, and it is more likel
 through than a plain design mistake. It also talks you out of the better implementation for a reason
 that does not exist. Getting the scope of the rule wrong in this direction is a real cost, not a
 harmless excess of caution.
+
+## Going looking, rather than waiting for a diff
+
+Everything above is a review pass, and a review pass only sees what somebody wrote this week. The
+[security-audit skill](../../agents/skills/security-audit/SKILL.md) is the same four shapes turned
+on the whole tree: it enumerates every site each shape could hide in, reads them in lanes, tries to
+disprove what it finds, and files one issue per finding that survives. It skips anything the tracker
+already holds, open or closed, and it does not create a label.
+
+`make check-security` is its deterministic half, and it holds the two things this document cannot.
+The count above has to agree with the one in [specs/labels.md](../specs/labels.md), because two
+documents disagreeing about how many exceptions are admitted is how an unlisted exception becomes
+invisible. And shape 4 says only a reader can tell a laundered label from a sound one, which is
+true of a single site and not of the surface: a spec can pin how many places construct a `Labelled`
+just as it pins how many release one, and a new site then arrives red rather than unread.

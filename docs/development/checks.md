@@ -37,6 +37,15 @@ pull request rather than waiting for somebody to notice it. It also holds
 `verified-by: none`, so giving a clause a test, or setting one to `none`, is a line in a diff
 rather than a warning nobody has to read. `make write-unverified` writes the file; commit what it
 writes.
+
+`make check-security` decides the things `check-spec` structurally cannot: whether two documents
+agree about how many exceptions to the rule are admitted, whether a trait reaches into a `Labelled`,
+whether a spec pins the constructors of one as well as the releases, and whether every workflow step
+is on a commit rather than a tag its owner can move. It fails on this tree today, which is why it is
+not in `check-all` yet, and the findings are what the
+[security-audit skill](../../agents/skills/security-audit/SKILL.md) files. Run it before a commit
+that touches a label, `.github/workflows`, or the trust specs.
+
 `make check-npm` installs from the lockfile and lints it, as CI does. `make check-deps` decides
 `deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
 build compiles at two versions without a recorded reason, and a dependency from anywhere but

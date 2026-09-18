@@ -2721,6 +2721,10 @@ const SHORTCUTS_HINT: &str = "? for shortcuts";
 /// line tells those apart.
 const UNMEASURED_CONTEXT: &str = "context not yet measured";
 
+/// The word for a conversation shortened underneath its reading. On its own where the compaction
+/// has no figure to give, and in front of the figure where it has one.
+const COMPACTED_CONTEXT: &str = "context compacted";
+
 /// Every key and marker, and what it does, in the order they are listed.
 ///
 /// The one place they are written down, so a binding that changes cannot leave the list advertising
@@ -2953,7 +2957,14 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // one people stop reading, and this is the only account of the size of a conversation there is.
     let context = match session.occupancy() {
         crate::state::Occupancy::Unmeasured => UNMEASURED_CONTEXT.to_string(),
-        crate::state::Occupancy::Compacted => "context compacted".to_string(),
+        // How much of the budget the compaction won back, which is what somebody who has just
+        // shortened a conversation is asking. Approximate, and marked so: the summariser counted
+        // its own instructions along with the exchange it read, and there is no tokeniser here to
+        // take them off again, so the figure is a little larger than the room really is.
+        crate::state::Occupancy::Compacted { .. } => match session.won_back() {
+            Some(percent) => format!("{COMPACTED_CONTEXT}, ~{percent}% won back"),
+            None => COMPACTED_CONTEXT.to_string(),
+        },
         crate::state::Occupancy::Measured { guessed, .. } => match session.fullness() {
             Some(percent) if guessed => format!("context ~{percent}%"),
             Some(percent) => format!("context {percent}%"),
@@ -6077,10 +6088,43 @@ mod tests {
     #[test]
     fn the_hint_line_reports_a_compacted_context() {
         let mut session = Session::new("none");
-        session.compacted();
+        session.compacted(36_000, 100_000);
         let output = rendered_at(&session, 120, 24);
 
-        assert!(output.contains("context compacted"), "{output}");
+        assert!(output.contains(COMPACTED_CONTEXT), "{output}");
+    }
+
+    /// Having just shortened a conversation, what a person wants to know is how much room that
+    /// won back, and the moment they want it is the one moment the figure is guaranteed absent:
+    /// nothing counts the shortened conversation until the next request. The compaction's own
+    /// reply is where the figure comes from, and it is a fraction of the budget like the reading
+    /// that replaces it a turn later.
+    #[test]
+    fn the_hint_line_says_how_much_room_a_compaction_won_back() {
+        let mut session = Session::new("none");
+        session.compacted(36_000, 100_000);
+        // Eighty columns, because the reading is only worth stating on a line that still fits the
+        // terminal somebody is working in: a part too long for it is one the width rule drops.
+        let hint = hint_row_at(&session, 80, 24);
+
+        assert!(hint.contains("context compacted, ~36% won back"), "{hint}");
+        assert!(hint.contains(SHORTCUTS_HINT), "the line was cut: {hint}");
+    }
+
+    /// A server that reported no usage leaves nothing to state, and `~0% won back` would claim a
+    /// measurement where the measurement is what is missing. The conversation was still
+    /// shortened, and that much the session does know.
+    #[test]
+    fn a_compaction_with_no_figure_to_give_still_says_the_conversation_was_compacted() {
+        let mut session = Session::new("none");
+        session.compacted(0, 100_000);
+        let hint = hint_row_at(&session, 120, 24);
+
+        assert!(hint.contains(COMPACTED_CONTEXT), "{hint}");
+        assert!(
+            !hint.contains('%'),
+            "a figure was drawn for a compaction nobody measured: {hint}"
+        );
     }
 
     /// Narrowing shows only what still matches, so the list answers what the half-typed word could

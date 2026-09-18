@@ -47,7 +47,7 @@ a violation wherever it sits.
 **Why.** The dependency graph makes `core` look like the safe place to put things, and it is not.
 The kernel is where decisions derived from content are *taken*, not where they become allowed.
 
-`verified-by: none`
+`verified-by: by-construction (a labelled value exposes no accessor for its contents, so reading one takes either a witness the policy layer alone mints or a conversion that refuses anything not already trusted and public, and labels.md pins that witness's use file by file across both crates, so a decision moved into the kernel moves a pinned count rather than escaping one; the one thing a labelled value answers without a witness is how many bytes it holds, which is a number labels.md already shows the planner)`
 
 <a id="LAYER-3"></a>
 ### LAYER-3: presentation crates display untrusted content on purpose
