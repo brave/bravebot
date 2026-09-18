@@ -230,6 +230,18 @@ too.
 answered to appear again. Resolution happens where the I/O does, before a plan exists, for the
 reason the program is the resolved path.
 
+**The path itself, and never a rendering of it.** A path is bytes, and not every sequence of bytes is
+text. `to_string_lossy` maps every byte it cannot read onto one replacement character, so two files
+whose names differ only in such bytes render to one string, and an entry keyed on that string covers
+both of them while the execution path spawns whichever of them the plan named: an answer about a file
+nobody was shown. The same holds of the tree, whose own key already turns on a spelling. So the
+binary an entry names and the tree it was given in are both compared as paths, and both are written
+by the path's own bytes wherever a path has no spelling as text. A rendering is for the screen, where
+a person reads a name rather than
+matching on one, and a recorded path that *is* a rendering designates no file: it covers nothing
+rather than covering every file it could have meant, which is what [RUN-9](#RUN-9) and
+[RUN-19](#RUN-19) say of the two records that outlive the prompt.
+
 Nothing else a person settled in advance reaches a tree of its own: the trust map's relative rules,
 a rule in a settings file, and a line remembered past the session ([RUN-19](#RUN-19)) are spelled
 against the workspace root, and a remembered line records no tree at all. So a line running outside
@@ -279,6 +291,12 @@ meaning is not in its argv, not the setting of a variable.
 `verified-by: bravebot_tui::confirm::a_run_carrying_an_environment_assignment_offers_no_standing_permission`
 `verified-by: bravebot_tui::confirm::a_run_that_is_private_and_carries_an_assignment_gives_both_reasons`
 `verified-by: bravebot_agent::turn::a_line_carrying_an_environment_assignment_is_not_remembered_however_it_is_answered`
+`verified-by: bravebot_core::programs::two_binaries_differing_only_in_unrenderable_bytes_are_different_programs`
+`verified-by: bravebot_core::programs::two_trees_differing_only_in_unrenderable_bytes_are_different_trees`
+`verified-by: bravebot_core::policy::a_vouch_does_not_cover_a_binary_that_only_renders_the_same_way`
+`verified-by: bravebot_core::command::a_spelling_names_the_path_it_was_taken_from`
+`verified-by: bravebot_core::command::a_text_spelling_holding_a_replacement_character_names_no_path`
+`verified-by: bravebot_core::command::a_path_that_really_holds_a_replacement_character_still_names_itself`
 
 <a id="RUN-9"></a>
 ### RUN-9: the vouched list belongs to the session
@@ -301,7 +319,11 @@ close, one checkout out.
 
 A record written before an entry held a tree restores as one given at the workspace root, which is
 the only place such an entry could ever have been spent. Nothing else is migrated: reading it any
-other way would either widen a permission nobody gave or drop one they did.
+other way would either widen a permission nobody gave or drop one they did. An entry whose recorded
+binary or tree is a rendering rather than a path restores as nothing, for the reason
+[RUN-8](#RUN-8) gives: it designates no file, and every path it could have meant would be a grant
+nobody gave. That entry alone is dropped and not the record holding it, the rest of the session's
+answers being the same person's.
 
 **Why.** The same reason the trust map belongs to a session. Its effect is invisible until a prompt
 does not appear, so it has to be readable back.
@@ -313,6 +335,8 @@ does not appear, so it has to be readable back.
 `verified-by: bravebot_tui::sessions::an_entry_recorded_without_a_tree_comes_back_scoped_to_the_root`
 `verified-by: bravebot_tui::sessions::a_tree_inside_the_project_is_written_down_relative`
 `verified-by: bravebot_tui::sessions::a_tree_written_down_relative_comes_back_under_the_resumed_root`
+`verified-by: bravebot_tui::sessions::a_binary_no_rendering_can_show_comes_back_as_itself`
+`verified-by: bravebot_tui::sessions::an_entry_whose_recorded_binary_is_a_rendering_vouches_for_nothing`
 
 <a id="RUN-10"></a>
 ### RUN-10: the vouched-for list is not an allowlist and must never become one
@@ -729,6 +753,17 @@ entry arriving with an assignment left out of it, from a hand edit or from a ver
 less, would cover the line a person answered about with anything at all put in front of it. Keying on
 it makes that entry cover nothing rather than cover too much.
 
+**A path in the record is the path's own bytes, and an entry holding a rendering covers nothing.** The
+binary a name resolved to and the tree the line ran in are both paths, and a path read out of this file
+next month is read by a build that need not be the one that wrote it. So it has the assignment's
+problem in a sharper form: an entry arriving from a hand edit or from a version that recorded a
+rendering names every binary whose path renders that way ([RUN-8](#RUN-8)), while the run spawns the
+one the line named. Such an entry covers nothing, which puts the line back to a prompt exactly as a
+record nobody had written would. Nothing this build writes is refused when read back, because a path
+with no spelling as text is written as bytes, and so is one that genuinely holds the character a
+rendering uses. The tree matters here for a second reason: the file's own name is lossy, so two trees
+can share a record, and the path written into each entry is the only thing that tells them apart.
+
 **Why a record rather than a rule in a settings file.** A rule is matched against a rendering of the
 line: one string, the program's name and its arguments run together, in a language where a character
 means "any text". Two different argument lists render to one string, and an argument containing that
@@ -907,6 +942,10 @@ begun in either. And a line whose arguments differ every time is not helped at a
 `verified-by: bravebot_tui::status::a_directory_with_nothing_remembered_does_not_mention_the_record`
 `verified-by: bravebot_tui::status::a_session_carrying_a_remembered_line_is_not_told_every_run_is_asked_about`
 `verified-by: bravebot_agent::remembered::an_entry_this_build_does_not_fully_understand_covers_nothing`
+`verified-by: bravebot_core::remembered::an_answer_does_not_follow_a_rendering_onto_a_different_binary`
+`verified-by: bravebot_agent::remembered::a_binary_no_rendering_can_show_is_read_back_as_itself`
+`verified-by: bravebot_agent::remembered::a_tree_no_rendering_can_show_is_answered_only_by_its_own_lines`
+`verified-by: bravebot_agent::remembered::an_entry_whose_recorded_binary_is_a_rendering_covers_nothing`
 
 <a id="RUN-20"></a>
 ### RUN-20: no answer at a prompt grants a family, because nothing here tells a value from a program

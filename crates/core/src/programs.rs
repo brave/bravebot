@@ -35,6 +35,11 @@
 //! recording the string would let a later change inherit an assertion made about a different
 //! binary. Resolution happens outside this crate, which performs no I/O; see `bravebot_agent::programs`.
 //!
+//! The path itself and not a rendering of it, for the same reason: a path is bytes, and
+//! `to_string_lossy` maps every byte it cannot read to one replacement character, so two binaries
+//! whose names differ only in such bytes would share one entry while a run spawns whichever of them
+//! was named. See [`crate::command::Spelling`].
+//!
 //! # And the tree the vouch was given in
 //!
 //! A prompt shows three things: the resolved binary, the argv, and the directory the line runs in.
@@ -67,7 +72,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Command {
     /// The absolute path the program name resolved to.
-    pub program: String,
+    pub program: PathBuf,
     /// The arguments, in order. Empty is a real value and different from any non-empty list.
     pub args: Vec<String>,
     /// The directory the vouch was given in, absolute and canonical.
@@ -79,7 +84,7 @@ pub struct Command {
 
 impl Command {
     pub fn new(
-        program: impl Into<String>,
+        program: impl Into<PathBuf>,
         args: Vec<String>,
         directory: impl Into<PathBuf>,
     ) -> Self {
@@ -96,8 +101,15 @@ impl Command {
     /// and renders it the way that screen renders a path: `/status` and a run prompt both show one
     /// relative to the workspace where they can, and this crate cannot, since it does not know
     /// where the workspace is.
+    ///
+    /// Lossy, as every rendering of a path is. This is the one thing here that is read rather than
+    /// matched on, and a path with no text spelling still has to reach the screen.
     pub fn display(&self) -> String {
-        crate::command::Stage::new(self.program.clone(), self.args.clone()).display()
+        crate::command::Stage::new(
+            self.program.to_string_lossy().to_string(),
+            self.args.clone(),
+        )
+        .display()
     }
 
     /// Whether this is the same program under the same arguments, wherever either was run.
@@ -144,7 +156,7 @@ impl TrustedPrograms {
     /// covers `sub/` and neither the root above it nor a `nested/` below it. A prefix test would
     /// leave the hole it closes one level down, since a relative argument names a different file
     /// in every tree it is read in.
-    pub fn contains(&self, program: &str, args: &[String], directory: &Path) -> bool {
+    pub fn contains(&self, program: &Path, args: &[String], directory: &Path) -> bool {
         self.commands
             .iter()
             .any(|c| c.program == program && c.args == args && c.directory == directory)
@@ -254,14 +266,14 @@ mod tests {
     fn nothing_is_vouched_for_to_begin_with() {
         let programs = TrustedPrograms::new();
         assert!(programs.is_empty());
-        assert!(!programs.contains("/usr/bin/git", &["log".to_string()], root()));
+        assert!(!programs.contains(Path::new("/usr/bin/git"), &["log".to_string()], root()));
     }
 
     #[test]
     fn a_command_that_was_vouched_for_is_recognised() {
         let mut programs = TrustedPrograms::new();
         programs.trust(git_log());
-        assert!(programs.contains("/usr/bin/git", &["log".to_string()], root()));
+        assert!(programs.contains(Path::new("/usr/bin/git"), &["log".to_string()], root()));
     }
 
     /// The reason entries are not keyed by program alone. Vouching for `git log` says nothing
@@ -272,7 +284,7 @@ mod tests {
         let mut programs = TrustedPrograms::new();
         programs.trust(git_log());
         assert!(
-            !programs.contains("/usr/bin/git", &["push".to_string()], root()),
+            !programs.contains(Path::new("/usr/bin/git"), &["push".to_string()], root()),
             "an assertion about one command covered a different one"
         );
     }
@@ -294,7 +306,7 @@ mod tests {
             vec!["-n".to_string(), "5".to_string(), "log".to_string()],
         ] {
             assert!(
-                !programs.contains("/usr/bin/git", &other, root()),
+                !programs.contains(Path::new("/usr/bin/git"), &other, root()),
                 "{other:?} matched an entry it is not"
             );
         }
@@ -305,8 +317,8 @@ mod tests {
     fn no_arguments_is_its_own_entry() {
         let mut programs = TrustedPrograms::new();
         programs.trust(Command::new("/bin/pwd", Vec::new(), ROOT));
-        assert!(programs.contains("/bin/pwd", &[], root()));
-        assert!(!programs.contains("/bin/pwd", &["-L".to_string()], root()));
+        assert!(programs.contains(Path::new("/bin/pwd"), &[], root()));
+        assert!(!programs.contains(Path::new("/bin/pwd"), &["-L".to_string()], root()));
     }
 
     /// Matched on the resolved path, so an assertion does not follow a name onto a different
@@ -316,8 +328,59 @@ mod tests {
         let mut programs = TrustedPrograms::new();
         programs.trust(Command::new("/usr/bin/grep", vec!["x".into()], ROOT));
         assert!(
-            !programs.contains("/opt/homebrew/bin/grep", &["x".to_string()], root()),
+            !programs.contains(
+                Path::new("/opt/homebrew/bin/grep"),
+                &["x".to_string()],
+                root()
+            ),
             "an assertion followed a name onto a different binary"
+        );
+    }
+
+    /// And on the path's own bytes, not on a rendering of them. `to_string_lossy` maps every byte
+    /// that is not valid UTF-8 onto one replacement character, so two binaries whose paths differ
+    /// only there shared one entry while a run spawns whichever of them the plan named.
+    #[cfg(unix)]
+    #[test]
+    fn two_binaries_differing_only_in_unrenderable_bytes_are_different_programs() {
+        let at = |last: u8| {
+            use std::os::unix::ffi::OsStrExt;
+            let mut bytes = b"/work/prog-".to_vec();
+            bytes.push(last);
+            PathBuf::from(std::ffi::OsStr::from_bytes(&bytes))
+        };
+        let mut programs = TrustedPrograms::new();
+        programs.trust(Command::new(at(0xff), vec!["x".into()], ROOT));
+        assert!(
+            programs.contains(&at(0xff), &["x".to_string()], root()),
+            "the binary that was vouched for was not recognised"
+        );
+        assert!(
+            !programs.contains(&at(0xfe), &["x".to_string()], root()),
+            "an assertion about one binary covered another that renders the same way"
+        );
+    }
+
+    /// The tree is a path too, and it is the whole question in a line whose arguments are relative,
+    /// so two trees that render the same way must not share an entry either.
+    #[cfg(unix)]
+    #[test]
+    fn two_trees_differing_only_in_unrenderable_bytes_are_different_trees() {
+        let tree = |last: u8| {
+            use std::os::unix::ffi::OsStrExt;
+            let mut bytes = b"/work/sub-".to_vec();
+            bytes.push(last);
+            PathBuf::from(std::ffi::OsStr::from_bytes(&bytes))
+        };
+        let mut programs = TrustedPrograms::new();
+        programs.trust(Command::new("/bin/sh", vec!["check.sh".into()], tree(0xff)));
+        assert!(
+            programs.contains(Path::new("/bin/sh"), &["check.sh".to_string()], &tree(0xff)),
+            "the tree the vouch was given in was not recognised"
+        );
+        assert!(
+            !programs.contains(Path::new("/bin/sh"), &["check.sh".to_string()], &tree(0xfe)),
+            "a vouch given in one tree covered another that renders the same way"
         );
     }
 
@@ -334,7 +397,7 @@ mod tests {
         let mut programs = TrustedPrograms::new();
         programs.trust(git_log());
         assert!(programs.forget(&git_log()));
-        assert!(!programs.contains("/usr/bin/git", &["log".to_string()], root()));
+        assert!(!programs.contains(Path::new("/usr/bin/git"), &["log".to_string()], root()));
         assert!(
             !programs.forget(&git_log()),
             "forgetting twice found nothing"
@@ -364,9 +427,13 @@ mod tests {
             vec!["check.sh".into()],
             "/work/sub",
         ));
-        assert!(programs.contains("/bin/sh", &["check.sh".to_string()], Path::new("/work/sub")));
+        assert!(programs.contains(
+            Path::new("/bin/sh"),
+            &["check.sh".to_string()],
+            Path::new("/work/sub")
+        ));
         assert!(
-            !programs.contains("/bin/sh", &["check.sh".to_string()], root()),
+            !programs.contains(Path::new("/bin/sh"), &["check.sh".to_string()], root()),
             "an answer given in a subdirectory covered a different file at the root"
         );
     }
@@ -384,7 +451,7 @@ mod tests {
         ));
         assert!(
             !programs.contains(
-                "/bin/sh",
+                Path::new("/bin/sh"),
                 &["check.sh".to_string()],
                 Path::new("/work/sub/nested")
             ),
@@ -529,6 +596,10 @@ mod varying {
         asked.record(commit("first"));
         let programs = TrustedPrograms::new();
         assert!(programs.is_empty());
-        assert!(!programs.contains("/usr/bin/git", &["commit".to_string()], Path::new("/work")));
+        assert!(!programs.contains(
+            Path::new("/usr/bin/git"),
+            &["commit".to_string()],
+            Path::new("/work")
+        ));
     }
 }

@@ -31,7 +31,7 @@
 //! prompt, which is the driver's own compiled plan and trusted and public before it reaches any
 //! gate, and the identifier of the session they pressed the key in.
 
-use bravebot_core::command::Route;
+use bravebot_core::command::{Route, Spelling};
 use bravebot_core::remembered::{Remembered, RememberedLine, RememberedStep, Shape};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -65,7 +65,9 @@ pub struct Store {
     ///
     /// The key is lossy, so two directories whose names reduce to the same segment share a file.
     /// Recording the real path is what lets a reader see which one an entry was answered about,
-    /// exactly as the session record holds the path its key was made from.
+    /// exactly as the session record holds the path its key was made from. It is also what decides
+    /// which entries in a shared file answer for this directory, so it is written as a
+    /// [`WrittenPath`] rather than rendered: a rendering of it collides exactly where the key does.
     directory: PathBuf,
 }
 
@@ -100,6 +102,9 @@ impl Store {
     ///
     /// An empty record is the answer for a file that is not there, cannot be read, or holds nothing
     /// this build understands.
+    ///
+    /// An entry whose spelling of a path names no path is skipped, as an unreadable line is: see
+    /// [`WrittenPath`].
     pub fn read(&self) -> Remembered {
         let Ok(contents) = std::fs::read_to_string(&self.path) else {
             return Remembered::new();
@@ -108,10 +113,14 @@ impl Store {
             .lines()
             .filter(|line| !line.trim().is_empty())
             .filter_map(|line| serde_json::from_str::<Written>(line).ok())
-            .filter(|entry| entry.directory == self.directory.to_string_lossy())
-            .map(|entry| bravebot_core::remembered::Entry {
-                line: entry.line.into(),
-                answered_in: entry.session,
+            .filter_map(|entry| {
+                if entry.directory.to_path()? != self.directory {
+                    return None;
+                }
+                Some(bravebot_core::remembered::Entry {
+                    line: entry.line.into_line()?,
+                    answered_in: entry.session,
+                })
             })
             .collect()
     }
@@ -132,7 +141,7 @@ impl Store {
             return;
         }
         let Ok(mut encoded) = serde_json::to_string(&Written {
-            directory: self.directory.to_string_lossy().to_string(),
+            directory: WrittenPath::of(&self.directory),
             session: session.to_string(),
             line: line.into(),
         }) else {
@@ -158,7 +167,7 @@ impl Store {
 #[serde(deny_unknown_fields)]
 struct Written {
     /// The working directory this answer was given about, in full.
-    directory: String,
+    directory: WrittenPath,
     /// The session the key was pressed in. Decides nothing; it is what the reading back says.
     session: String,
     line: WrittenLine,
@@ -198,10 +207,47 @@ enum WrittenJoiner {
 #[serde(deny_unknown_fields)]
 struct WrittenStep {
     program: String,
-    resolved: String,
+    resolved: WrittenPath,
     args: Vec<String>,
     environment: Vec<(String, String)>,
     routes: Vec<WrittenRoute>,
+}
+
+/// A path as this record spells it.
+///
+/// A string for a path that has a text spelling, which is every path anybody types and every path
+/// any entry written before this field could hold anything else. A list of bytes for a path that has
+/// none. Untagged, because JSON already distinguishes a string from a list, so an entry from an
+/// earlier build reads back as the path it always named and no spelling can be mistaken for the
+/// other.
+///
+/// [`Spelling`] is why a rendering will not do here, and why a string holding a replacement
+/// character names no path: an entry written that way by an earlier build held a rendering of some
+/// binary nobody can now identify, and reading it as the path it renders to would answer for a
+/// binary the person never approved. Such an entry covers nothing, and this build writes the bytes
+/// instead, so nothing it writes is refused when it is read back.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum WrittenPath {
+    Text(String),
+    Bytes(Vec<u8>),
+}
+
+impl WrittenPath {
+    fn of(path: &Path) -> Self {
+        match Spelling::of(path) {
+            Spelling::Text(text) => Self::Text(text),
+            Spelling::Bytes(bytes) => Self::Bytes(bytes),
+        }
+    }
+
+    fn to_path(&self) -> Option<PathBuf> {
+        match self {
+            Self::Text(text) => Spelling::Text(text.clone()),
+            Self::Bytes(bytes) => Spelling::Bytes(bytes.clone()),
+        }
+        .into_path()
+    }
 }
 
 /// Where one of a step's streams went.
@@ -212,10 +258,10 @@ struct WrittenStep {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "stream", rename_all = "lowercase", deny_unknown_fields)]
 enum WrittenRoute {
-    Stdout { path: String, append: bool },
-    Stdin { path: String },
-    Stderr { path: String, append: bool },
-    Both { path: String },
+    Stdout { path: WrittenPath, append: bool },
+    Stdin { path: WrittenPath },
+    Stderr { path: WrittenPath, append: bool },
+    Both { path: WrittenPath },
     StderrToStdout,
 }
 
@@ -257,7 +303,7 @@ impl From<&RememberedStep> for WrittenStep {
     fn from(step: &RememberedStep) -> Self {
         Self {
             program: step.program.clone(),
-            resolved: step.resolved.clone(),
+            resolved: WrittenPath::of(&step.resolved),
             args: step.args.clone(),
             environment: step.environment.clone(),
             routes: step.routes.iter().map(WrittenRoute::from).collect(),
@@ -267,7 +313,7 @@ impl From<&RememberedStep> for WrittenStep {
 
 impl From<&Route> for WrittenRoute {
     fn from(route: &Route) -> Self {
-        let named = |path: &std::path::Path| path.to_string_lossy().to_string();
+        let named = WrittenPath::of;
         match route {
             Route::Stdout { path, append } => Self::Stdout {
                 path: named(path),
@@ -284,69 +330,80 @@ impl From<&Route> for WrittenRoute {
     }
 }
 
-impl From<WrittenLine> for RememberedLine {
-    fn from(line: WrittenLine) -> Self {
-        Self {
-            steps: line.steps.into(),
-        }
+impl WrittenLine {
+    /// The line this entry holds, or nothing where it holds a path nobody can name.
+    ///
+    /// Nothing rather than a line with that path left out or rendered: either would be a shorter
+    /// key, and a shorter key covers more than the person answered about.
+    fn into_line(self) -> Option<RememberedLine> {
+        Some(RememberedLine {
+            steps: self.steps.into_shape()?,
+        })
     }
 }
 
-impl From<WrittenShape> for Shape {
-    fn from(shape: WrittenShape) -> Self {
-        match shape {
-            WrittenShape::Pipeline { steps } => {
-                Self::Pipeline(steps.into_iter().map(RememberedStep::from).collect())
-            }
-            WrittenShape::Join {
+impl WrittenShape {
+    fn into_shape(self) -> Option<Shape> {
+        Some(match self {
+            Self::Pipeline { steps } => Shape::Pipeline(
+                steps
+                    .into_iter()
+                    .map(WrittenStep::into_step)
+                    .collect::<Option<Vec<_>>>()?,
+            ),
+            Self::Join {
                 left,
                 joiner,
                 right,
-            } => Self::Join {
-                left: Box::new((*left).into()),
+            } => Shape::Join {
+                left: Box::new((*left).into_shape()?),
                 joiner: match joiner {
                     WrittenJoiner::And => bravebot_core::command::Joiner::And,
                     WrittenJoiner::Or => bravebot_core::command::Joiner::Or,
                     WrittenJoiner::Then => bravebot_core::command::Joiner::Then,
                 },
-                right: Box::new((*right).into()),
+                right: Box::new((*right).into_shape()?),
             },
-            WrittenShape::Group { inner } => Self::Group(Box::new((*inner).into())),
-        }
+            Self::Group { inner } => Shape::Group(Box::new((*inner).into_shape()?)),
+        })
     }
 }
 
-impl From<WrittenStep> for RememberedStep {
-    fn from(step: WrittenStep) -> Self {
-        Self {
-            program: step.program,
-            resolved: step.resolved,
-            args: step.args,
-            environment: step.environment,
-            routes: step.routes.into_iter().map(Route::from).collect(),
-        }
+impl WrittenStep {
+    fn into_step(self) -> Option<RememberedStep> {
+        Some(RememberedStep {
+            program: self.program,
+            resolved: self.resolved.to_path()?,
+            args: self.args,
+            environment: self.environment,
+            routes: self
+                .routes
+                .into_iter()
+                .map(WrittenRoute::into_route)
+                .collect::<Option<Vec<_>>>()?,
+        })
     }
 }
 
-impl From<WrittenRoute> for Route {
-    fn from(route: WrittenRoute) -> Self {
-        match route {
-            WrittenRoute::Stdout { path, append } => Self::Stdout {
-                path: PathBuf::from(path),
+impl WrittenRoute {
+    fn into_route(self) -> Option<Route> {
+        Some(match self {
+            Self::Stdout { path, append } => Route::Stdout {
+                path: path.to_path()?,
                 append,
             },
-            WrittenRoute::Stdin { path } => Self::Stdin {
-                path: PathBuf::from(path),
+            Self::Stdin { path } => Route::Stdin {
+                path: path.to_path()?,
             },
-            WrittenRoute::Stderr { path, append } => Self::Stderr {
-                path: PathBuf::from(path),
+            Self::Stderr { path, append } => Route::Stderr {
+                path: path.to_path()?,
                 append,
             },
-            WrittenRoute::Both { path } => Self::Both {
-                path: PathBuf::from(path),
+            Self::Both { path } => Route::Both {
+                path: path.to_path()?,
             },
-            WrittenRoute::StderrToStdout => Self::StderrToStdout,
-        }
+            Self::StderrToStdout => Route::StderrToStdout,
+        })
     }
 }
 
@@ -504,6 +561,111 @@ mod tests {
         );
 
         assert!(scratch.store(mine).read().is_empty());
+    }
+
+    /// A path whose last byte is not valid UTF-8. `display` renders any two of them alike, and the
+    /// file name a directory reduces to drops the byte entirely.
+    #[cfg(unix)]
+    fn unrenderable(prefix: &str, last: u8) -> PathBuf {
+        use std::os::unix::ffi::OsStrExt;
+        let mut bytes = prefix.as_bytes().to_vec();
+        bytes.push(last);
+        PathBuf::from(std::ffi::OsStr::from_bytes(&bytes))
+    }
+
+    /// RUN-19: the binary is written as bytes, not as a rendering of them. `to_string_lossy` maps
+    /// every byte it cannot read onto one replacement character, so a record holding a rendering
+    /// answered for every binary whose path renders that way, in every session after the one that
+    /// wrote it.
+    #[cfg(unix)]
+    #[test]
+    fn a_binary_no_rendering_can_show_is_read_back_as_itself() {
+        let scratch = Scratch::new("remembered-unrenderable-binary");
+        let running = |last: u8| {
+            let base = plan("make", &["check"]);
+            let mut only = (*base.steps().first().expect("a step")).clone();
+            only.resolved = unrenderable("/work/make-", last);
+            Plan {
+                steps: Steps::Pipeline(vec![only]),
+                ..base
+            }
+        };
+        scratch
+            .store("/work")
+            .remember(&RememberedLine::of(&running(0xff)), "a-session");
+
+        let read = scratch.store("/work").read();
+        assert!(
+            read.covers(&running(0xff)),
+            "the binary that was answered for was not read back"
+        );
+        assert!(
+            !read.covers(&running(0xfe)),
+            "an answer about one binary covered another that renders the same way"
+        );
+    }
+
+    /// RUN-19: and so is the tree, for the reason the lossy file key already gives. Two trees
+    /// differing only in a byte nothing can render reduce to one file name, so the full path written
+    /// into every entry is the only thing keeping their answers apart.
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_no_rendering_can_show_is_answered_only_by_its_own_lines() {
+        let scratch = Scratch::new("remembered-unrenderable-tree");
+        let mine = unrenderable("/work-", 0xff);
+        let theirs = unrenderable("/work-", 0xfe);
+        assert_eq!(
+            crate::home::key_for(&mine),
+            crate::home::key_for(&theirs),
+            "this test needs two trees that reduce to one key"
+        );
+        let line = |tree: &Path| Plan {
+            directory: tree.to_path_buf(),
+            ..plan("make", &["check"])
+        };
+
+        Store::new(&scratch.path, &theirs)
+            .remember(&RememberedLine::of(&line(&theirs)), "a-session");
+
+        assert!(
+            Store::new(&scratch.path, &theirs)
+                .read()
+                .covers(&line(&theirs)),
+            "the tree the answer was given in did not read it back"
+        );
+        assert!(
+            Store::new(&scratch.path, &mine).read().is_empty(),
+            "an answer given in one tree answered in another that renders the same way"
+        );
+    }
+
+    /// RUN-19: an entry naming a rendering rather than a path covers nothing, which is what a record
+    /// written by a build that keyed on `to_string_lossy` holds. The replacement character in it is
+    /// equally consistent with every byte it could have stood for, so reading it as a path would
+    /// answer for a file nobody was shown. Refused rather than repaired: the run asks, as it did
+    /// before anything was remembered.
+    #[test]
+    fn an_entry_whose_recorded_binary_is_a_rendering_covers_nothing() {
+        let scratch = Scratch::new("remembered-rendered-binary");
+        let store = scratch.store("/work");
+        store.remember(&RememberedLine::of(&plan("make", &["check"])), "a-session");
+
+        let written = std::fs::read_to_string(store.path()).expect("the record");
+        let rendered = written.replacen(
+            r#""resolved":"/usr/bin/make""#,
+            r#""resolved":"/usr/bin/make-�""#,
+            1,
+        );
+        assert_ne!(
+            rendered, written,
+            "the entry was not rewritten, so this test proves nothing"
+        );
+        std::fs::write(store.path(), rendered).expect("rewritten");
+
+        assert!(
+            store.read().is_empty(),
+            "an entry naming a rendering of a path still covered a line"
+        );
     }
 
     /// Everything degrades to asking. A record nothing can read says nothing, which is what a

@@ -40,6 +40,7 @@
 
 use bravebot_agent::conversation::Snapshot;
 use bravebot_agent::workspace::Workspace;
+use bravebot_core::command::Spelling;
 use bravebot_core::label::Integrity;
 use bravebot_core::programs::TrustedPrograms;
 use bravebot_core::todo::{self, Item, List, Row, Status};
@@ -479,15 +480,11 @@ fn stored_programs(programs: &TrustedPrograms, project: &Path) -> Vec<StoredComm
     programs
         .iter()
         .map(|c| StoredCommand {
-            program: c.program.clone(),
+            program: StoredPath::of(&c.program),
             args: c.args.clone(),
-            directory: Some(
-                c.directory
-                    .strip_prefix(project)
-                    .unwrap_or(&c.directory)
-                    .display()
-                    .to_string(),
-            ),
+            directory: Some(StoredPath::of(
+                c.directory.strip_prefix(project).unwrap_or(&c.directory),
+            )),
         })
         .collect()
 }
@@ -502,17 +499,23 @@ fn stored_programs(programs: &TrustedPrograms, project: &Path) -> Vec<StoredComm
 /// than the one the entry was granted in. An absolute one is read as it stands, which is both the
 /// tree outside the project this build writes in full and the tree inside it that a record written
 /// by the build before this one holds.
+///
+/// An entry whose spelling of a path names no path is dropped rather than restored: see
+/// [`StoredPath`]. It is the same direction a missing list takes, which is that the run asks.
 fn restored_programs(programs: &[StoredCommand], root: &Path) -> TrustedPrograms {
-    TrustedPrograms::from_iter(programs.iter().map(|c| {
-        bravebot_core::programs::Command::new(
-            c.program.clone(),
-            c.args.clone(),
-            match c.directory.as_deref().map(Path::new) {
-                None => root.to_path_buf(),
-                Some(written) if written.is_absolute() => written.to_path_buf(),
-                Some(written) => root.join(written),
+    TrustedPrograms::from_iter(programs.iter().filter_map(|c| {
+        let directory = match &c.directory {
+            None => root.to_path_buf(),
+            Some(written) => match written.to_path()? {
+                written if written.is_absolute() => written,
+                written => root.join(written),
             },
-        )
+        };
+        Some(bravebot_core::programs::Command::new(
+            c.program.to_path()?,
+            c.args.clone(),
+            directory,
+        ))
     }))
 }
 
@@ -687,7 +690,9 @@ const UNTRUSTED: &str = "untrusted";
 /// vouched for.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredCommand {
-    pub program: String,
+    /// The resolved binary the vouch was given for, spelled so that two of them cannot share one
+    /// entry: see [`StoredPath`].
+    pub program: StoredPath,
     #[serde(default)]
     pub args: Vec<String>,
     /// The tree the vouch was given in, relative to the project where it is inside it and absolute
@@ -702,7 +707,43 @@ pub struct StoredCommand {
     /// a vouch could only be spent at the root then, so restoring one as root-scoped resumes the
     /// session with exactly the grant it recorded rather than a wider one.
     #[serde(default)]
-    pub directory: Option<String>,
+    pub directory: Option<StoredPath>,
+}
+
+/// A path as the record spells it.
+///
+/// A string for a path that has a text spelling, which is every path anybody types and everything
+/// any record written before this field could hold; a list of bytes for a path that has none.
+/// Untagged, because JSON tells a string from a list itself, so a record from an earlier build reads
+/// back as the paths it always named.
+///
+/// [`Spelling`] is why a rendering will not do: a vouched entry is keyed on
+/// the resolved binary, and `to_string_lossy` gives two binaries whose names differ only in bytes
+/// that are not valid UTF-8 one spelling. It is also why a string holding a replacement character
+/// names no path, which is what makes such an entry, written by an earlier build, restore as nothing
+/// rather than as a vouch for whichever binary now renders that way.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StoredPath {
+    Text(String),
+    Bytes(Vec<u8>),
+}
+
+impl StoredPath {
+    fn of(path: &Path) -> Self {
+        match Spelling::of(path) {
+            Spelling::Text(text) => Self::Text(text),
+            Spelling::Bytes(bytes) => Self::Bytes(bytes),
+        }
+    }
+
+    fn to_path(&self) -> Option<PathBuf> {
+        match self {
+            Self::Text(text) => Spelling::Text(text.clone()),
+            Self::Bytes(bytes) => Spelling::Bytes(bytes.clone()),
+        }
+        .into_path()
+    }
 }
 
 /// One task as it is written down.
@@ -1796,30 +1837,38 @@ mod tests {
         let mut record = a_record();
         record.programs = vec![
             StoredCommand {
-                program: "/usr/bin/git".to_string(),
+                program: StoredPath::Text("/usr/bin/git".to_string()),
                 args: vec!["log".to_string()],
-                directory: Some("/work".to_string()),
+                directory: Some(StoredPath::Text("/work".to_string())),
             },
             StoredCommand {
-                program: "/bin/ls".to_string(),
+                program: StoredPath::Text("/bin/ls".to_string()),
                 args: Vec::new(),
-                directory: Some("/work/sub".to_string()),
+                directory: Some(StoredPath::Text("/work/sub".to_string())),
             },
         ];
         let vouched = record.trusted_programs(Path::new("/work"));
-        assert!(vouched.contains("/usr/bin/git", &["log".to_string()], Path::new("/work")));
-        assert!(vouched.contains("/bin/ls", &[], Path::new("/work/sub")));
+        assert!(vouched.contains(
+            Path::new("/usr/bin/git"),
+            &["log".to_string()],
+            Path::new("/work")
+        ));
+        assert!(vouched.contains(Path::new("/bin/ls"), &[], Path::new("/work/sub")));
         assert!(
-            !vouched.contains("/bin/ls", &[], Path::new("/work")),
+            !vouched.contains(Path::new("/bin/ls"), &[], Path::new("/work")),
             "an entry recorded in a subdirectory came back covering the workspace root"
         );
         assert!(
-            !vouched.contains("/usr/bin/git", &["push".to_string()], Path::new("/work")),
+            !vouched.contains(
+                Path::new("/usr/bin/git"),
+                &["push".to_string()],
+                Path::new("/work")
+            ),
             "a record vouched for a command it never named"
         );
         assert!(
             !vouched.contains(
-                "/opt/homebrew/bin/git",
+                Path::new("/opt/homebrew/bin/git"),
                 &["log".to_string()],
                 Path::new("/work")
             ),
@@ -1839,11 +1888,27 @@ mod tests {
         .expect("a record from before entries held a tree");
 
         let vouched = record.trusted_programs(Path::new("/work"));
-        assert!(vouched.contains("/usr/bin/git", &["log".to_string()], Path::new("/work")));
+        assert!(vouched.contains(
+            Path::new("/usr/bin/git"),
+            &["log".to_string()],
+            Path::new("/work")
+        ));
         assert!(
-            !vouched.contains("/usr/bin/git", &["log".to_string()], Path::new("/work/sub")),
+            !vouched.contains(
+                Path::new("/usr/bin/git"),
+                &["log".to_string()],
+                Path::new("/work/sub")
+            ),
             "an entry with no recorded tree came back covering one it never named"
         );
+    }
+
+    /// The tree a record holds, for a test whose subject is the tree rather than how it is spelled.
+    fn written_tree(command: &StoredCommand) -> Option<&str> {
+        match command.directory.as_ref()? {
+            StoredPath::Text(text) => Some(text),
+            StoredPath::Bytes(_) => panic!("a tree with a text spelling was written as bytes"),
+        }
     }
 
     /// A tree inside the project is written down against the project, so what lands in the record
@@ -1863,7 +1928,7 @@ mod tests {
 
         let written = stored_programs(&programs, Path::new("/work"));
 
-        let trees: Vec<Option<&str>> = written.iter().map(|c| c.directory.as_deref()).collect();
+        let trees: Vec<Option<&str>> = written.iter().map(written_tree).collect();
         assert_eq!(
             trees,
             vec![Some("/elsewhere"), Some(""), Some("sub")],
@@ -1880,19 +1945,19 @@ mod tests {
         let mut record = a_record();
         record.programs = vec![
             StoredCommand {
-                program: "/usr/bin/make".to_string(),
+                program: StoredPath::Text("/usr/bin/make".to_string()),
                 args: vec!["check".to_string()],
-                directory: Some("sub".to_string()),
+                directory: Some(StoredPath::Text("sub".to_string())),
             },
             StoredCommand {
-                program: "/usr/bin/git".to_string(),
+                program: StoredPath::Text("/usr/bin/git".to_string()),
                 args: vec!["log".to_string()],
-                directory: Some(String::new()),
+                directory: Some(StoredPath::Text(String::new())),
             },
             StoredCommand {
-                program: "/bin/ls".to_string(),
+                program: StoredPath::Text("/bin/ls".to_string()),
                 args: Vec::new(),
-                directory: Some("/elsewhere".to_string()),
+                directory: Some(StoredPath::Text("/elsewhere".to_string())),
             },
         ];
 
@@ -1900,21 +1965,115 @@ mod tests {
 
         let check = ["check".to_string()];
         assert!(
-            vouched.contains("/usr/bin/make", &check, Path::new("/moved/sub")),
+            vouched.contains(Path::new("/usr/bin/make"), &check, Path::new("/moved/sub")),
             "a tree written down relative did not come back under the resumed root"
         );
         assert!(
-            !vouched.contains("/usr/bin/make", &check, Path::new("/work/sub")),
+            !vouched.contains(Path::new("/usr/bin/make"), &check, Path::new("/work/sub")),
             "a tree written down relative came back under a root nobody resumed"
         );
         assert!(
-            vouched.contains("/usr/bin/git", &["log".to_string()], Path::new("/moved")),
+            vouched.contains(
+                Path::new("/usr/bin/git"),
+                &["log".to_string()],
+                Path::new("/moved")
+            ),
             "the project root, which is written down as the empty string, did not come back"
         );
         assert!(
-            vouched.contains("/bin/ls", &[], Path::new("/elsewhere")),
+            vouched.contains(Path::new("/bin/ls"), &[], Path::new("/elsewhere")),
             "a tree written down in full did not come back as it was written"
         );
+    }
+
+    /// A path whose last byte is not valid UTF-8, so no rendering of it can show that byte and two
+    /// of them render alike.
+    #[cfg(unix)]
+    fn unrenderable(prefix: &str, last: u8) -> std::path::PathBuf {
+        use std::os::unix::ffi::OsStrExt;
+        let mut bytes = prefix.as_bytes().to_vec();
+        bytes.push(last);
+        std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&bytes))
+    }
+
+    /// A binary and a tree are written as bytes wherever they have no text spelling, so a resumed
+    /// session vouches for the file its user vouched for and no other. `to_string_lossy` maps every
+    /// byte it cannot read onto one replacement character, so a record holding a rendering came back
+    /// covering every binary whose path renders that way.
+    #[cfg(unix)]
+    #[test]
+    fn a_binary_no_rendering_can_show_comes_back_as_itself() {
+        let root = Path::new("/work");
+        let program = |last: u8| unrenderable("/usr/bin/make-", last);
+        let tree = |last: u8| unrenderable("/work/sub-", last);
+        let written = stored_programs(
+            &TrustedPrograms::from_iter([bravebot_core::programs::Command::new(
+                program(0xff),
+                vec!["check".to_string()],
+                tree(0xff),
+            )]),
+            root,
+        );
+
+        let json = serde_json::to_string(&written).expect("a record is written as JSON");
+        let read: Vec<StoredCommand> = serde_json::from_str(&json).expect("and read back");
+        let vouched = restored_programs(&read, root);
+
+        let check = ["check".to_string()];
+        assert!(
+            vouched.contains(&program(0xff), &check, &tree(0xff)),
+            "the entry that was written down did not come back"
+        );
+        assert!(
+            !vouched.contains(&program(0xfe), &check, &tree(0xff)),
+            "a record vouched for a binary whose path only renders the same way"
+        );
+        assert!(
+            !vouched.contains(&program(0xff), &check, &tree(0xfe)),
+            "a record vouched in a tree whose path only renders the same way"
+        );
+    }
+
+    /// An entry naming a rendering rather than a path vouches for nothing, which is what a record
+    /// written by a build that keyed on `to_string_lossy` holds. The replacement character in it is
+    /// equally consistent with every byte it could have stood for, so restoring it would vouch for a
+    /// file nobody was shown. That entry is dropped and not the list, because the rest of the
+    /// answers are the same user's.
+    #[test]
+    fn an_entry_whose_recorded_binary_is_a_rendering_vouches_for_nothing() {
+        let mut record = a_record();
+        record.programs = vec![
+            StoredCommand {
+                program: StoredPath::Text("/usr/bin/make-\u{fffd}".to_string()),
+                args: vec!["check".to_string()],
+                directory: Some(StoredPath::Text(String::new())),
+            },
+            StoredCommand {
+                program: StoredPath::Text("/usr/bin/git".to_string()),
+                args: vec!["log".to_string()],
+                directory: Some(StoredPath::Text(String::new())),
+            },
+        ];
+
+        let vouched = record.trusted_programs(Path::new("/work"));
+        assert!(
+            !vouched.contains(
+                Path::new("/usr/bin/make-\u{fffd}"),
+                &["check".to_string()],
+                Path::new("/work")
+            ),
+            "an entry naming a rendering of a path came back vouching for one"
+        );
+        assert_eq!(
+            vouched.len(),
+            1,
+            "one entry nothing can read took the rest of the list with it"
+        );
+        assert!(vouched.contains(
+            Path::new("/usr/bin/git"),
+            &["log".to_string()],
+            Path::new("/work")
+        ));
     }
 
     /// A record from before the map was kept must be asked about, not read as a map that trusts

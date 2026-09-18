@@ -3489,11 +3489,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     fn every_step_vouched(&self, plan: &crate::command::Plan) -> bool {
         self.root.is_some()
             && plan.steps().iter().all(|step| {
-                self.programs.contains(
-                    &step.resolved.to_string_lossy(),
-                    &step.args,
-                    &plan.directory,
-                )
+                self.programs
+                    .contains(&step.resolved, &step.args, &plan.directory)
             })
     }
 
@@ -6708,6 +6705,67 @@ five
         );
     }
 
+    /// A binary under the root whose last byte is not valid UTF-8, so no rendering of its path can
+    /// show that byte and two of these render identically.
+    #[cfg(unix)]
+    fn unrenderable_binary(last: u8) -> std::path::PathBuf {
+        use std::os::unix::ffi::OsStrExt;
+        let mut bytes = b"/work/prog-".to_vec();
+        bytes.push(last);
+        std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&bytes))
+    }
+
+    #[cfg(unix)]
+    fn running_the_binary(last: u8) -> crate::command::Plan {
+        plan_of(vec![crate::command::Step {
+            resolved: unrenderable_binary(last),
+            ..step_named("prog", &[])
+        }])
+    }
+
+    /// RUN-8: an entry holds the resolved path, and a path is bytes. `to_string_lossy` maps every
+    /// byte it cannot read onto one replacement character, so a vouch given for one binary answered
+    /// for a second whose path renders the same way while the run spawns the one the plan named.
+    #[cfg(unix)]
+    #[test]
+    fn a_vouch_does_not_cover_a_binary_that_only_renders_the_same_way() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(crate::programs::Command::new(
+            unrenderable_binary(0xff),
+            Vec::new(),
+            "/work",
+        ));
+        assert!(
+            !policy.plan_needs_approval(&running_the_binary(0xff)),
+            "the entry did not cover the binary it was made for"
+        );
+        assert!(
+            policy.plan_needs_approval(&running_the_binary(0xfe)),
+            "a vouch for one binary answered for another that renders the same way"
+        );
+    }
+
+    /// PROMPT-5: an endorsement is single-use and bound to the exact value it was given for, and
+    /// that value holds every path in the plan. A grant minted for the binary the prompt showed was
+    /// redeemable by a second binary whose path renders the same way, so the approval a person read
+    /// ran a file they were never shown.
+    #[cfg(unix)]
+    #[test]
+    fn an_endorsement_is_not_redeemable_by_a_binary_that_only_renders_the_same_way() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.endorse_plan(&running_the_binary(0xff));
+        assert!(
+            policy.before_plan(&running_the_binary(0xfe)).is_err(),
+            "an endorsement given for one binary was redeemed by another that renders the same way"
+        );
+        assert!(
+            policy.before_plan(&running_the_binary(0xff)).is_ok(),
+            "the plan that was endorsed could not run"
+        );
+    }
+
     /// An entry given at `/work`, the root every test here opens with, so a test about a tree has
     /// to name one and the rest read as a vouch given where the session is.
     fn vouched(program: &str, args: &[&str]) -> crate::programs::Command {
@@ -7437,7 +7495,7 @@ five
             &["-la"],
         )]));
         assert!(policy.programs().contains(
-            "/bin/ls",
+            std::path::Path::new("/bin/ls"),
             &["-la".to_string()],
             std::path::Path::new("/work")
         ));

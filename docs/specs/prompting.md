@@ -153,6 +153,12 @@ approval is not an answer to a question, and an answer to a question is not cons
 approval to read what a program printed does not promote a slot, which covers more. Each
 endorsement is single-use and bound to the exact value it was given for.
 
+Bound to it means the value tells two plans apart wherever they would do different things, so it
+spells the tree a plan runs in, the binary each step resolved to and each destination a step's output
+is sent to, every one of them by that path's own bytes. A rendering maps every byte it cannot read
+onto one replacement character ([tools/run.md](tools/run.md#RUN-8)), and an endorsement keyed on a
+rendering is redeemable by a binary, a tree or a destination the person was never shown.
+
 **Why.** These are separate grants that happen to use the same keyboard. The plan is the widest of
 them, so it is the one where taking another answer for it would run the most that nobody was shown.
 
@@ -161,6 +167,10 @@ them, so it is the one where taking another answer for it would run the most tha
 `verified-by: bravebot_tui::remote_confirm::a_write_approval_is_not_taken_as_an_answer_to_a_question`
 `verified-by: bravebot_tui::remote_confirm::an_answer_to_a_question_is_not_taken_as_consent_to_a_write`
 `verified-by: bravebot_tui::remote_confirm::an_approved_output_read_does_not_approve_a_vetted_read`
+`verified-by: bravebot_core::policy::an_endorsement_is_not_redeemable_by_a_binary_that_only_renders_the_same_way`
+`verified-by: bravebot_core::command::a_plan_is_keyed_on_the_bytes_of_the_file_a_name_resolved_to`
+`verified-by: bravebot_core::command::the_directory_a_plan_runs_in_is_keyed_on_its_bytes`
+`verified-by: bravebot_core::command::where_a_plan_writes_is_keyed_on_its_bytes`
 
 <a id="PROMPT-6"></a>
 ### PROMPT-6: standing permission needs its own key, and is never the default
