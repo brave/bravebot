@@ -1394,16 +1394,26 @@ fn waiting_for_more_returns_when_the_job_ends_without_printing() {
 #[test]
 fn what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other() {
     let scratch = Scratch::new("since-interleaved");
+    // Named for this process, because the scratch path is not: another run of this binary writing
+    // the file in the directory it shares would release a script whose first look has not happened.
+    let looked = format!("looked-{}", std::process::id());
     let resolved = script(
         &scratch.path,
         "both",
-        "#!/bin/sh\necho out1\necho err1 >&2\nsleep 1\necho out2\nsleep 30\n",
+        // The wait is bounded so that a run killed outright leaves no shell polling for a file
+        // nothing is left to write.
+        &format!(
+            "#!/bin/sh\necho out1\necho err1 >&2\nn=0\n\
+             while [ ! -f {looked} ] && [ $n -lt 600 ]; do n=$((n + 1)); sleep 0.1; done\n\
+             echo out2\nsleep 30\n"
+        ),
     );
 
     let pipeline = Pipeline::new(vec![Stage::new("both", Vec::new())]);
-    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
-    for _ in 0..100 {
-        if job.printed().contains("err1") {
+    let job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    for _ in 0..600 {
+        let printed = job.printed();
+        if printed.contains("out1") && printed.contains("err1") {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1413,11 +1423,24 @@ fn what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other() {
     let first = job.since(&mut seen);
     assert!(
         first.contains("out1") && first.contains("err1"),
-        "the first look was handed neither stream in full, so nothing below is a test of the \
-         second: {first:?}"
+        "the first look was not handed both streams within thirty seconds, so nothing below is a \
+         test of the second: {first:?}"
     );
 
-    job.wait_for_more(std::time::Duration::from_secs(30), &Cancel::new());
+    // The second line waits for this rather than for a second on the clock: a script that sleeps
+    // instead prints it before a first look the machine was slow to reach, and then the second look
+    // has nothing new in it to be a test of.
+    std::fs::write(scratch.path.join(&looked), "").expect("release the second line");
+
+    // Waiting here rather than in `wait_for_more`, which counts what has arrived when it is entered:
+    // the line released above can arrive before that, and the wait would then sit out its whole
+    // bound over output already in hand.
+    for _ in 0..600 {
+        if job.has_more(&seen) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     let second = job.since(&mut seen);
     assert!(
         second.contains("out2"),
