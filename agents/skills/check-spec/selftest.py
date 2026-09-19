@@ -48,6 +48,9 @@ guards:
   - symbol: Gate::open
     sites:
       - crates/demo/src/lib.rs: 1
+  - symbol: Gate::new
+    sites:
+      - crates/demo/src/lib.rs: 1
 ---
 
 ## Clauses
@@ -76,6 +79,35 @@ pub struct Gate;
 
 impl Gate {
     pub fn open(&self) {}
+
+    pub fn new<S: Into<String>>(_name: S) -> Self {
+        Gate
+    }
+}
+
+fn opens_twice() {}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_gate_opens_only_once() {}
+}
+"""
+
+
+# The same gate with its type and its `impl` indented inside a module, which is where one type
+# among several in a file lands.
+NESTED_SOURCE = """\
+pub mod gate {
+    pub struct Gate;
+
+    impl Gate {
+        pub fn open(&self) {}
+
+        pub fn new<S: Into<String>>(_name: S) -> Self {
+            Gate
+        }
+    }
 }
 
 fn opens_twice() {}
@@ -155,6 +187,99 @@ def use_the_gate_twice_on_one_line(root):
         encoding="utf-8",
     )
     edit_spec(root, "crates/demo/src/lib.rs: 1", "crates/demo/src/lib.rs: 2")
+
+
+def build_the_gate(root):
+    """The one form an associated function can be written in, which is what has to be counted."""
+    path = root / "crates" / "demo" / "src" / "lib.rs"
+    path.write_text(
+        path.read_text(encoding="utf-8") + '\nfn build() -> Gate {\n    Gate::new("a gate")\n}\n',
+        encoding="utf-8",
+    )
+
+
+def build_a_sibling_of_the_gate(root):
+    """A constructor whose name begins with the guarded one's.
+
+    `Gate::new_named` is a different symbol, and counting the guarded name wherever it appears as
+    a prefix of another reports a use of `Gate::new`, which is the one call nobody made."""
+    path = root / "crates" / "demo" / "src" / "lib.rs"
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "\nimpl Gate {\n    fn new_named(_name: u8) -> Self {\n        Gate\n    }\n}\n"
+        + "\nfn build() -> Gate {\n    Gate::new_named(1)\n}\n",
+        encoding="utf-8",
+    )
+
+
+def name_a_free_function_the_same(root):
+    """A module-level function of the guarded name, below the block that defines it.
+
+    The definition belongs to `Gate` only while the `impl Gate` block is open, and this one is
+    outside it. Taking the last `impl` the file mentioned as the enclosing block instead puts
+    every later `fn new` into the count, which the next unrelated function of that name pays
+    for."""
+    path = root / "crates" / "demo" / "src" / "lib.rs"
+    path.write_text(
+        path.read_text(encoding="utf-8") + "\nfn new(width: u8) -> u8 {\n    width\n}\n",
+        encoding="utf-8",
+    )
+
+
+def renew_in_a_test_module(root):
+    """Another type's method of the same name, in a module indented inside the guarded type's own
+    file.
+
+    The nearest `impl` above `fn new(&self)` here is `impl Latch`, four spaces in. Reading the
+    outermost one instead finds a receiver on what it takes to be `Gate::new`, and every `.new(`
+    in the tree joins the count."""
+    path = root / "crates" / "demo" / "src" / "lib.rs"
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "\n#[cfg(test)]\nmod inner {\n    struct Latch;\n\n"
+        + "    impl Latch {\n        fn new(&self) {}\n    }\n\n"
+        + "    fn renew(latch: &Latch) {\n        latch.new();\n    }\n}\n",
+        encoding="utf-8",
+    )
+
+
+def build_something_else(root):
+    """Another type's constructor, in the file that defines the guarded one.
+
+    `Gate::new` is an associated function, so counting `fn new` wherever the file names `Gate` puts
+    every constructor this crate has in the count, and the pin then fails on the next type it
+    gains rather than on a new way in."""
+    path = root / "crates" / "demo" / "src" / "lib.rs"
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "\nstruct Latch;\n\nimpl Latch {\n    fn new() -> Self {\n        Latch\n    }\n}\n",
+        encoding="utf-8",
+    )
+
+
+def renew_something_else(root):
+    """Another type's method of the same name, called on a receiver.
+
+    An associated function has no receiver to be called on, so `latch.new()` cannot be a use of
+    `Gate::new` no matter which file it is in."""
+    path = root / "crates" / "demo" / "src" / "lib.rs"
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "\nstruct Latch;\n\nimpl Latch {\n    fn new(&self) {}\n}\n"
+        + "\nfn renew(latch: &Latch) {\n    latch.new();\n}\n",
+        encoding="utf-8",
+    )
+
+
+def define_the_gate_inside_a_module(root):
+    """The guarded definition indented inside a module, beside another type's method of the same
+    name on a receiver.
+
+    The definition is the same definition wherever the block it sits in begins. Recognising a block
+    only at the margin misses it, and the guard then reads as a method: `latch.new()` joins the
+    count, and so does every other `.new(` in the tree."""
+    (root / "crates" / "demo" / "src" / "lib.rs").write_text(NESTED_SOURCE, encoding="utf-8")
+    renew_something_else(root)
 
 
 def mention_the_gate_in_comments(root):
@@ -290,6 +415,17 @@ CASES = [
         use_the_gate_twice_on_one_line,
         "guard-site-count",
     ),
+    (
+        "a guarded associated function used more times than its allowlist pins",
+        build_the_gate,
+        "guard-site-count",
+    ),
+    ("another type's constructor of the same name", build_something_else, None),
+    ("another type's method of the same name, on a receiver", renew_something_else, None),
+    ("a constructor whose name extends the guarded one's", build_a_sibling_of_the_gate, None),
+    ("a free function of the same name below the block", name_a_free_function_the_same, None),
+    ("another type's method of the same name, in an inner module", renew_in_a_test_module, None),
+    ("a guarded definition inside a module", define_the_gate_inside_a_module, None),
     ("a guarded symbol named only in comments", mention_the_gate_in_comments, None),
     (
         # The exact set, because a missing count once reported the file as unlisted too, which
