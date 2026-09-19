@@ -36,7 +36,8 @@ this spec.
 | `bravebot-signing` | Brave services request signing, hs2019 HMAC-SHA256 over the body digest | none | Auth only. Carries no workspace content |
 | `bravebot-skus` | Imports a Leo Premium subscription by registering as a new device | none | Auth only. Carries no workspace content and no model output. Keeps its own HTTP client, over a transport its caller states. See [premium-credentials.md](premium-credentials.md) |
 
-`verified-by: by-construction (bravebot-core declares no dependencies at all)`
+`verified-by: bravebot_cli::layering::every_workspace_member_is_a_row_in_the_layering_table`
+`verified-by: bravebot_cli::layering::a_rows_dependency_list_is_what_the_manifest_asks_for`
 
 <a id="LAYER-2"></a>
 ### LAYER-2: `bravebot-core` and `bravebot-agent` are both the driver
@@ -61,6 +62,7 @@ replaced, so the content cannot draw its own.
 `verified-by: bravebot_tui::render::quarantined_content_is_shown_and_marked_on_every_line`
 `verified-by: bravebot_cli::progress::quarantined_content_is_shown_and_marked_on_every_line`
 `verified-by: bravebot_cli::progress::quarantined_content_cannot_paint_its_own_margin`
+`verified-by: bravebot_cli::layering::every_presentation_crate_is_named_by_the_clause_that_marks_content`
 
 <a id="LAYER-4"></a>
 ### LAYER-4: a crate root says what it does about unsafe
