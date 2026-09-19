@@ -67,6 +67,7 @@ stay a question. Prefix matching would have made `/add-dirs are useful` open a d
 `verified-by: bravebot_tui::app::an_argument_is_taken_only_after_the_whole_command_word`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_add_dir_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_status_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_cost_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_clear_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_compact_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_model_command_is_still_a_prompt`
@@ -119,6 +120,7 @@ the conversation with a question on the end of it, which [watching.md](watching.
 `/model` reaches the network to list models. None of them sends the typed line.
 
 `verified-by: bravebot_tui::app::typing_the_status_command_reports_rather_than_prompting`
+`verified-by: bravebot_tui::app::typing_the_cost_command_reports_rather_than_prompting`
 `verified-by: bravebot_tui::app::typing_the_clear_command_starts_a_new_session`
 `verified-by: bravebot_tui::app::the_compact_command_asks_for_a_summary_rather_than_being_sent`
 `verified-by: bravebot_tui::app::the_add_dir_command_carries_its_directory`
@@ -232,3 +234,14 @@ so a command recorded there would cost a person the prompt they stopped.
 `verified-by: bravebot_tui::app::a_prompt_queued_behind_a_command_is_sent_once_the_command_has_run`
 `verified-by: bravebot_tui::app::a_queued_command_is_not_what_the_turn_took`
 `verified-by: bravebot_tui::app::a_queued_command_comes_back_to_the_box`
+
+## Known costs
+
+- **The list is one row per command, and a screen with no room for it loses the last of them.**
+  Nothing bounds it and nothing scrolls it: the rows are handed to the layout and whatever does
+  not fit is dropped from the bottom, so a terminal a few rows short of the whole table offers
+  the commands at the top of it and silently offers none of the ones below. The arrows still walk
+  onto a row that was not drawn, which puts the highlight somewhere the person cannot see. Every
+  command is still typeable in full, and the table is still the one place they are written down;
+  what a short terminal costs is the discovery the list exists for. Bounding it would mean a
+  window that scrolls with the cursor, which is a second scroller beside the transcript's.

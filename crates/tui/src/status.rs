@@ -39,7 +39,7 @@ pub struct Line {
 }
 
 impl Line {
-    fn new(label: &str, value: impl Into<String>) -> Self {
+    pub(crate) fn new(label: &str, value: impl Into<String>) -> Self {
         Self {
             label: label.to_string(),
             value: value.into(),
@@ -47,7 +47,7 @@ impl Line {
         }
     }
 
-    fn with_note(mut self, note: impl Into<String>) -> Self {
+    pub(crate) fn with_note(mut self, note: impl Into<String>) -> Self {
         self.note = note.into();
         self
     }
@@ -591,7 +591,7 @@ fn abbreviate(path: &Path) -> String {
 }
 
 /// Tokens, in the units a person reads them in.
-fn tokens(count: u64) -> String {
+pub(crate) fn tokens(count: u64) -> String {
     if count < 1_000 {
         return t!(count_tokens, count = count);
     }
