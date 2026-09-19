@@ -1,8 +1,8 @@
 ### laundering: a `Labelled` built by hand
 
-This is shape 4, and `{review_doc}` says of it: "This is the shape no check pins: the constructor is
-how the program labels its own data, so it is used everywhere legitimately, and only a reader can tell
-the two apart."
+This is shape 4, and `{review_doc}` says of it: "No check can tell this shape from the rest: the
+constructor is how the program labels its own data, so it is used everywhere legitimately, and only
+a reader can say which is which."
 
 You are the reader. `Labelled::new` and `Labelled::trusted` take a value and a label and return the
 value wearing it. Nothing stops a caller passing `Label::trusted_public()` for bytes that came out of
