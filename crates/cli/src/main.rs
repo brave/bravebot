@@ -571,7 +571,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     // of what this run has to say about itself.
     let (permissions, rejected) = rules_for_a_one_shot_run(
         &settings,
-        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
         skip_permissions,
     );
     for problem in &rejected {
@@ -602,6 +602,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     let named_on_the_command_line = named.is_some();
     let mut task = Task::new(prompt)
         .with_home(bravebot_agent::home::directory())
+        .with_profile(bravebot_agent::home::profile())
         .with_model(model_asked_for(named, bravebot_tui::store::load_model()))
         .with_effort(bravebot_tui::store::load_effort())
         .with_permissions(permissions)
@@ -941,15 +942,15 @@ fn what_ran(
 /// their file is read whole.
 fn rules_for_a_one_shot_run(
     settings: &bravebot_config::Settings,
-    home: Option<&Path>,
+    profile: Option<&Path>,
     skip_permissions: bool,
 ) -> (
     bravebot_core::permissions::Permissions,
     Vec<bravebot_core::permissions::Rejected>,
 ) {
     match skip_permissions {
-        true => bravebot_agent::permissions::from_settings(settings, home),
-        false => bravebot_agent::permissions::for_an_unattended_run(settings, home),
+        true => bravebot_agent::permissions::from_settings(settings, profile),
+        false => bravebot_agent::permissions::for_an_unattended_run(settings, profile),
     }
 }
 
@@ -1652,10 +1653,9 @@ fn doctor() -> ExitCode {
     let settings = bravebot_config::Settings::load();
     let managed = Managed::load();
 
-    // Resolved once for the two sections that need it, since two answers to where the state
-    // directory is would be two answers to which rules a run reads.
+    // Which variable answered as well as what it answered, since more than one can and the one in
+    // force is what somebody has to change to put the state directory elsewhere.
     let resolved = bravebot_agent::home::resolved();
-    let home = resolved.as_ref().map(|(_, path)| path.as_path());
 
     match Config::from_env_and_settings(&settings, &managed) {
         Ok(config) => {
@@ -1718,8 +1718,10 @@ fn doctor() -> ExitCode {
             // nothing they cannot read in the file. What is worth saying is which of them this
             // build could not act on, because those are the ones that look like protection and
             // are not.
-            let (permissions, rejected) =
-                bravebot_agent::permissions::from_settings(&settings, home);
+            let (permissions, rejected) = bravebot_agent::permissions::from_settings(
+                &settings,
+                bravebot_agent::home::profile().as_deref(),
+            );
             fact(
                 t!(doctor_permissions),
                 match permissions.is_empty() {

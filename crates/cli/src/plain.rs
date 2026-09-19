@@ -97,8 +97,11 @@ pub fn session(skip_permissions: bool) -> ExitCode {
     // unattended reading, which drops every allow rule, is `-p`'s and belongs to a run nobody is
     // watching (CLI-1).
     let home = bravebot_agent::home::directory();
+    // The home directory rather than the state directory inside it, which is what a `~/` rule in
+    // the file is anchored at (PERM-3).
+    let profile = bravebot_agent::home::profile();
     let (permissions, rejected) =
-        bravebot_agent::permissions::from_settings(&settings, home.as_deref());
+        bravebot_agent::permissions::from_settings(&settings, profile.as_deref());
 
     let mode = match skip_permissions {
         true => PermissionMode::Bypass,
@@ -160,6 +163,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         in_force: named,
         complained: None,
         home,
+        profile,
         conversation: bravebot_agent::conversation::Conversation::new(),
         trust,
         programs: TrustedPrograms::new(),
@@ -290,6 +294,8 @@ struct Running<'a> {
     complained: Option<String>,
     /// The person's own directory, holding standing instructions and skills.
     home: Option<std::path::PathBuf>,
+    /// The directory that one sits inside, which is what a leading `~` stands for (CMDLINE-4).
+    profile: Option<std::path::PathBuf>,
     conversation: bravebot_agent::conversation::Conversation,
     trust: TrustStore,
     programs: TrustedPrograms,
@@ -308,6 +314,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
     fn take(&mut self, prompt: &str, asking: &mut C) -> Said {
         let task = Task::new(prompt.to_string())
             .with_home(self.home.clone())
+            .with_profile(self.profile.clone())
             // No bound on the rounds, as a session passes: there is a person watching, and they
             // are a better bound than any number. The terminal's own interrupt is how they use
             // it, this session having taken none of the keyboard.
