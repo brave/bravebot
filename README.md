@@ -1,5 +1,10 @@
 # bravebot
 
+> **Not a released or supported Brave product.** Brave does not release or support bravebot at this
+> time. It is early, and it is being developed in the open. Binaries, the install script, and the
+> npm package are published for early testing and feedback only. Brave expects to release and
+> support it as a product in the future.
+
 Brave Bot is a general-purpose agent, meant as a drop-in replacement for Claude Code, Codex and
 OpenCode. Brave has always shipped user agents, and this one is the user's agent in both senses:
 
