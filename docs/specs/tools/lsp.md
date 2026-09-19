@@ -81,8 +81,38 @@ untrusted file that is [LABEL-5](../labels.md#LABEL-5). Keeping the position som
 states, rather than something the driver derives, is what keeps this tool out of that.
 
 An out-of-range position is answered with nothing found, not an error: a file changes under an
-agent, and a stale line number is an ordinary thing rather than a fault.
+agent, and a stale line number is an ordinary thing rather than a fault. A server says so by
+rejecting the request, and three conditions decide whether a rejection is read that way.
 
+The request has to have carried a position, since one carrying none has none to be stale.
+
+The code must not be one of the few that say something other than that the server looked: a
+request it could not read or check, an operation it does not implement or was not ready for, a
+request nobody ran because it was cancelled, one the method ran and could not complete. Reading
+`MethodNotFound` as an answer would report an operation a server does not have as an authoritative
+nothing, which is what [LSP-6](#LSP-6) forbids. Every other code is an absence, `InternalError`
+included, because that is what a real out-of-range position answers: measured, gopls says `0` and
+rust-analyzer says `Invalid offset` under `-32603`, so a rule written against the range the
+protocol reserves would answer one of the two servers and not the other.
+
+The file has to have been one this process could open, since a position in a file that is not
+there may be stale or may be a path the planner got wrong, and nothing found would assert the
+first.
+
+All three are structure, the last of them a fact about the filesystem rather than about any byte
+in a file. None is the sentence the server wrote: gopls answers an out-of-range line and a fault
+of its own with the same code, so the difference between those two is only in the message, and
+reading it out of there would be the decision taken from content that this clause exists to rule
+out.
+
+All three are structure, the last of them a fact about the filesystem rather than about any byte
+in a file. None is the sentence the server wrote: gopls answers an
+out-of-range line and a fault of its own with the same code, so the difference between those two is
+only in the message, and reading it out of there would be the decision taken from content that this
+clause exists to rule out.
+
+`verified-by: bravebot_lsp::server::a_position_the_server_rejects_is_nothing_found`
+`verified-by: bravebot_lsp::server::a_failure_is_nothing_found_only_where_a_server_rejected_a_position`
 `verified-by: bravebot_agent::lsp::a_position_out_of_range_finds_nothing_rather_than_failing`
 `verified-by: bravebot_agent::lsp::no_position_is_computed_from_the_file`
 
@@ -354,6 +384,18 @@ trade incognito already makes for the session record.
   workspace under `~/.bravebot`, which is what makes the second session fast. It is not small: this
   workspace's is a few hundred megabytes, since what rust-analyzer keeps there is a build directory. A
   machine that has been in many workspaces holds one for each, and nothing removes them.
+
+- **A server's own fault at a position reads as nothing found.** [LSP-2](#LSP-2) takes a rejection
+  of a position request as an empty answer, and a server numbers a fault of its own the same way
+  it numbers an out-of-range line: gopls says `0` for both, rust-analyzer `InternalError` for
+  both. The three conditions that clause names are everything structure offers, so what is left is
+  a fault the server raises while looking, and it comes back as no locations rather than as a
+  failure. Separating it would mean reading the server's prose, which is the decision from content
+  the clause exists to rule out. Nothing bounds this: where the fault is scoped to the one request
+  rather than to the session, a single `findReferences` answers no locations and reads exactly
+  like one that found none, which is the false negative [LSP-6](#LSP-6) is about. It is the price
+  of this clause over that one where a server gives nothing to tell the two apart, and it is the
+  thing to revisit if something to tell them apart appears.
 
 - **A server that goes quiet is indistinguishable from one that is working.** The bound in
   [LSP-7](#LSP-7) is what separates them, and it has to be enforced against a process that may send

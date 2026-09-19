@@ -105,6 +105,18 @@ impl Operation {
         !matches!(self, Self::WorkspaceSymbol)
     }
 
+    /// Whether the request this operation puts carries a position.
+    ///
+    /// Not the same question as [`Self::needs_position`], which is whether the operation starts
+    /// from a file. `documentSymbol` does start from one and names it, but asks about the whole
+    /// document and sends no position at all, so it is the operation the two answers differ on.
+    ///
+    /// The distinction decides what a rejection means: only a request that stated a position can
+    /// have stated one that is out of range.
+    pub fn sends_a_position(self) -> bool {
+        !matches!(self, Self::WorkspaceSymbol | Self::DocumentSymbol)
+    }
+
     /// Whether this operation needs a call-hierarchy item prepared first.
     pub fn needs_prepared_item(self) -> bool {
         matches!(self, Self::IncomingCalls | Self::OutgoingCalls)
@@ -806,6 +818,43 @@ mod tests {
                 assert!(operation.needs_position(), "{}", operation.as_str());
             }
         }
+    }
+
+    /// Which operations can state a position that turns out to be wrong, which is which
+    /// rejections can mean nothing found. Written out one by one rather than derived from the
+    /// same `matches!` the implementation uses, and ending on the count, so an operation added to
+    /// the closed set is a decision taken here rather than a default inherited in silence.
+    #[test]
+    fn only_an_operation_that_asks_about_a_place_sends_a_position() {
+        for asking in [
+            Operation::Definition,
+            Operation::References,
+            Operation::Hover,
+            Operation::Implementation,
+            Operation::IncomingCalls,
+            Operation::OutgoingCalls,
+        ] {
+            assert!(asking.sends_a_position(), "{}", asking.as_str());
+            assert!(
+                asking.needs_position(),
+                "{} sends a position without starting from a file",
+                asking.as_str()
+            );
+        }
+
+        // Names a file, asks about the whole of it.
+        assert!(!Operation::DocumentSymbol.sends_a_position());
+        assert!(Operation::DocumentSymbol.needs_position());
+
+        // Names no file at all.
+        assert!(!Operation::WorkspaceSymbol.sends_a_position());
+        assert!(!Operation::WorkspaceSymbol.needs_position());
+
+        assert_eq!(
+            Operation::ALL.len(),
+            8,
+            "an operation added to the set needs an answer above"
+        );
     }
 
     #[test]
