@@ -118,6 +118,17 @@ pub struct Completion {
     pub context_tokens: u64,
     /// What this call cost, including reported usage from completed retry attempts.
     pub usage: protocol::Usage,
+    /// Whether the service stopped the reply at its output ceiling rather than letting it finish.
+    ///
+    /// What is here is what the model wrote before it ran out of room, which is kept rather than
+    /// discarded: the alternative throws away a whole turn's work to report that it was too long.
+    /// A caller showing this to a person has to say so, and one continuing a conversation with it
+    /// is continuing from a sentence that stops mid-word.
+    ///
+    /// Always false from this backend, which states no ceiling: the request carries no
+    /// `max_tokens` field, so whatever bounds a reply here belongs to the service and is not
+    /// reported as this. Only [`bravebot_bedrock`] sets it.
+    pub cut_off: bool,
 }
 
 /// A source of subscription credentials, one per request.
@@ -550,6 +561,7 @@ impl<'a> AichatClient<'a> {
             calls,
             context_tokens: usage.prompt_tokens,
             usage,
+            cut_off: false,
         })
     }
 
@@ -824,6 +836,7 @@ impl<'a> AichatClient<'a> {
             calls,
             context_tokens: usage.prompt_tokens,
             usage,
+            cut_off: false,
         })
     }
 }

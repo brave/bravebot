@@ -19,6 +19,7 @@ guards:
       - crates/agent/src/workspace.rs: 2
       - crates/agent/tests/workspace.rs: 39
       - crates/aichat/tests/client.rs: 2
+      - crates/bedrock/src/lib.rs: 1
       - crates/core/src/policy.rs: 48
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 1
