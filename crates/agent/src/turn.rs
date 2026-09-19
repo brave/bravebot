@@ -1560,7 +1560,8 @@ fn collect_delegates<S: Sink, R: Reporter>(
         let joined_at = Instant::now();
         #[cfg(test)]
         if let Some(started) = working.join_started {
-            started.send(()).expect("join observer is waiting");
+            // A closed receiver means the test observer has already exited.
+            let _ = started.send(());
         }
         let (finished, partial, requests) = match working.handle.join() {
             Ok(finished) => finished,
