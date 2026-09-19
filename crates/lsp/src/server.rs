@@ -50,6 +50,40 @@ pub const MAX_REQUEST_WAIT: Duration = Duration::from_secs(20);
 /// changed. Answered as nothing found, with the index reported unsettled.
 const CONTENT_MODIFIED: i64 = -32801;
 
+/// The codes a rejection is never read as nothing found under.
+///
+/// Each says something other than "I looked at that position and there is nothing there", so
+/// taking it as an empty answer would report an absence nobody established, which is the false
+/// negative LSP-6 exists to prevent.
+///
+/// Every other code is read as an absence, `InternalError` included, because that is what a real
+/// out-of-range position answers. Measured on the two servers this machine has rather than
+/// inferred from the protocol: gopls says `0`, rust-analyzer says `-32603 Invalid offset LineCol
+/// { line: 9999, col: 0 } (line index length: 17)`. A rule keyed on the reserved range instead
+/// would read the same as a fault and leave rust-analyzer exactly where it started.
+const NOT_AN_ABSENCE: [i64; 8] = [
+    // The request could not be read, understood or checked, which says nothing about any position
+    // in it. `InvalidParams` is the arguable one, since an out-of-range position is a kind of bad
+    // parameter, and it is here because the two ways of being wrong are not symmetric: a server
+    // that rejects a stale line this way is left reporting a refusal, which is the bug this fixes
+    // and is visible, while a malformed request taken as an absence is a silent wrong answer.
+    -32700, // ParseError
+    -32600, // InvalidRequest
+    -32602, // InvalidParams
+    // An operation the server does not implement, or one asked before it was ready. Answering "no
+    // implementations" for a `goToImplementation` that never ran is the case this list is most
+    // for: pyright has no `textDocument/implementation`, and a planner reads an empty answer as
+    // proof.
+    -32601, // MethodNotFound
+    -32002, // ServerNotInitialized
+    // Nobody looked, so nobody can say what is there.
+    -32800, // RequestCancelled
+    -32802, // ServerCancelled
+    // The method ran and could not be completed. Not a report about the position either, and
+    // listed for the same reason `InvalidParams` is: an unhelpful refusal beats a silent nothing.
+    -32803, // RequestFailed
+];
+
 /// How long a server gets to exit on request before it is killed.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 
@@ -617,6 +651,39 @@ impl Server {
         }
     }
 
+    /// Put a request that carries a position, taking a rejection of it as nothing found.
+    ///
+    /// LSP-2: a file changes under an agent, so a line number that was right when a search
+    /// reported it is an ordinary thing to be stale by the time the planner names it. A server
+    /// asked about a position past the end of a file answers with an error, gopls with `line
+    /// number 9999 out of range 0-8`, and surfacing that as a refusal tells the planner the tool
+    /// is broken when the truth is that there is nothing there.
+    ///
+    /// Every rejection a server raises in its own numbering is taken this way rather than the
+    /// out-of-range ones alone, because the only thing separating those is the sentence the server
+    /// wrote: gopls answers code `0` for an out-of-range line and for a fault of its own alike.
+    /// Reading that sentence would be a decision taken from bytes a file chose, which is the one
+    /// thing this crate may not do.
+    ///
+    /// What is read instead is structure, the same structure [`CONTENT_MODIFIED`] is read from: the
+    /// request that was put, the code the protocol assigns, and whether the file was there to open.
+    ///
+    /// A [`NOT_AN_ABSENCE`] code is kept a failure, because each of those says something other
+    /// than that the server looked and found nothing.
+    ///
+    /// `opened` is the same thing from the other side. A position in a file this process could not
+    /// read may be stale, or the path may simply not be there, and nothing found would assert the
+    /// first of those. Whether a file opened is a fact about the filesystem rather than about any
+    /// byte in it, so reading it decides nothing from content.
+    fn ask_at_a_position(&mut self, method: &str, params: Value, opened: bool) -> LspResult<Value> {
+        match self.send_request(method, Some(params), MAX_REQUEST_WAIT) {
+            Err(LspError::Server { code, .. }) if opened && !NOT_AN_ABSENCE.contains(&code) => {
+                Ok(Value::Null)
+            }
+            answer => answer,
+        }
+    }
+
     /// Tell the server about a document, which is what makes it answerable.
     ///
     /// The contents are read off disk and handed straight over. This module never looks at them; see
@@ -701,12 +768,14 @@ impl Server {
         // rules permit and it is worth being exact about: nothing here branches on the contents,
         // compares them, or derives a position from them, so no decision is taken from a byte a file
         // chose. What the server does with them produces locations, which LSP-3 governs.
-        if operation.needs_position() {
-            let opened = self.open(question.path, &uri);
-            // A file that cannot be read is not a failure of this call: the question is put anyway,
-            // and a server that has the document indexed already answers from that.
-            let _ = opened;
-        }
+        // A file that cannot be read is not a failure of this call: the question is put anyway, and
+        // a server that has the document indexed already answers from that. It does decide what a
+        // rejection of that question means, which is why the outcome is kept rather than dropped.
+        let opened = operation.needs_position() && self.open(question.path, &uri).is_ok();
+        debug_assert!(
+            !operation.sends_a_position() || operation.needs_position(),
+            "a position is stated about a file, so anything sending one opens one first"
+        );
         let result = if operation == Operation::WorkspaceSymbol {
             self.send_request(
                 operation.method(),
@@ -716,10 +785,10 @@ impl Server {
         } else if operation.needs_prepared_item() {
             // Both directions need an item first, and a position with no symbol at it prepares
             // nothing, which is an empty answer rather than an error.
-            let prepared = self.send_request(
+            let prepared = self.ask_at_a_position(
                 "textDocument/prepareCallHierarchy",
-                Some(position_params(&uri, question.line, question.character)),
-                MAX_REQUEST_WAIT,
+                position_params(&uri, question.line, question.character),
+                opened,
             )?;
             let item = match &prepared {
                 Value::Array(items) if !items.is_empty() => items[0].clone(),
@@ -736,15 +805,23 @@ impl Server {
                 Some(serde_json::json!({ "item": item })),
                 MAX_REQUEST_WAIT,
             )?
+        } else if !operation.sends_a_position() {
+            // `documentSymbol` names a file and asks about the whole of it, so there is no
+            // position to be out of range and a failure here is the server's own. Asked of the
+            // predicate rather than of the operation, so an operation of the same shape added
+            // later does not fall through to the position rules by default.
+            self.send_request(
+                operation.method(),
+                Some(serde_json::json!({ "textDocument": { "uri": uri } })),
+                MAX_REQUEST_WAIT,
+            )?
         } else {
             let params = if operation == Operation::References {
                 reference_params(&uri, question.line, question.character)
-            } else if operation == Operation::DocumentSymbol {
-                serde_json::json!({ "textDocument": { "uri": uri } })
             } else {
                 position_params(&uri, question.line, question.character)
             };
-            self.send_request(operation.method(), Some(params), MAX_REQUEST_WAIT)?
+            self.ask_at_a_position(operation.method(), params, opened)?
         };
 
         Ok(Answer {
@@ -1525,6 +1602,257 @@ mod tests {
                 .token_for(Capability::LanguageServer)
                 .is_none()
         );
+    }
+
+    /// A language server that rejects every question the way gopls rejects an out-of-range one.
+    ///
+    /// The requests that carry a position answer with what a real server sends for a line past the
+    /// end of a file, code and message verbatim: gopls's `0` for the two that a definition and a
+    /// call hierarchy put, rust-analyzer's `-32603` for the one a references query puts. The two that carry none answer a
+    /// fault of the server's own, in the same shape, which is the point: nothing but the prose
+    /// says which of the two it is. The last two answer a code the protocol reserves, one from
+    /// each of the two bands it reserves them in: `textDocument/implementation` answers
+    /// JSON-RPC's `MethodNotFound`, as a server without that operation does, and
+    /// `textDocument/hover` answers LSP's own `RequestFailed`. Neither is a code any server here
+    /// answers an out-of-range position with. The index is reported settled as
+    /// the process comes up, in the words rust-analyzer uses, so nothing waits out LSP-7's
+    /// bound.
+    #[cfg(unix)]
+    const REJECTING_SERVER: &str = r#"#!/bin/sh
+reply() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+out_of_range='{"code":0,"message":"line number 9999 out of range 0-8"}'
+its_own_fault='{"code":0,"message":"no views"}'
+unimplemented='{"code":-32601,"message":"method not found"}'
+request_failed='{"code":-32803,"message":"request failed"}'
+invalid_offset='{"code":-32603,"message":"Invalid offset LineCol { line: 9999, col: 0 } (line index length: 17)"}'
+while IFS= read -r header; do
+  case "$header" in
+    Content-Length:*) length=$(printf '%s' "$header" | tr -cd '0-9') ;;
+    *) continue ;;
+  esac
+  IFS= read -r _blank
+  body=$(dd bs=1 count="$length" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$body" in
+    *'"initialize"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
+      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"rustAnalyzer/cachePriming","value":{"kind":"end"}}}'
+      ;;
+    *'"textDocument/definition"'*|*'"textDocument/prepareCallHierarchy"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":$out_of_range}"
+      ;;
+    *'"textDocument/references"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":$invalid_offset}"
+      ;;
+    *'"textDocument/documentSymbol"'*|*'"workspace/symbol"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":$its_own_fault}"
+      ;;
+    *'"textDocument/implementation"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":$unimplemented}"
+      ;;
+    *'"textDocument/hover"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":$request_failed}"
+      ;;
+    *'"shutdown"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+      ;;
+  esac
+done
+"#;
+
+    /// One scratch directory per test rather than one for the fixture: the tests below run at the
+    /// same time, and [`crate::testutil::Scratch`] empties the directory it is given, so a shared
+    /// name has one test deleting the binary the other is about to launch.
+    #[cfg(unix)]
+    const REJECTS_A_POSITION: &str = "bravebot-lsp-rejects-a-position";
+
+    #[cfg(unix)]
+    const REJECTS_A_QUERY: &str = "bravebot-lsp-rejects-a-query";
+
+    /// The scratch name and the resolver have to agree without either seeing the other: `resolve`
+    /// is a function pointer, so it cannot close over where the test put its binary, and it
+    /// recomputes the path from the same name instead.
+    #[cfg(unix)]
+    fn the_server_that_rejects_a_position(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(REJECTS_A_POSITION).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_that_rejects_a_query(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(REJECTS_A_QUERY).join("server"))
+    }
+
+    /// A workspace of one nine-line Rust file, with the script above beside it as its server.
+    #[cfg(unix)]
+    fn a_workspace_a_server_rejects(name: &str) -> (crate::testutil::Scratch, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scratch = crate::testutil::Scratch::new(name);
+        std::fs::create_dir_all(scratch.join("src")).expect("create the workspace");
+        let file = scratch.join("src").join("a.rs");
+        std::fs::write(&file, "pub struct Held;\n".repeat(9)).expect("write the file");
+
+        let program = scratch.join("server");
+        std::fs::write(&program, REJECTING_SERVER).expect("write the server");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        (scratch, file)
+    }
+
+    /// Everything a question needs besides the question: the capability, and a yes to starting the
+    /// server.
+    #[cfg(unix)]
+    fn ask_of_the_rejecting_server(
+        servers: &mut Servers,
+        question: &Question<'_>,
+    ) -> LspResult<Answer> {
+        use bravebot_core::capability::CapabilitySet;
+
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "look up");
+        let mut policy = Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::LanguageServer]),
+            &mut sink,
+        )
+        .expect("policy");
+
+        servers.ask(&mut policy, question, &mut |_| true)
+    }
+
+    /// LSP-2: a file changes under an agent, so a line number that was right when a search
+    /// reported it is an ordinary thing to be stale. Asking about one is nothing found, not a
+    /// report that the tool is broken.
+    ///
+    /// Driven against a process rather than a constructed [`Answer`], because the whole of the
+    /// clause is what this client does with what a server sends: a server is the only thing that
+    /// knows the file is nine lines long, and it says so by refusing.
+    ///
+    /// Both operations that put a position, because they put it in different requests: a
+    /// definition asks the one method, and a call hierarchy prepares an item first.
+    #[cfg(unix)]
+    #[test]
+    fn a_position_the_server_rejects_is_nothing_found() {
+        let (scratch, file) = a_workspace_a_server_rejects(REJECTS_A_POSITION);
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_that_rejects_a_position,
+            false,
+            Vec::new(),
+        );
+
+        for operation in [
+            Operation::Definition,
+            Operation::IncomingCalls,
+            // rust-analyzer answers `InternalError`, which is inside the range the protocol
+            // reserves, so a rule that kept the whole of that range a failure would fix this for
+            // gopls and leave rust-analyzer where it was.
+            Operation::References,
+        ] {
+            let named = operation.as_str();
+            let answer = ask_of_the_rejecting_server(
+                &mut servers,
+                &Question {
+                    operation,
+                    path: file.to_str().expect("a utf-8 scratch path"),
+                    // Past the end of a nine-line file, as a search that ran before an edit would
+                    // have reported it.
+                    line: 10_000,
+                    character: 1,
+                    query: None,
+                },
+            )
+            .unwrap_or_else(|e| {
+                panic!("{named}: a stale line number is an answer, not a failure: {e}")
+            });
+
+            assert!(
+                answer.locations.is_empty(),
+                "{named}: a position nothing is at reports no locations, got {:?}",
+                answer.locations
+            );
+            assert_eq!(answer.text, None, "{named}");
+            // The index settled before the question, so nothing found is the whole answer rather
+            // than a short one: LSP-7's notice reads off `says_indexing_finished`, and answering
+            // with nothing must not start claiming otherwise.
+            assert!(
+                !answer.partial,
+                "{named}: a settled index makes no partial claim"
+            );
+        }
+    }
+
+    /// The other half of the same rule, which is three conditions and needs all of them: a
+    /// rejection is nothing found only where the request carried a position, the server raised it
+    /// in its own numbering, and the file was there to open.
+    ///
+    /// A request with no position in it has none to be stale, so `documentSymbol` and
+    /// `workspaceSymbol` are untouched. A [`NOT_AN_ABSENCE`] code says something other than that
+    /// the server looked and found nothing, so `goToImplementation` against a server answering
+    /// `MethodNotFound` stays a failure rather than becoming an authoritative answer of no
+    /// implementations. One code from each of the two bands the protocol reserves, since they do
+    /// not adjoin: `MethodNotFound` is JSON-RPC's, and the `RequestFailed` that `hover` answers is
+    /// LSP's own, below it.
+    ///
+    /// A path that is not there is the third: a position in a file this process could not read may
+    /// be stale, or the path may be wrong, and nothing found would assert the first. A planner
+    /// that mistypes a path has to be told, not handed a confident nothing.
+    ///
+    /// The fixture's rejections differ only in the prose and the code, never in the shape, which
+    /// is what gopls does and why the message cannot be what separates them.
+    #[cfg(unix)]
+    #[test]
+    fn a_failure_is_nothing_found_only_where_a_server_rejected_a_position() {
+        let (scratch, file) = a_workspace_a_server_rejects(REJECTS_A_QUERY);
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_that_rejects_a_query,
+            false,
+            Vec::new(),
+        );
+
+        // A whole-tree query names no file, so it goes to whichever server is running. The
+        // document question is what starts one, and it is the first of the three cases.
+        let named = file.to_str().expect("a utf-8 scratch path");
+        for (operation, path, query) in [
+            (Operation::DocumentSymbol, named, None),
+            (Operation::WorkspaceSymbol, "", Some("Held")),
+            (Operation::Implementation, named, None),
+            (Operation::Hover, named, None),
+            // Rejected in the server's own numbering, as a stale position is, and refused all the
+            // same because there is no such file to have held one.
+            (
+                Operation::Definition,
+                scratch
+                    .join("src")
+                    .join("mistyped.rs")
+                    .to_str()
+                    .expect("a utf-8 scratch path"),
+                None,
+            ),
+        ] {
+            let refused = ask_of_the_rejecting_server(
+                &mut servers,
+                &Question {
+                    operation,
+                    path,
+                    line: 1,
+                    character: 1,
+                    query,
+                },
+            );
+            assert!(
+                matches!(refused, Err(LspError::Server { .. })),
+                "{}: a server that could not answer must not report nothing found, got {refused:?}",
+                operation.as_str()
+            );
+        }
     }
 
     #[test]
