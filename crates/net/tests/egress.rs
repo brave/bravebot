@@ -67,6 +67,15 @@ fn redirect_to(location: &str) -> String {
     )
 }
 
+/// A redirect with nowhere to go, which ends the chain in a failure rather than another hop.
+fn redirect_without_location() -> String {
+    "HTTP/1.1 302 Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+}
+
+fn not_found() -> String {
+    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+}
+
 fn routing() -> Routing {
     let mut r = Routing::new();
     r.insert_trusted("task", "fetch a page");
@@ -198,6 +207,81 @@ fn a_redirect_loop_is_bounded() {
     assert!(
         error.to_string().contains("too many redirects"),
         "unexpected error: {error}"
+    );
+}
+
+/// A failure's text is the part of it a caller formats into whatever it is building, including a
+/// message the planner reads. Past the first hop the URL a request is on is a string a server
+/// wrote into a `Location` header, so a failure there names the URL the caller asked for and
+/// carries nothing of where the redirect went.
+#[test]
+fn a_redirect_that_leads_nowhere_names_the_url_that_was_asked_for() {
+    let base = serve(vec![
+        redirect_to("/SENTINEL-REDIRECT-BYTES"),
+        redirect_without_location(),
+    ]);
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let egress = Egress::new();
+    let error = egress
+        .fetch(
+            &mut policy,
+            Request::get(format!("{base}/start")),
+            Label::untrusted_public(),
+        )
+        .expect_err("the second hop carried no location");
+
+    let reported = error.to_string();
+    assert!(
+        !reported.contains("SENTINEL-REDIRECT-BYTES"),
+        "the redirect the server chose reached the failure's text: {reported}"
+    );
+    assert!(
+        reported.contains("/start"),
+        "the failure did not name the request it was about: {reported}"
+    );
+}
+
+/// The same property for the arm an attacker reaches with an ordinary reply rather than a
+/// malformed one: a status the caller can act on, about the URL it asked for.
+#[test]
+fn a_status_after_a_redirect_names_the_url_that_was_asked_for() {
+    let base = serve(vec![redirect_to("/SENTINEL-REDIRECT-BYTES"), not_found()]);
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let egress = Egress::new();
+    let error = egress
+        .fetch(
+            &mut policy,
+            Request::get(format!("{base}/start")),
+            Label::untrusted_public(),
+        )
+        .expect_err("the second hop was a 404");
+
+    let reported = error.to_string();
+    assert!(
+        !reported.contains("SENTINEL-REDIRECT-BYTES"),
+        "the redirect the server chose reached the failure's text: {reported}"
+    );
+    assert!(
+        reported.contains("/start") && reported.contains("404"),
+        "the failure did not report what happened to the request: {reported}"
     );
 }
 

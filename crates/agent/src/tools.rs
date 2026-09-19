@@ -4177,7 +4177,9 @@ fn fetch_url<S: Sink, C: Confirmer>(
             produced
         }
         // The URL is safe to repeat: a person approved it, so it is not something an attacker
-        // chose. Nothing of the response is, and none of it is read to build this.
+        // chose. Nothing of the response is, and none of it is read to build this: a failure
+        // names the URL that was asked for and never the hop a redirect took the request to,
+        // which is the one thing of a server's that could otherwise reach this sentence.
         Err(error) => problem(format!("error: fetching {url} failed: {error}")),
     }
 }
