@@ -15,7 +15,7 @@ use bravebot_core::todo::{Item, List, Row, Status, rows};
 use bravebot_core::trust::TrustStore;
 use bravebot_tui::sessions::{self, Handle, Standing, StoredManifest};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// Serialises the tests in this binary.
@@ -435,20 +435,20 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
     // person who vouched for them, so they are not asked about the same program again.
     let vouched = record.trusted_programs(std::path::Path::new(&record.directory));
     assert!(vouched.contains(
-        "/usr/bin/git",
+        Path::new("/usr/bin/git"),
         &["log".to_string()],
         std::path::Path::new("/work")
     ));
     // The tree each entry was given in comes back with it, so the one vouched for in `sub/` is
     // still an entry about `sub/` and not one the root inherited.
     assert!(vouched.contains(
-        "/usr/bin/make",
+        Path::new("/usr/bin/make"),
         &["check".to_string()],
         std::path::Path::new("/work/sub")
     ));
     assert!(
         !vouched.contains(
-            "/usr/bin/make",
+            Path::new("/usr/bin/make"),
             &["check".to_string()],
             std::path::Path::new("/work")
         ),
@@ -456,7 +456,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
     );
     assert!(
         !vouched.contains(
-            "/usr/bin/git",
+            Path::new("/usr/bin/git"),
             &["push".to_string()],
             std::path::Path::new("/work")
         ),

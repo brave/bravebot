@@ -978,7 +978,7 @@ mod tests {
                     steps: bravebot_core::remembered::Shape::Pipeline(vec![
                         bravebot_core::remembered::RememberedStep {
                             program: "make".to_string(),
-                            resolved: "/usr/bin/make".to_string(),
+                            resolved: std::path::PathBuf::from("/usr/bin/make"),
                             args: vec![format!("check{nth}")],
                             environment: Vec::new(),
                             routes: Vec::new(),

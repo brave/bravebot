@@ -43,7 +43,90 @@
 //! here, since carrying bytes decides nothing. Private is about confidentiality, and handing the
 //! user's data to a program releases it somewhere this policy no longer governs.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// A path as a key made of text can hold it.
+///
+/// A path is bytes on Unix and UTF-16 on Windows, and neither is guaranteed to have a text
+/// spelling. `to_string_lossy` produces one anyway, by replacing every byte it cannot read with
+/// `U+FFFD`. That is the rendering a person should be shown and it is not something a key may be
+/// built from: two files whose names differ only in bytes that are not valid UTF-8 render to one
+/// string, so an answer given about one of them would cover the other, while the spawn takes the
+/// path itself and runs whichever file was named.
+///
+/// So a key spells a path as its own text where it has one and as its bytes where it does not. The
+/// two are never confusable, because whatever holds them says which it is: a string or a list of
+/// numbers in a record, a tagged branch in [`Plan::canonical`].
+///
+/// A path whose text holds `U+FFFD` is spelled by its bytes as well, which is what lets a reader
+/// treat a *text* spelling holding one as a rendering rather than a path. [`Spelling::into_path`]
+/// refuses those, and that is the one thing here that is not a round trip: the bytes behind a
+/// `U+FFFD` cannot be recovered, so an entry holding one names a file nobody can identify now, and
+/// reading it back as the path it renders to would hand an answer about one binary to another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Spelling {
+    /// The path's own text, which is every path anybody types.
+    Text(String),
+    /// The path's bytes, for a path that has no text of its own to be spelled by.
+    Bytes(Vec<u8>),
+}
+
+impl Spelling {
+    /// How this path is spelled.
+    pub fn of(path: &Path) -> Self {
+        match path.to_str() {
+            Some(text) if !text.contains(char::REPLACEMENT_CHARACTER) => {
+                Self::Text(text.to_string())
+            }
+            _ => Self::Bytes(bytes_of(path)),
+        }
+    }
+
+    /// The path this spells, or nothing where it spells no path anybody can name.
+    pub fn into_path(self) -> Option<PathBuf> {
+        match self {
+            Self::Text(text) if text.contains(char::REPLACEMENT_CHARACTER) => None,
+            Self::Text(text) => Some(PathBuf::from(text)),
+            Self::Bytes(bytes) => path_from_bytes(&bytes),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn bytes_of(path: &Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(unix)]
+fn path_from_bytes(bytes: &[u8]) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+}
+
+/// The UTF-16 code units of the path, each little-endian, because a Windows path is UTF-16 and an
+/// unpaired surrogate in one is exactly what no text spelling survives.
+#[cfg(windows)]
+fn bytes_of(path: &Path) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+/// `None` for an odd number of bytes, which is half a code unit and so no path. Nothing here
+/// writes one; a record somebody edited by hand can hold one, and that entry covers nothing.
+#[cfg(windows)]
+fn path_from_bytes(bytes: &[u8]) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    let (pairs, half) = bytes.as_chunks::<2>();
+    if !half.is_empty() {
+        return None;
+    }
+    let wide: Vec<u16> = pairs.iter().copied().map(u16::from_le_bytes).collect();
+    Some(PathBuf::from(std::ffi::OsString::from_wide(&wide)))
+}
 
 /// One program in a pipeline.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -288,12 +371,8 @@ impl Step {
     /// The tree comes from the plan rather than the step, because every step of a plan runs in one
     /// directory and that is the one the prompt showed. An entry covers that tree and no other, so
     /// passing a tree the person was not shown would record a grant nobody gave.
-    pub fn command(&self, directory: &std::path::Path) -> crate::programs::Command {
-        crate::programs::Command::new(
-            self.resolved.to_string_lossy().to_string(),
-            self.args.clone(),
-            directory,
-        )
+    pub fn command(&self, directory: &Path) -> crate::programs::Command {
+        crate::programs::Command::new(self.resolved.clone(), self.args.clone(), directory)
     }
 }
 
@@ -472,11 +551,15 @@ impl Plan {
     /// follow a name onto a different binary. The line itself is not part of this, because two
     /// spellings of one plan are one plan.
     ///
+    /// Every path in it is spelled by [`Spelling`], because a rendering of a path is not injective:
+    /// two files whose names differ only in bytes that are not valid UTF-8 render alike, and a
+    /// grant is redeemed by whatever encodes to the value it holds.
+    ///
     /// Not for a person to read. [`Plan::display`] is that, and the two exist separately because a
     /// rendering has to be legible while this has to be injective.
     pub fn canonical(&self) -> String {
         let mut out = String::new();
-        length_prefixed(&mut out, &self.directory.to_string_lossy());
+        length_prefixed_path(&mut out, &self.directory);
         encode(&mut out, &self.steps);
         out
     }
@@ -485,6 +568,29 @@ impl Plan {
 /// Append `text` so that no text can forge the boundary after it.
 fn length_prefixed(out: &mut String, text: &str) {
     out.push_str(&format!("{}:{text}", text.len()));
+}
+
+/// Append a path, tagged by which spelling it has so the two cannot meet: a path whose text is
+/// `2f61` and a path whose bytes spell `/a` are different paths and encode differently.
+fn length_prefixed_path(out: &mut String, path: &Path) {
+    match Spelling::of(path) {
+        Spelling::Text(text) => {
+            out.push('t');
+            length_prefixed(out, &text);
+        }
+        Spelling::Bytes(bytes) => {
+            out.push('b');
+            length_prefixed(out, &hex(&bytes));
+        }
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
 }
 
 fn encode(out: &mut String, steps: &Steps) {
@@ -516,7 +622,7 @@ fn encode(out: &mut String, steps: &Steps) {
 }
 
 fn encode_step(out: &mut String, step: &Step) {
-    length_prefixed(out, &step.resolved.to_string_lossy());
+    length_prefixed_path(out, &step.resolved);
     out.push_str(&format!("a{}|", step.args.len()));
     for arg in &step.args {
         length_prefixed(out, arg);
@@ -538,7 +644,7 @@ fn encode_step(out: &mut String, step: &Step) {
         out.push_str(tag);
         out.push('|');
         if let Some(path) = path {
-            length_prefixed(out, &path.to_string_lossy());
+            length_prefixed_path(out, path);
         }
     }
 }
@@ -663,6 +769,129 @@ mod tests {
             plan(Steps::Pipeline(vec![written_short])).canonical(),
             plan(Steps::Pipeline(vec![written_long])).canonical(),
             "two spellings of one plan are one plan"
+        );
+    }
+
+    /// A path whose last byte is not valid UTF-8, so no rendering of it can show that byte.
+    #[cfg(unix)]
+    fn unshowable(last: u8) -> PathBuf {
+        use std::os::unix::ffi::OsStrExt;
+        let mut bytes = b"/work/".to_vec();
+        bytes.push(last);
+        PathBuf::from(std::ffi::OsStr::from_bytes(&bytes))
+    }
+
+    /// The hex of `/work/` followed by one byte, as [`length_prefixed_path`] spells it.
+    #[cfg(unix)]
+    const UNSHOWABLE_FF: &str = "b14:2f776f726b2fff";
+
+    /// The bytes of the file, not a rendering of them. `to_string_lossy` maps every byte that is
+    /// not valid UTF-8 onto one replacement character, so two binaries whose paths differ only
+    /// there encoded alike and an endorsement given for one was redeemable by the other.
+    #[cfg(unix)]
+    #[test]
+    fn a_plan_is_keyed_on_the_bytes_of_the_file_a_name_resolved_to() {
+        let resolving_to = |last: u8| {
+            let mut only = step("prog", &[]);
+            only.resolved = unshowable(last);
+            plan(Steps::Pipeline(vec![only]))
+        };
+        assert_ne!(
+            resolving_to(0xff).canonical(),
+            resolving_to(0xfe).canonical(),
+            "two binaries shared one endorsement"
+        );
+        assert_eq!(
+            resolving_to(0xff).canonical(),
+            format!("t5:/workP1|{UNSHOWABLE_FF}a0|e0|r0|"),
+            "the endorsement is bound to the path's own bytes"
+        );
+    }
+
+    /// The directory is a path too, and it decides what every relative path in the plan means, so
+    /// two trees differing only in bytes nothing can render are two things to endorse.
+    #[cfg(unix)]
+    #[test]
+    fn the_directory_a_plan_runs_in_is_keyed_on_its_bytes() {
+        let running_in = |last: u8| {
+            let mut whole = plan(Steps::Pipeline(vec![step("prog", &[])]));
+            whole.directory = unshowable(last);
+            whole
+        };
+        assert_ne!(
+            running_in(0xff).canonical(),
+            running_in(0xfe).canonical(),
+            "two trees shared one endorsement"
+        );
+        assert!(
+            running_in(0xff).canonical().contains(UNSHOWABLE_FF),
+            "the tree was not spelled by its bytes"
+        );
+    }
+
+    /// Where the bytes go is part of what was endorsed, so a destination differing only in bytes
+    /// nothing can render is a different destination.
+    #[cfg(unix)]
+    #[test]
+    fn where_a_plan_writes_is_keyed_on_its_bytes() {
+        let writing_to = |last: u8| {
+            let mut only = step("prog", &[]);
+            only.routes = vec![Route::Stdout {
+                path: unshowable(last),
+                append: false,
+            }];
+            plan(Steps::Pipeline(vec![only]))
+        };
+        assert_ne!(
+            writing_to(0xff).canonical(),
+            writing_to(0xfe).canonical(),
+            "two destinations shared one endorsement"
+        );
+        assert!(
+            writing_to(0xff).canonical().contains(UNSHOWABLE_FF),
+            "the destination was not spelled by its bytes"
+        );
+    }
+
+    /// A spelling is what a record holds, and what is read back out of it is what a later run is
+    /// matched against, so it has to name the path it was taken from and no other.
+    #[cfg(unix)]
+    #[test]
+    fn a_spelling_names_the_path_it_was_taken_from() {
+        let unrenderable = unshowable(0xff);
+        assert_eq!(
+            Spelling::of(&unrenderable).into_path().as_deref(),
+            Some(unrenderable.as_path())
+        );
+        assert_eq!(
+            Spelling::of(Path::new("/work/prog")).into_path(),
+            Some(PathBuf::from("/work/prog"))
+        );
+    }
+
+    /// A rendering is not a path. A record written where a build keyed on `to_string_lossy` holds a
+    /// replacement character in place of the byte, and every path that byte could have been is
+    /// equally consistent with it, so it has to name none rather than the wrong file.
+    #[test]
+    fn a_text_spelling_holding_a_replacement_character_names_no_path() {
+        assert_eq!(
+            Spelling::Text("/work/\u{fffd}".to_string()).into_path(),
+            None
+        );
+    }
+
+    /// Refusing that costs nothing, because a path that really does contain a replacement character
+    /// is spelled by its bytes and still names itself.
+    #[test]
+    fn a_path_that_really_holds_a_replacement_character_still_names_itself() {
+        let real = PathBuf::from("/work/\u{fffd}");
+        assert!(
+            matches!(Spelling::of(&real), Spelling::Bytes(_)),
+            "a path holding the character a rendering uses cannot be spelled as text"
+        );
+        assert_eq!(
+            Spelling::of(&real).into_path().as_deref(),
+            Some(real.as_path())
         );
     }
 

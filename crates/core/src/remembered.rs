@@ -33,6 +33,7 @@
 //! `bravebot_agent::remembered`'s.
 
 use crate::command::{Joiner, Plan, Route, Step, Steps};
+use std::path::PathBuf;
 
 /// One step of a remembered line, in the fields a person read at the prompt.
 ///
@@ -44,7 +45,14 @@ pub struct RememberedStep {
     /// The name the line used.
     pub program: String,
     /// The file that name resolved to, absolute.
-    pub resolved: String,
+    ///
+    /// The path, not a rendering of it. [RUN-19] covers a line only while the name still resolves to
+    /// the same binary, and two binaries whose names differ only in bytes that are not valid UTF-8
+    /// render to one string, so an entry holding a rendering would answer for both. How it is
+    /// spelled in the file this record is kept in is [`crate::command::Spelling`].
+    ///
+    /// [RUN-19]: ../../../docs/specs/tools/run.md
+    pub resolved: PathBuf,
     /// The arguments, in order, each its own value.
     pub args: Vec<String>,
     /// `NAME=value` written in front of the program, each name and value its own value.
@@ -72,7 +80,7 @@ impl RememberedStep {
     pub fn of(step: &Step) -> Self {
         Self {
             program: step.program.clone(),
-            resolved: step.resolved.to_string_lossy().to_string(),
+            resolved: step.resolved.clone(),
             args: step.args.clone(),
             environment: step.environment.clone(),
             routes: step.routes.clone(),
@@ -96,7 +104,7 @@ impl RememberedStep {
     fn as_step(&self) -> Step {
         Step {
             program: self.program.clone(),
-            resolved: std::path::PathBuf::from(&self.resolved),
+            resolved: self.resolved.clone(),
             args: self.args.clone(),
             environment: self.environment.clone(),
             routes: self.routes.clone(),
@@ -379,6 +387,32 @@ mod tests {
             routes: Vec::new(),
         }]));
         assert!(!record.covers(&elsewhere));
+    }
+
+    /// RUN-19: onto the binary's own bytes. `to_string_lossy` maps every byte that is not valid
+    /// UTF-8 onto one replacement character, so an entry holding a rendering answered for every
+    /// binary whose name renders that way, and this answer outlives the session that gave it.
+    #[cfg(unix)]
+    #[test]
+    fn an_answer_does_not_follow_a_rendering_onto_a_different_binary() {
+        let resolving_to = |last: u8| {
+            use std::os::unix::ffi::OsStrExt;
+            let mut bytes = b"/work/make-".to_vec();
+            bytes.push(last);
+            plan_of(Steps::Pipeline(vec![Step {
+                resolved: PathBuf::from(std::ffi::OsStr::from_bytes(&bytes)),
+                ..step("make", &["check"])
+            }]))
+        };
+        let record = remembering(&resolving_to(0xff));
+        assert!(
+            record.covers(&resolving_to(0xff)),
+            "the line that was recorded was not covered"
+        );
+        assert!(
+            !record.covers(&resolving_to(0xfe)),
+            "an answer about one binary covered another that renders the same way"
+        );
     }
 
     /// RUN-19: an assignment decides what a program loads before its own arguments are looked at,
