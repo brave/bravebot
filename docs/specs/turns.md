@@ -117,7 +117,8 @@ Unknown usage adds nothing; no estimate is made for a failed or unfinished reque
 cannot inherit a previous call's retained usage. These totals use the existing session storage
 and resume path.
 
-Timing keeps the existing measurements; this does not measure the union of overlapping delegate requests.
+Timing measures elapsed time: overlapping delegate requests count once and only during parent
+collection waits. [delegation.md](delegation.md) defines the wait accounting.
 Raw backend errors remain outside planner context and user-facing history.
 
 **Why.** A later error or stop does not undo the cost of requests that already finished.

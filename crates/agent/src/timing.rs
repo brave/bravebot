@@ -17,7 +17,7 @@
 //! nanoseconds, which is a poor thing to meet in a JSON file six months later.
 
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How a turn's wall clock divided up.
 ///
@@ -31,7 +31,7 @@ pub struct Timing {
     /// not account for is [`Timing::overhead_ms`].
     #[serde(default)]
     pub wall_ms: u64,
-    /// Waiting on the model, summed over every round and every processor.
+    /// Waiting on the model, across own requests and the union of requests during delegate joins.
     ///
     /// A turn is several requests when the model calls tools, and a processor is a request of its
     /// own, so a figure for one round would understate this by however long the rest took.
@@ -102,9 +102,139 @@ impl Elapsed {
     }
 }
 
+/// A request's original timing boundary, on the process-wide monotonic clock.
+#[derive(Debug, Clone, Copy)]
+pub struct Interval {
+    pub start: Instant,
+    pub end: Instant,
+}
+
+impl Interval {
+    pub fn since(start: Instant) -> Self {
+        Self {
+            start,
+            end: Instant::now(),
+        }
+    }
+
+    pub fn duration(self) -> Duration {
+        self.end.duration_since(self.start)
+    }
+}
+
+/// The union of requests, restricted to one actual parent wait.
+fn covered(requests: &[Interval], wait: Interval) -> Duration {
+    let mut clipped: Vec<_> = requests
+        .iter()
+        .filter_map(|request| {
+            let start = request.start.max(wait.start);
+            let end = request.end.min(wait.end);
+            (start < end).then_some(Interval { start, end })
+        })
+        .collect();
+    clipped.sort_unstable_by_key(|interval| interval.start);
+    let mut through = wait.start;
+    let mut total = Duration::ZERO;
+    for interval in clipped {
+        let start = interval.start.max(through);
+        if start < interval.end {
+            total += interval.end.duration_since(start);
+            through = interval.end;
+        }
+    }
+    total
+}
+
+/// Join windows never overlap: the parent joins on one thread. A later join may return a
+/// request that covered an earlier window, so retain both until all delegates are collected.
+#[derive(Default)]
+pub(crate) struct DelegateWait {
+    requests: Vec<Interval>,
+    waits: Vec<Interval>,
+    charged: Duration,
+}
+
+impl DelegateWait {
+    pub fn collected(&mut self, wait: Interval, requests: Vec<Interval>) -> Duration {
+        self.waits.push(wait);
+        self.requests.extend(requests);
+        let total: Duration = self
+            .waits
+            .iter()
+            .map(|wait| covered(&self.requests, *wait))
+            .sum();
+        let added = total - self.charged;
+        self.charged = total;
+        added
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn interval(base: Instant, start: u64, end: u64) -> Interval {
+        Interval {
+            start: base + Duration::from_millis(start),
+            end: base + Duration::from_millis(end),
+        }
+    }
+
+    /// Elapsed inference is a union clipped to the wait, including neither gaps nor background work.
+    #[test]
+    fn delegate_requests_cover_only_their_union_inside_a_wait() {
+        let base = Instant::now();
+        for (name, requests, expected) in [
+            ("disjoint", vec![(110, 120), (140, 160)], 30),
+            ("overlap", vec![(80, 150), (120, 180)], 80),
+            ("nested", vec![(110, 190), (120, 130)], 80),
+            ("identical", vec![(110, 190), (110, 190)], 80),
+            ("spanning", vec![(80, 220)], 100),
+            ("left clip", vec![(80, 130)], 30),
+            ("right clip", vec![(170, 230)], 30),
+            ("outside", vec![(20, 90), (210, 230)], 0),
+            ("adjacent", vec![(100, 150), (150, 200)], 100),
+            ("empty", vec![(120, 120), (200, 220), (80, 100)], 0),
+            ("unordered", vec![(160, 190), (110, 130), (120, 170)], 80),
+        ] {
+            let requests: Vec<_> = requests
+                .into_iter()
+                .map(|(start, end)| interval(base, start, end))
+                .collect();
+            assert_eq!(
+                covered(&requests, interval(base, 100, 200)),
+                Duration::from_millis(expected),
+                "{name}"
+            );
+            assert_eq!(
+                covered(&requests, interval(base, 150, 150)),
+                Duration::ZERO,
+                "empty wait: {name}"
+            );
+        }
+    }
+
+    /// A later-collected delegate can cover an earlier wait, but cannot charge it twice.
+    #[test]
+    fn successive_collections_charge_each_covered_instant_once() {
+        let base = Instant::now();
+        let mut waits = DelegateWait::default();
+        assert_eq!(
+            waits.collected(interval(base, 100, 150), vec![interval(base, 120, 140)]),
+            Duration::from_millis(20)
+        );
+        // The second delegate was already working during the first join. Its request also
+        // spans a gap between joins; that gap is the parent's own work, not delegate wait.
+        assert_eq!(
+            waits.collected(interval(base, 170, 200), vec![interval(base, 80, 190)]),
+            Duration::from_millis(50)
+        );
+        assert_eq!(
+            waits.collected(interval(base, 220, 230), vec![interval(base, 100, 190)]),
+            Duration::ZERO
+        );
+        assert_eq!(waits.charged, Duration::from_millis(70));
+    }
 
     /// The point of the whole type: what is left when the three known costs are taken out.
     #[test]

@@ -18306,6 +18306,14 @@ mod usage {
             );
         }
 
+        fn retryable(mut self) {
+            write!(
+                self.stream,
+                "HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        }
+
         fn refuse(mut self) {
             let _ = write!(
                 self.stream,
@@ -18349,7 +18357,8 @@ mod usage {
                     body: String::from_utf8(body).unwrap(),
                     stream: reader.into_inner(),
                 };
-                if pending.body.contains(A_CHECK_ASKING) {
+                if pending.body.contains(A_CHECK_ASKING) && !pending.body.contains("CONTROLLED-VET")
+                {
                     pending.answer(&a_check_finding_nothing());
                 } else if tx.send(pending).is_err() {
                     break;
@@ -18363,11 +18372,31 @@ mod usage {
     struct Reports {
         spent: Vec<Spent>,
         delegates: Vec<bool>,
+        waits: usize,
+        collection_pause: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>,
+        from: Option<DelegateId>,
+        parent_requests: Vec<bravebot_agent::timing::Interval>,
+        child_requests: Vec<bravebot_agent::timing::Interval>,
     }
 
     struct Live(Arc<Mutex<Reports>>);
 
     impl Reporter for Live {
+        fn reporting_for(&mut self, from: Option<DelegateId>) {
+            self.0.lock().unwrap().from = from;
+        }
+        fn inference_interval(&mut self, interval: bravebot_agent::timing::Interval) {
+            let mut reports = self.0.lock().unwrap();
+            if reports.from.is_some() {
+                reports.child_requests.push(interval);
+            } else {
+                reports.parent_requests.push(interval);
+            }
+        }
+
+        fn delegate_waiting(&mut self, _: DelegateId) {
+            self.0.lock().unwrap().waits += 1;
+        }
         fn todos(&mut self, _: Vec<bravebot_core::todo::Row>) {}
         fn spent(&mut self, spent: Spent) {
             self.0.lock().unwrap().spent.push(spent);
@@ -18379,7 +18408,17 @@ mod usage {
             failed: bool,
             _: Option<bravebot_agent::report::Reported>,
         ) {
-            self.0.lock().unwrap().delegates.push(failed);
+            let pause = {
+                let mut reports = self.0.lock().unwrap();
+                reports.delegates.push(failed);
+                reports.collection_pause.take()
+            };
+            if let Some((entered, release)) = pause {
+                entered.send(()).unwrap();
+                release
+                    .recv_timeout(WAIT)
+                    .expect("collection reporting released");
+            }
         }
     }
 
@@ -18391,13 +18430,24 @@ mod usage {
     }
 
     impl Run {
-        fn start(
+        fn start(name: &str, conversation: bravebot_agent::Conversation, compact: bool) -> Self {
+            Self::with_confirmer(
+                name,
+                conversation,
+                compact,
+                bravebot_agent::confirm::ApproveWrites,
+            )
+        }
+
+        fn with_confirmer<C: bravebot_agent::Confirmer + Send + 'static>(
             name: &str,
             mut conversation: bravebot_agent::Conversation,
             compact: bool,
+            mut confirmer: C,
         ) -> Self {
             let scratch = Scratch::new(name);
             std::fs::write(scratch.path.join("input.txt"), "private input").unwrap();
+            std::fs::write(scratch.path.join("vet.txt"), "CONTROLLED-VET").unwrap();
             let workspace = Workspace::new(&scratch.path).unwrap();
             let (endpoint, pending) = controlled_server();
             let config = if compact {
@@ -18418,7 +18468,7 @@ mod usage {
                     &workspace,
                     &Task::new("PARENT-TASK: inspect input.txt"),
                     &mut conversation,
-                    &mut bravebot_agent::confirm::ApproveWrites,
+                    &mut confirmer,
                     &mut reporter,
                     &mut RecordingSink::new(),
                     bravebot_core::trust::TrustStore::new(workspace.root()),
@@ -18691,6 +18741,483 @@ mod usage {
     #[test]
     fn stopped_parents_collect_outstanding_delegate_usage_once() {
         outstanding_delegate_usage("stopped");
+    }
+
+    fn wait_for_collection(run: &Run) {
+        let deadline = std::time::Instant::now() + WAIT;
+        while run.reports.lock().unwrap().waits == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "parent never collected"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn delegate_wait_timing(ending: &str, child_fails: bool) {
+        let run = Run::start(
+            &format!("delegate-wait-clock-{ending}-{child_fails}"),
+            bravebot_agent::Conversation::new(),
+            false,
+        );
+        run.request().answer(&tool_request(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"CHILD-TASK"}"#,
+        ));
+        let (parent, child) = parent_and_child(&run);
+        match ending {
+            "done" | "stopped" => parent.answer(&reply_with("waiting")),
+            "failed" => parent.refuse(),
+            _ => unreachable!(),
+        }
+        wait_for_collection(&run);
+        let before = run.progress().timing.inference_ms;
+        // The callback establishes collection, and receipt establishes the child's request.
+        // The delay supplies a measurable interval; it does not establish concurrency.
+        thread::sleep(Duration::from_millis(120));
+        if ending == "stopped" {
+            run.cancel.cancel();
+            child.interrupted_stream();
+        } else if child_fails {
+            child.refuse();
+        } else {
+            child.answer(&reply_with("child done"));
+        }
+        if ending == "done" {
+            run.request().answer(&reply_with("done"));
+        }
+        let result = run.finish();
+        let timing = run.progress().timing;
+        assert!(
+            timing.inference_ms >= before + 100,
+            "delegate wait was lost: {timing:?}, before={before}"
+        );
+        assert!(
+            timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
+            "overlapping categories: {timing:?}"
+        );
+        if ending == "done" {
+            assert_eq!(result.unwrap().timing.inference_ms, timing.inference_ms);
+        } else {
+            assert_ending(result.unwrap_err(), ending == "stopped");
+        }
+    }
+
+    /// A successful parent attributes time waiting on either a successful or failed child.
+    #[test]
+    fn delegate_collection_keeps_success_and_failure_wait_time() {
+        for failed in [false, true] {
+            delegate_wait_timing("done", failed);
+        }
+    }
+
+    /// Error cleanup still waits on requests and must report that elapsed inference.
+    #[test]
+    fn failed_parent_keeps_delegate_wait_time() {
+        delegate_wait_timing("failed", false);
+    }
+
+    /// Cancellation can leave a child blocked until its transport observes the stop.
+    #[test]
+    fn cancelled_parent_keeps_delegate_wait_time() {
+        delegate_wait_timing("stopped", false);
+    }
+
+    fn parent_and_child(run: &Run) -> (Pending, Pending) {
+        let first = run.request();
+        let second = run.request();
+        if first.body.contains("PARENT-TASK") {
+            (first, second)
+        } else {
+            (second, first)
+        }
+    }
+
+    fn own_inference(run: &Run) -> u64 {
+        run.reports
+            .lock()
+            .unwrap()
+            .parent_requests
+            .iter()
+            .map(|interval| interval.duration())
+            .sum::<Duration>()
+            .as_millis() as u64
+    }
+
+    /// Two active requests cover one wait, even when one delegate is joined before the other.
+    #[test]
+    fn overlapping_delegate_requests_charge_one_elapsed_wait() {
+        let run = Run::start("overlap-clock", bravebot_agent::Conversation::new(), false);
+        run.request().answer(&tool_request_with_cache(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"FIRST-CHILD"}"#,
+            10,
+            1,
+            2,
+        ));
+        let (parent, first_child) = parent_and_child(&run);
+        parent.answer(&tool_request_with_cache(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"SECOND-CHILD"}"#,
+            20,
+            2,
+            3,
+        ));
+        let (parent, second_child) = parent_and_child(&run);
+        // All three requests are pending. Time here belongs to the parent's own request.
+        thread::sleep(Duration::from_millis(120));
+        parent.answer(&reply_with_cache("waiting", 30, 3, 4));
+        wait_for_collection(&run);
+        thread::sleep(Duration::from_millis(120));
+        first_child.answer(&reply_with_cache("first done", 40, 4, 5));
+        let deadline = std::time::Instant::now() + WAIT;
+        while run.reports.lock().unwrap().waits < 2 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "second join not reached"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        thread::sleep(Duration::from_millis(60));
+        second_child.answer(&reply_with_cache("second done", 50, 5, 6));
+        run.request().answer(&reply_with_cache("done", 60, 6, 7));
+        let outcome = run.finish().unwrap();
+        let timing = outcome.timing;
+        assert_eq!(outcome.tokens, 231);
+        assert_usage(run.progress(), 231, 21, 27);
+        let reports = run.reports.lock().unwrap();
+        assert_eq!(reports.parent_requests.len(), 4);
+        assert_eq!(reports.child_requests.len(), 2);
+        drop(reports);
+        assert!(
+            timing.inference_ms >= own_inference(&run) + 160,
+            "wait missing: {timing:?}"
+        );
+        assert!(
+            timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
+            "overlap charged twice: {timing:?}"
+        );
+    }
+
+    fn two_pending_children(run: &Run) -> (Pending, Pending, Pending) {
+        run.request().answer(&two_tool_requests(
+            ("spawn_agent", r#"{"kind":"reader","task":"FIRST-CHILD"}"#),
+            ("spawn_agent", r#"{"kind":"reader","task":"SECOND-CHILD"}"#),
+        ));
+        let mut parent = None;
+        let mut first = None;
+        let mut second = None;
+        for _ in 0..3 {
+            let request = run.request();
+            if request.body.contains("PARENT-TASK") {
+                parent = Some(request);
+            } else if request.body.contains("FIRST-CHILD") {
+                first = Some(request);
+            } else {
+                assert!(request.body.contains("SECOND-CHILD"));
+                second = Some(request);
+            }
+        }
+        (parent.unwrap(), first.unwrap(), second.unwrap())
+    }
+
+    /// A parent's failure does not make retry waits free, or turn concurrent retries into serial costs.
+    #[test]
+    fn failed_parent_keeps_overlapping_delegate_retry_waits() {
+        let run = Run::start(
+            "delegate-retry-cleanup",
+            bravebot_agent::Conversation::new(),
+            false,
+        );
+        let (parent, first, second) = two_pending_children(&run);
+        parent.refuse();
+        wait_for_collection(&run);
+        first.retryable();
+        second.retryable();
+        // Both first attempts were observed before either reply. Repeat for the next two
+        // attempts, so requests cannot escape the fixture or finish before cleanup begins.
+        for _ in 0..2 {
+            let first = run.request();
+            let second = run.request();
+            assert!(!first.body.contains("PARENT-TASK"));
+            assert!(!second.body.contains("PARENT-TASK"));
+            first.retryable();
+            second.retryable();
+        }
+        assert_ending(run.finish().unwrap_err(), false);
+        let spent = run.progress();
+        assert_eq!(spent.tokens, 0, "failed attempts invented usage");
+        assert!(
+            spent.timing.inference_ms >= own_inference(&run) + 2900,
+            "retry wait missing: {spent:?}"
+        );
+        assert!(
+            spent.timing.inference_ms + spent.timing.tools_ms + spent.timing.stalled_ms
+                <= spent.timing.wall_ms,
+            "concurrent retries counted twice: {spent:?}"
+        );
+        let reports = run.reports.lock().unwrap();
+        assert_eq!(reports.delegates, [true, true]);
+        assert_eq!(
+            reports.child_requests.len(),
+            2,
+            "a request interval must include all its attempts"
+        );
+    }
+
+    /// Reporting a collected result is parent overhead, even while another delegate requests.
+    #[test]
+    fn reporting_between_delegate_joins_is_not_inference_wait() {
+        let run = Run::start(
+            "delegate-report-gap",
+            bravebot_agent::Conversation::new(),
+            false,
+        );
+        let (parent, first, second) = two_pending_children(&run);
+        parent.answer(&reply_with("waiting"));
+        wait_for_collection(&run);
+        let (entered, observed) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        run.reports.lock().unwrap().collection_pause = Some((entered, released));
+        first.answer(&reply_with("first done"));
+        observed
+            .recv_timeout(WAIT)
+            .expect("first join ended and reporting began");
+        // The second request is still pending, but the parent is inside its reporter, not join.
+        thread::sleep(Duration::from_millis(150));
+        second.answer(&reply_with("second done"));
+        release.send(()).unwrap();
+        run.request().answer(&reply_with("done"));
+        let timing = run.finish().unwrap().timing;
+        assert!(
+            timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
+            "overlapping categories: {timing:?}"
+        );
+        assert!(
+            timing.overhead_ms() >= 140,
+            "reporting time charged to inference: {timing:?}"
+        );
+        assert_eq!(run.reports.lock().unwrap().delegates, [false, false]);
+    }
+
+    /// A child whose last request ended while its parent was requesting adds no inference wait.
+    #[test]
+    fn completed_delegate_requests_do_not_charge_background_time() {
+        let run = Run::start(
+            "completed-child-clock",
+            bravebot_agent::Conversation::new(),
+            false,
+        );
+        run.request().answer(&tool_request(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"CHILD-TASK"}"#,
+        ));
+        let (parent, child) = parent_and_child(&run);
+        thread::sleep(Duration::from_millis(120));
+        child.answer(&reply_with("child done"));
+        let deadline = std::time::Instant::now() + WAIT;
+        while run.reports.lock().unwrap().child_requests.is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child request did not end"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        // Keep the parent calling tools until its nonblocking poll collects the child.
+        // That poll joins only handles for which is_finished() is true.
+        let mut parent = parent;
+        loop {
+            parent.answer(&tool_request("list_files", r#"{"directory":"."}"#));
+            parent = run.request();
+            if run.reports.lock().unwrap().waits > 0 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "completed child not collected"
+            );
+        }
+        parent.answer(&reply_with("done"));
+        let timing = run.finish().unwrap().timing;
+        assert_eq!(
+            timing.inference_ms,
+            own_inference(&run),
+            "finished background request charged again"
+        );
+    }
+
+    /// Calls made inside a delegate must retain their intervals, not just its planner calls.
+    #[test]
+    fn delegate_processor_compaction_and_vetting_requests_cover_parent_waits() {
+        for kind in ["processor", "compaction", "vetting"] {
+            let compact = kind == "compaction";
+            let run = Run::start(
+                "child-subrequest-clock",
+                bravebot_agent::Conversation::new(),
+                compact,
+            );
+            run.request().answer(&tool_request(
+                "spawn_agent",
+                r#"{"kind":"reader","task":"CHILD-TASK"}"#,
+            ));
+            let (parent, mut child) = parent_and_child(&run);
+            if compact {
+                // Build enough rounds for the summariser to have an older half to discard.
+                for _ in 0..12 {
+                    child.answer(&tool_request_with_usage(
+                        "list_files",
+                        r#"{"directory":"."}"#,
+                        10,
+                        2,
+                    ));
+                    child = run.request();
+                }
+            }
+            child.answer(&tool_request_with_usage(
+                "read_file",
+                if kind == "vetting" {
+                    r#"{"path":"vet.txt"}"#
+                } else {
+                    r#"{"path":"input.txt"}"#
+                },
+                if compact { 2000 } else { 10 },
+                2,
+            ));
+            let next = run.request();
+            let subrequest = if compact {
+                assert!(
+                    next.body
+                        .contains("You are summarising part of a conversation"),
+                    "expected compaction"
+                );
+                next
+            } else if kind == "vetting" {
+                assert!(
+                    next.body.contains(A_CHECK_ASKING),
+                    "expected a file vetting request"
+                );
+                next
+            } else {
+                next.answer(&tool_request(
+                    "spawn_processor",
+                    r#"{"reads":["ref:1"],"instruction":"summarise this"}"#,
+                ));
+                run.request()
+            };
+            parent.answer(&reply_with("waiting"));
+            wait_for_collection(&run);
+            thread::sleep(Duration::from_millis(120));
+            subrequest.answer(&if kind == "vetting" {
+                a_check_finding_nothing()
+            } else {
+                reply_with("summary")
+            });
+            run.request().answer(&reply_with("child done"));
+            run.request().answer(&reply_with("done"));
+            let timing = run.finish().unwrap().timing;
+            assert!(
+                timing.inference_ms >= own_inference(&run) + 100,
+                "subrequest wait missing ({kind}): {timing:?}"
+            );
+            assert!(
+                timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
+                "{timing:?}"
+            );
+        }
+    }
+
+    /// Command-output vetting inside a delegate contributes only its overlap with the parent's join.
+    #[test]
+    fn delegate_read_output_vetting_covers_parent_wait() {
+        let run = Run::with_confirmer(
+            "child-output-vetting-clock",
+            bravebot_agent::Conversation::new(),
+            false,
+            ReadsWhatItRan::new(false),
+        );
+        run.request().answer(&tool_request(
+            "spawn_agent",
+            r#"{"kind":"checker","task":"CHILD-TASK"}"#,
+        ));
+        let (parent, child) = parent_and_child(&run);
+        child.answer(&tool_request("run", r#"{"command":"cat vet.txt"}"#));
+        run.request()
+            .answer(&tool_request("read_output", r#"{"ref":"ref:1"}"#));
+        let vetting = run.request();
+        assert!(
+            vetting.body.contains(A_CHECK_ASKING),
+            "expected output vetting"
+        );
+        assert!(
+            vetting.body.contains("CONTROLLED-VET"),
+            "expected command output"
+        );
+        parent.answer(&reply_with("waiting"));
+        wait_for_collection(&run);
+        // Both the vetting request and the parent join have been observed.
+        thread::sleep(Duration::from_millis(120));
+        vetting.answer(&a_check_finding_nothing());
+        run.request().answer(&reply_with("child done"));
+        run.request().answer(&reply_with("done"));
+        let timing = run.finish().unwrap().timing;
+        assert!(
+            timing.inference_ms >= own_inference(&run) + 100,
+            "output vetting wait missing: {timing:?}"
+        );
+        assert!(
+            timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
+            "overlapping categories: {timing:?}"
+        );
+    }
+
+    /// Cancellation cleanup must not charge a child request that ended before the parent stopped.
+    #[test]
+    fn cancellation_cleanup_does_not_charge_completed_delegate_requests() {
+        let run = Run::start(
+            "cancel-before-cleanup-clock",
+            bravebot_agent::Conversation::new(),
+            false,
+        );
+        run.request().answer(&tool_request(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"CHILD-TASK"}"#,
+        ));
+        let (parent, child) = parent_and_child(&run);
+        assert_eq!(
+            run.reports.lock().unwrap().waits,
+            0,
+            "cleanup already began"
+        );
+        // Both requests are pending. Supply measurable background time before ending the child.
+        thread::sleep(Duration::from_millis(120));
+        child.answer(&reply_with_usage("child done", 100, 7));
+        let deadline = std::time::Instant::now() + WAIT;
+        while run.reports.lock().unwrap().child_requests.is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child request did not end"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        // The parent is still requesting, and the child's final request has ended. Whether
+        // its thread has returned yet cannot change the inference overlap with cleanup.
+        run.cancel.cancel();
+        parent.interrupted_stream();
+        wait_for_collection(&run);
+        assert_ending(run.finish().unwrap_err(), true);
+        let spent = run.progress();
+        assert_eq!(spent.tokens, 107, "only the completed child has usage");
+        assert_eq!(run.reports.lock().unwrap().delegates.len(), 1);
+        assert_eq!(
+            spent.timing.inference_ms,
+            own_inference(&run),
+            "completed child request charged during cancellation cleanup"
+        );
+        assert!(
+            spent.timing.inference_ms + spent.timing.tools_ms + spent.timing.stalled_ms
+                <= spent.timing.wall_ms,
+            "overlapping categories: {spent:?}"
+        );
     }
 
     /// Time waiting for the final request is real even when it yields no billable usage.

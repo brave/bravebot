@@ -450,6 +450,12 @@ pub struct Delegation {
 }
 
 pub trait Reporter {
+    /// A measured model call, including retries and their waits, even on failure or stop.
+    fn inference_interval(&mut self, _interval: crate::timing::Interval) {}
+
+    /// The parent is about to join a delegate, which may already have finished.
+    fn delegate_waiting(&mut self, _delegate: DelegateId) {}
+
     /// The submitted prompt was appended at this position in the recounted conversation.
     /// Context may precede it, and a context read can fail before it is appended.
     fn prompt_recorded(&mut self, _at: usize) {}
