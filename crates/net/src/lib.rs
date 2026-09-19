@@ -153,6 +153,40 @@ impl EgressError {
             | Self::Stopped { .. } => false,
         }
     }
+
+    /// The same failure, reported as a failure of `url` and carrying nothing of where it
+    /// actually happened.
+    ///
+    /// Everything a failure says about a place comes from the URL it happened on, down to the
+    /// transport quoting back the string it was handed. Past the first hop that string is one a
+    /// server wrote into a `Location` header, and an error's text is the part of a failure a
+    /// caller formats into whatever it is building, including a message the planner reads. So a
+    /// redirect's URL is not carried out of the crate that followed it: the caller is told which
+    /// of its own requests failed and how, which is the whole of what it asked.
+    fn into_a_failure_of(self, url: &str) -> Self {
+        let url = url.to_string();
+        match self {
+            // The policy's own words about a gate it applied, naming what a person approved.
+            Self::Denied(denial) => Self::Denied(denial),
+            Self::TooManyRedirects { .. } => Self::TooManyRedirects { url },
+            Self::MissingLocation { .. } => Self::MissingLocation { url },
+            Self::Stopped { .. } => Self::Stopped { url },
+            Self::Status { status, .. } => Self::Status { url, status },
+            // The detail here is this crate's own sentence about a shape, so it survives.
+            Self::InvalidUrl { detail, .. } => Self::InvalidUrl { url, detail },
+            // The detail here is the transport's, and a transport reports a URL it could not use
+            // by quoting it: `ureq::Error::BadUri` is "bad uri: <the whole string>". Keeping the
+            // ones that do not quote it would mean reading the detail to decide, which is a
+            // branch on a string a server chose. So the cost is paid instead: a timeout or a
+            // refused connection on a hop reads as this sentence, and `transient` still carries
+            // the part of it anything decides on.
+            Self::Transport { transient, .. } => Self::Transport {
+                url,
+                detail: "a request after a redirect did not complete".to_string(),
+                transient,
+            },
+        }
+    }
 }
 
 /// Statuses a server uses to say "not now" rather than "no".
@@ -191,6 +225,8 @@ pub struct Streamed<'r> {
     pub status: u16,
     pub content_type: Option<String>,
     pub final_url: String,
+    /// The URL the caller asked for, which is what a failure part-way through the body names.
+    requested: String,
     label: Label,
     /// `Send`, so a caller can read the body on a thread it is able to walk away from.
     ///
@@ -240,7 +276,7 @@ impl Streamed<'_> {
                 Ok(Some(Labelled::new(buffer, self.label)))
             }
             Err(e) => Err(EgressError::Transport {
-                url: self.final_url.clone(),
+                url: self.requested.clone(),
                 detail: e.to_string(),
                 transient: is_transient_io(&e),
             }),
@@ -405,8 +441,10 @@ impl Egress {
         cancel: Option<&Cancel>,
     ) -> Result<Response, EgressError> {
         let (status, content_type, url, reader) = self.fetch_checked(policy, &request, cancel)?;
+        // The URL the caller asked for, not the one the body is arriving from: a redirect chain
+        // ends somewhere a server chose, and this failure is reported to whoever asked.
         let (body, truncated) = read_capped(reader).map_err(|e| EgressError::Transport {
-            url: url.clone(),
+            url: request.url.clone(),
             detail: e.to_string(),
             transient: is_transient_io(&e),
         })?;
@@ -440,6 +478,7 @@ impl Egress {
             status,
             content_type,
             final_url: url,
+            requested: request.url.clone(),
             label,
             reader,
             read: 0,
@@ -451,12 +490,34 @@ impl Egress {
     ///
     /// The single place the gate is applied, so a streamed request cannot take a different path
     /// through the checks than a buffered one.
+    ///
+    /// Also the single place a failure past the first hop is reported from. Once a redirect has
+    /// been followed, every URL the loop below holds is one a server wrote into a `Location`
+    /// header, so each of the errors it can build names a place the caller never asked about.
+    /// Rewriting them here rather than at each construction is what keeps that true: a new arm in
+    /// there cannot forget a discipline it does not have to apply.
     #[allow(clippy::type_complexity)]
     fn fetch_checked<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
         request: &Request,
         cancel: Option<&Cancel>,
+    ) -> Result<(u16, Option<String>, String, Box<dyn std::io::Read + Send>), EgressError> {
+        let mut redirected = false;
+        match self.follow(policy, request, cancel, &mut redirected) {
+            Err(error) if redirected => Err(error.into_a_failure_of(&request.url)),
+            outcome => outcome,
+        }
+    }
+
+    /// The redirect loop itself: send, revalidate, follow, and hand back the body reader unread.
+    #[allow(clippy::type_complexity)]
+    fn follow<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        request: &Request,
+        cancel: Option<&Cancel>,
+        redirected: &mut bool,
     ) -> Result<(u16, Option<String>, String, Box<dyn std::io::Read + Send>), EgressError> {
         let mut url = request.url.clone();
         let mut hops = 0;
@@ -484,6 +545,7 @@ impl Egress {
                 // as the absolute URL it will actually resolve to.
                 url = resolve(&url, &location)?;
                 hops += 1;
+                *redirected = true;
                 continue;
             }
 
@@ -880,6 +942,7 @@ mod tests {
             status: 200,
             content_type: None,
             final_url: "https://example.com".into(),
+            requested: "https://example.com".into(),
             label: Label::untrusted_public(),
             reader: Box::new(std::io::Cursor::new(body)),
             read: 0,
