@@ -26,7 +26,7 @@ this spec.
 | `bravebot-net` | The network egress path for everything carrying labelled content | `core` | All agent traffic passes the policy gate here. See the known cost below |
 | `bravebot-aichat` | Client for the OpenAI-compatible aichat backend | `core`, `config`, `net`, `signing` | Speaks the wire protocol only, and reaches the network through `net` |
 | `bravebot-bedrock` | Client for models on AWS Bedrock | `core`, `aichat`, `config`, `net`, `signing` | Speaks the wire protocol only, and reaches the network through `net`. Runs the AWS CLI to resolve a credential, which is the one subprocess it starts |
-| `bravebot-tui` | The interactive terminal interface | `core`, `agent`, `aichat`, `config`, `i18n`, `net`, `sandbox` | Presentation. May display released content, always inside a margin it draws itself. Owns the clipboard and shell mode, both of which are gestures a person made. Owns the terminal itself, so it may read the tty directly to ask the terminal about itself; what comes back describes the terminal and never enters a turn |
+| `bravebot-tui` | The interactive terminal interface | `core`, `agent`, `aichat`, `config`, `i18n`, `net`, `sandbox` | Presentation. May display released content, always inside a margin it draws itself. Owns the clipboard and shell mode, both of which are gestures a person made. Owns the terminal itself, so it may read the tty directly to ask the terminal about itself; what comes back describes the terminal and never enters a turn. Holds the on-disk session record and the audit serialiser, which is a known cost below |
 | `bravebot-cli` | Command-line entry point | `core`, `agent`, `config`, `i18n`, `net`, `sandbox`, `skus`, `tui` | Presentation. Where nobody can be asked, effects are refused rather than applied unseen |
 | `bravebot-mcp` | Model Context Protocol client: the extension boundary for tools | `core`, `net`, `sandbox` | An opaque call erases the routing/content split, so primitives stay native rather than moving behind it |
 | `bravebot-lsp` | Language server client: a read-only question about a symbol | `core` | Speaks the protocol only. Asks a closed set of read-only methods and never a name a caller supplies, so a server's own method list cannot widen what this does. Separates a location from the text at it: the type carrying a location holds no text, which is what [tools/lsp.md](tools/lsp.md) rests on |
@@ -85,6 +85,38 @@ is kept in letter and lost in substance, because `deny` is the one an `allow` ad
 `verified-by: bravebot_cli::unsafe_code::a_crate_that_exempts_nothing_forbids_rather_than_denies`
 `verified-by: bravebot_cli::unsafe_code::allowing_unsafe_at_a_root_is_not_a_declaration`
 
+<a id="LAYER-5"></a>
+### LAYER-5: the marking rule is addressed to a surface, not to a crate
+
+Anything that puts released content in front of a person marks it, whether it is a crate in this
+workspace or a program elsewhere that links these crates. A surface can only mark content it can
+still tell apart, so whatever carries content to one carries the label with it: a boundary that
+drops the label has not lost a detail, it has made the content trusted by moving it.
+
+**Why.** The crates here offer no compatibility promise, so a program outside this workspace that
+links them links internal APIs across a pin of its own choosing, and a pin is not a contract. The
+break it defers is found by whoever next moves it rather than by the change that caused it, and the
+same distance applies to the marking: a rule written about the crates in this repository holds for
+the terminal and says nothing about the screen most people are looking at. Written about surfaces,
+it is a rule a second front end can be held to, which is the most this document can do about one it
+does not compile.
+
+`verified-by: bravebot_cli::layering::every_presentation_crate_is_named_by_the_clause_that_marks_content`
+`verified-by: by-construction (a surface this workspace compiles is one of its crates, and the test above holds the clause naming them to every row of the table whose constraint opens on presentation, in both directions; a surface this workspace does not compile has no run to check, which is the known cost below)`
+
+## Open questions
+
+- **How the reach of the clause above is closed for a surface this workspace does not compile.** A
+  surface built as a member lands inside the paths this spec governs, so it has to gain a row and a
+  test before it compiles; a published interface with a specified transport supplies instead the
+  compatibility promise the pin does not, and keeps the two release cadences apart. Both answer the
+  clause and they differ in everything else, and what decides between them is who maintains what
+  rather than anything here.
+- **Whether a crate of its own for the session record is worth the move.** The alternative is
+  leaving the record where it is and letting the table say so, which is what it says today. The
+  cost of that is in the known cost below; the cost of moving it is two crates re-pointed and a row
+  added, paid once.
+
 ## Known costs
 
 - **A crate root says nothing about the test binaries beside it.** A file under `tests/` is its
@@ -105,3 +137,19 @@ is kept in letter and lost in substance, because `deny` is the one an `allow` ad
   certificate authority and one route off it, not one per client. Passing it in rather than
   depending on `bravebot-net` keeps this crate at no dependencies, which is what makes "auth only"
   checkable by reading its manifest.
+
+- **Nothing here reaches a surface this workspace does not compile.** The clause about marking is
+  addressed to any surface, and the only surfaces checked against it are the crates in this
+  workspace: the table has their rows and the clause names them. A front end elsewhere that links
+  these crates is governed by nothing written down, and whether it marks what it displays is not a
+  thing this repository can state either way. Markup is where that costs most, because its escapes
+  are ones a terminal does not have: content that reaches raw markup, a link or a remote resource
+  can draw its own container and can leave the machine, so a margin is the first of three questions
+  rather than the whole of one.
+
+- **The on-disk session record lives in a presentation crate.** `bravebot-tui`'s row opens with
+  presentation, and the session record, the state directory and the audit serialiser are its public
+  modules, which [sessions.md](sessions.md) and [state-directory.md](state-directory.md) govern
+  where they sit. So reading a session back means linking the terminal interface, and the terminal
+  library with it, whether or not anything draws. The record is not presentation and the crate
+  holding it is, which is a row that cannot describe both at once.
