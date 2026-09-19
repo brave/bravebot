@@ -43,8 +43,11 @@ is asked whether it belongs.
 **4. A `Labelled` built by hand.** Never construct one to give a value a better label than its
 inputs had. That is laundering, whichever crate it happens in. If a value derived from
 untrusted input has to be trusted for something to work, the design is wrong, not the label.
-This is the shape no check pins: the constructor is how the program labels its own data, so it is
-used everywhere legitimately, and only a reader can tell the two apart.
+No check can tell this shape from the rest: the constructor is how the program labels its own
+data, so it is used everywhere legitimately, and only a reader can say which is which. Where
+[specs/labels.md](../specs/labels.md) pins a constructor with a count per file, a new site moves
+that count and `make check-spec` fails until somebody records it, which puts the question in front
+of a reviewer without answering it.
 
 Three places in the kernel do branch on untrusted bytes, deliberately. All three are named under
 Known costs in [specs/labels.md](../specs/labels.md), because an unlisted exception is
