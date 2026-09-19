@@ -23,13 +23,6 @@ use bravebot_aichat::protocol::{Cached, Effort};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-/// How many tokens a reply may run to before it is cut off.
-///
-/// Chosen to be larger than any single reply a turn here produces: a tool call and its reasoning,
-/// not a document. A cut-off reply is reported as one rather than silently truncated, but the
-/// cheaper fix is to not hit it.
-pub const MAX_TOKENS: u64 = 8_192;
-
 /// The stop reason meaning the reply hit the ceiling rather than finishing.
 pub const STOP_REASON_MAX_TOKENS: &str = "max_tokens";
 
@@ -420,6 +413,17 @@ pub fn stream_event(name: &str, payload: &[u8]) -> Option<StreamEvent> {
 }
 
 impl ConverseRequest {
+    /// Cap the reply at what the configuration says this model may write.
+    ///
+    /// A ceiling rather than a target: the model stops here having said whatever it had room for,
+    /// so the figure costs nothing on a reply that was going to be short. What decides it is
+    /// [`bravebot_config::bedrock::Bedrock::output_limit`], and the assumed figure
+    /// [`request_from`] starts from is the one that holds where nothing stated another.
+    pub fn with_ceiling(mut self, ceiling: u64) -> Self {
+        self.inference_config.max_tokens = ceiling;
+        self
+    }
+
     /// Ask for a particular amount of thinking, or leave the model to its own default.
     ///
     /// This API's own parameters have no field for it, so the level goes in the passthrough under
@@ -512,7 +516,7 @@ pub fn request_from(
         system,
         messages: converted,
         inference_config: InferenceConfig {
-            max_tokens: MAX_TOKENS,
+            max_tokens: bravebot_config::bedrock::OUTPUT_LIMIT,
         },
         // An empty list is no list. This API refuses `tools: []` rather than reading it as a
         // request to use none, so a turn offering nothing has to omit the field entirely.

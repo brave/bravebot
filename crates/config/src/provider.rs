@@ -321,6 +321,7 @@ fn bedrock_entries(value: Option<&serde_json::Value>) -> Vec<crate::bedrock::Ent
                 id: id.to_string(),
                 name: entry.and_then(|entry| string(entry.get("name"))),
                 context_window: entry.and_then(|entry| window(entry.get("limit"))),
+                output_limit: entry.and_then(|entry| ceiling(entry.get("limit"))),
             }
         })
         .collect()
@@ -361,6 +362,20 @@ fn window(limit: Option<&serde_json::Value>) -> Option<u64> {
     let context = limit.get("context")?.as_u64()?;
     limit.get("output")?.as_u64()?;
     (context > 0).then_some(context)
+}
+
+/// The reply ceiling a `limit` block states, where it states a usable one.
+///
+/// Read out of the same block and under the same rule as [`window`]: both halves have to be there
+/// for either to be one, so a block opencode would reject says nothing here either. The figure it
+/// states is the one it already means in that tool, which is what makes the block copyable.
+fn ceiling(limit: Option<&serde_json::Value>) -> Option<u64> {
+    let serde_json::Value::Object(limit) = limit? else {
+        return None;
+    };
+    limit.get("context")?.as_u64()?;
+    let output = limit.get("output")?.as_u64()?;
+    (output > 0).then_some(output)
 }
 
 #[cfg(test)]
@@ -430,6 +445,7 @@ mod tests {
         assert_eq!(entry.tier, None, "a block names a model, not a tier");
         assert_eq!(entry.display_name(), "GPT-5.6 Sol (Bedrock)");
         assert_eq!(entry.window(), 1_050_000);
+        assert_eq!(entry.output(), 128_000);
     }
 
     /// An ARN is not a name anybody reads, so a block that named nothing friendlier leaves the id
@@ -448,6 +464,36 @@ mod tests {
             entry.window(),
             super::CONTEXT_WINDOW,
             "a window nobody stated was guessed at"
+        );
+        assert_eq!(
+            entry.output(),
+            crate::bedrock::OUTPUT_LIMIT,
+            "a ceiling nobody stated was guessed at"
+        );
+    }
+
+    /// The figure the block already carries and this used to throw away. A ceiling is a property
+    /// of the model, and one compiled-in number for every model Bedrock fronts cuts a reply off
+    /// far below what most of them allow.
+    #[test]
+    fn a_stated_reply_ceiling_is_read_per_model() {
+        let provider = one(r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2"},
+                "models": {
+                    "anthropic.claude-sonnet-4-5": {"limit": {"context": 200000, "output": 64000}},
+                    "anthropic.claude-opus-4-1": {"limit": {"context": 200000, "output": 32000}},
+                    "openai.gpt-5.6-sol": {}
+                }
+            }}}"#);
+        let bedrock = provider.bedrock.as_ref().expect("an AWS account");
+        // Two stated figures rather than one, and neither equal to the other or to the assumed
+        // value: a reading that took any single number for every model passes with one.
+        assert_eq!(bedrock.output_limit("anthropic.claude-sonnet-4-5"), 64_000);
+        assert_eq!(bedrock.output_limit("anthropic.claude-opus-4-1"), 32_000);
+        assert_eq!(
+            bedrock.output_limit("openai.gpt-5.6-sol"),
+            crate::bedrock::OUTPUT_LIMIT,
+            "a model that stated no ceiling took another model's"
         );
     }
 
@@ -526,6 +572,26 @@ mod tests {
                 provider.model("m").expect("offered").context_window,
                 None,
                 "{text:?} stated a window"
+            );
+        }
+        // The ceiling comes out of the same block under the same rule, so a half-typed `limit`
+        // states neither figure. A zero is absence for the same reason it is for the window: it
+        // is not a ceiling a reply could be written under.
+        for text in [
+            r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2"},
+                "models": {"m": {"limit": {"context": 200000}}}}}}"#,
+            r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2"},
+                "models": {"m": {"limit": {"output": 64000}}}}}}"#,
+            r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2"},
+                "models": {"m": {"limit": {"context": 200000, "output": 0}}}}}}"#,
+            r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2"},
+                "models": {"m": {"limit": "wide"}}}}}"#,
+        ] {
+            let bedrock = one(text).bedrock.expect("an AWS account");
+            assert_eq!(
+                bedrock.entry("m").expect("offered").output_limit,
+                None,
+                "{text:?} stated a ceiling"
             );
         }
     }

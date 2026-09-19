@@ -155,7 +155,9 @@ impl BackendError {
                     // Unknown protocol names must not enter the diagnosis.
                     _ => Category::Incomplete,
                 },
-                BedrockError::TooLong => Category::TooLong,
+                BedrockError::TooLong { ceiling } => {
+                    return Diagnosis::of(Category::TooLong).at_ceiling(*ceiling);
+                }
                 BedrockError::NoModel => Category::Unconfigured,
                 BedrockError::Egress(egress) => return of_egress(egress),
             },
@@ -1133,7 +1135,7 @@ mod tests {
     fn other_failures_are_not_mistaken_for_a_stop() {
         assert!(!BackendError::from(ChatError::NoContent).is_cancelled());
         assert!(!BackendError::from(BedrockError::NoContent).is_cancelled());
-        assert!(!BackendError::from(BedrockError::TooLong).is_cancelled());
+        assert!(!BackendError::from(BedrockError::TooLong { ceiling: 8_192 }).is_cancelled());
     }
 
     /// The remedies differ, so the messages have to. An expired AWS session is fixed by signing in
@@ -1221,9 +1223,31 @@ mod tests {
         assert_eq!(of_status(503).status, Some(503));
     }
 
+    /// The one number a failure repeats. It is this program's own configured ceiling rather than
+    /// anything the service reported, and without it the interface can only say that a limit was
+    /// reached, which names no remedy. The count of requests survives beside it.
+    #[test]
+    fn a_reply_stopped_at_the_ceiling_reports_which_ceiling() {
+        for ceiling in [8_192_u64, 64_000] {
+            let diagnosis = BackendError::from(BedrockError::TooLong { ceiling })
+                .counted(1, None, None)
+                .diagnosis();
+            assert_eq!(diagnosis.category, Category::TooLong);
+            assert_eq!(diagnosis.ceiling, Some(ceiling));
+            assert_eq!(diagnosis.attempts, Some(1));
+        }
+        assert_eq!(
+            BackendError::from(BedrockError::Incomplete)
+                .diagnosis()
+                .ceiling,
+            None,
+            "a failure that reached no ceiling reported one"
+        );
+    }
+
     /// The address a request went to comes from a setting, and a setting can hold a credential in a
-    /// path or a query. What is kept about a failure is a category, a status and a count, so there
-    /// is no field for one to travel in.
+    /// path or a query. What is kept about a failure is a category, a status, a count and a
+    /// ceiling this program itself set, so there is no field for one to travel in.
     #[test]
     fn what_is_kept_about_a_failure_carries_nothing_the_service_or_the_setting_said() {
         const SECRET: &str = "s3cret-in-the-url";

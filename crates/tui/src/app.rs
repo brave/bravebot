@@ -5607,12 +5607,14 @@ mod tests {
                     id: "arn:aws:bedrock:us-west-2:1:application-inference-profile/abc".to_string(),
                     name: Some("GPT-5.6 Sol (Bedrock)".to_string()),
                     context_window: Some(1_050_000),
+                    output_limit: Some(32_000),
                 },
                 Entry {
                     tier: None,
                     id: "openai.gpt-5.6-sol".to_string(),
                     name: None,
                     context_window: None,
+                    output_limit: None,
                 },
             ],
         ));

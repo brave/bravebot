@@ -357,7 +357,24 @@ impl Config {
         lookup: impl Fn(&str) -> Option<String>,
         providers: Vec<provider::Provider>,
     ) -> Result<Self, ConfigError> {
-        let bedrock = bedrock::Bedrock::from_lookup(&lookup);
+        // Applied here rather than where either route to an account is read, because a `provider`
+        // block is parsed with no environment to consult and both routes have to answer the same.
+        // Nonsense falls back to what the models state, on the footing the context budget is read
+        // on: a mistyped figure should cost the setting, not the ceiling that lets a reply finish.
+        let output_budget = lookup(env_var::OUTPUT_BUDGET)
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|budget| *budget > 0);
+        let bedrock =
+            bedrock::Bedrock::from_lookup(&lookup).map(|it| it.with_output_budget(output_budget));
+        let providers: Vec<provider::Provider> = providers
+            .into_iter()
+            .map(|mut entry| {
+                entry.bedrock = entry
+                    .bedrock
+                    .map(|account| account.with_output_budget(output_budget));
+                entry
+            })
+            .collect();
 
         // With Bedrock or a gateway configured these are not requirements. A user of another
         // backend need not hold Brave service credentials as well. Released binaries have them
@@ -1197,6 +1214,7 @@ mod tests {
                 "BRAVE_AI_CHAT_PREMIUM_ENDPOINT": "https://premium.invalid",
                 "BRAVE_AI_CHAT_DEFAULT_MODEL": "model-from-the-file",
                 "BRAVEBOT_CONTEXT_BUDGET": "4096",
+                "BRAVEBOT_OUTPUT_BUDGET": "48000",
                 "BRAVEBOT_USE_BEDROCK": "1",
                 "AWS_REGION": "eu-west-1",
                 "AWS_PROFILE": "profile-from-the-file",
@@ -1220,12 +1238,97 @@ mod tests {
         let bedrock = config.bedrock.expect("an aws block");
         assert_eq!(bedrock.region, "eu-west-1");
         assert_eq!(bedrock.profile.as_deref(), Some("profile-from-the-file"));
+        assert_eq!(bedrock.output_limit("opus-arn"), 48_000);
         for (tier, named) in [
             (bedrock::Tier::Opus, "opus-arn"),
             (bedrock::Tier::Sonnet, "sonnet-arn"),
             (bedrock::Tier::Haiku, "haiku-arn"),
         ] {
             assert_eq!(bedrock.model_for(tier), Some(named));
+        }
+    }
+
+    /// A tier has no block to state a ceiling in, so the variable is the only thing that can raise
+    /// one for the three models most people reach this backend through. It has to reach both
+    /// routes to an AWS account and outrank a figure a file stated, which is the order
+    /// BACKEND-35 gives for everything else here.
+    #[test]
+    fn an_exported_reply_ceiling_outranks_every_stated_one() {
+        let settings = Settings::parse(
+            r#"{
+                "env": {
+                    "BRAVEBOT_USE_BEDROCK": "1",
+                    "AWS_REGION": "eu-west-1",
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn"
+                },
+                "provider": {"amazon-bedrock": {
+                    "options": {"region": "us-west-2"},
+                    "models": {"anthropic.claude-sonnet-4-5": {
+                        "limit": {"context": 200000, "output": 64000}
+                    }}
+                }}
+            }"#,
+        );
+
+        // Without it, each route answers with what it knows: the block's figure for the model that
+        // stated one, the assumed figure for the tier that cannot.
+        let config = resolved(&settings, |_| None, |_| None).expect("configured");
+        let stated = config
+            .bedrock_for("anthropic.claude-sonnet-4-5")
+            .expect("the block's account");
+        assert_eq!(stated.output_limit("anthropic.claude-sonnet-4-5"), 64_000);
+        assert_eq!(
+            config
+                .bedrock
+                .as_ref()
+                .expect("the tier account")
+                .output_limit("opus-arn"),
+            bedrock::OUTPUT_LIMIT
+        );
+
+        // With it, both. 48,000 is neither of the two figures above, so a reading that kept either
+        // of them is distinguishable from one that took the variable.
+        let exported = |name: &str| (name == env_var::OUTPUT_BUDGET).then(|| "48000".to_string());
+        let config = resolved(&settings, exported, |_| None).expect("configured");
+        assert_eq!(
+            config
+                .bedrock_for("anthropic.claude-sonnet-4-5")
+                .expect("the block's account")
+                .output_limit("anthropic.claude-sonnet-4-5"),
+            48_000,
+            "a stated ceiling outranked the exported one"
+        );
+        assert_eq!(
+            config
+                .bedrock
+                .as_ref()
+                .expect("the tier account")
+                .output_limit("opus-arn"),
+            48_000,
+            "the variable did not reach a tier"
+        );
+    }
+
+    /// A mistyped budget costs the setting, not the ceiling. Read as zero it would cap every reply
+    /// at nothing, which is the failure the setting exists to prevent.
+    #[test]
+    fn a_reply_ceiling_that_is_not_a_figure_leaves_the_stated_one_standing() {
+        let settings = Settings::parse(
+            r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1", "AWS_REGION": "eu-west-1",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn"}}"#,
+        );
+        for typed in ["0", "lots", "", "-1", "64_000"] {
+            let exported = |name: &str| (name == env_var::OUTPUT_BUDGET).then(|| typed.to_string());
+            let config = resolved(&settings, exported, |_| None).expect("configured");
+            assert_eq!(
+                config
+                    .bedrock
+                    .as_ref()
+                    .expect("the tier account")
+                    .output_limit("opus-arn"),
+                bedrock::OUTPUT_LIMIT,
+                "{typed:?} was read as a ceiling"
+            );
         }
     }
 
