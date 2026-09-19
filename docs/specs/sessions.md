@@ -285,6 +285,11 @@ over. The four are a partition rather than four independent measures, so the par
 whole and the remainder is meaningful. An approval prompt is drawn from inside a tool call, so what
 was spent waiting for a person is taken off the tool figure rather than counted in both.
 
+Delegate inference contributes only where requests overlap the parent's actual collection waits,
+with overlapping requests counted once (see [delegation.md](delegation.md)). The resulting
+breakdown reaches the same outcome, cumulative progress and session record as the parent's own
+measurements; collection does not add a second session charge.
+
 A turn that failed or stopped records its elapsed wall time and the timing breakdown retained from
 its progress on the same footing as one that succeeded. A `/compact` asked for mid-turn is charged
 to the turn it interrupted, as its tokens are; one asked for before the first turn is charged to

@@ -53,6 +53,7 @@ impl<'a, T: ?Sized> Lent<'a, T> {
             lent: self,
             from: None,
             spent: Default::default(),
+            inference: Vec::new(),
         }
     }
 
@@ -62,6 +63,7 @@ impl<'a, T: ?Sized> Lent<'a, T> {
             lent: self,
             from: Some(id),
             spent: Default::default(),
+            inference: Vec::new(),
         }
     }
 
@@ -90,21 +92,25 @@ impl<'a, T: ?Sized> Lent<'a, T> {
 
 /// One run's handle on something lent.
 ///
-/// Copyable, because a delegate is handed one of these and the turn keeps its own.
+/// Each handle retains its own progress until the parent collects it.
 pub struct Borrowed<'m, 'a, T: ?Sized> {
     lent: &'m Lent<'a, T>,
     /// Whose work goes through this handle, where it is a delegate's.
     from: Option<DelegateId>,
     spent: crate::outcome::Spent,
+    inference: Vec<crate::timing::Interval>,
 }
 
 impl<T: ?Sized> Clone for Borrowed<'_, '_, T> {
     fn clone(&self) -> Self {
-        *self
+        Self {
+            lent: self.lent,
+            from: self.from,
+            spent: self.spent,
+            inference: self.inference.clone(),
+        }
     }
 }
-
-impl<T: ?Sized> Copy for Borrowed<'_, '_, T> {}
 
 impl<T: Sink + ?Sized> Sink for Borrowed<'_, '_, T> {
     /// Both under one lock, so a record and the run it belongs to cannot be separated by another
@@ -138,6 +144,15 @@ macro_rules! reports {
 }
 
 impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
+    fn inference_interval(&mut self, interval: crate::timing::Interval) {
+        if self.from.is_some() {
+            self.inference.push(interval);
+        }
+        let mut held = self.lent.hold();
+        held.reporting_for(self.from);
+        held.inference_interval(interval);
+    }
+
     fn prompt_recorded(&mut self, at: usize) {
         // A delegate has its own conversation; its offsets do not describe the parent turn.
         if self.from.is_none() {
@@ -159,6 +174,7 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn tool_finished(&mut self, activity: Activity);
         fn interjected(&mut self, said: String);
         fn delegate_started(&mut self, delegation: Delegation);
+        fn delegate_waiting(&mut self, delegate: DelegateId);
     }
 
     /// Retain delegate totals until collection. Forwarding them would replace the parent's
@@ -242,6 +258,11 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 }
 
 impl<T: ?Sized> Borrowed<'_, '_, T> {
+    /// Keep request intervals available on successful, failed and cancelled returns alike.
+    pub fn take_inference(&mut self) -> Vec<crate::timing::Interval> {
+        std::mem::take(&mut self.inference)
+    }
+
     /// Keep completed usage available when a delegate returns an error without an outcome.
     pub fn last_spent(&self) -> crate::outcome::Spent {
         self.spent

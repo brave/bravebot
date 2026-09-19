@@ -1441,6 +1441,9 @@ fn admit_context_file<S: Sink>(
 /// call: the call answered as soon as the kernel approved it, and this is what is still here when
 /// the work finishes.
 struct Working<'scope> {
+    /// Let unit tests release a worker only after its join window has begun.
+    #[cfg(test)]
+    join_started: Option<std::sync::mpsc::Sender<()>>,
     id: DelegateId,
     /// What it started from, so only what a person answered inside it is taken back.
     seeded: Vouched,
@@ -1449,6 +1452,7 @@ struct Working<'scope> {
         (
             Result<crate::delegate::Finished, TurnError>,
             crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
         ),
     >,
 }
@@ -1540,6 +1544,8 @@ fn collect_delegates<S: Sink, R: Reporter>(
     output_tokens: &mut u64,
     cached: &mut Cached,
     wait: bool,
+    waits: &mut crate::timing::DelegateWait,
+    spent: &mut crate::timing::Elapsed,
 ) -> Result<usize, TurnError> {
     let mut collected = 0;
     while let Some(at) = delegates
@@ -1548,17 +1554,26 @@ fn collect_delegates<S: Sink, R: Reporter>(
     {
         let working = delegates.remove(at);
         let id = working.id;
+        reporter.delegate_waiting(id);
         // A thread that panicked is a delegate that stopped, which is all anybody can be told
         // about it: what it was doing died with it, and the turn is still running.
-        let (finished, partial) = match working.handle.join() {
+        let joined_at = Instant::now();
+        #[cfg(test)]
+        if let Some(started) = working.join_started {
+            started.send(()).expect("join observer is waiting");
+        }
+        let (finished, partial, requests) = match working.handle.join() {
             Ok(finished) => finished,
             Err(_) => (
                 Err(TurnError::Precommit(
                     "the delegate stopped without finishing".to_string(),
                 )),
                 Default::default(),
+                Vec::new(),
             ),
         };
+
+        spent.inference += waits.collected(crate::timing::Interval::since(joined_at), requests);
 
         let (note, body, failed, reported) = match finished {
             Ok(finished) => {
@@ -2288,6 +2303,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // what makes "a delegate does not outlive the turn that spawned it" a fact about the program
         // rather than a promise about the code.
         let mut delegates: Vec<Working<'_>> = Vec::new();
+        let mut waits = crate::timing::DelegateWait::default();
         let result = (|| {
             let completion = loop {
                 // Checked before each request rather than mid-flight: a request already on the wire has
@@ -2308,6 +2324,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     &mut output_tokens,
                     &mut cached,
                     false,
+                    &mut waits,
+                    &mut spent,
                 )?;
 
                 reporter.spent(crate::outcome::Spent {
@@ -2342,7 +2360,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     let summarising = Instant::now();
                     let summary =
                         crate::compact::compact(&mut policy, &mut chat, conversation, steps);
-                    spent.inference += summarising.elapsed();
+                    let interval = crate::timing::Interval::since(summarising);
+                    spent.inference += interval.duration();
+                    reporter.inference_interval(interval);
                     if let Err(error) = &summary
                         && let Some(usage) = error.completed_usage()
                     {
@@ -2462,7 +2482,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 // Retries included, because a round that had to reconnect really did keep the turn waiting
                 // that long. The count is what the turn spent, not what the endpoint would have taken had
                 // the connection held.
-                spent.inference += asked_at.elapsed();
+                let interval = crate::timing::Interval::since(asked_at);
+                spent.inference += interval.duration();
+                reporter.inference_interval(interval);
                 if let Err(error) = &completion
                     && let Some(usage) = error.completed_usage()
                 {
@@ -2510,6 +2532,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         &mut output_tokens,
                         &mut cached,
                         true,
+                        &mut waits,
+                        &mut spent,
                     )?;
                     break completion;
                 }
@@ -2530,6 +2554,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             &mut output_tokens,
                             &mut cached,
                             true,
+                            &mut waits,
+                            &mut spent,
                         )?;
                         // A round the planner spent waiting is still a round, and the wait is when a
                         // person watching a turn go somewhere they did not ask for is most likely to
@@ -2738,9 +2764,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 &mut reporter,
                                 &mut sink,
                             );
-                            (result, reporter.last_spent())
+                            (result, reporter.last_spent(), reporter.take_inference())
                         });
                         delegates.push(Working {
+                            #[cfg(test)]
+                            join_started: None,
                             id,
                             seeded: vouched,
                             handle,
@@ -2751,6 +2779,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // What the model waited for inside the call, which is not what the call spent working:
                     // a processor is a request, and its seconds belong with the other requests'.
                     spent.inference += output.inference;
+                    if let Some(interval) = output.inference_interval {
+                        reporter.inference_interval(interval);
+                    }
                     // Both taken off, so the four figures partition the turn rather than double-count the
                     // parts of it that nest. Saturating because they are separate clocks: a measure of the
                     // inside cannot be allowed to make the outside negative.
@@ -3254,6 +3285,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 &mut output_tokens,
                 &mut cached,
                 true,
+                &mut waits,
+                &mut spent,
             );
         }
         result
@@ -3346,4 +3379,103 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             .collect(),
         attempt: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// Cleanup entered after cancellation must still charge requests that overlap its join.
+    /// A controlled worker keeps the interval open independently of transport polling.
+    #[test]
+    fn cancelled_cleanup_retains_inflight_delegate_inference() {
+        const LIMIT: Duration = Duration::from_secs(5);
+        struct Joining;
+        impl Reporter for Joining {
+            fn todos(&mut self, _: Vec<bravebot_core::todo::Row>) {}
+            fn delegate_waiting(&mut self, _: DelegateId) {
+                // Reporting stays outside the join window, even when it is slow.
+                std::thread::sleep(Duration::from_millis(160));
+            }
+        }
+        let cancel = Cancel::new();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (joining_tx, joining_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "collect cancelled work");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let mut spent = Elapsed::default();
+        let mut waits = crate::timing::DelegateWait::default();
+        std::thread::scope(|scope| {
+            let child_cancel = cancel.clone();
+            let worker = scope.spawn(move || {
+                let began = Instant::now();
+                ready_tx.send(()).unwrap();
+                release_rx
+                    .recv_timeout(LIMIT)
+                    .expect("join released the worker");
+                assert!(child_cancel.is_cancelled());
+                (
+                    Err(TurnError::Cancelled { attempts: None }),
+                    crate::outcome::Spent {
+                        tokens: 17,
+                        ..Default::default()
+                    },
+                    vec![crate::timing::Interval::since(began)],
+                )
+            });
+            ready_rx.recv_timeout(LIMIT).expect("request started");
+            cancel.cancel();
+            // Cancellation precedes collection; the request remains open until the join starts.
+            scope.spawn(move || {
+                joining_rx
+                    .recv_timeout(LIMIT)
+                    .expect("cleanup entered its join");
+                std::thread::sleep(Duration::from_millis(120));
+                release_tx.send(()).unwrap();
+            });
+            let mut delegates = vec![Working {
+                join_started: Some(joining_tx),
+                id: DelegateId::nth(1),
+                seeded: policy.vouched(),
+                handle: worker,
+            }];
+            let mut tokens = 0;
+            assert_eq!(
+                collect_delegates(
+                    &mut delegates,
+                    &mut policy,
+                    &mut Conversation::new(),
+                    &mut Joining,
+                    &mut tokens,
+                    &mut 0,
+                    &mut Cached::default(),
+                    true,
+                    &mut waits,
+                    &mut spent,
+                )
+                .unwrap(),
+                1
+            );
+            assert!(delegates.is_empty());
+            assert_eq!(
+                tokens, 17,
+                "completed usage survives the cancelled delegate"
+            );
+        });
+        assert!(
+            spent.inference >= Duration::from_millis(100),
+            "cancelled cleanup lost its request interval: {spent:?}"
+        );
+    }
 }
