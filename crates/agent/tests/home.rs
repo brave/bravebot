@@ -48,6 +48,64 @@ fn the_home_directory_is_the_one_the_environment_names() {
     });
 }
 
+/// CMDLINE-4: a leading `~` stands for the profile directory itself, and the state directory is
+/// one segment below it.
+///
+/// The two are one `join` apart, which is what makes answering with the wrong one silent: a
+/// command line naming `~/notes.txt` would read `~/.bravebot/notes.txt`, a directory holding this
+/// program's own settings and credentials rather than the person's files.
+#[test]
+fn the_profile_directory_is_the_home_itself_rather_than_the_state_directory() {
+    with_temp_home("profile", |home| {
+        assert_eq!(bravebot_agent::home::profile(), Some(home.clone()));
+        assert_eq!(
+            bravebot_agent::home::directory(),
+            Some(home.join(".bravebot")),
+            "the state directory moved out from under the profile directory"
+        );
+    });
+}
+
+/// PERM-3: a `~/` rule in a settings file is anchored at the home directory and a `/` rule at the
+/// state directory inside it, when the accessor every caller reads is the one that answers.
+///
+/// The rule language is right about both and the anchors it is given decide where they land, so
+/// the mistake this rejects is a caller handing over `~/.bravebot` where the home directory is
+/// wanted: `Read(~/.ssh/**)` then covers `~/.bravebot/.ssh`, a directory nobody has, and the deny
+/// rule protects nothing while reading as though it does.
+#[test]
+fn a_settings_rule_is_anchored_at_the_home_directory_the_accessor_names() {
+    use bravebot_core::permissions::{Decision, Ruling, Subject};
+
+    with_temp_home("permission-anchors", |home| {
+        let settings = bravebot_config::Settings::parse(
+            r#"{"permissions": {"deny": ["Read(~/.ssh/**)", "Read(/secrets/**)"]}}"#,
+        );
+        let (permissions, rejected) = bravebot_agent::permissions::from_settings(
+            &settings,
+            bravebot_agent::home::profile().as_deref(),
+        );
+
+        assert!(rejected.is_empty(), "{rejected:?}");
+        assert_eq!(
+            permissions.for_path(
+                Subject::Read,
+                &home.join(".ssh/id_ed25519").display().to_string()
+            ),
+            Decision::Ruled(Ruling::Deny),
+            "a `~/` rule did not cover the home directory"
+        );
+        assert_eq!(
+            permissions.for_path(
+                Subject::Read,
+                &home.join(".bravebot/secrets/key").display().to_string()
+            ),
+            Decision::Ruled(Ruling::Deny),
+            "a `/` rule did not cover the directory the settings file is in"
+        );
+    });
+}
+
 /// Clear every variable the platform states a profile directory in, run the closure, and put them
 /// back.
 ///
@@ -84,6 +142,15 @@ fn an_absent_home_is_not_an_error() {
     let found = with_no_home(bravebot_agent::home::directory);
 
     assert_eq!(found, None, "a missing home invented a directory");
+}
+
+/// A machine that names no home has no directory for a `~` to stand for either, and inventing one
+/// would put a path in front of somebody that is not where the bytes would go.
+#[test]
+fn an_absent_home_names_no_profile_directory_for_a_tilde() {
+    let found = with_no_home(bravebot_agent::home::profile);
+
+    assert_eq!(found, None, "a missing home invented a profile directory");
 }
 
 /// An empty HOME is a misconfigured environment, not the filesystem root. Joining onto it would

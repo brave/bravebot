@@ -21,12 +21,16 @@ use bravebot_core::permissions::{Anchors, Permissions, Rejected};
 /// The rejects are returned rather than logged so a caller can report them where a person will
 /// read them. A rule nobody can act on is worth saying out loud: a misspelled deny rule reads as
 /// protection that is not there.
+/// `profile` is the user's home directory ([`crate::home::profile`]) and never the state
+/// directory: [`anchors`] joins `.bravebot` onto it itself to reach the settings file, and a
+/// caller that passed the state directory would anchor a `~/` rule one segment too deep and a
+/// `/` rule two.
 pub fn from_settings(
     settings: &Settings,
-    home: Option<&std::path::Path>,
+    profile: Option<&std::path::Path>,
 ) -> (Permissions, Vec<Rejected>) {
     let lists = settings.permissions();
-    Permissions::parse(&lists.deny, &lists.ask, &lists.allow, &anchors(home))
+    Permissions::parse(&lists.deny, &lists.ask, &lists.allow, &anchors(profile))
 }
 
 /// The same rules for a run with nobody at it, which is every list but the one that allows.
@@ -39,12 +43,13 @@ pub fn from_settings(
 /// The other two carry over, because both still say something such a run can act on. A deny rule
 /// refuses before there is anything to prompt about, and an ask rule turns a write that would have
 /// gone through silently into one there is nobody to approve.
+/// `profile` is the user's home directory, for the reason [`from_settings`] states.
 pub fn for_an_unattended_run(
     settings: &Settings,
-    home: Option<&std::path::Path>,
+    profile: Option<&std::path::Path>,
 ) -> (Permissions, Vec<Rejected>) {
     let lists = settings.permissions();
-    let anchors = anchors(home);
+    let anchors = anchors(profile);
     let (permissions, mut rejected) = Permissions::parse(&lists.deny, &lists.ask, &[], &anchors);
     // Read for its rejects and then dropped, rather than not read at all. A line the person
     // believes is in force and that nothing can act on is worth saying out loud wherever it was
@@ -55,8 +60,12 @@ pub fn for_an_unattended_run(
 }
 
 /// What a leading `~` and a leading `/` in a rule are resolved against.
-fn anchors(home: Option<&std::path::Path>) -> Anchors {
-    let home = home.map(|home| home.display().to_string());
+///
+/// Both come from the user's home directory, the settings one by joining `.bravebot` onto it. So
+/// what this takes is the home directory itself and not the state directory that sits inside it
+/// (PERM-3), which is the same distinction a `~` in a command line turns on (CMDLINE-4).
+fn anchors(profile: Option<&std::path::Path>) -> Anchors {
+    let home = profile.map(|profile| profile.display().to_string());
     Anchors {
         // The settings file lives in the global state directory, so a `/` rule is anchored there.
         settings_dir: home.as_ref().map(|home| format!("{home}/.bravebot")),

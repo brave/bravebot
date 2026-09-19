@@ -10582,6 +10582,78 @@ fn a_quarantined_read_says_nothing_about_vouching_for_a_command() {
     );
 }
 
+/// A turn whose state directory sits inside a profile directory, as a real one's does.
+///
+/// The two are told apart on purpose: the state directory is the profile directory with
+/// `.bravebot` joined onto it, so a `~` resolved against the wrong one lands a segment deeper and
+/// the test can say which was passed.
+fn a_run_turn_from_a_home(
+    scratch: &Scratch,
+    profile: &std::path::Path,
+    arguments: &str,
+    confirmer: &mut AskedAboutRuns,
+) -> Result<turn::Outcome, turn::TurnError> {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) =
+        serve_sequence(vec![tool_request("run", arguments), reply_with("done")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it")
+            .with_home(Some(profile.join(".bravebot")))
+            .with_profile(Some(profile.to_path_buf())),
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+}
+
+/// CMDLINE-4: a `~` the planner writes stands for the person's home directory, not for the state
+/// directory this program keeps inside it.
+///
+/// The two differ by one segment, so passing the wrong one is silent: `cat ~/notes.txt` reads
+/// `~/.bravebot/notes.txt`, which usually does not exist, and the planner concludes the person's
+/// file is missing. Where the name does exist under the state directory it reads a control file
+/// of this program's instead of the file that was asked for.
+#[test]
+fn a_tilde_in_a_command_line_stands_for_the_home_directory_and_not_the_state_directory() {
+    let scratch = Scratch::new("run-tilde-home");
+    let home = Scratch::new("run-tilde-home-profile");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    let seen = confirmer.seen.clone();
+
+    a_run_turn_from_a_home(
+        &scratch,
+        &home.path,
+        r#"{"command":"cat ~/notes.txt"}"#,
+        &mut confirmer,
+    )
+    .expect("the turn completes");
+
+    let asked = seen.lock().unwrap();
+    let request = asked.first().expect("the user was asked about the run");
+    let steps = request.plan.steps();
+    assert_eq!(
+        steps[0].args,
+        [home.path.join("notes.txt").display().to_string()],
+        "the `~` did not stand for the home directory"
+    );
+    assert!(
+        !steps[0].args[0].contains(".bravebot"),
+        "the `~` stood for the state directory: {}",
+        steps[0].args[0]
+    );
+}
+
 /// A line with a pipe in it compiles into the steps it names, and the person is asked about the
 /// plan rather than about the text. Filtering at the source is the whole point of the notation.
 #[test]
@@ -14297,6 +14369,70 @@ fn a_turn_does_not_answer_while_a_delegate_is_still_working() {
         "what the delegate said never reached the planner"
     );
     assert_eq!(outcome.reply_for_display(), "it came back and I read it");
+}
+
+/// CMDLINE-4: a delegate resolves a `~` the way the turn that spawned it would.
+///
+/// A delegate is that turn's own work done elsewhere, so a line it sends has to name the same
+/// file. Carried rather than re-read, since a delegate reaches the environment no more than a
+/// turn does: without it being passed down, `cat ~/notes.txt` inside a delegate is refused for
+/// having no home to stand for while the same line in the parent runs.
+#[test]
+fn a_delegate_resolves_a_tilde_against_the_home_its_parent_did() {
+    let scratch = Scratch::new("delegate-tilde");
+    let home = Scratch::new("delegate-tilde-profile");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "HAND-IT-ON",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"checker","task":"CHECK-THE-NOTES"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "CHECK-THE-NOTES",
+            vec![
+                tool_request("run", r#"{"command":"cat ~/notes.txt"}"#),
+                reply_with("asked about it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    let seen = confirmer.seen.clone();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAND-IT-ON")
+            .with_home(Some(home.path.join(".bravebot")))
+            .with_profile(Some(home.path.clone())),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let asked = seen.lock().unwrap();
+    let request = asked
+        .first()
+        .expect("the delegate's line was refused before anybody was asked about it");
+    assert_eq!(
+        request.plan.steps()[0].args,
+        [home.path.join("notes.txt").display().to_string()],
+        "a delegate resolved the `~` somewhere its parent would not have"
+    );
 }
 
 /// A delegate is a planner, so a file nobody vouched for is quarantined from it exactly as it
