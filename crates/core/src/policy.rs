@@ -2514,7 +2514,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// person is asked to approve a diff that looks like nothing, and the file on disk now ends
     /// mid-line for whatever reads it next.
     ///
-    /// This does read untrusted bytes to decide something, and it is the second of the two places
+    /// This does read untrusted bytes to decide something, and it is the second of the exceptions
     /// Known costs in `docs/specs/labels.md` licenses. The write happens either way; what changes
     /// is one byte of a document, in the direction of the document it came from.
     fn keep_the_last_newline(
@@ -2549,9 +2549,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Take what a processor wanted to say off the front of what it produced.
     ///
     /// See [`crate::processor::ProcessorSpec::NOTE_MARKER`]. Searching the reply for the line is
-    /// a decision taken from untrusted bytes, and it is the first of the two places Known costs
-    /// in `docs/specs/labels.md` licenses: content in, content out, both halves still
-    /// quarantined, and no branch outside these lines.
+    /// a decision taken from untrusted bytes, and it is the first of the exceptions Known costs in
+    /// `docs/specs/labels.md` licenses: content in, content out, both halves still quarantined,
+    /// and no branch outside these lines.
     fn split_note(
         &mut self,
         id: &str,
@@ -2936,8 +2936,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// This is the one read of the reply, and it happens here for the reason splitting a
     /// processor's answer happens here: deciding anything from bytes a model produced about
     /// untrusted content is a decision from untrusted content, and the policy layer is the only
-    /// place allowed to take one. What comes out is a word from a fixed set and free text that
-    /// stays labelled.
+    /// place allowed to take one. It is the third of the exceptions Known costs in
+    /// `docs/specs/labels.md` licenses. What comes out is a word from a fixed set and free text
+    /// that stays labelled.
     ///
     /// **Fails closed on every path.** A reply that stated no verdict, gave a word outside the
     /// set, or arrived truncated is `Inconclusive`, which promotes nothing and draws the prompt

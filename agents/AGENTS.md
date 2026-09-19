@@ -27,7 +27,7 @@ Do not restate the rule to match the code.
 
 [docs/development/reviewing-for-the-rule.md](docs/development/reviewing-for-the-rule.md) is the
 review pass: the four shapes a violation takes in a diff, the argument that mistakes a sound design
-for one, and the two exceptions that are written down. Read it before writing code that touches a
+for one, and the exceptions that are written down. Read it before writing code that touches a
 label, and again before asking anyone to review one.
 
 ## Everything else is in the specs

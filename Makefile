@@ -135,9 +135,9 @@ check-spec:
 # belongs in CI. The lanes that read code are the skill, and a person runs those.
 #
 # Not in check-all yet, because it fails on this tree: `Labelled::new` and `Labelled::trusted` have
-# no `guards` entry in docs/specs/labels.md, and two documents disagree about how many exceptions to
-# the rule are admitted. Adding it before those land would make a red check-all the normal state,
-# which is how a check stops being read. Add it to check-all in the change that fixes them.
+# no `guards` entry in docs/specs/labels.md. Adding it before that lands would make a red check-all
+# the normal state, which is how a check stops being read. Add it to check-all in the change that
+# fixes it.
 .PHONY: check-security
 check-security:
 	python3 agents/skills/security-audit/selftest.py
