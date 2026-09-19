@@ -2315,7 +2315,7 @@ fn event_loop(
     session.adopt_keybindings(settings.keybindings());
     let (permissions, rejected) = bravebot_agent::permissions::from_settings(
         &settings,
-        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
     );
     // Said out loud, because a rule that parses as nothing is a rule somebody believes is in
     // force. A misspelled deny rule reads as protection that is not there.
@@ -3042,6 +3042,10 @@ fn against_workspace(root: &std::path::Path, directory: &str) -> String {
 /// Only a leading one, and only when it is the whole first segment, so a directory genuinely called
 /// `~notes` is left alone. Without a home to expand to, the path is passed through and the
 /// workspace refuses it for not being absolute, which says the same thing.
+///
+/// The directory comes from [`bravebot_agent::home::profile`] rather than from `HOME` read here,
+/// so that a `~` somebody types and a `~` the planner writes in a command line name the same file
+/// (CMDLINE-4). Two readings of the environment are two answers waiting to differ.
 fn expand_home(directory: &str) -> String {
     let Some(rest) = directory.strip_prefix('~') else {
         return directory.to_string();
@@ -3049,11 +3053,9 @@ fn expand_home(directory: &str) -> String {
     if !(rest.is_empty() || rest.starts_with('/')) {
         return directory.to_string();
     }
-    match std::env::var_os("HOME") {
-        Some(home) if !home.is_empty() => {
-            format!("{}{rest}", std::path::Path::new(&home).display())
-        }
-        _ => directory.to_string(),
+    match bravebot_agent::home::profile() {
+        Some(home) => format!("{}{rest}", home.display()),
+        None => directory.to_string(),
     }
 }
 
@@ -4168,6 +4170,7 @@ fn manifest_animated(
     // is the same reason a pipe is refused (MANIFEST-9).
     let worker_task = Task::new(task)
         .with_home(bravebot_agent::home::directory())
+        .with_profile(bravebot_agent::home::profile())
         .with_model(session.model().map(str::to_string))
         .with_effort(session.effort_in_force())
         .with_permissions(permissions.clone())
@@ -4717,6 +4720,7 @@ fn run_turn_animated(
     let mut task = Task::new(prompt)
         .with_rounds(None)
         .with_home(bravebot_agent::home::directory())
+        .with_profile(bravebot_agent::home::profile())
         // There is somebody in front of this, so a run prompt here may offer the key whose answer
         // outlives the session. A one-shot run says nothing here and reads no record.
         .remembering(Some(session_id.to_string()))
@@ -9781,6 +9785,28 @@ mod tests {
         assert_eq!(expand_home("~notes"), "~notes");
         assert_eq!(expand_home("/tmp/notes"), "/tmp/notes");
         assert_eq!(expand_home("relative/notes"), "relative/notes");
+    }
+
+    /// CMDLINE-4: a `~` somebody types and a `~` the planner writes in a command line stand for
+    /// the same directory.
+    ///
+    /// Two layers resolving it apart is the symptom a person meets: `~/notes.txt` typed at the
+    /// prompt reaches one file and the same path in a line the planner sent reaches another, with
+    /// nothing on screen to say why. Both answers come from one accessor so that a change to what
+    /// a `~` means cannot move one of them alone.
+    #[test]
+    fn a_typed_tilde_and_a_compiled_one_stand_for_the_same_directory() {
+        let profile = bravebot_agent::home::profile().expect("a home directory");
+
+        assert_eq!(
+            expand_home("~/notes.txt"),
+            format!("{}/notes.txt", profile.display())
+        );
+        assert!(
+            !expand_home("~/notes.txt").contains(".bravebot"),
+            "a typed `~` named the state directory: {}",
+            expand_home("~/notes.txt")
+        );
     }
 
     #[test]
