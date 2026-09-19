@@ -8,6 +8,22 @@ governs:
   - crates/core/src/reference.rs
   - crates/core/src/slot.rs
 guards:
+  - symbol: Labelled::new
+    sites:
+      - crates/agent/src/lsp.rs: 3
+      - crates/agent/src/manifest.rs: 3
+      - crates/agent/src/tools.rs: 19
+      - crates/agent/src/workspace.rs: 6
+      - crates/agent/tests/workspace.rs: 27
+      - crates/aichat/src/lib.rs: 4
+      - crates/bedrock/src/lib.rs: 4
+      - crates/core/src/policy.rs: 80
+      - crates/core/src/slot.rs: 4
+      - crates/core/src/value.rs: 7
+      - crates/mcp/src/http.rs: 2
+      - crates/mcp/src/lib.rs: 1
+      - crates/mcp/src/stdio.rs: 2
+      - crates/net/src/lib.rs: 2
   - symbol: Labelled::declassify
     sites:
       - crates/agent/src/aside.rs: 2

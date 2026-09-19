@@ -154,17 +154,13 @@ def enclosing(lines, number):
 def construction_hits(symbol, sources):
     """Every call of an associated function, matched on the qualified name and nothing else.
 
-    Not `mechanics.guard_sites`, which is right for what it is for and wrong here. That counts
-    `.method(` as well as `Type::method`, because a method is called on a receiver, and it counts
-    `fn method` in any file that mentions the qualifier so a renamed symbol cannot read as present.
-    For `Labelled::declassify` all three forms are the same symbol. For `Labelled::new` the second
-    and third catch every `fn new` and every `x.new(` in a file that says `Labelled` anywhere, which
-    is most of them.
+    Not `mechanics.guard_sites`, which counts the same symbol to answer a different question. A
+    pin has to cover every way a symbol can be reached, so that counts the definition and a bare
+    `Labelled::new` handed to `map` as well as the calls. This list is read by a person deciding
+    whether each site should exist, and neither of those is a site to decide about.
 
-    An associated function cannot be called on a receiver, so the qualified name is the only way to
-    write one and a literal count is exact. This matters beyond a tidier list: the fix these sites
-    argue for is a `sites:` count in the spec, and a count including an unrelated `fn new` is a check
-    that fails on the wrong change.
+    An associated function cannot be called on a receiver, so the qualified name with its paren is
+    the only way to write a call and a literal count is exact.
     """
     literal = f"{symbol}("
     hits = []
@@ -301,12 +297,12 @@ def check_labelled_impls(sources):
 
 
 def check_construction_pinned(specs, sources):
-    """The constructor that can give a value a better label than its inputs had is pinned nowhere.
+    """A constructor that can give a value a better label than its inputs had, pinned nowhere.
 
     `labels.md` pins `Labelled::declassify` to a count per file, so a new release cannot land
-    quietly. The construction end has no such entry, and it is the other half of the same
-    guarantee: a value built trusted out of untrusted bytes is read through `into_trusted` with no
-    witness at all, because by then the label says it is allowed.
+    quietly. A constructor with no such entry leaves the other half of the same guarantee open: a
+    value built trusted out of untrusted bytes is read through `into_trusted` with no witness at
+    all, because by then the label says it is allowed.
     """
     pinned = set()
     for spec in specs:
@@ -339,10 +335,9 @@ def check_construction_pinned(specs, sources):
             "medium",
             evidence=[f"{path} {count} uses" for path, count in worst],
             fix=f"add a `guards` entry for `{constructor}` to `{LABELS_SPEC}` with a `sites:` count "
-            f"per file, the way `{RELEASE}` already has one. The counts above are of the qualified "
-            f"name alone; `check-spec` counts a guarded symbol three ways and two of them do not "
-            f"apply to an associated function, so pinning these needs `guard_sites` to count "
-            f"`Type::function(` exactly or the pin fails on the next unrelated `fn new`",
+            f"per file, the way `{RELEASE}` already has one. The counts above are the calls "
+            f"outside `crates/core` in non-test code, and a `sites:` list pins the whole tree, so "
+            f"read the counts to pin out of `check-spec` rather than off this finding",
             gain="nothing on its own. What it buys is the next change: a call that hands this "
             "constructor bytes from a page or a process, with a label saying a person typed them, "
             "puts untrusted content in the planner's context and passes every check in the tree",

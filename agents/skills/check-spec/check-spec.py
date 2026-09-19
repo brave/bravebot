@@ -331,6 +331,18 @@ def check_governs(spec):
 
 _STRIPPED = {}
 
+# The first parameter of a method, in every shape Rust writes it: `self`, `&self`, `&mut self`,
+# `&'a self`, `mut self`, `self: Box<Self>`.
+RECEIVER = re.compile(r"\s*&?\s*(?:'[a-z_]\w*\s+)?(?:mut\s+)?self\b")
+
+# A line beginning something, as against one continuing the line above it. An `impl` whose bounds
+# or `where` clause run to several lines is the same item on each of them, and rustfmt leaves the
+# brace that opens its block alone on a line of its own.
+ITEM = re.compile(
+    r"(?:pub|impl|fn|mod|struct|enum|trait|type|const|static|use|unsafe|async|extern)\b"
+    r"|macro_rules!|#\[|\}"
+)
+
 
 def strip_comments(lines):
     """The same lines with their comments blanked out, since a symbol named in prose is not a
@@ -390,32 +402,105 @@ def strip_comments(lines):
     return stripped
 
 
+def definition_of(bare):
+    """`fn <bare>` through the parenthesis that opens its parameters.
+
+    The generics in between may hold one level of their own, which is as deep as
+    `fn new<S: Into<String>>(` goes and as deep as this tree goes. Stopping at the parenthesis
+    rather than in front of the generics is what lets a caller read the first parameter off
+    whatever follows the match."""
+    return re.compile(rf"\bfn\s+{re.escape(bare)}\s*(?:<[^<>]*(?:<[^<>]*>[^<>]*)*>)?\s*\(")
+
+
+def associated_definitions(bare, qualifier, sources):
+    """Where `qualifier` defines `bare` without a receiver, or `None` when it takes one.
+
+    Which of the two it is decides how a use can be written, and so what counting one means. A
+    method is `receiver.name(` at nearly every call site, so those have to be counted. An
+    associated function cannot be written that way at all, and counting the form anyway counts
+    every `x.name(` on every other type in the tree. The `fn name` form fails the same way round
+    the other side: a crate holding a dozen constructors says `fn new` a dozen times, one of them
+    is the guarded one, and a count over all of them moves when an unrelated type gains one.
+
+    Read off the definition rather than declared in the front matter, so a `guards` entry cannot
+    assert that a method is an associated function and quietly drop the receiver form from what is
+    counted.
+
+    Which block a definition sits in is read from the indentation: it belongs to the nearest
+    `impl` above it that is indented less far, and an item at that indentation or further out has
+    closed that block. An `impl Labelled`, a later `fn` of the same name at the margin, and a
+    `mod tests` with a `Latch::new` of its own are three blocks, and taking the last `impl` seen
+    would read them as one.
+
+    `None` where no definition is found inside an `impl` naming the qualifier, which is the case a
+    module-qualified free function like `home::write_file` lands in. Counting too many forms fails
+    loudly on the next unrelated function of that name, and counting too few reports a new use of
+    an escape hatch as no use at all."""
+    definition = definition_of(bare)
+    owned = re.compile(rf"\b{re.escape(qualifier)}\b")
+    found = set()
+    for path, lines in sources.items():
+        code = strip_comments(lines)
+        # Nothing here is the qualifier's definition unless the impl naming it is in this file,
+        # and most files in the tree never mention it.
+        if not any(qualifier in line for line in code):
+            continue
+        blocks = []
+        for number, raw in enumerate(code, start=1):
+            body = raw.lstrip()
+            if ITEM.match(body):
+                indent = len(raw) - len(body)
+                while blocks and blocks[-1][0] >= indent:
+                    blocks.pop()
+                if body.startswith("impl"):
+                    blocks.append((indent, body))
+            hit = definition.search(raw)
+            if not hit or not blocks or not owned.search(blocks[-1][1]):
+                continue
+            # rustfmt puts the receiver on the next line wherever the signature does not fit.
+            tail = raw[hit.end() :] + " " + (code[number] if number < len(code) else "")
+            if RECEIVER.match(tail):
+                return None
+            found.add((path, number))
+    return found or None
+
+
 def guard_sites(symbol, sources):
     """Every use of a guarded symbol, as `(path, line, text, count)`. `Type::method` also
-    matches `.method(`, since that is how most call sites read once the receiver has a type.
+    matches `.method(`, since that is how most call sites read once the receiver has a type,
+    and `Type::function` does not, since an associated function has no receiver to be called on.
 
     Occurrences rather than lines. Two uses on one line are two uses, and rustfmt reflowing
     one call across two lines is still one, which is what lets an allowlist pin a count and
     survive a formatting change.
 
-    The definition is matched on the whole name rather than on a prefix, because a guard named
-    `vouch` matching `fn vouching_for_one_command` would report a renamed symbol as present,
-    which is the one answer this check must never give. For a qualified guard the file has to
+    Every form is matched on the whole name rather than on a prefix. A guard named `vouch`
+    matching `fn vouching_for_one_command` would report a renamed symbol as present, which is the
+    one answer this check must never give, and `Labelled::new` matching `Labelled::new_unchecked`
+    would blame a use of the one symbol that was not used. For a qualified guard the file has to
     name the qualifier too: an unrelated `fn present` in another crate is not `Policy::present`,
-    and counting it would put a file in the allowlist that never touches a label."""
+    and counting it would put a file in the allowlist that never touches a label. For an
+    associated function that is not enough, because a file using `Labelled` says `fn new` for
+    reasons of its own, so there the definition counts at the one line that defines it."""
     parts = symbol.split("::")
     bare = parts[-1]
     qualifier = parts[0] if len(parts) > 1 else None
-    definition = re.compile(rf"\bfn\s+{re.escape(bare)}\s*[(<]")
+    associated = associated_definitions(bare, qualifier, sources) if qualifier else None
+    named = re.compile(rf"\b{re.escape(symbol)}\b")
+    definition = definition_of(bare)
     call = f".{bare}("
     hits = []
     for path, lines in sources.items():
         code = strip_comments(lines)
         owns = qualifier is None or any(qualifier in line for line in code)
         for number, raw in enumerate(code, start=1):
-            count = raw.count(symbol) + raw.count(call)
-            if owns:
-                count += len(definition.findall(raw))
+            count = len(named.findall(raw)) if symbol in raw else 0
+            if associated is not None:
+                count += (path, number) in associated
+            else:
+                count += raw.count(call)
+                if owns:
+                    count += len(definition.findall(raw))
             if count:
                 hits.append((str(path), number, raw.strip(), count))
     return hits
@@ -514,7 +599,7 @@ def check_allowlist(spec, symbol, listed, sites):
                 "guard-site-unlisted",
                 f"`{symbol}` is used in `{path}`, which its `sites:` list does not name",
                 evidence=f"{path}:{lines}",
-                fix="add the file with its count, or use the gate that already covers this",
+                fix=f"record `{path}: {actual}`, or use the gate that already covers this",
             )
         elif actual != allowed[path]:
             yield finding(
