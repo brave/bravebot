@@ -691,11 +691,11 @@ comparison, or early return whose condition derives from untrusted bytes. Moving
 branch from `bravebot-agent` into `bravebot-core` does not fix it.
 
 A witness is not permission to inspect. A `declassify` outside `Policy::present`,
-`Policy::render_in_place` and `Policy::read_trusted_content` is almost certainly a
-violation. Constructing a `Labelled` by hand to give a value a better label than its
-inputs had is laundering.
+`Policy::render_in_place`, `Policy::read_trusted_content` and
+`Policy::read_planner_argument` is almost certainly a violation. Constructing a `Labelled`
+by hand to give a value a better label than its inputs had is laundering.
 
-Two deliberate exceptions are listed under "Known costs" in docs/specs/labels.md. Anything
+The deliberate exceptions are listed under "Known costs" in docs/specs/labels.md. Anything
 not listed there is a violation, whatever the comment beside it says.
 
 Report a breach of this rule at severity `error`, whether or not a clause names it.
