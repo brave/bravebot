@@ -578,6 +578,11 @@ doctor-dropped-chatgpt-account-renewable-without-authority =
 # since the token is replaced when it is next used.
 doctor-chatgpt = chatgpt
 doctor-chatgpt-signed-in = signed in, the access token expires { $expires }
+# Which of the two handlers at that endpoint will answer. Never the key itself: a diagnostic that
+# printed one is a diagnostic people paste into issues, and unlike the signing key this one is sent.
+doctor-relay = requests
+doctor-relay-key = API key (relayed parameters, premium unavailable)
+doctor-relay-signed = signed
 # Both are reported when both are reachable, so this names one of the two rather than the backend.
 doctor-backend = offers
 doctor-backend-bedrock = AWS Bedrock
