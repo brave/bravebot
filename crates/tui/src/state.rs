@@ -442,19 +442,24 @@ impl Finished {
 /// Compose a localized failure reason from safe fields, without raw backend error text.
 pub fn failure_reason(diagnosis: bravebot_agent::Diagnosis) -> String {
     use bravebot_agent::Category;
-    let what = match diagnosis.category {
-        Category::Unauthorized => t!(failure_unauthorized),
-        Category::RateLimited => t!(failure_rate_limited),
-        Category::Unavailable => t!(failure_unavailable),
-        Category::Refused => t!(failure_refused),
-        Category::Transport => t!(failure_transport),
-        Category::Incomplete => t!(failure_incomplete),
-        Category::Undecodable => t!(failure_undecodable),
-        Category::TooLong => t!(failure_too_long),
-        Category::Unconfigured => t!(failure_unconfigured),
-        Category::Blocked => t!(failure_blocked),
-        Category::Workspace => t!(failure_workspace),
-        Category::Internal => t!(failure_internal),
+    let what: std::borrow::Cow<'_, str> = match diagnosis.category {
+        Category::Unauthorized => t!(failure_unauthorized).into(),
+        Category::RateLimited => t!(failure_rate_limited).into(),
+        Category::Unavailable => t!(failure_unavailable).into(),
+        Category::Refused => t!(failure_refused).into(),
+        Category::Transport => t!(failure_transport).into(),
+        Category::Incomplete => t!(failure_incomplete).into(),
+        Category::Undecodable => t!(failure_undecodable).into(),
+        // The one category that says a number. It is this program's own configured ceiling, not
+        // anything the service reported, and without it the sentence names no remedy.
+        Category::TooLong => match diagnosis.ceiling {
+            Some(tokens) => t!(failure_too_long_at, tokens = tokens).into(),
+            None => t!(failure_too_long).into(),
+        },
+        Category::Unconfigured => t!(failure_unconfigured).into(),
+        Category::Blocked => t!(failure_blocked).into(),
+        Category::Workspace => t!(failure_workspace).into(),
+        Category::Internal => t!(failure_internal).into(),
     };
     let mut said = what.to_string();
     if let Some(status) = diagnosis.status {
@@ -1543,7 +1548,10 @@ impl Session {
         self.timing = by_turn;
     }
 
-    /// What each turn cost, by turn number, for writing the session down.
+    /// What each turn cost, by turn number.
+    ///
+    /// Read for writing the session down, for the per-turn block an export carries, and for what
+    /// [`Session::report_spend`] draws.
     pub fn spend_by_turn(&self) -> &std::collections::BTreeMap<usize, u64> {
         &self.spend
     }
@@ -5762,6 +5770,60 @@ impl Session {
         self.transcript.push(Entry::system(message));
     }
 
+    /// Put what each turn has spent in the transcript.
+    ///
+    /// What `/cost` answers, and the question the session total cannot: a total tells twenty even
+    /// turns and one turn that ran away apart not at all, and those want different fixes. The
+    /// share is beside each figure because that is the comparison a reader would otherwise do in
+    /// their head, one row at a time.
+    ///
+    /// Tokens rather than money, because nothing here knows what a token is charged at. No model
+    /// listing carries a price, and a prompt the service answered out of its own cache is billed
+    /// at a fraction of a fresh one while the record keeps no cache split per turn, so a figure in
+    /// money would be composed here rather than measured.
+    pub fn report_spend(&mut self) {
+        let total = self.tokens;
+        let mut lines = vec![crate::status::Line::new(
+            t!(status_this_session),
+            if total == 0 && self.spend.is_empty() {
+                t!(cost_nothing_spent).to_string()
+            } else {
+                format!(
+                    "{} · {}",
+                    t!(count_turns, count = self.turns),
+                    crate::status::tokens(total)
+                )
+            },
+        )];
+
+        for (turn, spent) in &self.spend {
+            let label = match turn {
+                0 => t!(cost_before_the_first_turn).to_string(),
+                number => t!(cost_turn, number = number),
+            };
+            let line = crate::status::Line::new(&label, crate::status::tokens(*spent));
+            lines.push(match total {
+                0 => line,
+                total => line.with_note(t!(cost_share, percent = spent * 100 / total)),
+            });
+        }
+
+        // What the total holds that the rows do not account for. A record written before turns
+        // were charged separately keeps the whole of it here, and a session resumed from one keeps
+        // the part it spent before the resume, so an empty breakdown is the far end of this case
+        // rather than a case of its own. Left out, the rows would read as an account of the total
+        // that quietly does not add up to it.
+        let unattributed = total.saturating_sub(self.spend.values().sum());
+        if unattributed > 0 {
+            lines.push(
+                crate::status::Line::new("", crate::status::tokens(unattributed))
+                    .with_note(t!(cost_unattributed)),
+            );
+        }
+
+        self.report(crate::status::Report { lines });
+    }
+
     /// Put a status report in the transcript, one note per line.
     ///
     /// In the transcript rather than over the screen, so it scrolls back with everything else and
@@ -9093,6 +9155,33 @@ mod tests {
         assert_eq!(s.transcript[1].speaker, Speaker::Assistant);
     }
 
+    /// "the model reached its output limit" leaves somebody guessing a budget nothing shows them.
+    /// The figure is what names the setting to raise, and it is this program's own configured
+    /// number rather than anything the service said, so repeating it gives nothing away.
+    #[test]
+    fn a_reply_stopped_at_a_ceiling_says_which_ceiling() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        let vague = failure_reason(Diagnosis::of(Category::TooLong));
+        assert!(
+            !vague.contains("8192") && !vague.contains("8,192"),
+            "a ceiling nobody measured was named anyway: {vague}"
+        );
+
+        // Two different ceilings, because a sentence that hard-coded one would pass with either.
+        for ceiling in [8_192_u64, 64_000] {
+            let said = failure_reason(Diagnosis::of(Category::TooLong).at_ceiling(ceiling));
+            assert!(
+                said.contains(&ceiling.to_string()),
+                "the ceiling that stopped the reply is not in {said}"
+            );
+            assert!(
+                said.contains(bravebot_config::env_var::OUTPUT_BUDGET),
+                "the setting that raises it is not in {said}"
+            );
+        }
+    }
+
     #[test]
     fn a_failure_also_returns_to_idle() {
         let mut s = session();
@@ -9589,6 +9678,160 @@ mod tests {
             }],
         });
         assert_eq!(s.transcript[0].text, "Session  a name");
+    }
+
+    /// What `/cost` put in the transcript, without the lines that were already there.
+    fn spending(session: &mut Session) -> Vec<String> {
+        let before = session.transcript.len();
+        session.report_spend();
+        session.transcript[before..]
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect()
+    }
+
+    /// The one line that carries a word, so a test names the row it means rather than its index.
+    fn row<'a>(lines: &'a [String], word: &str) -> &'a str {
+        let mut found = lines.iter().filter(|line| line.contains(word));
+        let line = found
+            .next()
+            .unwrap_or_else(|| panic!("no line says {word}: {lines:?}"));
+        assert!(found.next().is_none(), "{word} is on two lines: {lines:?}");
+        line
+    }
+
+    /// A session total tells twenty even turns and one turn that ran away apart not at all, and
+    /// those want different fixes. Only a figure per turn distinguishes them, so each turn's has
+    /// to reach a line of its own rather than being added into the total and lost.
+    #[test]
+    fn what_each_turn_spent_is_reported_turn_by_turn() {
+        let mut s = session();
+
+        s.type_char('a');
+        s.submit();
+        s.complete("first", Vec::new(), 1_000);
+
+        s.type_char('b');
+        s.submit();
+        s.complete("second", Vec::new(), 9_000);
+
+        let lines = spending(&mut s);
+
+        assert!(
+            row(&lines, "This session").contains("10.0k tokens"),
+            "the session total is wrong: {lines:?}"
+        );
+        assert!(
+            row(&lines, "Turn 1").contains("1.0k tokens"),
+            "the first turn's spend is wrong: {lines:?}"
+        );
+        assert!(
+            row(&lines, "Turn 2").contains("9.0k tokens"),
+            "the second turn's spend is wrong: {lines:?}"
+        );
+    }
+
+    /// The runaway turn is the reason to ask, and a column of raw counts leaves the reader
+    /// dividing each one by the total themselves to find it.
+    #[test]
+    fn each_turn_is_reported_as_a_share_of_the_session() {
+        let mut s = session();
+        s.restore_spend(
+            10_000,
+            std::collections::BTreeMap::from([(1, 1_000), (2, 9_000)]),
+        );
+
+        let lines = spending(&mut s);
+
+        assert!(
+            row(&lines, "Turn 1").contains("10%"),
+            "the first turn's share is wrong: {lines:?}"
+        );
+        assert!(
+            row(&lines, "Turn 2").contains("90%"),
+            "the second turn's share is wrong: {lines:?}"
+        );
+    }
+
+    /// An aside or a run asked before the first prompt is in the session total, so it is shown.
+    /// It is not a turn, and giving it a turn's number would file it under work nobody did.
+    #[test]
+    fn what_was_spent_before_the_first_turn_is_not_reported_as_a_turn() {
+        let mut s = session();
+        s.restore_spend(
+            1_000,
+            std::collections::BTreeMap::from([(0, 250), (1, 750)]),
+        );
+
+        let lines = spending(&mut s);
+
+        assert!(
+            row(&lines, "Before turn 1").contains("250 tokens"),
+            "the leading entry is wrong: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.contains("Turn 0")),
+            "the leading entry was given a turn number: {lines:?}"
+        );
+    }
+
+    /// A record written before turns were charged separately keeps a total and no breakdown. Read
+    /// as a session that spent nothing it would contradict the total on the line above it, and the
+    /// total is the figure that is real.
+    #[test]
+    fn a_total_with_no_breakdown_does_not_read_as_a_session_that_spent_nothing() {
+        let mut recorded = session();
+        recorded.restore_spend(4_200, std::collections::BTreeMap::new());
+        let with_a_total = spending(&mut recorded);
+
+        let spent_nothing = spending(&mut session());
+
+        assert!(
+            row(&with_a_total, "This session").contains("4.2k tokens"),
+            "the total went missing: {with_a_total:?}"
+        );
+        assert!(
+            row(&with_a_total, "not recorded against any turn").contains("4.2k tokens"),
+            "the whole total was left unaccounted for in silence: {with_a_total:?}"
+        );
+        assert_ne!(
+            with_a_total, spent_nothing,
+            "a session with a total said what a session with nothing says"
+        );
+    }
+
+    /// Resuming a record that kept no breakdown and then taking a turn leaves a session whose rows
+    /// account for a fraction of its total. The rows are read against that total, so a remainder
+    /// nobody names reads as arithmetic that does not work rather than as spend from before the
+    /// resume.
+    #[test]
+    fn spend_the_turns_do_not_account_for_is_reported_rather_than_dropped() {
+        let mut s = session();
+        s.restore_spend(10_000, std::collections::BTreeMap::from([(1, 2_000)]));
+
+        let lines = spending(&mut s);
+
+        assert!(
+            row(&lines, "not recorded against any turn").contains("8.0k tokens"),
+            "the unaccounted spend went missing: {lines:?}"
+        );
+    }
+
+    /// Asking before anything has been sent is an ordinary thing to do, and a row of zeroes reads
+    /// as a measurement rather than as an answer that nothing has happened.
+    #[test]
+    fn a_session_that_has_spent_nothing_says_so() {
+        let lines = spending(&mut session());
+
+        assert_eq!(
+            lines.len(),
+            1,
+            "a breakdown was drawn for no turns: {lines:?}"
+        );
+        assert!(
+            row(&lines, "This session").contains("nothing spent yet"),
+            "{lines:?}"
+        );
     }
 
     #[test]

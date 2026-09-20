@@ -15299,6 +15299,17 @@ fn page(body: &str) -> String {
     )
 }
 
+fn moved_to(location: &str) -> String {
+    format!(
+        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+}
+
+/// A redirect with nowhere to go, which ends the chain in a failure rather than another hop.
+fn moved_nowhere() -> String {
+    "HTTP/1.1 302 Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+}
+
 /// The property the whole tool rests on. A fetched page is content nobody vouched for, so the
 /// planner is handed a reference and never the bytes: a page that says "ignore your instructions"
 /// cannot say it to anything that would act on it.
@@ -15343,6 +15354,97 @@ fn a_fetched_page_never_reaches_the_planner() {
     assert!(
         !scratch.path.join("evil.txt").exists(),
         "the page's instruction was carried out"
+    );
+}
+
+/// The same property for the road a 200 does not take. A failed fetch is reported to the planner
+/// as the driver's own words, which are trusted and arrive verbatim, and a redirect puts the
+/// request on a URL a server wrote into a `Location` header. So the failure names the URL that was
+/// asked for: otherwise a header is a sentence the planner reads as though the driver wrote it.
+#[test]
+fn a_failed_fetch_names_the_url_that_was_asked_for_and_not_where_a_redirect_went() {
+    let scratch = Scratch::new("fetch-failed-redirect");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // Two replies from one server, which is the whole of what this takes: the first moves the
+    // request onto a URL of the server's choosing, and the second fails there.
+    let (site, _requests) =
+        serve_pages(vec![moved_to("/SENTINEL-REDIRECT-BYTES"), moved_nowhere()]);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/start"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the start page"),
+        &mut bravebot_agent::confirm::ApproveFetches,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("SENTINEL-REDIRECT-BYTES"),
+        "the redirect the server chose reached the planner's context: {second}"
+    );
+    // The whole sentence, since the URL on its own is already in the call the planner made.
+    assert!(
+        second.contains(&format!("error: fetching {site}/start failed")),
+        "the planner was not told which fetch failed: {second}"
+    );
+}
+
+/// A redirect off the approved host is refused, and the refusal is reported to the planner the
+/// same way a failure is. The host it names was taken out of the server's `Location` header, so
+/// saying it would be the same leak through the gate that stops the request.
+#[test]
+fn a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose() {
+    let scratch = Scratch::new("fetch-refused-redirect");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // Never reached: the gate refuses the hop before anything is sent to it.
+    let (site, _requests) = serve_pages(vec![moved_to("https://sentinel-redirect.test/landed")]);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/start"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the start page"),
+        &mut bravebot_agent::confirm::ApproveFetches,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("sentinel-redirect"),
+        "the host the server chose reached the planner's context: {second}"
+    );
+    // The whole sentence, since the URL on its own is already in the call the planner made.
+    assert!(
+        second.contains(&format!("error: fetching {site}/start failed")),
+        "the planner was not told which fetch was refused: {second}"
+    );
+    assert!(
+        second.contains("approved for 127.0.0.1"),
+        "the refusal did not say which host the fetch was for: {second}"
     );
 }
 

@@ -425,25 +425,37 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         if let Some(approved) = self.fetching.clone() {
             let host = crate::url::host_of(url).unwrap_or_default();
             let ruling = self.permissions.for_host(&host);
+            // A host that is not the approved one was taken out of a `Location` header, so the
+            // string is a server's own bytes and a refusal that repeated it would be writing
+            // them into whatever formats that refusal, which includes a message the planner
+            // reads. The approved host is what a person was shown, so a refusal names that.
+            let redirected = host != approved;
 
             if ruling == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny) {
                 return Err(self.deny(
                     "network",
                     Principle::IntegrityGate,
-                    format!("a rule in the settings file denies fetching from {host}"),
+                    if redirected {
+                        format!(
+                            "this fetch was approved for {approved} and redirected to a host a \
+                             rule in the settings file denies"
+                        )
+                    } else {
+                        format!("a rule in the settings file denies fetching from {host}")
+                    },
                 ));
             }
 
             // A redirect to somewhere else is a destination nobody saw. Allowed only where a rule
             // names it, which is a person having written that host down in advance.
-            if host != approved
+            if redirected
                 && ruling != crate::permissions::Decision::Ruled(crate::permissions::Ruling::Allow)
             {
                 return Err(self.deny(
                     "network",
                     Principle::IntegrityGate,
                     format!(
-                        "this fetch was approved for {approved} and redirected to {host}, \
+                        "this fetch was approved for {approved} and redirected somewhere else, \
                          which nobody was shown"
                     ),
                 ));
@@ -7301,6 +7313,48 @@ five
                 .before_network("https://elsewhere.test/landed")
                 .is_err(),
             "a fetch approved for one host followed a redirect to another"
+        );
+    }
+
+    /// A refusal's text is what a caller formats into whatever it is building, including a
+    /// message the planner reads. The host a redirect names was taken from a `Location` header,
+    /// so it is a server's own bytes and saying it here would put them there.
+    #[test]
+    fn a_refused_redirect_names_the_approved_host_and_not_the_one_a_server_chose() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &["WebFetch(domain:sentinel-denied.test)"],
+            &[],
+            &[],
+        ));
+
+        let start = "https://example.com/start";
+        policy.endorse_fetch(start);
+        policy.before_fetch(start).expect("the fetch was allowed");
+
+        // A host nobody ruled on: refused for being somewhere else.
+        let unruled = policy
+            .before_network("https://sentinel-elsewhere.test/landed")
+            .expect_err("a redirect off the approved host was allowed");
+        assert!(
+            !unruled.message.contains("sentinel-elsewhere"),
+            "the refusal repeated the host the server chose: {}",
+            unruled.message
+        );
+        assert!(
+            unruled.message.contains("example.com"),
+            "the refusal did not say which fetch it was about: {}",
+            unruled.message
+        );
+
+        // A host a rule denies: refused earlier, by the rule, and just as much a server's string.
+        let denied = policy
+            .before_network("https://sentinel-denied.test/landed")
+            .expect_err("a denied host was allowed");
+        assert!(
+            !denied.message.contains("sentinel-denied"),
+            "the refusal repeated the host the server chose: {}",
+            denied.message
         );
     }
 

@@ -750,6 +750,25 @@ environment-prod = prod
 environment-custom = custom
 
 
+## What /cost reports about each turn
+
+# One turn's share of the session, so the turn that ran away is the one that stands out. A figure
+# in tokens alone leaves the reader to divide it by the total themselves, and the whole reason to
+# ask is that one row is unlike the others.
+cost-share = { $percent }%
+cost-turn = Turn { $number }
+# What an aside or a run asked for before any prompt was sent. It is in the session total either
+# way, so it is shown rather than dropped, and it is not a turn, so it does not borrow a turn's
+# number.
+cost-before-the-first-turn = Before turn 1
+cost-nothing-spent = nothing spent yet
+# What the total holds that no turn's figure accounts for. A record written before turns were
+# charged separately keeps the whole of it here, and a session resumed from one keeps the part it
+# spent before the resume. Reported as a figure rather than left out, because the rows are read
+# against the total on the first line and a remainder nobody names reads as an arithmetic fault.
+cost-unattributed = not recorded against any turn
+
+
 ## The indicator drawn while a turn runs
 
 # How long the turn has been going. No hours: a turn that ran that long has gone wrong, and
@@ -883,6 +902,7 @@ watching-hint = { $chord } { $count } to open
 ## The commands a line beginning with a slash may be
 
 command-status = Report this session, what it may touch, and what it has spent
+command-cost = Show what each turn of this session has spent
 command-model = Choose which model to think with
 command-theme = Choose which theme paints the interface
 command-effort = Choose how hard to think before answering
@@ -1013,6 +1033,7 @@ failure-transport = the request did not get through
 failure-incomplete = the reply stopped before it was finished
 failure-undecodable = the reply could not be read
 failure-too-long = the model reached its output limit
+failure-too-long-at = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises
 failure-unconfigured = nothing here was configured to send the request
 failure-blocked = a gate here would not let the request out
 failure-workspace = the workspace could not be used

@@ -2497,6 +2497,18 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     }
                 }
                 let completion = completion?;
+                // A reply the ceiling stopped is kept for what it says, so the person has to be
+                // told that it stops short: the text arrives looking like an answer, and an answer
+                // that ends mid-sentence is worth nothing if it is read as a whole one. The
+                // backend carried no calls out of such a reply, so this round is the last.
+                if completion.cut_off {
+                    reporter.narration(
+                        "the model reached its output limit, so this answer stops where it did. \
+                         What it wrote is kept; raise BRAVEBOT_OUTPUT_BUDGET or ask for less in \
+                         one turn"
+                            .to_string(),
+                    );
+                }
                 tokens += completion.usage.total();
                 output_tokens += completion.usage.completion_tokens;
                 cached.add(completion.usage.cached);
