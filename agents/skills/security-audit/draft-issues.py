@@ -34,7 +34,8 @@ TITLE_LIMIT = shared.TITLE_LIMIT
 # Words that only make sense with what comes next, so a title ending on one has been cut rather than
 # shortened.
 DANGLING = re.compile(
-    r"(?:\s+(?:a|an|the|that|to|for|of|and|or|in|on|at|with|as|is|it|so|which|into|from|by))+$",
+    r"(?:\s+(?:a|an|the|that|to|for|of|and|or|in|on|at|with|as|is|it|so|which|into|from|by"
+    r"|than|rather|where|whose|because))+$",
     re.IGNORECASE,
 )
 
@@ -213,9 +214,13 @@ def title_for(finding):
         cut = title[:TITLE_LIMIT]
         # A title cut at a word boundary still dangles: "that interpolates Display for" ends on a
         # preposition whose object went over the limit. So prefer the last clause boundary that fits,
-        # and where there is none, drop the words that were leading somewhere.
-        comma = cut.rfind(", ")
-        title = cut[:comma] if comma > TITLE_LIMIT // 2 else cut.rsplit(" ", 1)[0]
+        # and where there is none, drop the words that were leading somewhere. A colon is as much a
+        # boundary as a comma, and a summary that has one usually says the mechanism before it.
+        boundary = max(cut.rfind(", "), cut.rfind("; "), cut.rfind(": "))
+        if boundary <= TITLE_LIMIT // 2:
+            # A conjunction is a boundary too, and the half after it is the half that went over.
+            boundary = max(cut.rfind(" and "), cut.rfind(" or "), cut.rfind(" but "))
+        title = cut[:boundary] if boundary > TITLE_LIMIT // 2 else cut.rsplit(" ", 1)[0]
         title = DANGLING.sub("", title).rstrip(" ,;:")
     return title
 

@@ -662,6 +662,42 @@ def test_titles():
             {"title": "`Labelled` now implements `PartialEq`, so content can be compared", "area": "trust"}
         ).startswith("trust: Labelled now implements PartialEq"),
     )
+    colon = drafts.title_for(
+        {
+            "clause": "LAYER-2",
+            "title": "LAYER-2's by-construction bracket justifies the clause from the properties of "
+            "Labelled: reading one takes a witness, and two accessors are public",
+        }
+    )
+    check(
+        "a summary that says the mechanism before a colon is cut at the colon",
+        colon.endswith("from the properties of Labelled"),
+        colon,
+    )
+    coordination = drafts.title_for(
+        {
+            "area": "delegation",
+            "title": "the drafter dereferences the place string a lane or a verifier wrote and "
+            "inlines seven lines of it into a body it posts to a public tracker",
+        }
+    )
+    check(
+        "half a coordination whose other half went over the limit is dropped",
+        coordination.endswith("a lane or a verifier wrote"),
+        coordination,
+    )
+    comparison = drafts.title_for(
+        {
+            "area": "infrastructure",
+            "title": "three containers that run with this whole tree are named by a movable tag "
+            "rather than by the digest the build was tested against",
+        }
+    )
+    check(
+        "a comparison cut before what it compares to does not end on 'rather than'",
+        comparison.endswith("by a movable tag"),
+        comparison,
+    )
 
 
 def test_a_name_stays_a_name():
