@@ -65,6 +65,13 @@ pub struct Diagnosis {
     /// Requests handed to egress for this call, including retries and capability probes.
     /// Zero means preparation failed first. A policy refusal counts as an attempt.
     pub attempts: Option<u32>,
+    /// The output ceiling that stopped the reply, where one did.
+    ///
+    /// This program's own configured figure rather than anything the service said, which is why
+    /// it may be repeated: a person told only that a limit was reached is told nothing they can
+    /// act on, and the number is what names the setting to raise. Absent for every other
+    /// category, and absent where the ceiling is not known.
+    pub ceiling: Option<u64>,
 }
 
 impl Diagnosis {
@@ -74,12 +81,19 @@ impl Diagnosis {
             category,
             status: None,
             attempts: None,
+            ceiling: None,
         }
     }
 
     /// The same, with the status a service answered with.
     pub fn with_status(mut self, status: u16) -> Self {
         self.status = Some(status);
+        self
+    }
+
+    /// The same, with the output ceiling that stopped the reply.
+    pub fn at_ceiling(mut self, ceiling: u64) -> Self {
+        self.ceiling = Some(ceiling);
         self
     }
 

@@ -57,11 +57,19 @@ pub enum BedrockError {
     /// Named by the failure the service reported rather than by a status: the status was sent and
     /// accepted before the reply began, so this is the only thing that says why it stopped.
     Reported { kind: String },
-    /// The model was cut off at the token ceiling.
+    /// The model was cut off at the token ceiling with nothing to show for it.
     ///
     /// Distinct from [`BedrockError::Incomplete`], which is a connection that died: this reply ended
     /// because it ran out of room, so sending it again unchanged produces the same result.
-    TooLong,
+    ///
+    /// Only where the reply said nothing before it stopped, which is what a model that spent the
+    /// whole ceiling on reasoning leaves. A reply that wrote anything is returned as
+    /// [`Completion::cut_off`] rather than as this, because throwing away what it did say is the
+    /// one outcome nobody asked for.
+    ///
+    /// Carries the ceiling that stopped it, since a person told only that a limit was reached is
+    /// told nothing they can act on: the figure is what names the setting to raise.
+    TooLong { ceiling: u64 },
     /// No model is configured, so there is nothing to send to.
     NoModel,
     /// The caller asked for the reply to stop arriving.
@@ -90,8 +98,11 @@ impl fmt::Display for BedrockError {
             Self::Reported { kind } => {
                 write!(f, "AWS stopped the reply part way through and reported {kind}")
             }
-            Self::TooLong => f.write_str(
-                "the model reached its output limit before finishing. Ask for less in one turn",
+            Self::TooLong { ceiling } => write!(
+                f,
+                "the model reached its output limit of {ceiling} tokens before finishing, and \
+                 wrote nothing on the way. Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less \
+                 in one turn"
             ),
             Self::NoModel => f.write_str(
                 "no Bedrock model is configured. Set ANTHROPIC_DEFAULT_OPUS_MODEL (or the sonnet or \
@@ -439,9 +450,7 @@ impl<'a> BedrockClient<'a> {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
             })?;
 
-        if parsed.stop_reason.as_deref() == Some(protocol::STOP_REASON_MAX_TOKENS) {
-            return Err(BedrockError::TooLong);
-        }
+        let cut_off = parsed.stop_reason.as_deref() == Some(protocol::STOP_REASON_MAX_TOKENS);
 
         let blocks = parsed
             .output
@@ -458,11 +467,14 @@ impl<'a> BedrockClient<'a> {
         }
 
         let (content, calls) = protocol::parts_of(&blocks);
+        let usage = parsed.usage.map(Usage::from).unwrap_or_default();
+        if cut_off {
+            return self.what_was_written(content, label, model, usage);
+        }
         if content.is_empty() && calls.is_empty() {
             return Err(BedrockError::NoContent);
         }
 
-        let usage = parsed.usage.map(Usage::from).unwrap_or_default();
         Ok(Completion {
             content: Labelled::new(content, label),
             // This API does not name the model back, so the one the request asked for is the one
@@ -471,6 +483,40 @@ impl<'a> BedrockClient<'a> {
             calls,
             context_tokens: usage.prompt_tokens,
             usage,
+            cut_off: false,
+        })
+    }
+
+    /// What a reply the ceiling stopped is worth keeping.
+    ///
+    /// The text, and never the calls. A reply cut off at the ceiling was cut off wherever the
+    /// model happened to be, so the last thing in it may be half a tool call: an argument stopped
+    /// mid-string is not an argument, and a call the model had not finished choosing is not one it
+    /// asked for. Dropping them also ends the turn, which is the right end: the planner did not
+    /// finish, and another round on a truncated thought is a round spent on a sentence nobody
+    /// wrote.
+    ///
+    /// Nothing written at all is the one case left as a failure. There is no reply to keep, so the
+    /// person gets the ceiling that stopped it instead, which is the thing they can change.
+    fn what_was_written(
+        &self,
+        content: String,
+        label: Label,
+        model: String,
+        usage: Usage,
+    ) -> Result<Completion, BedrockError> {
+        if content.is_empty() {
+            return Err(BedrockError::TooLong {
+                ceiling: self.config.output_limit(&model),
+            });
+        }
+        Ok(Completion {
+            content: Labelled::new(content, label),
+            model,
+            calls: Vec::new(),
+            context_tokens: usage.prompt_tokens,
+            usage,
+            cut_off: true,
         })
     }
 
@@ -657,7 +703,7 @@ impl<'a> BedrockClient<'a> {
         }
 
         if reply.stop_reason.as_deref() == Some(protocol::STOP_REASON_MAX_TOKENS) {
-            return Err(BedrockError::TooLong);
+            return self.what_was_written(reply.text, label, model, reply.usage);
         }
 
         let calls = reply.calls();
@@ -673,7 +719,29 @@ impl<'a> BedrockClient<'a> {
             calls,
             context_tokens: reply.usage.prompt_tokens,
             usage: reply.usage,
+            cut_off: false,
         })
+    }
+
+    /// The body one request carries, before anything signs it.
+    ///
+    /// Separate from [`BedrockClient::build`] so what a configuration puts in a request can be
+    /// read without a credential: everything else that method does needs the AWS CLI to have
+    /// answered, and the ceiling is decided here.
+    fn converse_for(&self, request: &ChatRequest, model: &str) -> protocol::ConverseRequest {
+        let converse = protocol::request_from(&request.messages, request.tools.as_deref())
+            .with_ceiling(self.config.output_limit(model))
+            .with_effort(request.effort.filter(|_| self.effort));
+        let converse = if request.conversation_is_sent_again {
+            converse
+        } else {
+            converse.without_the_conversation_breakpoint()
+        };
+        if self.breakpoints {
+            converse
+        } else {
+            converse.without_breakpoints()
+        }
     }
 
     /// The signed request for one attempt, and the model it names.
@@ -691,18 +759,7 @@ impl<'a> BedrockClient<'a> {
         }
         let model = self.model_for(request)?;
 
-        let converse = protocol::request_from(&request.messages, request.tools.as_deref())
-            .with_effort(request.effort.filter(|_| self.effort));
-        let converse = if request.conversation_is_sent_again {
-            converse
-        } else {
-            converse.without_the_conversation_breakpoint()
-        };
-        let converse = if self.breakpoints {
-            converse
-        } else {
-            converse.without_breakpoints()
-        };
+        let converse = self.converse_for(request, &model);
         let body =
             serde_json::to_vec(&converse).map_err(|e| BedrockError::Encode(e.to_string()))?;
 
@@ -1307,13 +1364,20 @@ mod tests {
 
     /// Hitting the ceiling is not a transport failure: sending the same request again produces the
     /// same truncation, so it must not be retried and must say what happened.
+    ///
+    /// What it says has to include the ceiling. "Ask for less in one turn" asks somebody to guess
+    /// a budget nothing shows them, so the figure and the name of the setting that raises it are
+    /// the whole difference between a report and an instruction.
     #[test]
     fn reaching_the_token_ceiling_is_not_retried() {
-        assert!(!worth_another_attempt(1, &BedrockError::TooLong));
+        let error = BedrockError::TooLong { ceiling: 8_192 };
+        assert!(!worth_another_attempt(1, &error));
+        let said = error.to_string();
+        assert!(said.contains("output limit"), "{said}");
+        assert!(said.contains("8192"), "the ceiling is not named: {said}");
         assert!(
-            BedrockError::TooLong.to_string().contains("output limit"),
-            "{}",
-            BedrockError::TooLong
+            said.contains(bravebot_config::env_var::OUTPUT_BUDGET),
+            "the setting that raises it is not named: {said}"
         );
     }
 
@@ -1424,7 +1488,7 @@ mod tests {
         }
 
         assert!(!client.worth_dropping_breakpoints(&BedrockError::Incomplete));
-        assert!(!client.worth_dropping_breakpoints(&BedrockError::TooLong));
+        assert!(!client.worth_dropping_breakpoints(&BedrockError::TooLong { ceiling: 8_192 }));
     }
 
     /// A reply the service abandoned says why in the frame that ends it. Reported as a truncation,
@@ -1725,6 +1789,160 @@ mod tests {
             }
         }
     }
+    /// One compiled-in figure for every model Bedrock fronts caps a reply far below what most of
+    /// them allow, and the number the block already carries is the one the model actually has.
+    /// A request that still sent the assumed figure would be indistinguishable from one that read
+    /// the block, so each case here states a different ceiling.
+    #[test]
+    fn a_request_carries_the_ceiling_its_own_model_states() {
+        use bravebot_config::bedrock::Entry;
+
+        let config = Bedrock::from_provider(
+            "us-west-2".to_string(),
+            None,
+            vec![
+                Entry {
+                    tier: None,
+                    id: "stated".to_string(),
+                    name: None,
+                    context_window: None,
+                    output_limit: Some(64_000),
+                },
+                Entry {
+                    tier: None,
+                    id: "also-stated".to_string(),
+                    name: None,
+                    context_window: None,
+                    output_limit: Some(32_000),
+                },
+                Entry {
+                    tier: None,
+                    id: "unstated".to_string(),
+                    name: None,
+                    context_window: None,
+                    output_limit: None,
+                },
+            ],
+        );
+        let egress = Egress::new();
+        let ceiling = |config: &Bedrock, model: &str| {
+            let client = BedrockClient::new(config, &egress);
+            client
+                .converse_for(&ChatRequest::new(model, vec![]), model)
+                .inference_config
+                .max_tokens
+        };
+
+        assert_eq!(ceiling(&config, "stated"), 64_000);
+        assert_eq!(ceiling(&config, "also-stated"), 32_000);
+        assert_eq!(
+            ceiling(&config, "unstated"),
+            bravebot_config::bedrock::OUTPUT_LIMIT,
+            "a model that stated no ceiling took another model's"
+        );
+
+        // A tier has no block to state one in, so the exported budget is the only thing that
+        // raises its ceiling, and it outranks what a block stated.
+        let exported = config.with_output_budget(Some(48_000));
+        for model in ["stated", "also-stated", "unstated"] {
+            assert_eq!(
+                ceiling(&exported, model),
+                48_000,
+                "{model} did not take the exported ceiling"
+            );
+        }
+    }
+
+    /// The reply the ceiling stopped is the turn's work, and throwing it away to report that it
+    /// was too long is the one outcome nobody asked for. What the model wrote is kept, marked as
+    /// stopping short, and billed.
+    ///
+    /// Its tool calls are not. A reply cut off wherever the model happened to be may end in half a
+    /// call, and a stream that carried no arguments at all becomes a call with none: `write_file`
+    /// with `{}` is a call this would otherwise hand to the turn loop to run.
+    #[test]
+    fn a_reply_the_ceiling_stopped_keeps_its_text_and_asks_for_no_tools() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        for streaming in [false, true] {
+            let body = if streaming {
+                let mut body = eventstream::tests::frame(
+                    "contentBlockDelta",
+                    br#"{"contentBlockIndex":0,"delta":{"text":"import pygame"}}"#,
+                );
+                body.extend(eventstream::tests::frame(
+                    "contentBlockStart",
+                    br#"{"contentBlockIndex":1,"start":{"toolUse":{"toolUseId":"a","name":"write_file"}}}"#,
+                ));
+                body.extend(eventstream::tests::frame(
+                    "messageStop",
+                    br#"{"stopReason":"max_tokens"}"#,
+                ));
+                body.extend(eventstream::tests::frame(
+                    "metadata",
+                    br#"{"usage":{"inputTokens":100,"outputTokens":7}}"#,
+                ));
+                body
+            } else {
+                br#"{"stopReason":"max_tokens","output":{"message":{"content":[
+                    {"text":"import pygame"},
+                    {"toolUse":{"toolUseId":"a","name":"write_file","input":{}}}
+                ]}},"usage":{"inputTokens":100,"outputTokens":7}}"#
+                    .to_vec()
+            };
+            let mut response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            response.extend(body);
+            let (http, received) = scripted_responses(vec![response]);
+            let config = config();
+            let egress = Egress::new();
+            let mut client = BedrockClient::new(&config, &egress);
+            client.test_request = Some(http);
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let request = ChatRequest::new("opus-arn", vec![]);
+            let completion = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            }
+            .expect("what the model wrote before the ceiling stopped it");
+
+            let shown = policy.authorise_display_release("a reply the ceiling stopped");
+            assert_eq!(
+                completion.content.clone().declassify(&shown),
+                "import pygame",
+                "streaming={streaming}: the partial reply was discarded"
+            );
+            assert!(
+                completion.cut_off,
+                "streaming={streaming}: a reply that stops short was reported as a whole one"
+            );
+            assert!(
+                completion.calls.is_empty(),
+                "streaming={streaming}: a call the model had not finished writing was kept: {:?}",
+                completion.calls
+            );
+            assert_eq!(completion.usage.total(), 107);
+            assert_eq!(client.attempts(), 1, "streaming={streaming}");
+            received.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
+    }
+
     /// Completed output-limit replies keep their bill for both transport modes.
     #[test]
     fn output_limit_keeps_completed_usage() {
@@ -1774,7 +1992,7 @@ mod tests {
                 client.complete(&mut policy, &request)
             }
             .unwrap_err();
-            assert!(matches!(error, BedrockError::TooLong));
+            assert!(matches!(error, BedrockError::TooLong { ceiling } if ceiling == 8_192));
             assert_eq!(client.completed_usage().unwrap().total(), 107);
             assert_eq!(client.attempts(), 1);
             received.recv_timeout(Duration::from_secs(2)).unwrap();
