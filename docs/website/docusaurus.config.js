@@ -28,7 +28,7 @@ const config = {
         docs: {
           routeBasePath: '/',
           sidebarPath: require.resolve('./sidebars.js'),
-          editUrl: 'https://github.com/brave/bravebot-docs/edit/main/',
+          editUrl: `${repository}/edit/main/docs/website/`,
         },
         blog: false,
         theme: {

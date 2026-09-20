@@ -1,16 +1,18 @@
 # Brave Bot documentation
 
-The documentation site for [Brave Bot](https://github.com/brave-experiments/bravebot), a
-general-purpose agent with structural resistance to indirect prompt injection.
+The documentation site for [Brave Bot](https://github.com/brave/bravebot), a general-purpose
+agent with structural resistance to indirect prompt injection.
 
-**Read it at [brave-experiments.github.io/bravebot-docs](https://brave-experiments.github.io/bravebot-docs/).**
+**Read it at [brave.github.io/bravebot](https://brave.github.io/bravebot/).**
 
-Built with [Docusaurus](https://docusaurus.io/) and published from `main` on every push.
+Built with [Docusaurus](https://docusaurus.io/). `.github/workflows/gh-pages.yml` builds this
+directory and publishes it on every push to `main`; nothing outside `docs/website/build` is
+served, and no `gh-pages` branch is involved.
 
 ### Getting started
 
 ```sh
-make init     # install dependencies and link agents/ into .claude/ and .bravebot/
+make install  # install dependencies
 make start    # serve locally with live reload
 ```
 
@@ -23,37 +25,28 @@ make start    # serve locally with live reload
 make build
 ```
 
-Generates static content into `build/`, which can be served by any static host. Broken
-links and anchors are build errors rather than warnings, so a clean build is also the
-correctness check, and it is the whole of what CI runs.
+Generates static content into `build/`, which can be served by any static host. Broken links
+and anchors are build errors rather than warnings, so a clean build is also the correctness
+check:
+
+```sh
+make check
+```
+
+From the repository root, `make check-docs` runs the same build the CI job runs, and
+`make check-all` includes it.
 
 ### Where the content comes from
 
-Everything here describes behaviour that is specified clause by clause in the
-[mini-specs](https://github.com/brave-experiments/bravebot/tree/main/docs/specs) in the
-main repository. Where the two disagree, the specs are the source of truth: fix this site
-rather than documenting around it.
+Everything here describes behaviour that is specified clause by clause in
+[docs/specs](../specs/README.md). Where the two disagree, the specs are the source of truth:
+fix this site rather than documenting around it.
 
-[`docs-updated-to-sha`](docs-updated-to-sha) records the bravebot commit this site was
-last brought up to.
-
-```sh
-make docs-updated-to-sha   # where the docs stand against bravebot
-make docs-changes          # what has landed since
-```
-
-Both read a bravebot checkout at `../bravebot`, or wherever `BRAVEBOT_REPO` points. To
-fold the gap in, run the [update-docs](agents/skills/update-docs/SKILL.md) skill: it
-reviews the intervening commits, updates the pages that went stale, then records the new
-commit and commits that too.
-
-### Agent configuration
-
-`agents/` is the checked-in source of truth for skills, `AGENTS.md` and each tool's
-settings. No tool reads it
-directly. `make init` symlinks it into `.claude/` for Claude Code and `.bravebot/` for
-bravebot, so a skill is written once and both find it. The links are generated and
-gitignored; `make agents` shows their state and `make unlink` removes them.
+`make check-spec` at the repository root holds the specs to this site. A clause no page
+documents is listed in [`undocumented-clauses.txt`](../../undocumented-clauses.txt), and
+`make write-undocumented` rewrites that list once a clause has been documented, or once one
+has been added. To fold a span of bravebot commits into these pages, run the
+[update-docs](../../agents/skills/update-docs/SKILL.md) skill.
 
 ## License
 
