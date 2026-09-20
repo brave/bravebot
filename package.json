@@ -18,12 +18,17 @@
     "npm/bin",
     "npm/scripts",
     "README.md",
-    "docs",
+    "docs/*.md",
+    "docs/best-practices",
+    "docs/design",
+    "docs/development",
+    "docs/specs",
     "LICENSE"
   ],
   "scripts": {
     "postinstall": "node npm/scripts/postinstall.js",
-    "lint:lockfile": "lockfile-lint --path package-lock.json --type npm --allowed-hosts npm --validate-https --validate-package-names --validate-integrity"
+    "lint:lockfile": "lockfile-lint --path package-lock.json --type npm --allowed-hosts npm --validate-https --validate-package-names --validate-integrity",
+    "lint:lockfile:website": "lockfile-lint --path docs/website/package-lock.json --type npm --allowed-hosts npm --validate-https --validate-package-names --validate-integrity --allowed-package-name-aliases image-size:image-size-next react-helmet-async:@slorber/react-helmet-async react-loadable:@docusaurus/react-loadable"
   },
   "engines": {
     "node": ">=18"

@@ -1,0 +1,8 @@
+{
+  "label": "Using Brave Bot",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "description": "Working in a session: the keys, the context you give it, your own shell, the transcript, and picking a session back up."
+  }
+}

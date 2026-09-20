@@ -1,0 +1,33 @@
+/**
+ * Any CSS included here is global. The classic template bundles Infima, which
+ * is a CSS framework designed for content-centric websites.
+ */
+
+:root {
+  --ifm-color-primary: #737ADE;
+  --ifm-color-primary-dark: #5A63D6;
+  --ifm-color-primary-darker: #4C54D2;
+  --ifm-color-primary-darkest: #353DAB;
+  --ifm-color-primary-light: #8D92E6;
+  --ifm-color-primary-lighter: #A0A5EB;
+  --ifm-color-primary-lightest: #C3C6F3;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+html[data-theme='dark'] {
+  --ifm-color-primary: #A0A5EB;
+  --ifm-color-primary-dark: #8D92E6;
+  --ifm-color-primary-darker: #737ADE;
+  --ifm-color-primary-darkest: #4C54D2;
+  --ifm-color-primary-light: #B3B7F0;
+  --ifm-color-primary-lighter: #C3C6F3;
+  --ifm-color-primary-lightest: #DDDFF8;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* Tables of keys and clauses read better without the default centring. */
+table th,
+table td {
+  text-align: left;
+}

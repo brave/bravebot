@@ -30,7 +30,9 @@ help:
 	@echo "  make check-spec            Check docs/specs against the implementation"
 	@echo "  make check-security        The security audit's deterministic half"
 	@echo "  make check-locales         Hold the catalogs to untranslated-messages.txt"
+	@echo "  make check-docs            Build the documentation website under docs/website"
 	@echo "  make write-unverified      Write unverified-clauses.txt, which check-spec holds it to"
+	@echo "  make write-undocumented    Write undocumented-clauses.txt, which check-spec holds it to"
 	@echo "  make write-untranslated    Write untranslated-messages.txt, which check-locales holds it to"
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
@@ -151,6 +153,13 @@ check-security:
 write-unverified:
 	python3 agents/skills/check-spec/check-spec.py --write-unverified
 
+# undocumented-clauses.txt, written from the specs. It is the list of clauses no website page documents,
+# and check-spec fails while it and the specs disagree, so this is what to run after documenting a
+# clause, or adding one.
+.PHONY: write-undocumented
+write-undocumented:
+	python3 agents/skills/check-spec/check-spec.py --write-undocumented
+
 # untranslated-messages.txt, written from the catalogs. It is the list of messages each translation
 # is missing, and check-locales fails while it and the catalogs disagree, so this is what to run
 # after translating a message, or after adding one to the reference that no catalog has yet.
@@ -234,12 +243,20 @@ check-windows:
 		cargo clippy --target x86_64-pc-windows-gnu --all-targets --all-features --locked \
 			-- -D warnings'
 
+# docusaurus.config.js throws on a broken link or anchor, so building the site is the whole
+# of its correctness check. --ignore-scripts because the site's dependency tree is a
+# thousand packages deep and none of them needs an install hook to build.
+.PHONY: check-docs
+check-docs:
+	npm --prefix docs/website ci --ignore-scripts
+	npm --prefix docs/website run build
+
 # Everything any CI enforces, in one target: the jobs in ci.yml plus the security
 # scan the organization-level workflow runs. Slower than `check` by a lot -- two
 # container builds and a scan -- so `check` stays the inner loop and this is the
 # before-you-push pass.
 .PHONY: check-all
-check-all: check check-spec check-security check-locales check-npm check-deps check-msrv check-windows check-reviewdog
+check-all: check check-spec check-security check-locales check-docs check-npm check-deps check-msrv check-windows check-reviewdog
 
 # What each catalog has of the reference, and what it is missing. The build says so too, in a
 # warning, but a warning is only printed when the build script actually runs, so a translator
@@ -459,6 +476,7 @@ github-release:
 clean:
 	cargo clean
 	rm -rf dist
+	rm -rf docs/website/build docs/website/.docusaurus
 
 # Configuration reaches the build as a BuildKit secret rather than a build argument,
 # which would record the signing key in the image metadata. The temporary file is
