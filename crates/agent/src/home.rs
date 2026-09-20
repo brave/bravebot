@@ -39,13 +39,27 @@ pub fn directory() -> Option<PathBuf> {
 /// `doctor` reports which one answered, because more than one can and the one in force is what
 /// somebody has to change to put the directory elsewhere.
 pub fn resolved() -> Option<(&'static str, PathBuf)> {
-    // Read directly rather than taking a dependency for two variables. Both absent in some daemon
-    // and container environments, which is a case that has to be handled anyway.
-    resolve(
-        PROFILE_VARIABLES
-            .iter()
-            .map(|variable| (*variable, std::env::var_os(variable))),
-    )
+    resolve(from_the_environment())
+}
+
+/// The user's profile directory itself, or `None` when the platform names nowhere.
+///
+/// The directory [`directory`] sits inside, and the only answer here that is not about what this
+/// program keeps. It is what a leading `~` stands for: a home-relative path somebody writes names
+/// a file in their home, and answering with the state directory would send every one of them into
+/// `~/.bravebot` instead (CMDLINE-4).
+pub fn profile() -> Option<PathBuf> {
+    named_profile(from_the_environment()).map(|(_, profile)| profile)
+}
+
+/// The variables the platform states a profile directory in, with what each holds here.
+///
+/// Read directly rather than taking a dependency for two variables. Both absent in some daemon
+/// and container environments, which is a case that has to be handled anyway.
+fn from_the_environment() -> impl Iterator<Item = (&'static str, Option<OsString>)> {
+    PROFILE_VARIABLES
+        .iter()
+        .map(|variable| (*variable, std::env::var_os(variable)))
 }
 
 /// The same answer from the values rather than from the variables.
@@ -54,18 +68,25 @@ pub fn resolved() -> Option<(&'static str, PathBuf)> {
 /// test that set one would have to take a lock against every other test in the binary, restore what
 /// was there, and step outside safe Rust to do it, all to check a rule that is a function of a
 /// couple of strings.
+fn resolve(
+    named: impl IntoIterator<Item = (&'static str, Option<OsString>)>,
+) -> Option<(&'static str, PathBuf)> {
+    named_profile(named).map(|(variable, profile)| (variable, profile.join(DIRECTORY)))
+}
+
+/// Which variable names the profile directory, and what it names, before `DIRECTORY` is joined on.
 ///
 /// An empty value names nothing, so it is passed over rather than joined onto: joining would put the
 /// user's own files in `/.bravebot`, and stopping there would lose a profile directory the platform
 /// does name to a variable some shell exported empty.
-fn resolve(
+fn named_profile(
     named: impl IntoIterator<Item = (&'static str, Option<OsString>)>,
 ) -> Option<(&'static str, PathBuf)> {
     named
         .into_iter()
         .filter_map(|(variable, value)| Some((variable, value?)))
         .find(|(_, value)| !value.is_empty())
-        .map(|(variable, value)| (variable, Path::new(&value).join(DIRECTORY)))
+        .map(|(variable, value)| (variable, Path::new(&value).to_path_buf()))
 }
 
 /// The user's own directory when something may be written into it, or `None` when nothing may be.

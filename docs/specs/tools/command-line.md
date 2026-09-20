@@ -217,6 +217,15 @@ thousand paths in front of a reader who will approve them unread.
 Ignored directories are ignored the way the tree walk ignores them, so `**` does not descend into
 `.git` or `node_modules`.
 
+**A leading `~` stands for the person's home directory**, which is the directory `~/.bravebot`
+sits inside and never that directory itself. `run` is given it separately from the state directory
+it is given everything else, because a home-relative path the planner writes names a file of the
+person's own: resolved against the state directory, every one of them would instead name a file in
+the directory holding this program's settings, credentials and session records. A delegate resolves
+a `~` against the directory its parent did, and the interface expands a `~` somebody types against
+the same answer, so the two spellings cannot name different files. A machine naming no home
+directory refuses the `~` rather than inventing one.
+
 **Why bounded.** An approval prompt long enough that nobody reads it is a prompt that grants
 everything and asks nothing.
 
@@ -233,6 +242,11 @@ everything and asks nothing.
 `verified-by: bravebot_agent::cmdline::a_range_counts_and_keeps_the_padding_it_was_written_with`
 `verified-by: bravebot_agent::cmdline::a_leading_tilde_becomes_the_home_directory`
 `verified-by: bravebot_agent::cmdline::a_tilde_with_no_home_to_stand_for_is_refused`
+`verified-by: bravebot_agent::home::the_profile_directory_is_the_home_itself_rather_than_the_state_directory`
+`verified-by: bravebot_agent::home::an_absent_home_names_no_profile_directory_for_a_tilde`
+`verified-by: bravebot_agent::turn::a_tilde_in_a_command_line_stands_for_the_home_directory_and_not_the_state_directory`
+`verified-by: bravebot_agent::turn::a_delegate_resolves_a_tilde_against_the_home_its_parent_did`
+`verified-by: bravebot_tui::app::a_typed_tilde_and_a_compiled_one_stand_for_the_same_directory`
 
 <a id="CMDLINE-5"></a>
 ### CMDLINE-5: a redirection target is a write destination and takes the write gates
