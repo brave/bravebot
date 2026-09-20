@@ -243,15 +243,18 @@ check-windows:
 		cargo clippy --target x86_64-pc-windows-gnu --all-targets --all-features --locked \
 			-- -D warnings'
 
+# docusaurus.config.js throws on a broken link or anchor, so building the site is the whole
+# of its correctness check. --ignore-scripts because the site's dependency tree is a
+# thousand packages deep and none of them needs an install hook to build.
+.PHONY: check-docs
+check-docs:
+	npm --prefix docs/website ci --ignore-scripts
+	npm --prefix docs/website run build
+
 # Everything any CI enforces, in one target: the jobs in ci.yml plus the security
 # scan the organization-level workflow runs. Slower than `check` by a lot -- two
 # container builds and a scan -- so `check` stays the inner loop and this is the
 # before-you-push pass.
-.PHONY: check-docs
-check-docs:
-	npm --prefix docs/website ci
-	npm --prefix docs/website run build
-
 .PHONY: check-all
 check-all: check check-spec check-security check-locales check-docs check-npm check-deps check-msrv check-windows check-reviewdog
 

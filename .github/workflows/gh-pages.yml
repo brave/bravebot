@@ -36,7 +36,7 @@ jobs:
           cache-dependency-path: docs/website/package-lock.json
 
       - name: Install dependencies
-        run: npm --prefix docs/website ci
+        run: npm --prefix docs/website ci --ignore-scripts
 
       # docusaurus.config.js throws on a broken link or anchor, so this step is the whole
       # of the site's correctness check as well as its build.

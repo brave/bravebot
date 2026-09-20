@@ -153,9 +153,11 @@ jobs:
           cache: npm
           cache-dependency-path: docs/website/package-lock.json
 
+      # --ignore-scripts because this job runs on a pull request, which means it runs the
+      # install hooks of whatever a fork put in the lockfile. The site builds without them.
       - name: Build documentation website
         run: |
-          npm --prefix docs/website ci
+          npm --prefix docs/website ci --ignore-scripts
           npm --prefix docs/website run build
 
   # The mechanical half of docs/specs, which decides nothing a person has to read a diff for:
