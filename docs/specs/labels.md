@@ -16,7 +16,7 @@ guards:
       - crates/agent/src/workspace.rs: 6
       - crates/agent/tests/workspace.rs: 27
       - crates/aichat/src/lib.rs: 4
-      - crates/bedrock/src/lib.rs: 4
+      - crates/bedrock/src/lib.rs: 5
       - crates/core/src/policy.rs: 80
       - crates/core/src/slot.rs: 4
       - crates/core/src/value.rs: 7
