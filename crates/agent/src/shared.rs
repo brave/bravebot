@@ -101,17 +101,6 @@ pub struct Borrowed<'m, 'a, T: ?Sized> {
     inference: Vec<crate::timing::Interval>,
 }
 
-impl<T: ?Sized> Clone for Borrowed<'_, '_, T> {
-    fn clone(&self) -> Self {
-        Self {
-            lent: self.lent,
-            from: self.from,
-            spent: self.spent,
-            inference: self.inference.clone(),
-        }
-    }
-}
-
 impl<T: Sink + ?Sized> Sink for Borrowed<'_, '_, T> {
     /// Both under one lock, so a record and the run it belongs to cannot be separated by another
     /// run recording in between. The same reason the reports below announce whose they are.
