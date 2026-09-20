@@ -1,4 +1,4 @@
-//! Keeping the imported credentials in a mode-0600 file under `~/.bravebot`.
+//! Keeping the imported credentials in a file under `~/.bravebot` that no other account can read.
 //!
 //! # One batch, whichever channel it came from
 //!
@@ -271,23 +271,306 @@ pub fn save(credentials: &StoredCredentials) -> Result<(), StoreError> {
         .map_err(|e| unusable(format!("{}: {e}", path.display())))
 }
 
+/// Write the batch, replacing whatever was there.
+///
+/// Windows has no mode, so what says the same thing is an access-control list, and the list is asked
+/// for as the file is created rather than set afterwards: the other order leaves the secret readable
+/// by whatever the directory grants for the moment in between. [`dacl_granting_only`] is the list.
+#[cfg(windows)]
+pub fn save(credentials: &StoredCredentials) -> Result<(), StoreError> {
+    use std::io::Write;
+
+    let path = path()?;
+    let unusable = |detail: String| StoreError::Unusable { detail };
+
+    // The directory is left with whatever the profile directory grants it, which is the cost
+    // state-directory.md records for a platform where the mode is not there to be set: what else is
+    // kept in there is decided by the crates that write it, not by this one. The file's own list
+    // does not depend on the directory's, which is why it is protected below.
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| unusable(format!("{}: {e}", parent.display())))?;
+    }
+
+    let mut file = acl::create_granted_to_this_account_only(&path)
+        .map_err(|e| unusable(format!("{}: {e}", path.display())))?;
+
+    file.write_all(encode(credentials).as_bytes())
+        .map_err(|e| unusable(format!("{}: {e}", path.display())))
+}
+
+/// The access-control list the credential file is kept under, written as SDDL.
+///
+/// `D:` opens the list and `P` protects it, so nothing the directory above offers is added to what
+/// follows: a profile directory on a shared or a roaming volume can carry an inheritable entry for
+/// `Users`, and a list that took it would hand a bearer token to every account on the machine. `A`
+/// allows and `FA` is full access to a file, so the one entry is the one account, and an account
+/// with no entry in a protected list is granted nothing.
+///
+/// A string handed to the platform's parser rather than a list built entry by entry, so that what is
+/// granted is decided by something a test can call anywhere. Nothing else in this function can be
+/// exercised off Windows, and `make check-windows` compiles it without running it.
+#[cfg(any(windows, test))]
+fn dacl_granting_only(account: &str) -> String {
+    format!("D:P(A;;FA;;;{account})")
+}
+
 /// Refused, because there is nothing here that can keep the secret to the user.
 ///
-/// The Unix path creates the file 0600 before a byte is written, and there is no equivalent on this
-/// target: `std::os::unix` does not exist, and Windows wants a restrictive DACL, which is not
-/// written yet. The file holds a bearer token, so writing it under whatever permissions it happened
-/// to inherit is worse than not writing it — and doing that silently is worse still, since nothing
-/// would ever say the secret is unprotected. This refuses instead, and the caller reports it.
+/// Unix creates the file 0600 and Windows creates it granted to one account, both before a byte is
+/// written, and there is no equivalent on this target: `std::os::unix` does not exist and neither
+/// does the Win32 call. The file holds a bearer token, so writing it under whatever permissions it
+/// happened to inherit is worse than not writing it, and doing that silently is worse still, since
+/// nothing would ever say the secret is unprotected. This refuses instead, and the caller reports it.
 ///
 /// Reading stays available: an existing file is no less safe for being read, and a batch imported
 /// elsewhere should still work here.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub fn save(_credentials: &StoredCredentials) -> Result<(), StoreError> {
     Err(StoreError::Unusable {
         detail: "this platform has no way to restrict the file to your account, and the \
                  credentials are a bearer token, so they were not written"
             .to_string(),
     })
+}
+
+/// The Win32 calls behind the Windows [`save`], the only unsafe in this crate outside the helper
+/// the tests point `HOME` with.
+///
+/// Every entry point here is a thin wrapper reporting `GetLastError` as an [`std::io::Error`], so the
+/// caller above reads the same as the Unix one. What the list *says* is [`super::dacl_granting_only`]
+/// instead, so the decision a reviewer cares about is not inside an unsafe block.
+#[cfg(windows)]
+mod acl {
+    use std::ffi::OsStr;
+    use std::fs::File;
+    use std::io::{Error, Result};
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use std::path::Path;
+    use windows_sys::Win32::Foundation::{
+        ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, GENERIC_WRITE, INVALID_HANDLE_VALUE, LocalFree,
+    };
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+        SDDL_REVISION_1, SE_FILE_OBJECT, SetSecurityInfo,
+    };
+    use windows_sys::Win32::Security::{
+        ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetTokenInformation,
+        PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+        TOKEN_QUERY, TOKEN_USER, TokenUser,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        OPEN_ALWAYS, WRITE_DAC,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    /// Open `path`, creating it if it is not there, reachable by the account this process runs as and
+    /// by no other, and empty ready to be written.
+    pub fn create_granted_to_this_account_only(path: &Path) -> Result<File> {
+        let descriptor = SecurityDescriptor::of(&super::dacl_granting_only(&current_account()?))?;
+        let file = open(path, &descriptor)?;
+        // The list asked for in the open is the list a file gets when the open creates it, and says
+        // nothing about one already there: a file copied in from another machine carries whatever the
+        // directory it landed in offers, an inheritable entry for `Users` included. So it is set again
+        // on the handle, before anything is written.
+        descriptor.apply_to(&file)?;
+        // Emptied once the list is settled rather than by the open, so that a batch somebody copied
+        // here is merely unwritten and not destroyed if setting the list fails. Importing again is
+        // how a lost batch is replaced, and this is the platform that cannot import.
+        file.set_len(0)?;
+        Ok(file)
+    }
+
+    /// Open `path` for writing, creating it if it is not there, asking for `descriptor` as it is
+    /// created.
+    #[allow(unsafe_code)]
+    fn open(path: &Path, descriptor: &SecurityDescriptor) -> Result<File> {
+        let path = wide(path.as_os_str());
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor.0,
+            bInheritHandle: 0,
+        };
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let handle = unsafe {
+            CreateFileW(
+                path.as_ptr(),
+                // The right to set the list as well as the right to write the bytes, since the list
+                // is set again once the file is open.
+                GENERIC_WRITE | WRITE_DAC,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                &attributes,
+                OPEN_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(Error::last_os_error());
+        }
+        // Sound because the handle is the one this call just opened, checked against the value it
+        // reports a failure with, and is owned by nothing else.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        Ok(unsafe { File::from_raw_handle(handle) })
+    }
+
+    /// The account this process runs as, written the way an entry in a list names one.
+    ///
+    /// Taken from the process token rather than from a user name, because a name is not what the list
+    /// holds and the same name can belong to two accounts, one on the machine and one in a domain.
+    #[allow(unsafe_code)]
+    fn current_account() -> Result<String> {
+        // Sound because a call that returns nonzero has written an open handle nothing else owns,
+        // which is what [`OwnedHandle`] takes responsibility for closing.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let token = unsafe {
+            let mut token = std::ptr::null_mut();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                return Err(Error::last_os_error());
+            }
+            OwnedHandle::from_raw_handle(token)
+        };
+
+        // An account is a variable-length value, so its length is asked for before there is anywhere
+        // to put it, and the call that asks fails saying so.
+        let mut length = 0;
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let measured = unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenUser,
+                std::ptr::null_mut(),
+                0,
+                &mut length,
+            )
+        };
+        if measured == 0 {
+            let no_room = Error::last_os_error();
+            if no_room.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) {
+                return Err(no_room);
+            }
+        }
+
+        // Words rather than bytes, so the struct written into it is aligned as it expects.
+        let mut buffer = vec![0u64; (length as usize).div_ceil(size_of::<u64>()).max(1)];
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let read = unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenUser,
+                buffer.as_mut_ptr().cast(),
+                length,
+                &mut length,
+            )
+        };
+        if read == 0 {
+            return Err(Error::last_os_error());
+        }
+
+        // Sound because the call above returned success, which means it wrote a whole `TOKEN_USER`
+        // and the account it points at into this buffer, and a `Vec<u64>` is aligned for both. The
+        // string the SID is written to is allocated by the call that writes it, null-terminated, and
+        // freed here.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        unsafe {
+            let user: *const TOKEN_USER = buffer.as_ptr().cast();
+            let mut written = std::ptr::null_mut();
+            if ConvertSidToStringSidW((*user).User.Sid, &mut written) == 0 {
+                return Err(Error::last_os_error());
+            }
+            let mut end = written;
+            while *end != 0 {
+                end = end.add(1);
+            }
+            let account = String::from_utf16_lossy(std::slice::from_raw_parts(
+                written,
+                end.offset_from(written) as usize,
+            ));
+            LocalFree(written.cast());
+            Ok(account)
+        }
+    }
+
+    /// A list the platform parsed out of its written form, freed when it goes out of scope.
+    struct SecurityDescriptor(PSECURITY_DESCRIPTOR);
+
+    impl SecurityDescriptor {
+        /// Parse SDDL into the form a file takes.
+        #[allow(unsafe_code)]
+        fn of(sddl: &str) -> Result<Self> {
+            let sddl = wide(OsStr::new(sddl));
+            let mut descriptor = std::ptr::null_mut();
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+            let parsed = unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    sddl.as_ptr(),
+                    SDDL_REVISION_1,
+                    &mut descriptor,
+                    std::ptr::null_mut(),
+                )
+            };
+            if parsed == 0 {
+                return Err(Error::last_os_error());
+            }
+            Ok(Self(descriptor))
+        }
+
+        /// Replace the list on an open file with this one, and stop it inheriting any other.
+        ///
+        /// A descriptor that named no list at all would answer nothing here, and a file with no list
+        /// grants every account everything, so that answer is an error rather than a token written
+        /// out in the open.
+        #[allow(unsafe_code)]
+        fn apply_to(&self, file: &File) -> Result<()> {
+            let mut dacl: *mut ACL = std::ptr::null_mut();
+            let mut present = 0;
+            let mut defaulted = 0;
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+            let read = unsafe {
+                GetSecurityDescriptorDacl(self.0, &mut present, &mut dacl, &mut defaulted)
+            };
+            if read == 0 {
+                return Err(Error::last_os_error());
+            }
+            if present == 0 || dacl.is_null() {
+                return Err(Error::other(
+                    "names no account, so it would grant every account",
+                ));
+            }
+
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+            let set = unsafe {
+                SetSecurityInfo(
+                    file.as_raw_handle(),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    dacl,
+                    std::ptr::null(),
+                )
+            };
+            if set != ERROR_SUCCESS {
+                return Err(Error::from_raw_os_error(set as i32));
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for SecurityDescriptor {
+        #[allow(unsafe_code)]
+        fn drop(&mut self) {
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+            unsafe { LocalFree(self.0) };
+        }
+    }
+
+    /// A null-terminated UTF-16 copy, which is what every call here reads a string as.
+    fn wide(text: &OsStr) -> Vec<u16> {
+        text.encode_wide().chain(std::iter::once(0)).collect()
+    }
 }
 
 /// Read the batch.
@@ -451,9 +734,9 @@ pub fn clear() -> Result<(), StoreError> {
     }
 }
 
-/// Only [`save`] writes, and only the Unix build of it exists, so on a target without one this is
-/// reachable from the tests alone.
-#[cfg(any(unix, test))]
+/// Only [`save`] writes, and the target that has neither a mode nor an access-control list has a
+/// [`save`] that refuses, so there this is reachable from the tests alone.
+#[cfg(any(unix, windows, test))]
 fn encode(credentials: &StoredCredentials) -> String {
     serde_json::json!({
         "version": 1,
@@ -933,6 +1216,24 @@ mod tests {
                 parent.display()
             );
         });
+    }
+
+    /// PREM-7: a Windows file has no mode, so what keeps this one to the account that imported it is
+    /// the access-control list it is created with. One entry is one account granted, and `P` protects
+    /// the list, so an inheritable entry carried by the directory above (`Users`, on a shared or a
+    /// roaming profile volume) is not added to it. Losing either would write a bearer token every
+    /// account on the machine can read.
+    ///
+    /// Asserted on the list rather than on a file written on Windows because the suite is not run on
+    /// that target at all: `make check-windows` compiles and lints it and stops there.
+    #[test]
+    fn the_windows_list_grants_one_account_and_inherits_nothing() {
+        // An account as `ConvertSidToStringSidW` writes the one this process runs as.
+        let account = "S-1-5-21-2127521184-1604012920-1887927527-72713";
+        assert_eq!(
+            dacl_granting_only(account),
+            "D:P(A;;FA;;;S-1-5-21-2127521184-1604012920-1887927527-72713)"
+        );
     }
 
     /// Discarding an import must remove the secret from disk, and asking twice is not an error:

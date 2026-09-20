@@ -14,3 +14,7 @@ rand = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 ureq = { workspace = true }
+
+# Windows has no file mode, so the access-control list that stands in for one is set through these.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }

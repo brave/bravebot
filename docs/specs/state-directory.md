@@ -160,8 +160,10 @@ that invented a fallback would be the case above, whichever crate it happened in
   where that is felt, and the prompt history is the file that matters, since it holds every path,
   branch name and pasted fragment somebody has typed. `doctor` reports which of the two a machine has, so
   this is a weakness a user can read rather than one only recorded here. An imported subscription is
-  the exception: it is a bearer token, so a platform whose mode cannot be set has it refused rather
-  than written, which [premium-credentials.md](premium-credentials.md) records.
+  the exception: it is a bearer token, so it is restricted to one account by whatever the platform
+  does have (a mode on Unix, an access-control list on Windows) and refused rather than written where
+  it has neither, which [premium-credentials.md](premium-credentials.md) records. That buys the one
+  file and not the directory holding it, which is why the sentence above still stands.
 - **A file this program only reads keeps whatever mode it arrived with.** STATE-1 reaches a file as
   something here writes it, and `settings.json`, the standing instructions and the skills are put in
   the directory by the user rather than written by this program, so one placed there at the umask
