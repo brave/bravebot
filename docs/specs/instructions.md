@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/preamble.rs
   - crates/agent/src/home.rs
+documented-by: docs/website/docs/customize/instructions.md
 ---
 
 ## Scope

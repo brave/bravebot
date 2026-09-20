@@ -14,6 +14,7 @@ guards:
   - symbol: Task::with_permission_mode
   - symbol: Session::allowing_bypass
   - symbol: Session::cycle_permission_mode
+documented-by: docs/website/docs/security/permissions.md
 ---
 
 ## Scope

@@ -12,6 +12,7 @@ governs:
   - crates/tui/src/config_prompt.rs
   - crates/tui/src/keybindings.rs
   - crates/config/src/settings.rs
+documented-by: docs/website/docs/using/interactive-mode.md
 ---
 
 ## Scope

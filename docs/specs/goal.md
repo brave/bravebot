@@ -13,6 +13,7 @@ guards:
   - symbol: Session::goal_not_met
   - symbol: goal::assess
   - symbol: goal::read
+documented-by: docs/website/docs/reference/commands.md
 ---
 
 ## Scope

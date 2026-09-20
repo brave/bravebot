@@ -14,6 +14,9 @@ guards:
   - symbol: Policy::adopt_from_delegate
   - symbol: Policy::sink
   - symbol: Task::delegated
+documented-by:
+  - docs/website/docs/how-it-works.md
+  - docs/website/docs/reference/tools.md
 ---
 
 ## Scope

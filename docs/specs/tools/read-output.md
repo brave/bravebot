@@ -6,6 +6,9 @@ governs:
   - crates/core/src/policy.rs
 guards:
   - symbol: Policy::read_output
+documented-by:
+  - docs/website/docs/reference/tools.md
+  - docs/website/docs/security/permissions.md
 ---
 
 ## Scope

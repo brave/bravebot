@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/render.rs
   - crates/tui/src/state.rs
   - crates/tui/src/editor.rs
+documented-by: docs/website/docs/using/transcript.md
 ---
 
 ## Scope

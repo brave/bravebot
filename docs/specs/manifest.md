@@ -17,6 +17,9 @@ guards:
   - symbol: Policy::adopt_manifest
   - symbol: Policy::quarantine
   - symbol: Manifest::routing
+documented-by:
+  - docs/website/docs/using/headless.md
+  - docs/website/docs/using/sessions.md
 ---
 
 ## Scope

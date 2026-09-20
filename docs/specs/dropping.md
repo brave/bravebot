@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/dropped.rs
   - crates/tui/src/app.rs
+documented-by: docs/website/docs/using/context.md
 ---
 
 ## Scope

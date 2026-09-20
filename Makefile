@@ -34,7 +34,6 @@ help:
 	@echo "  make docs-changes          What has landed in the specs since the site was updated"
 	@echo "  make docs-updated-to-sha   The commit the documentation site is current as of"
 	@echo "  make write-unverified      Write unverified-clauses.txt, which check-spec holds it to"
-	@echo "  make write-undocumented    Write undocumented-clauses.txt, which check-spec holds it to"
 	@echo "  make write-untranslated    Write untranslated-messages.txt, which check-locales holds it to"
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
@@ -136,9 +135,11 @@ check-spec:
 
 # The deterministic half of the security audit. It answers the questions check-spec cannot: whether
 # two documents agree about how many exceptions to the rule are admitted, whether anything reaches
-# into a Labelled, whether a spec pins the constructors as well as the releases, and whether every
-# workflow step is on a commit rather than a tag somebody else can move. No model takes part, so it
-# belongs in CI. The lanes that read code are the skill, and a person runs those.
+# into a Labelled, whether a spec pins the constructors as well as the releases, whether every
+# workflow step is on a commit rather than a tag somebody else can move, and whether a job holding
+# `id-token: write` or a secret installs or runs an npm dependency, which every step in that job
+# could read the credential from. No model takes part, so it belongs in CI. The lanes that read
+# code are the skill, and a person runs those.
 #
 # It passes on this tree now that `Labelled::trusted` has a `guards` entry beside `Labelled::new`,
 # so ci.yml runs it and check-all has it below. It was held out of both while it failed, because a
@@ -154,13 +155,6 @@ check-security:
 .PHONY: write-unverified
 write-unverified:
 	python3 agents/skills/check-spec/check-spec.py --write-unverified
-
-# undocumented-clauses.txt, written from the specs. It is the list of clauses no website page documents,
-# and check-spec fails while it and the specs disagree, so this is what to run after documenting a
-# clause, or adding one.
-.PHONY: write-undocumented
-write-undocumented:
-	python3 agents/skills/check-spec/check-spec.py --write-undocumented
 
 # untranslated-messages.txt, written from the catalogs. It is the list of messages each translation
 # is missing, and check-locales fails while it and the catalogs disagree, so this is what to run

@@ -6,6 +6,7 @@ governs:
   - crates/tui/src/entries.rs
   - crates/tui/src/state.rs
   - crates/cli/src/main.rs
+documented-by: docs/website/docs/using/context.md
 ---
 
 ## Scope

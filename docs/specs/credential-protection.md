@@ -8,6 +8,9 @@ governs:
   - crates/bedrock/src/credentials.rs
 guards:
   - symbol: Secret::expose
+documented-by:
+  - docs/website/docs/customize/configuration.md
+  - docs/website/docs/security/security.md
 ---
 
 ## Scope

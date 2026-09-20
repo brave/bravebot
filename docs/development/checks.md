@@ -40,10 +40,12 @@ writes.
 
 `make check-security` decides the things `check-spec` structurally cannot: whether two documents
 agree about how many exceptions to the rule are admitted, whether a trait reaches into a `Labelled`,
-whether a spec pins the constructors of one as well as the releases, and whether every workflow step
-is on a commit rather than a tag its owner can move. CI runs it too, so a pull request that moves a
-workflow step onto a movable tag, or that drops the entry pinning a constructor, fails rather than
-holding only for whoever remembers to run this. It is the deterministic half of the
+whether a spec pins the constructors of one as well as the releases, whether every workflow step
+is on a commit rather than a tag its owner can move, and whether a job holding `id-token: write` or a
+secret installs or runs an npm dependency, which every step in that job could read the credential
+from. CI runs it too, so a pull request that moves a workflow step onto a movable tag, that puts an
+install back beside the publish credential, or that drops the entry pinning a constructor, fails
+rather than holding only for whoever remembers to run this. It is the deterministic half of the
 [security-audit skill](../../agents/skills/security-audit/SKILL.md); the lanes that read code are
 the other half, and a person runs those. Run it before a commit that touches a label,
 `.github/workflows`, or the trust specs.

@@ -13,15 +13,50 @@ on:
         required: true
         type: string
 
+# The floor for anything added here later. The OIDC grant is not in it: it is
+# declared on the one job that publishes, because a grant is readable by every step
+# of the job that holds it, so the job is the smallest boundary it has.
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  publish:
-    name: Publish @brave/bravebot
+  # lockfile-lint and the packages under it are code nobody here wrote, and the step
+  # below runs them by design. They run in this job, which can read nothing but the
+  # tree, rather than beside the token the publish job mints.
+  #
+  # Not left to ci.yml's npm-lockfile job, which runs the same two commands: nothing
+  # here requires that job to have passed, so a tag moved after it ran would be
+  # linted nowhere.
+  lint:
+    name: Lint the lockfile
     if: github.repository == 'brave/bravebot'
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install from the lockfile
+        run: npm ci --ignore-scripts
+
+      - name: Lint the lockfile
+        run: npm run lint:lockfile
+
+  # The trusted publisher on npmjs.com keys on this repository and this filename, not
+  # on a job name, so publishing is unaffected by which job here holds the grant.
+  publish:
+    name: Publish @brave/bravebot
+    needs: lint
+    if: github.repository == 'brave/bravebot'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,12 +112,6 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
-
-      - name: Install from the lockfile
-        run: npm ci --ignore-scripts
-
-      - name: Lint the lockfile
-        run: npm run lint:lockfile
 
       # Provenance is attached automatically for trusted publishing from a public
       # repository. --provenance keeps that explicit. No NODE_AUTH_TOKEN: a token

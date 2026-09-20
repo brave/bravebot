@@ -15,6 +15,9 @@ guards:
   - symbol: Policy::read_is_denied
   - symbol: Policy::before_write
   - symbol: Policy::before_plan_rules
+documented-by:
+  - docs/website/docs/customize/configuration.md
+  - docs/website/docs/security/permissions.md
 ---
 
 ## Scope

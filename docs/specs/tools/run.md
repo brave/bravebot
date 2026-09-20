@@ -18,6 +18,9 @@ guards:
 reads_a_step_without_keying:
   - crates/core/src/policy.rs::plan_lines
   - crates/core/src/policy.rs::read_proven
+documented-by:
+  - docs/website/docs/reference/tools.md
+  - docs/website/docs/security/permissions.md
 ---
 
 ## Scope

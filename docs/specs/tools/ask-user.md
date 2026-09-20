@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/ask.rs
 guards:
   - symbol: Policy::record_answers
+documented-by: docs/website/docs/reference/tools.md
 ---
 
 ## Scope
