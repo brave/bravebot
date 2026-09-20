@@ -152,12 +152,20 @@ acts on content it cannot read by naming that reference, and the policy layer re
 write or the call actually happens. Where the content has to be changed rather than moved, it goes
 to a processor, described in [processors.md](processors.md).
 
+The origin is routing, and it is trusted where it is presented. The counts are numbers and the
+label is an enum, but the origin is a string that reaches the planner's context, the trace and the
+transcript verbatim, so it is one the driver chose: a path, a slot, or an argument a person
+approved. It is never taken from the content it describes, nor from anything that answered the
+request for that content. An origin a server wrote is untrusted content in the planner's context
+wearing the driver's attribution, which is the thing this clause exists to stop.
+
 `verified-by: bravebot_core::policy::untrusted_content_is_presented_as_a_reference`
 `verified-by: bravebot_core::policy::trusted_content_is_presented_visibly`
 `verified-by: bravebot_core::reference::a_quarantined_presentation_shows_no_content`
 `verified-by: bravebot_core::reference::a_visible_presentation_shows_the_content`
 `verified-by: bravebot_core::reference::a_description_names_the_shape_and_not_the_content`
 `verified-by: bravebot_core::reference::a_description_says_how_to_refer_to_the_content`
+`verified-by: bravebot_agent::turn::a_fetched_page_names_the_url_that_was_asked_for_and_not_where_a_redirect_went`
 
 <a id="LABEL-4"></a>
 ### LABEL-4: nothing untrusted in the driver's context
