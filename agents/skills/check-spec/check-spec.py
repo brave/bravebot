@@ -36,7 +36,18 @@ from specs import EM_DASH, README, SPEC_DIR, TestIndex, crate_directories, load_
 ERROR = "error"
 WARNING = "warning"
 
-FRONT_MATTER_KEYS = {"id", "title", "status", "governs", "guards"}
+# `reads_a_step_without_keying` is read by the security-audit skill rather than here: it names the
+# functions that read a `Step` field by field for something that is not a key, which that skill
+# otherwise faults. It is listed so a deliberate key is told apart from a `sites:` indented out of
+# its `guards` entry, which is what the unknown-key error is for.
+FRONT_MATTER_KEYS = {
+    "id",
+    "title",
+    "status",
+    "governs",
+    "guards",
+    "reads_a_step_without_keying",
+}
 
 UNVERIFIED_FILE = Path("unverified-clauses.txt")
 

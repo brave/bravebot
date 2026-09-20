@@ -77,17 +77,33 @@ pub struct RememberedStep {
 
 impl RememberedStep {
     /// The step as it was approved.
+    ///
+    /// Destructured rather than read field by field, so that a field added to [`Step`] stops the
+    /// build here instead of being left out of the entry. [`Self::matches`] compares the whole
+    /// struct, so what this function copies across is exactly what the key is, and a field it
+    /// silently skipped would be one an entry covers without having been answered for ([RUN-8]).
+    ///
+    /// [RUN-8]: ../../../docs/specs/tools/run.md
     pub fn of(step: &Step) -> Self {
+        let Step {
+            program,
+            resolved,
+            args,
+            environment,
+            routes,
+        } = step;
         Self {
-            program: step.program.clone(),
-            resolved: step.resolved.clone(),
-            args: step.args.clone(),
-            environment: step.environment.clone(),
-            routes: step.routes.clone(),
+            program: program.clone(),
+            resolved: resolved.clone(),
+            args: args.clone(),
+            environment: environment.clone(),
+            routes: routes.clone(),
         }
     }
 
     /// Whether a step about to run is the one this entry holds.
+    ///
+    /// The whole struct, so every field [`Self::of`] carried across is part of the question.
     pub fn matches(&self, step: &Step) -> bool {
         *self == Self::of(step)
     }

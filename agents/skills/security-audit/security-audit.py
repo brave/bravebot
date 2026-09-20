@@ -68,6 +68,10 @@ WITNESS = "Declassification::authorise"
 # The specs the guarantee rests on. A clause of one of these that nothing pins is worth reporting
 # even though `check-spec` already counts it, because there it is one warning among many and here it
 # is the list of what a change could break while staying green.
+# Spelled relative to `docs/specs`, so a spec in a subdirectory can be named. `tools/run.md` is
+# here because the standing answers a run prompt records are what four of this repository's reported
+# findings turned on, and a clause governing them is as able to permit a violation as one about a
+# label.
 GUARANTEE_SPECS = (
     "labels.md",
     "routing.md",
@@ -76,6 +80,7 @@ GUARANTEE_SPECS = (
     "processors.md",
     "vetting.md",
     "permissions.md",
+    "tools/run.md",
 )
 
 NUMBERS = {
@@ -92,6 +97,20 @@ PLACES = re.compile(
     r"\b(" + "|".join(NUMBERS) + r")\s+places?\s+(?:in|do|that)", re.IGNORECASE
 )
 FUNCTION = re.compile(r"\bfn\s+([A-Za-z0-9_]+)")
+
+# The struct a standing answer is keyed on, and where its fields are declared. A key built out of
+# fewer of them than the prompt displayed covers a line nobody read, which is the defect RUN-8's
+# environment, tree and path-bytes paragraphs were each written after.
+STEP_STRUCT = Path("crates/core/src/command.rs")
+STEP_DECLARATION = re.compile(r"^\s*pub\s+struct\s+Step\s*\{")
+STEP_FIELD = re.compile(r"^\s*pub\s+([a-z_][a-z0-9_]*)\s*:")
+STEP_READ = re.compile(r"\bstep\.([a-z_][a-z0-9_]*)\b")
+STEP_DESTRUCTURE = re.compile(r"\blet\s+(?:Remembered|Written)?Step\s*\{")
+RUN_SPEC = Path("docs/specs/tools/run.md")
+# A function may read a `Step` field by field for something that is not a key: the lines a deny rule
+# is matched against, or the read set a pure plan is proven by. Those are named in the spec rather
+# than here, so admitting one is an edit somebody reviews.
+NOT_A_KEY = "reads_a_step_without_keying"
 
 # A third party step in a workflow, and the only form of it that names one immutable thing. A tag or
 # a branch is whatever its owner points it at today, and every one of these runs with the repository
@@ -344,6 +363,178 @@ def check_construction_pinned(specs, sources):
         )
 
 
+def test_regions(lines):
+    """The line ranges under a `#[cfg(test)]`, by brace depth.
+
+    `in_test_module` walks back to the nearest marker and gives up at an `impl`, which is right for
+    a call site inside an inherent method and wrong for a function inside a test module that holds
+    one. A key check reports a function rather than a call, so it needs the module's extent.
+    """
+    spans = []
+    depth = None
+    counter = 0
+    armed = False
+    for number, raw in enumerate(lines, start=1):
+        if depth is None and raw.strip().startswith("#[cfg(test)]"):
+            armed = True
+        opens = raw.count("{")
+        closes = raw.count("}")
+        if armed and opens:
+            depth = counter
+            armed = False
+            start = number
+        counter += opens - closes
+        if depth is not None and counter <= depth:
+            spans.append((start, number))
+            depth = None
+    if depth is not None:
+        spans.append((start, len(lines)))
+    return spans
+
+
+def carries_the_guarantee(spec):
+    """Whether a spec is one the guarantee rests on, by its path under `docs/specs`.
+
+    One predicate because the two callers have to agree. Comparing base names answers `False` for
+    every spec in a subdirectory whatever `GUARANTEE_SPECS` says, so the list and the check would
+    disagree quietly, which is how `tools/run.md` went unread while appearing to be named.
+    """
+    try:
+        return Path(spec.rel).relative_to("docs/specs").as_posix() in GUARANTEE_SPECS
+    except ValueError:
+        return False
+
+
+def step_fields(sources):
+    """The fields of `Step`, read from the declaration rather than listed here.
+
+    Read rather than hardcoded so that adding a field widens this check instead of leaving it
+    describing the struct as it used to be.
+    """
+    lines = sources.get(STEP_STRUCT)
+    if not lines:
+        return []
+    found = []
+    inside = False
+    for raw in lines:
+        if not inside:
+            if STEP_DECLARATION.match(raw):
+                inside = True
+            continue
+        if raw.startswith("}"):
+            break
+        field = STEP_FIELD.match(raw)
+        if field:
+            found.append(field.group(1))
+    return found
+
+
+def check_key_sites_exhaustive(specs, sources):
+    """A function that builds a standing answer's key out of a `Step`, field by field.
+
+    Three of the reports this repository has had were one defect: a key holding less than the prompt
+    displayed, so an entry covered a line nobody answered for. The environment was missing, then the
+    tree, then the path's own bytes. Each was fixed where it was found, and each could have been
+    written again in the next function, because reading `step.resolved` and `step.args` and stopping
+    there is not an error a compiler has any reason to report.
+
+    An exhaustive `let Step { .. }` is what makes it one. A field added to the struct then stops the
+    build at every site that has to decide about it, which is the difference between a rule somebody
+    remembers and a rule something enforces. So this faults a function that reads two or more fields
+    without destructuring, and a function reading a `Step` for something other than a key says so in
+    `run.md` instead.
+    """
+    fields = set(step_fields(sources))
+    if not fields:
+        yield finding(
+            ERROR,
+            "key-sites-unreadable",
+            "the Step declaration could not be read, so nothing checks what a key holds",
+            f"`{STEP_STRUCT}` has no `pub struct Step {{` this check can read, so it cannot tell "
+            "which fields a key is built from and is silently passing",
+            "trust",
+            "medium",
+            fix=f"restore the declaration in `{STEP_STRUCT}`, or update `STEP_DECLARATION` here to "
+            "match where it moved to",
+            gain="nothing directly. It removes the check that would report the next key built out "
+            "of fewer fields than the prompt showed",
+        )
+        return
+
+    admitted = set()
+    for spec in specs:
+        for entry in spec.front.get(NOT_A_KEY, []):
+            admitted.add(entry.strip() if isinstance(entry, str) else str(entry))
+
+    reads = {}
+    destructures = set()
+    for path, lines in sources.items():
+        if "/tests/" in str(path):
+            continue
+        spans = test_regions(lines)
+        stripped = mechanics.strip_comments(lines)
+        for number, raw in enumerate(stripped, start=1):
+            if any(start <= number <= end for start, end in spans):
+                continue
+            if STEP_DESTRUCTURE.search(raw):
+                destructures.add(f"{path}::{enclosing(lines, number)}")
+            for field in STEP_READ.findall(raw):
+                if field not in fields:
+                    continue
+                where = f"{path}::{enclosing(lines, number)}"
+                reads.setdefault(where, {}).setdefault(field, number)
+
+    # An admission outlives the function it was written about. Left in place it is a standing grant
+    # for whatever is next given that name, decided by nobody, which is what this check exists to
+    # stop.
+    for where in sorted(admitted - set(reads)):
+        yield finding(
+            WARNING,
+            "key-site-admission-stale",
+            f"{RUN_SPEC.name} still admits {where}, which reads no Step field",
+            f"`{where}` is named under `{NOT_A_KEY}:` in `{RUN_SPEC}` and does not read a `Step` "
+            "field by field, so the admission now covers whatever is next written under that name "
+            "rather than the function somebody reviewed",
+            "trust",
+            "low",
+            evidence=[f"{RUN_SPEC}: {NOT_A_KEY}: {where}"],
+            fix=f"drop the entry from `{NOT_A_KEY}:` in `{RUN_SPEC}`, or correct it to where the "
+            "function moved to",
+        )
+
+    loose = {
+        where: found
+        for where, found in reads.items()
+        if len(found) >= 2 and where not in destructures and where not in admitted
+    }
+    if not loose:
+        return
+
+    worst = sorted(loose.items(), key=lambda item: -len(item[1]))
+    for where, found in worst:
+        missing = sorted(fields - set(found))
+        yield finding(
+            ERROR,
+            "key-site-not-exhaustive",
+            f"{where.split('::')[-1]} reads a Step field by field, so a new field lands outside it",
+            f"`{where}` reads {len(found)} of the {len(fields)} fields of `Step` individually and "
+            "does not destructure it, so a field added to the struct is left out of whatever this "
+            "function builds and nothing fails",
+            "trust",
+            "medium" if missing else "low",
+            evidence=[f"{where} reads {', '.join(sorted(found))}"]
+            + ([f"does not read {', '.join(missing)}"] if missing else []),
+            fix=f"open with `let Step {{ {', '.join(sorted(fields))} }} = step;`, naming a field "
+            f"`_` where it is deliberately not part of the key, so that a sixth field stops the "
+            f"build here. Where this function is not building a key, add `{where}` under "
+            f"`{NOT_A_KEY}:` in `{RUN_SPEC}` with the reason",
+            gain="a field the next change adds to a command — another way a step differs from the "
+            "one a person was shown — is absent from this key, so one answer covers both. That is "
+            "the defect RUN-8's environment, tree and path-bytes paragraphs were each written "
+            "after, arriving a fourth time in a function nobody thought to re-read",
+        )
+
+
 def check_pinned_actions():
     """Every workflow step names an immutable commit, not a tag somebody else can move.
 
@@ -379,6 +570,28 @@ def check_pinned_actions():
             )
 
 
+def check_guarantee_specs_exist():
+    """A named guarantee spec that no file answers to.
+
+    Every use of the list skips what it cannot resolve, so a renamed or misspelled spec leaves the
+    list looking complete while nothing reads the file. That is the shape of the gap this list was
+    widened to close, and a rename is the ordinary way it comes back.
+    """
+    for one in GUARANTEE_SPECS:
+        if not (Path("docs/specs") / one).is_file():
+            yield finding(
+                ERROR,
+                "unpinned-guarantee",
+                f"`GUARANTEE_SPECS` names `{one}`, which is not a file, so no pass reads it",
+                "the lanes are given the specs the guarantee rests on, and each use of the list "
+                f"skips an entry it cannot resolve, so `{one}` is named and unread",
+                "trust",
+                "high",
+                evidence=[f"agents/skills/security-audit/security-audit.py: {one}"],
+                fix="point the entry at where the spec moved to, or drop it if the spec is gone",
+            )
+
+
 def check_unpinned_guarantee_clauses(specs):
     """Clauses of the guarantee specs that no test pins.
 
@@ -386,7 +599,7 @@ def check_unpinned_guarantee_clauses(specs):
     are a different thing: the list of guarantees a change can break while every check stays green.
     """
     for spec in specs:
-        if spec.name not in GUARANTEE_SPECS:
+        if not carries_the_guarantee(spec):
             continue
         loose = [
             clause
@@ -422,7 +635,7 @@ def bracket_clauses(specs):
     return [
         (spec, clause)
         for spec in specs
-        if spec.name in GUARANTEE_SPECS
+        if carries_the_guarantee(spec)
         for clause in spec.clauses
         if not clause.withdrawn
         and any(one.startswith("by-construction") for one in clause.verified_by)
@@ -595,7 +808,9 @@ def main():
     findings = list(check_exception_counts())
     findings += list(check_labelled_impls(sources))
     findings += list(check_construction_pinned(specs, sources))
+    findings += list(check_key_sites_exhaustive(specs, sources))
     findings += list(check_pinned_actions())
+    findings += list(check_guarantee_specs_exist())
     findings += list(check_unpinned_guarantee_clauses(specs))
 
     unknown = [one for one in args.lanes if one not in LANES]

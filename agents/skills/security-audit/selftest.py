@@ -65,6 +65,7 @@ class FakeSpec:
 
     def __init__(self, pinned):
         self.allowlists = {symbol: [] for symbol in pinned}
+        self.front = {}
 
 
 def in_tree(files):
@@ -248,6 +249,257 @@ def test_construction_pinned():
             site["count"]
             for site in audit.sites_for("Labelled::trusted", unrelated)
         ) == 1,
+    )
+
+
+STEP_DECLARED = [
+    "pub struct Step {",
+    "    pub program: String,",
+    "    pub resolved: PathBuf,",
+    "    pub args: Vec<String>,",
+    "    pub environment: Vec<(String, String)>,",
+    "    pub routes: Vec<Route>,",
+    "}",
+]
+
+
+def declaring(more):
+    """Sources holding the `Step` declaration, plus whatever the fixture is about."""
+    sources = {audit.STEP_STRUCT: list(STEP_DECLARED)}
+    sources.update(more)
+    return sources
+
+
+def test_key_sites_exhaustive():
+    """The check that makes a field-by-field key a build failure rather than a habit."""
+    check(
+        "the fields are read from the declaration, not listed in the check",
+        audit.step_fields(declaring({})) == [
+            "program",
+            "resolved",
+            "args",
+            "environment",
+            "routes",
+        ],
+        str(audit.step_fields(declaring({}))),
+    )
+
+    reading = declaring(
+        {
+            Path("crates/core/src/command.rs"): STEP_DECLARED
+            + [
+                "fn encode_step(out: &mut String, step: &Step) {",
+                "    length_prefixed_path(out, &step.resolved);",
+                "    for arg in &step.args {",
+                "        length_prefixed(out, arg);",
+                "    }",
+                "}",
+            ]
+        }
+    )
+    found = list(audit.check_key_sites_exhaustive([FakeSpec([])], reading))
+    check(
+        "a function reading two Step fields without destructuring is an error",
+        kinds(found) == ["key-site-not-exhaustive"] and found[0]["severity"] == audit.ERROR,
+        str(kinds(found)),
+    )
+    check(
+        "the finding names the function and the fields it leaves out",
+        found
+        and "encode_step" in found[0]["summary"]
+        and any("environment" in one for one in found[0]["evidence"]),
+        str(found[0]["evidence"]) if found else "no finding",
+    )
+
+    destructured = declaring(
+        {
+            Path("crates/core/src/command.rs"): STEP_DECLARED
+            + [
+                "fn encode_step(out: &mut String, step: &Step) {",
+                "    let Step { program: _, resolved, args, environment, routes } = step;",
+                "    length_prefixed_path(out, resolved);",
+                "    for arg in args {",
+                "        length_prefixed(out, arg);",
+                "    }",
+                "}",
+            ]
+        }
+    )
+    check(
+        "the same function destructuring first is clean",
+        list(audit.check_key_sites_exhaustive([FakeSpec([])], destructured)) == [],
+    )
+
+    # The conversion out of `RememberedStep` destructures that type rather than `Step`, and a check
+    # that only recognised `let Step {` would leave a fixed site permanently red.
+    wrapper = declaring(
+        {
+            Path("crates/agent/src/remembered.rs"): [
+                "fn written(step: &RememberedStep) -> WrittenStep {",
+                "    let RememberedStep { resolved, args, environment } = step;",
+                "    WrittenStep { path: step.resolved.clone(), args: step.args.clone() }",
+                "}",
+            ]
+        }
+    )
+    check(
+        "destructuring a RememberedStep counts as destructuring",
+        list(audit.check_key_sites_exhaustive([FakeSpec([])], wrapper)) == [],
+    )
+
+    # A function reading one field is reading a field, not building a key out of the step.
+    single = declaring(
+        {
+            Path("crates/core/src/policy.rs"): [
+                "fn describe(step: &Step) -> String {",
+                "    step.program.clone()",
+                "}",
+            ]
+        }
+    )
+    check(
+        "a function reading one field is not a key",
+        list(audit.check_key_sites_exhaustive([FakeSpec([])], single)) == [],
+    )
+
+    class Admitting:
+        """A spec naming one site as reading a step for something that is not a key."""
+
+        allowlists = {}
+        front = {audit.NOT_A_KEY: ["crates/core/src/policy.rs::plan_lines"]}
+
+    admitted = declaring(
+        {
+            Path("crates/core/src/policy.rs"): [
+                "fn plan_lines(step: &Step) -> String {",
+                "    format!(\"{} {}\", step.program, step.args.join(\" \"))",
+                "}",
+            ]
+        }
+    )
+    check(
+        "a site the spec admits reads a step for something other than a key is clean",
+        list(audit.check_key_sites_exhaustive([Admitting()], admitted)) == [],
+    )
+    check(
+        "the same site is an error when the spec does not admit it",
+        kinds(list(audit.check_key_sites_exhaustive([FakeSpec([])], admitted)))
+        == ["key-site-not-exhaustive"],
+    )
+
+    class Stale:
+        """A spec admitting a function that is no longer there."""
+
+        allowlists = {}
+        front = {audit.NOT_A_KEY: ["crates/core/src/policy.rs::deleted_long_ago"]}
+
+    found = list(audit.check_key_sites_exhaustive([Stale()], declaring({})))
+    check(
+        "an admission for a function that reads no Step field is reported",
+        kinds(found) == ["key-site-admission-stale"]
+        and found[0]["severity"] == audit.WARNING,
+        str(kinds(found)),
+    )
+
+    # Tests read a step field by field constantly, and each one reported would bury the real site.
+    in_a_test = declaring(
+        {
+            Path("crates/core/src/command.rs"): STEP_DECLARED
+            + [
+                "#[cfg(test)]",
+                "mod tests {",
+                "    use super::*;",
+                "",
+                "    impl Step {",
+                "        fn sample() -> Self { Self::default() }",
+                "    }",
+                "",
+                "    #[test]",
+                "    fn every_field_survives() {",
+                "        let step = Step::sample();",
+                "        assert_eq!(step.resolved, other.resolved);",
+                "        assert_eq!(step.args, other.args);",
+                "        assert_eq!(step.environment, other.environment);",
+                "    }",
+                "}",
+            ]
+        }
+    )
+    found = list(audit.check_key_sites_exhaustive([FakeSpec([])], in_a_test))
+    check(
+        "a test module holding an impl block is still recognised as test code",
+        found == [],
+        str([one["summary"] for one in found]),
+    )
+
+    check(
+        "a tree with no readable Step declaration is reported rather than silently passing",
+        kinds(list(audit.check_key_sites_exhaustive([FakeSpec([])], {})))
+        == ["key-sites-unreadable"],
+    )
+
+    check(
+        "the tree's own key sites destructure",
+        with_cwd(
+            ROOT,
+            lambda: list(
+                audit.check_key_sites_exhaustive(audit.load_specs(), audit.mechanics.load_sources())
+            ),
+        )
+        == [],
+    )
+
+
+def test_guarantee_specs_are_read():
+    """Naming a spec in the list is only worth something if every use resolves it.
+
+    The list went years matched by base name while an entry in a subdirectory would have been
+    skipped by two of its three uses, which is exactly how `tools/run.md` stayed unread.
+    """
+
+    class At:
+        def __init__(self, rel):
+            self.rel = rel
+            self.name = Path(rel).name
+
+    check(
+        "a spec in a subdirectory of docs/specs is recognised",
+        audit.carries_the_guarantee(At("docs/specs/tools/run.md")),
+    )
+    check(
+        "a spec at the top level is recognised",
+        audit.carries_the_guarantee(At("docs/specs/labels.md")),
+    )
+    check(
+        "a spec sharing a base name with a listed one is not recognised",
+        not audit.carries_the_guarantee(At("docs/specs/elsewhere/labels.md")),
+    )
+    check(
+        "a path outside docs/specs is not recognised",
+        not audit.carries_the_guarantee(At("docs/labels.md")),
+    )
+
+    check(
+        "every listed spec resolves to a file in this tree",
+        with_cwd(ROOT, lambda: list(audit.check_guarantee_specs_exist())) == [],
+        str([one["summary"] for one in with_cwd(ROOT, audit.check_guarantee_specs_exist)]),
+    )
+
+    moved = in_tree({f"docs/specs/{one}": "# spec\n" for one in audit.GUARANTEE_SPECS[:-1]})
+    found = with_cwd(moved, lambda: list(audit.check_guarantee_specs_exist()))
+    check(
+        "a listed spec that is not a file is an error, not a silent skip",
+        len(found) == 1 and found[0]["severity"] == audit.ERROR,
+        str([one["summary"] for one in found]),
+    )
+
+    check(
+        "every spec the list names is one load_specs returns",
+        with_cwd(
+            ROOT,
+            lambda: len([one for one in audit.load_specs() if audit.carries_the_guarantee(one)]),
+        )
+        == len(audit.GUARANTEE_SPECS),
     )
 
 
@@ -594,6 +846,8 @@ def main():
         test_labelled_impls,
         test_pinned_actions,
         test_construction_pinned,
+        test_key_sites_exhaustive,
+        test_guarantee_specs_are_read,
         test_declassify_counts_match_the_spec,
         test_every_lane_prompt_composes,
         test_verifier_prompt_composes,

@@ -414,6 +414,18 @@ impl<'a> Running<'a> {
         let last = steps.len() - 1;
 
         for (index, step) in steps.iter().enumerate() {
+            // Exhaustive so that a field added to `Step` stops the build here. This is where a step
+            // becomes a real process, so a field this applies that no standing answer's key holds
+            // would be a line running differently from the one somebody was shown ([RUN-8]).
+            //
+            // [RUN-8]: ../../../docs/specs/tools/run.md
+            let Step {
+                program: _,
+                resolved: _,
+                args: _,
+                environment: _,
+                routes: _,
+            } = step;
             // The resolved path, never the name. The name was resolved once, before the person was
             // asked, and looking it up again here would leave a window in which `$PATH` changed.
             let mut command = Command::new(&step.resolved);
@@ -1010,6 +1022,14 @@ pub fn start_steps(
     let last = steps.len() - 1;
 
     for (index, step) in steps.iter().enumerate() {
+        // Exhaustive for the reason it is in the foreground.
+        let Step {
+            program: _,
+            resolved: _,
+            args: _,
+            environment: _,
+            routes: _,
+        } = step;
         let mut command = Command::new(&step.resolved);
         command.args(&step.args).current_dir(directory);
         // In front of the step's own assignments, as in the foreground.
