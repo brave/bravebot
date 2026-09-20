@@ -2352,7 +2352,7 @@ pub(crate) fn materialise<S: Sink>(
     // reads on the screen were the planner's, which are the ones that read nothing.
     let mut opened = Vec::new();
     for slot in wanted {
-        let was_unread = slots.deferred(slot).is_some();
+        let was_unread = slots.is_unread(slot);
         policy
             .materialise(tool, slot, slots, |path| read_into_slot(workspace, path))
             .map_err(|denial| format!("refused: {denial}"))?;

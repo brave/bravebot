@@ -21,6 +21,7 @@
 //! error and never an empty document.
 
 use crate::label::Label;
+use crate::policy::PathAuthority;
 use crate::value::Labelled;
 use std::collections::HashMap;
 use std::fmt;
@@ -91,26 +92,30 @@ impl std::error::Error for SlotError {}
 
 /// A slot that names a file it has not read.
 ///
-/// The path is routing: the planner named it and it was checked `(T,pub)` before the slot was
-/// deferred, so holding it here decides nothing an attacker steers. The label is what the trust
-/// map said when the promise was made, and it is a ceiling rather than a promise in its own
-/// right: [`crate::policy::Policy::materialise`] takes the meet with what the map says when the
-/// file is actually read, so a path that stopped being trusted in between cannot be read back
-/// as though it had not.
+/// The path is not always routing. Where the planner named it, it was checked `(T,pub)` before
+/// the slot was deferred; where [`crate::policy::Policy::defer_entries`] made the entry, it is a
+/// filename out of a quarantined listing, which is untrusted content the planner is never shown.
+/// So the whole of this type stays inside the kernel, and a decision taken from the path is one
+/// taken from untrusted bytes.
+///
+/// The label is what the trust map said when the promise was made, and it is a ceiling rather
+/// than a promise in its own right: [`crate::policy::Policy::materialise`] takes the meet with
+/// what the map says when the file is actually read, so a path that stopped being trusted in
+/// between cannot be read back as though it had not.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Deferred {
+pub(crate) struct Deferred {
     path: String,
     label: Label,
 }
 
 impl Deferred {
     /// The file this slot will hold.
-    pub fn path(&self) -> &str {
+    pub(crate) fn path(&self) -> &str {
         &self.path
     }
 
     /// The label recorded when the read was deferred.
-    pub fn label(&self) -> Label {
+    pub(crate) fn label(&self) -> Label {
         self.label
     }
 }
@@ -289,20 +294,27 @@ impl SlotStore {
     /// only the policy layer may ask, and only through the gates that decide what a name may
     /// become. Kept after the bytes arrive, so processing a file does not lose the address it
     /// came from.
-    pub(crate) fn path_of(&self, id: &SlotId) -> Option<&str> {
+    ///
+    /// The witness is what holds that, rather than the sentence above:
+    /// [`crate::policy::PathAuthority`] is minted inside the policy module and nowhere else, so
+    /// a decision relocated into another module of this crate cannot reach these bytes at all.
+    pub(crate) fn path_of(&self, id: &SlotId, _authority: &PathAuthority) -> Option<&str> {
         self.slots.get(id).and_then(Entry::path)
     }
 
     /// The file a slot's bytes are a copy of, where they are one.
     ///
-    /// Only the policy layer may ask: what it is for is recognising a write that would put a
-    /// file back exactly as it is, and that is a decision.
-    pub(crate) fn verbatim_of(&self, id: &SlotId) -> Option<&str> {
+    /// Only the policy layer may ask, held by the witness [`SlotStore::path_of`] takes and for
+    /// the same reason: what it is for is recognising a write that would put a file back exactly
+    /// as it is, and that is a decision.
+    pub(crate) fn verbatim_of(&self, id: &SlotId, _authority: &PathAuthority) -> Option<&str> {
         self.slots.get(id).and_then(Entry::verbatim)
     }
 
     /// Where the contents of a slot may be written.
-    pub(crate) fn home_of(&self, id: &SlotId) -> Home {
+    ///
+    /// Carries the same filename through [`Home::Only`], so it takes the same witness.
+    pub(crate) fn home_of(&self, id: &SlotId, _authority: &PathAuthority) -> Home {
         self.slots
             .get(id)
             .map(Entry::home)
@@ -325,10 +337,11 @@ impl SlotStore {
 
     /// Where a slot's bytes came from, where the driver said.
     ///
-    /// Metadata, like everything else a caller may ask a slot store, and the driver's own sentence
-    /// rather than anything read. Only the policy layer may ask, because what it is for is putting
-    /// a line in front of a person, which is a release.
-    pub(crate) fn origin_of(&self, id: &SlotId) -> Option<&str> {
+    /// The driver's own sentence for a slot that has been read, and the file's own name for one
+    /// still waiting on it, which for an entry out of a quarantined listing is the same untrusted
+    /// content [`SlotStore::path_of`] returns. So it takes the same witness, and what it is for
+    /// is putting a line in front of a person, which is a release either way.
+    pub(crate) fn origin_of(&self, id: &SlotId, _authority: &PathAuthority) -> Option<&str> {
         self.slots.get(id).and_then(Entry::origin)
     }
 
@@ -388,11 +401,22 @@ impl SlotStore {
         self.slots.get(id).and_then(Entry::remark)
     }
 
+    /// Whether this slot is waiting on a file it has not read.
+    ///
+    /// Metadata: a yes or a no, and no part of the name the slot is waiting on. This is what a
+    /// caller outside the kernel gets, since the only thing one has ever wanted to know is
+    /// whether asking for the bytes will open a file.
+    pub fn is_unread(&self, id: &SlotId) -> bool {
+        matches!(self.slots.get(id), Some(Entry::Unread(_)))
+    }
+
     /// The file a slot is waiting on, where it is waiting on one.
     ///
-    /// Metadata, like everything else a caller may ask a slot store: a path the planner chose
-    /// and a label, never a byte of what the file holds.
-    pub fn deferred(&self, id: &SlotId) -> Option<&Deferred> {
+    /// A path and a label. The path is the same untrusted content [`SlotStore::path_of`] returns
+    /// wherever [`crate::policy::Policy::defer_entries`] made the entry, since the planner is
+    /// never told that name, so this takes the same witness. Outside the kernel only
+    /// [`SlotStore::is_unread`] is offered, which names nothing.
+    pub(crate) fn deferred(&self, id: &SlotId, _authority: &PathAuthority) -> Option<&Deferred> {
         match self.slots.get(id) {
             Some(Entry::Unread(deferred)) => Some(deferred),
             _ => None,
@@ -744,6 +768,29 @@ mod tests {
                 .writer_for(sid("ref:0"), Label::untrusted_private())
                 .is_err()
         );
+    }
+
+    /// What a caller outside the kernel is told about a deferred slot is whether asking for the
+    /// bytes will open a file, and nothing else. A slot nothing has reserved opens no file, and
+    /// neither does one whose bytes are already here, so answering yes to either would report a
+    /// read that is not going to happen against a person's workspace.
+    #[test]
+    fn a_slot_is_unread_only_while_it_is_waiting_on_its_file() {
+        let mut store = SlotStore::new();
+        assert!(!store.is_unread(&sid("ref:0")));
+
+        store
+            .defer(sid("ref:0"), "notes.md", Label::untrusted_private())
+            .unwrap();
+        assert!(store.is_unread(&sid("ref:0")));
+
+        store
+            .fill(
+                &sid("ref:0"),
+                Labelled::new("one\ntwo".to_string(), Label::untrusted_private()),
+            )
+            .expect("the first reading fills it");
+        assert!(!store.is_unread(&sid("ref:0")));
     }
 
     /// Reading the file is the slot's single write, so a second reading has nowhere to go.

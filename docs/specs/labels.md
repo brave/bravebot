@@ -18,7 +18,7 @@ guards:
       - crates/aichat/src/lib.rs: 4
       - crates/bedrock/src/lib.rs: 5
       - crates/core/src/policy.rs: 80
-      - crates/core/src/slot.rs: 4
+      - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
       - crates/mcp/src/lib.rs: 1
@@ -58,6 +58,26 @@ guards:
   - symbol: Declassification::authorise
     sites:
       - crates/core/src/policy.rs: 45
+  - symbol: SlotStore::path_of
+    sites:
+      - crates/core/src/policy.rs: 5
+      - crates/core/src/slot.rs: 1
+  - symbol: SlotStore::verbatim_of
+    sites:
+      - crates/core/src/policy.rs: 2
+      - crates/core/src/slot.rs: 1
+  - symbol: SlotStore::home_of
+    sites:
+      - crates/core/src/policy.rs: 1
+      - crates/core/src/slot.rs: 1
+  - symbol: SlotStore::origin_of
+    sites:
+      - crates/core/src/policy.rs: 1
+      - crates/core/src/slot.rs: 1
+  - symbol: SlotStore::deferred
+    sites:
+      - crates/core/src/policy.rs: 2
+      - crates/core/src/slot.rs: 1
   - symbol: Policy::present
     sites:
       - crates/agent/src/aside.rs: 1
@@ -180,6 +200,17 @@ the read: the planner's own arguments, a transport envelope a decoder has to see
 reply on its way out of that envelope. A driver holding the bytes without one is the shape this
 clause exists to stop.
 
+**A slot's address is untrusted content too, and is not carried in a labelled value.** The file a
+slot names, the file its bytes are a copy of, the file an answer produced from it belongs to, the
+sentence saying where its bytes came from, and the file it is still waiting on are bare strings,
+and where the slot came from a quarantined listing every one of them is a filename the planner was
+never shown. So each accessor that hands one back takes a witness minted in the same module the
+declassification witness is minted in, and the `guards` list above pins their uses file by file,
+the way it pins a declassification. A decision relocated into the kernel and taken from a slot's
+address therefore moves a pinned count, and one relocated into any module of `bravebot-core`
+outside the gates does not compile at all. Outside the kernel a slot answers one question about
+its address, whether asking for its bytes will open a file, which names nothing.
+
 **`bravebot-core` and `bravebot-agent` are both the driver.** Moving a branch from one
 into the other does not remove it.
 
@@ -192,6 +223,8 @@ into the other does not remove it.
 `verified-by: bravebot_core::policy::decoding_a_transport_envelope_is_recorded_and_hands_back_the_label`
 `verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub))`
 `verified-by: by-construction (Declassification::authorise is pub(in crate::policy), so no other module of bravebot-core and no crate downstream of it can mint a witness)`
+`verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of and SlotStore::deferred cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate), so those five are the whole of the surface returning a slot's address and every use of each is pinned above)`
+`verified-by: bravebot_core::slot::a_slot_is_unread_only_while_it_is_waiting_on_its_file`
 
 <a id="LABEL-5"></a>
 ### LABEL-5: a decision may be taken only from trusted content

@@ -66,6 +66,24 @@ impl SpecAuthority {
     }
 }
 
+/// Permission to read the address a slot holds: the file it names, the file its bytes are a copy
+/// of, and the file an answer produced from it belongs to.
+///
+/// Lives here for the reason [`Declassification`] does, and exists because those three are the
+/// one class of untrusted bytes the kernel holds outside a [`Labelled`]. A filename out of a
+/// quarantined listing is content, so a decision taken from one is a decision taken from
+/// untrusted bytes; stored as a bare `String` it needs no witness, which would leave the only
+/// such decision in the kernel outside everything [`Labelled`] is pinned by. `mint` is
+/// `pub(in crate::policy)`, so the gates here are the one place that can ask, and labels.md pins
+/// their uses file by file the way it pins a declassification.
+pub(crate) struct PathAuthority(());
+
+impl PathAuthority {
+    pub(in crate::policy) fn mint() -> Self {
+        Self(())
+    }
+}
+
 /// Permission to take the bytes out of a transport envelope, for as long as the decoder needs.
 ///
 /// Confined to `Vec<u8>`, which is the shape of an envelope off a socket. A tool argument, a
@@ -1753,7 +1771,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             .into_iter()
             .filter_map(|(slot, label)| {
                 slots
-                    .path_of(&slot)
+                    .path_of(&slot, &PathAuthority::mint())
                     .map(|path| (slot.clone(), label, path.to_string()))
             })
             .collect();
@@ -1833,7 +1851,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slot: &SlotId,
         slots: &crate::slot::SlotStore,
     ) -> Gated<String> {
-        let Some(path) = slots.path_of(slot) else {
+        let Some(path) = slots.path_of(slot, &PathAuthority::mint()) else {
             return Err(self.deny(
                 "reference",
                 Principle::IntegrityGate,
@@ -1874,7 +1892,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     where
         F: FnOnce(&str) -> Result<String, String>,
     {
-        let Some(deferred) = slots.deferred(slot) else {
+        let Some(deferred) = slots.deferred(slot, &PathAuthority::mint()) else {
             return Ok(());
         };
         let path = deferred.path().to_string();
@@ -2176,7 +2194,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         // had to do with. Two calls were enough: one to turn a game into a page, a second over
         // that page and a script, and the page went into the script with every gate passing.
         let about = about.or_else(|| match reads {
-            [only] if slots.verbatim_of(only).is_some() => Some(only.clone()),
+            [only] if slots.verbatim_of(only, &PathAuthority::mint()).is_some() => {
+                Some(only.clone())
+            }
             _ => None,
         });
 
@@ -2620,7 +2640,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ) {
         let home = match about.and_then(|about| {
             slots
-                .path_of(about)
+                .path_of(about, &PathAuthority::mint())
                 .map(|path| (path.to_string(), about.clone()))
         }) {
             Some((path, named_by)) => crate::slot::Home::Only { path, named_by },
@@ -2647,7 +2667,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slot: &SlotId,
         slots: &crate::slot::SlotStore,
     ) -> Gated<()> {
-        match slots.home_of(slot) {
+        match slots.home_of(slot, &PathAuthority::mint()) {
             crate::slot::Home::Anywhere => Ok(()),
             // One file is one document however either side spells its path, the same way the
             // trust map holds one rule per file rather than one per spelling. Comparing the
@@ -2754,7 +2774,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ));
         }
 
-        if slots.deferred(slot).is_some() {
+        if slots.deferred(slot, &PathAuthority::mint()).is_some() {
             return Err(self.deny(
                 "vetting",
                 Principle::Confinement,
@@ -2805,7 +2825,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         // than the line itself; everything else is the sentence the driver wrote when it
         // quarantined the bytes. A slot from neither has only its own name to offer, which is
         // a poor thing to put in front of somebody and is better than inventing one.
-        let origin = match (slots.command_of(slot), slots.origin_of(slot)) {
+        let origin = match (
+            slots.command_of(slot),
+            slots.origin_of(slot, &PathAuthority::mint()),
+        ) {
             (Some(command), _) => format!("what {command} printed"),
             (None, Some(origin)) => origin.to_string(),
             (None, None) => slot.to_string(),
@@ -3185,7 +3208,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slot: &SlotId,
         slots: &crate::slot::SlotStore,
     ) -> bool {
-        let unchanged = slots.verbatim_of(slot) == Some(path);
+        let unchanged = slots.verbatim_of(slot, &PathAuthority::mint()) == Some(path);
         if unchanged {
             self.allow(
                 "write",
@@ -4738,8 +4761,9 @@ mod tests {
         }
 
         // The kernel kept them, which is what makes the reference an address.
-        assert_eq!(slots.path_of(&ids[0]), Some("secret-plans.md"));
-        assert_eq!(slots.path_of(&ids[1]), Some("game.js"));
+        let authority = PathAuthority::mint();
+        assert_eq!(slots.path_of(&ids[0], &authority), Some("secret-plans.md"));
+        assert_eq!(slots.path_of(&ids[1], &authority), Some("game.js"));
     }
 
     /// The count comes from outside and the list from inside, so they have to agree. Taking the
