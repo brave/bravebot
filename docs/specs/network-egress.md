@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/net/src/lib.rs
   - crates/net/src/transport.rs
+documented-by: docs/website/docs/security/security.md
 ---
 
 ## Scope

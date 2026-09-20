@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/app.rs
 guards:
   - symbol: Policy::label_user_command_output
+documented-by: docs/website/docs/using/shell-mode.md
 ---
 
 ## Scope

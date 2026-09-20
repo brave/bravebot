@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/replace.rs
   - crates/agent/src/diff.rs
+documented-by: docs/website/docs/reference/tools.md
 ---
 
 ## Scope

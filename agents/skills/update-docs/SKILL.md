@@ -58,6 +58,10 @@ A deferral needs a reason a later run can act on. "Behaviour is in the code but 
 
 ## The Topic Mapping
 
+Each spec already names its pages: `documented-by` in its front matter, which `make check-spec`
+holds to pages that exist. Read the spec a commit touched and that is the answer. The table below is
+the fallback for a change no spec covers, and for deciding where something new belongs.
+
 When a change passes the gate, map it to the corresponding page in `docs/website/docs/`:
 
 | A bravebot spec about | Belongs on |

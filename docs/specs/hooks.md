@@ -6,6 +6,7 @@ governs:
   - crates/config/src/hooks.rs
   - crates/agent/src/hooks.rs
   - crates/agent/src/turn.rs
+documented-by: none (gap: no page documents where a hook is declared, which moments exist, or what one is handed)
 ---
 
 ## Scope

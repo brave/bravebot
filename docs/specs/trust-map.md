@@ -18,6 +18,7 @@ guards:
   - symbol: TrustStore::rebased
   - symbol: Policy::reconcile_after_write
   - symbol: Policy::vouch_for_named_path
+documented-by: docs/website/docs/security/trust.md
 ---
 
 ## Scope

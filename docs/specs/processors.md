@@ -11,6 +11,7 @@ guards:
   - symbol: Policy::compose_processor_input
   - symbol: Policy::write_belongs_here
   - symbol: Policy::declassify_into_workspace
+documented-by: docs/website/docs/how-it-works.md
 ---
 
 ## Scope

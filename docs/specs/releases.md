@@ -10,6 +10,7 @@ governs:
   - install.sh
   - package.json
   - package-lock.json
+documented-by: docs/website/docs/quickstart.md
 ---
 
 ## Scope

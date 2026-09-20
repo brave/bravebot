@@ -4,6 +4,7 @@ title: read_file
 status: normative
 governs:
   - crates/agent/src/workspace.rs
+documented-by: docs/website/docs/reference/tools.md
 ---
 
 ## Scope

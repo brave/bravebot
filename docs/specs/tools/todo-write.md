@@ -4,6 +4,7 @@ title: todo_write
 status: normative
 governs:
   - crates/core/src/todo.rs
+documented-by: docs/website/docs/reference/tools.md
 ---
 
 ## Scope

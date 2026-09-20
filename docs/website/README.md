@@ -42,12 +42,12 @@ Everything here describes behaviour that is specified clause by clause in
 [docs/specs](../specs/README.md). Where the two disagree, the specs are the source of truth:
 fix this site rather than documenting around it.
 
-`make check-spec` at the repository root holds the specs to this site. A clause no page
-documents is listed in [`undocumented-clauses.txt`](../../undocumented-clauses.txt), and
-`make write-undocumented` rewrites that list once a clause has been documented, or once one
-has been added.
+`make check-spec` at the repository root holds the specs to this site. Every spec's front matter
+carries a `documented-by` naming the pages here that describe it, and the check fails when a spec
+says nothing or names a page that is not there. A spec no page describes says `none` with the
+reason in brackets, so `grep -rn "none (gap" ../specs` is what the site still owes.
 
-That check answers which clauses are documented, not whether what a page says is still true
+That check answers which specs are documented, not whether what a page says is still true
 after the behaviour underneath it changed. `make docs-changes` answers the second question:
 it lists what has landed in the specs since the commit recorded in
 [`docs-updated-to-sha`](../../docs-updated-to-sha). To fold those commits into these pages,

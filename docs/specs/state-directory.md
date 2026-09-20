@@ -16,6 +16,7 @@ guards:
   - symbol: home::create_directory
   - symbol: home::write_file
   - symbol: home::append_to_file
+documented-by: docs/website/docs/customize/configuration.md
 ---
 
 ## Scope

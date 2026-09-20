@@ -12,6 +12,7 @@ governs:
 guards:
   - symbol: Operation::parse
   - symbol: locations_in
+documented-by: docs/website/docs/reference/tools.md
 ---
 
 ## Scope

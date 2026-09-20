@@ -7,6 +7,7 @@ governs:
 guards:
   - symbol: Policy::label_user_configuration
   - symbol: Policy::read_trusted_content
+documented-by: docs/website/docs/customize/skills.md
 ---
 
 ## Scope

@@ -9,6 +9,7 @@ governs:
   - crates/session/src/store.rs
   - crates/session/src/sessions.rs
   - crates/cli/src/main.rs
+documented-by: docs/website/docs/using/sessions.md
 ---
 
 ## Scope

@@ -11,6 +11,9 @@ guards:
   - symbol: Policy::promote_confined_read
   - symbol: Policy::accept_reference
   - symbol: Policy::path_of_reference
+documented-by:
+  - docs/website/docs/how-it-works.md
+  - docs/website/docs/security/permissions.md
 ---
 
 ## Scope
