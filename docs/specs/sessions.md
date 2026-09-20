@@ -725,6 +725,31 @@ a transcript of work nobody did.
 
 `verified-by: bravebot_tui::sessions::a_lost_conversation_keeps_turn_identity_and_can_be_rewound`
 
+<a id="SESSION-27"></a>
+### SESSION-27: what each turn spent can be asked for while the session is running
+
+A word asks what the session has cost and is answered with the total, and under it one figure per
+turn with that turn's share of the total beside it. What was spent before the first turn is
+reported too and is not given a turn's number, since no turn did it. A record that holds a total
+and no breakdown says the breakdown is missing, which is not the answer a session that has spent
+nothing gives.
+
+The figures are tokens. Nothing here states a price: no model listing carries one, and a prompt a
+service answered out of its own cache is billed at a fraction of a fresh one while the breakdown
+keeps no cache split per turn, so a figure in money would be composed here rather than measured.
+That the figures are not a bill is under Known costs.
+
+**Why.** The breakdown exists to answer "where did it go", and a figure only a file on disk holds
+answers nobody. A total cannot tell twenty even turns from one that ran away, and the share is
+what makes the second one visible without the reader dividing each row by the total themselves.
+
+`verified-by: bravebot_tui::state::what_each_turn_spent_is_reported_turn_by_turn`
+`verified-by: bravebot_tui::state::each_turn_is_reported_as_a_share_of_the_session`
+`verified-by: bravebot_tui::state::what_was_spent_before_the_first_turn_is_not_reported_as_a_turn`
+`verified-by: bravebot_tui::state::a_total_with_no_breakdown_does_not_read_as_a_session_that_spent_nothing`
+`verified-by: bravebot_tui::state::a_session_that_has_spent_nothing_says_so`
+`verified-by: bravebot_tui::app::typing_the_cost_command_reports_rather_than_prompting`
+
 ## Known costs
 
 - **Two working directories can share a session store.** The directory name is derived by mapping

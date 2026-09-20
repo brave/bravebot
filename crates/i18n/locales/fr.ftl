@@ -688,6 +688,16 @@ environment-prod = prod
 environment-custom = personnalisé
 
 
+## Ce que /cost rapporte de chaque tour
+
+# Le français sépare le nombre du signe pour cent.
+cost-share = { $percent } %
+cost-turn = Tour { $number }
+cost-before-the-first-turn = Avant le tour 1
+cost-nothing-spent = rien de dépensé pour l'instant
+cost-unattributed = non imputé à un tour
+
+
 ## L'indicateur dessiné pendant qu'un tour tourne
 
 elapsed-seconds = { $seconds } s
@@ -790,6 +800,7 @@ scroller-footer-search = / rechercher
 ## Ce qu'une ligne commençant par une barre oblique peut être
 
 command-status = Décrire cette session, ce qu'elle peut toucher, et ce qu'elle a dépensé
+command-cost = Montrer ce que chaque tour de cette session a dépensé
 command-model = Choisir avec quel modèle réfléchir
 command-theme = Choisir quel thème habille l'interface
 command-effort = Choisir l'effort de réflexion avant de répondre
@@ -898,6 +909,7 @@ failure-transport = la requête n'est pas passée
 failure-incomplete = la réponse s'est arrêtée avant la fin
 failure-undecodable = la réponse n'a pas pu être lue
 failure-too-long = le modèle a atteint sa limite de sortie
+failure-too-long-at = le modèle a atteint sa limite de sortie de { $tokens } jetons, que BRAVEBOT_OUTPUT_BUDGET relève
 failure-unconfigured = rien ici n'était configuré pour envoyer la requête
 failure-blocked = un contrôle local a refusé de laisser sortir la requête
 failure-workspace = l'espace de travail n'a pas pu être utilisé

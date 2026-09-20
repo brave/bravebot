@@ -83,6 +83,14 @@ const CD_COMMAND: &str = "/cd";
 /// The line that reports what this session is and what it may touch.
 const STATUS_COMMAND: &str = "/status";
 
+/// The line that reports what each turn of this session has spent.
+///
+/// A word of its own rather than more rows on the status panel, because the list grows with the
+/// session: a panel that answers "what is this session" in fifteen rows would answer it in fifty
+/// on the fiftieth turn, and the breakdown is asked for when one figure looks wrong rather than
+/// every time somebody checks which directory they are in.
+const COST_COMMAND: &str = "/cost";
+
 /// The line that summarises the conversation so far, in place of sending all of it.
 const COMPACT_COMMAND: &str = "/compact";
 
@@ -147,12 +155,17 @@ pub struct Command {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 19] {
+pub fn commands() -> [Command; 20] {
     [
         Command {
             name: STATUS_COMMAND,
             argument: "",
             description: t!(command_status),
+        },
+        Command {
+            name: COST_COMMAND,
+            argument: "",
+            description: t!(command_cost),
         },
         Command {
             name: MODEL_COMMAND,
@@ -347,6 +360,8 @@ pub enum Action {
     Rename(String),
     /// Report what this session is. Needs the workspace and the trust map, which the loop owns.
     Status,
+    /// Report what each turn has spent. Reads nothing the session does not already hold.
+    Cost,
     /// Run a command the user typed in shell mode. Needs the workspace and the conversation.
     Run(String),
     /// Put the transcript in front of the user in their editor. Needs the terminal, which the
@@ -1065,6 +1080,9 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
     }
     if line.trim() == STATUS_COMMAND {
         return Action::Status;
+    }
+    if line.trim() == COST_COMMAND {
+        return Action::Cost;
     }
     if line.trim() == COMPACT_COMMAND {
         return Action::Compact;
@@ -2315,7 +2333,7 @@ fn event_loop(
     session.adopt_keybindings(settings.keybindings());
     let (permissions, rejected) = bravebot_agent::permissions::from_settings(
         &settings,
-        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
     );
     // Said out loud, because a rule that parses as nothing is a rule somebody believes is in
     // force. A misspelled deny rule reads as protection that is not there.
@@ -2594,6 +2612,10 @@ fn event_loop(
                         }),
                 });
                 session.report(report);
+                needs_draw = true;
+            }
+            Action::Cost => {
+                session.report_spend();
                 needs_draw = true;
             }
             Action::Compact => {
@@ -3042,6 +3064,10 @@ fn against_workspace(root: &std::path::Path, directory: &str) -> String {
 /// Only a leading one, and only when it is the whole first segment, so a directory genuinely called
 /// `~notes` is left alone. Without a home to expand to, the path is passed through and the
 /// workspace refuses it for not being absolute, which says the same thing.
+///
+/// The directory comes from [`bravebot_agent::home::profile`] rather than from `HOME` read here,
+/// so that a `~` somebody types and a `~` the planner writes in a command line name the same file
+/// (CMDLINE-4). Two readings of the environment are two answers waiting to differ.
 fn expand_home(directory: &str) -> String {
     let Some(rest) = directory.strip_prefix('~') else {
         return directory.to_string();
@@ -3049,11 +3075,9 @@ fn expand_home(directory: &str) -> String {
     if !(rest.is_empty() || rest.starts_with('/')) {
         return directory.to_string();
     }
-    match std::env::var_os("HOME") {
-        Some(home) if !home.is_empty() => {
-            format!("{}{rest}", std::path::Path::new(&home).display())
-        }
-        _ => directory.to_string(),
+    match bravebot_agent::home::profile() {
+        Some(home) => format!("{}{rest}", home.display()),
+        None => directory.to_string(),
     }
 }
 
@@ -4168,6 +4192,7 @@ fn manifest_animated(
     // is the same reason a pipe is refused (MANIFEST-9).
     let worker_task = Task::new(task)
         .with_home(bravebot_agent::home::directory())
+        .with_profile(bravebot_agent::home::profile())
         .with_model(session.model().map(str::to_string))
         .with_effort(session.effort_in_force())
         .with_permissions(permissions.clone())
@@ -4717,6 +4742,7 @@ fn run_turn_animated(
     let mut task = Task::new(prompt)
         .with_rounds(None)
         .with_home(bravebot_agent::home::directory())
+        .with_profile(bravebot_agent::home::profile())
         // There is somebody in front of this, so a run prompt here may offer the key whose answer
         // outlives the session. A one-shot run says nothing here and reads no record.
         .remembering(Some(session_id.to_string()))
@@ -5607,12 +5633,14 @@ mod tests {
                     id: "arn:aws:bedrock:us-west-2:1:application-inference-profile/abc".to_string(),
                     name: Some("GPT-5.6 Sol (Bedrock)".to_string()),
                     context_window: Some(1_050_000),
+                    output_limit: Some(32_000),
                 },
                 Entry {
                     tier: None,
                     id: "openai.gpt-5.6-sol".to_string(),
                     name: None,
                     context_window: None,
+                    output_limit: None,
                 },
             ],
         ));
@@ -9758,6 +9786,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn typing_the_cost_command_reports_rather_than_prompting() {
+        let mut session = Session::new("none");
+        for c in COST_COMMAND.chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::Cost);
+        assert!(session.input().is_empty(), "the command stayed on the line");
+        assert!(
+            session.transcript.is_empty(),
+            "the command was sent as a prompt"
+        );
+    }
+
+    /// Asking the planner what a session has cost is a question, not a command.
+    #[test]
+    fn a_prompt_containing_the_cost_command_is_still_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "what does /cost show".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("what does /cost show".to_string())
+        );
+    }
+
     /// Asking the planner about status is a question, not a command.
     #[test]
     fn a_prompt_containing_the_status_command_is_still_a_prompt() {
@@ -9781,6 +9838,28 @@ mod tests {
         assert_eq!(expand_home("~notes"), "~notes");
         assert_eq!(expand_home("/tmp/notes"), "/tmp/notes");
         assert_eq!(expand_home("relative/notes"), "relative/notes");
+    }
+
+    /// CMDLINE-4: a `~` somebody types and a `~` the planner writes in a command line stand for
+    /// the same directory.
+    ///
+    /// Two layers resolving it apart is the symptom a person meets: `~/notes.txt` typed at the
+    /// prompt reaches one file and the same path in a line the planner sent reaches another, with
+    /// nothing on screen to say why. Both answers come from one accessor so that a change to what
+    /// a `~` means cannot move one of them alone.
+    #[test]
+    fn a_typed_tilde_and_a_compiled_one_stand_for_the_same_directory() {
+        let profile = bravebot_agent::home::profile().expect("a home directory");
+
+        assert_eq!(
+            expand_home("~/notes.txt"),
+            format!("{}/notes.txt", profile.display())
+        );
+        assert!(
+            !expand_home("~/notes.txt").contains(".bravebot"),
+            "a typed `~` named the state directory: {}",
+            expand_home("~/notes.txt")
+        );
     }
 
     #[test]

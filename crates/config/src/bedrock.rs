@@ -109,6 +109,12 @@ pub struct Entry {
     /// `None` reads as [`CONTEXT_WINDOW`]. A tier never states one, an opaque ARN having nothing to
     /// state it from, and a `provider` block may.
     pub context_window: Option<u64>,
+    /// How long a reply this model may write, where the configuration stated it.
+    ///
+    /// `None` reads as [`OUTPUT_LIMIT`], the same way an unstated window reads as
+    /// [`CONTEXT_WINDOW`]. A tier never states one and a `provider` block may, out of the same
+    /// `limit` block the window comes from.
+    pub output_limit: Option<u64>,
 }
 
 impl Entry {
@@ -119,6 +125,7 @@ impl Entry {
             id,
             name: None,
             context_window: None,
+            output_limit: None,
         }
     }
 
@@ -138,6 +145,11 @@ impl Entry {
     pub fn window(&self) -> u64 {
         self.context_window.unwrap_or(CONTEXT_WINDOW)
     }
+
+    /// The ceiling a reply from this model is capped at, stated or assumed.
+    pub fn output(&self) -> u64 {
+        self.output_limit.unwrap_or(OUTPUT_LIMIT)
+    }
 }
 
 /// Everything needed to talk to Bedrock, when a build is pointed at it.
@@ -152,6 +164,11 @@ pub struct Bedrock {
     /// Possibly empty: a block that turns Bedrock on without naming a model is still Bedrock, and
     /// the resulting "no models configured" is a better thing to report than a guessed ARN.
     models: Vec<Entry>,
+    /// A ceiling somebody exported, which outranks whatever the models state.
+    ///
+    /// Set by [`crate::Config`] rather than here, because a `provider` block is parsed with no
+    /// environment to consult and both routes to an account have to answer the same.
+    output_budget: Option<u64>,
 }
 
 /// The context window a Bedrock model is assumed to have, in prompt tokens.
@@ -169,6 +186,21 @@ pub const CONTEXT_WINDOW: u64 = 131_072;
 // Compaction depends on the budget sitting under the window: above it, compaction is not delayed but
 // removed, silently. A compile is a better place to find that out than a transcript.
 const _: () = assert!(CONTEXT_WINDOW > crate::DEFAULT_CONTEXT_BUDGET);
+
+/// How many tokens a Bedrock reply may run to, where nothing states another figure.
+///
+/// The error leans low here for the opposite reason it does for [`CONTEXT_WINDOW`], and with the
+/// opposite consequence. A ceiling under what the model would allow costs the tail of a long
+/// answer; one above what it allows is a request the service refuses outright, and refuses every
+/// time, so a model that would have answered at all answers nothing. Bedrock fronts models from
+/// several providers whose ceilings differ by an order of magnitude, an inference-profile ARN does
+/// not say which model is behind it, and no endpoint reports the figure, so there is nothing to
+/// resolve a guess against.
+///
+/// Low enough to hurt, therefore, and the answer to that is to state a better one rather than to
+/// guess a better one here: a `provider` block states it per model beside the window, and
+/// [`env_var::OUTPUT_BUDGET`] states it for a tier, which has no block to state anything in.
+pub const OUTPUT_LIMIT: u64 = 8_192;
 
 impl Bedrock {
     /// Read Bedrock configuration from a lookup, or `None` if this build is not pointed at it.
@@ -197,6 +229,7 @@ impl Bedrock {
             region,
             profile,
             models,
+            output_budget: None,
         })
     }
 
@@ -237,7 +270,29 @@ impl Bedrock {
             region,
             profile,
             models,
+            output_budget: None,
         }
+    }
+
+    /// The same account with an exported reply ceiling applied to every model it reaches.
+    pub fn with_output_budget(mut self, budget: Option<u64>) -> Self {
+        self.output_budget = budget;
+        self
+    }
+
+    /// How long a reply from `model` may run before the service cuts it off.
+    ///
+    /// An exported budget, then what the model's own block stated, then [`OUTPUT_LIMIT`]. That is
+    /// the order the rest of the configuration resolves in, and the one a person debugging a
+    /// session expects: a variable they exported for this run wins over a file they wrote once.
+    ///
+    /// A model this account does not offer still gets a figure rather than nothing. The request
+    /// would fail on the name long before the ceiling mattered, and a caller holding an
+    /// `Option<u64>` here would have to invent the same fallback.
+    pub fn output_limit(&self, model: &str) -> u64 {
+        self.output_budget
+            .or_else(|| self.entry(model).and_then(|entry| entry.output_limit))
+            .unwrap_or(OUTPUT_LIMIT)
     }
 
     /// Every configured model, strongest tier first.
