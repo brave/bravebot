@@ -24,7 +24,8 @@ that follows. `changes` replays whatever is still deferred ahead of the new span
 
 import argparse
 import re
-import subprocess
+# Only ever invoked with an argument list, never a shell string.
+import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 from pathlib import Path
 
