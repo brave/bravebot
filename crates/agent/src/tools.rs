@@ -2354,7 +2354,7 @@ pub(crate) fn materialise<S: Sink>(
     // reads on the screen were the planner's, which are the ones that read nothing.
     let mut opened = Vec::new();
     for slot in wanted {
-        let was_unread = slots.deferred(slot).is_some();
+        let was_unread = slots.is_unread(slot);
         policy
             .materialise(tool, slot, slots, |path| read_into_slot(workspace, path))
             .map_err(|denial| format!("refused: {denial}"))?;
@@ -5107,10 +5107,15 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
             produced.incomplete = answer.partial;
             produced
         }
-        // Locations only, which is every operation but hover. The line is the driver's, composed
-        // from structure, so there is nothing here to quarantine.
+        // Locations only, which is every operation but hover. The label is not built here: it is
+        // LSP-3's, and `crate::lsp::label_for_locations` is where the clause and its bound are
+        // argued. Trusted so the planner reads it, private so nothing routes on it.
         None => {
-            let mut produced = Produced::new(Labelled::trusted(described), relative, note);
+            let mut produced = Produced::new(
+                Labelled::new(described, crate::lsp::label_for_locations()),
+                relative,
+                note,
+            );
             produced.incomplete = answer.partial;
             produced
         }

@@ -22,6 +22,13 @@ see them.
 A listing is trusted only if every file it touched is. A file can be named to read like an
 instruction, so the names are treated as content and not shown to the planner.
 
+**The same bytes reach the planner from a language server, and that is not this clause being
+contradicted.** [LSP-3](lsp.md#LSP-3) agrees that a filename is content and admits a bounded
+disclosure of one anyway, because a location is a name *and* a position and the remedy
+[LIST-2](#LIST-2) uses here, a reference the planner passes where it would have typed a path,
+carries no position and opens nothing outside the workspace. What that clause owes this one is the
+bound written down and its cost enumerated, which is where to read what a name can still carry.
+
 `verified-by: bravebot_agent::workspace::list_enumerates_files_recursively`
 `verified-by: bravebot_agent::turn::untrusted_listings_never_reach_the_model`
 
