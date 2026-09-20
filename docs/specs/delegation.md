@@ -7,6 +7,8 @@ governs:
   - crates/core/src/policy.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/report.rs
+  - crates/agent/src/timing.rs
+  - crates/agent/src/shared.rs
 guards:
   - symbol: Policy::before_delegate
   - symbol: Policy::adopt_from_delegate
@@ -308,6 +310,46 @@ front of them for a turn they were told had finished.
 `verified-by: bravebot_agent::turn::a_turn_does_not_answer_while_a_delegate_is_still_working`
 `verified-by: bravebot_agent::turn::two_delegates_work_at_the_same_time`
 
+<a id="DELEGATE-18"></a>
+### DELEGATE-18: inference wait counts elapsed time once
+
+A parent's inference time includes the union of delegate model request intervals, clipped to the
+parent's actual join windows. All intervals use the same monotonic clock. Overlapping requests
+count once, and sequential collections cannot charge the same instant twice. For a wait from 100
+to 200, requests spanning `[80, 150)` and `[120, 180)` contribute 80, the interval `[100, 180)`.
+
+A request completed before a join adds no inference time to that join. Background work during a parent's
+own request, tool, approval or overhead time adds none either. Gaps between delegate requests and
+other non-inference parts of a join remain overhead. Delegate tool and approval durations do not
+become parent tool or stalled time. These rules also apply when collecting failed or cancelled
+delegates, and when a parent collects outstanding delegates while ending a failed or cancelled turn.
+
+Request intervals span whole planner, processor, vetting and compaction calls, including failed
+calls. Planner calls include retries and retry waits. Durations are rounded once when the turn
+reports milliseconds. Tokens, cache usage and request counts describe all work performed;
+elapsed time does not change their additive accounting.
+Nested delegates are refused by [DELEGATE-7](#DELEGATE-7).
+
+**Why.** Adding concurrent request durations would report time the parent did not spend waiting.
+A delegate's final duration alone cannot say which part fell inside a wait. Retaining intervals
+also lets a later collection account for its requests during earlier joins without charging them
+again.
+
+`verified-by: bravebot_agent::timing::delegate_requests_cover_only_their_union_inside_a_wait`
+`verified-by: bravebot_agent::timing::successive_collections_charge_each_covered_instant_once`
+`verified-by: bravebot_agent::turn::overlapping_delegate_requests_charge_one_elapsed_wait`
+`verified-by: bravebot_agent::turn::failed_parent_keeps_overlapping_delegate_retry_waits`
+`verified-by: bravebot_agent::turn::reporting_between_delegate_joins_is_not_inference_wait`
+`verified-by: bravebot_agent::turn::completed_delegate_requests_do_not_charge_background_time`
+`verified-by: bravebot_agent::turn::delegate_collection_keeps_success_and_failure_wait_time`
+`verified-by: bravebot_agent::turn::failed_parent_keeps_delegate_wait_time`
+`verified-by: bravebot_agent::turn::cancelled_parent_keeps_delegate_wait_time`
+`verified-by: bravebot_agent::turn::cancellation_cleanup_does_not_charge_completed_delegate_requests`
+`verified-by: bravebot_agent::turn::cancelled_cleanup_retains_inflight_delegate_inference`
+`verified-by: bravebot_agent::turn::delegate_read_output_vetting_covers_parent_wait`
+`verified-by: bravebot_agent::turn::stopped_parents_collect_outstanding_delegate_usage_once`
+`verified-by: bravebot_agent::turn::delegate_processor_compaction_and_vetting_requests_cover_parent_waits`
+
 ## Known costs
 
 - **A reference cannot be handed to a delegate.** A parent working in a directory nobody vouched
@@ -321,12 +363,15 @@ front of them for a turn they were told had finished.
   and the diff, and does not say which of the runs in flight is asking. A person reading only the
   prompt is approving a change whose reason is one of several tasks they did not read.
 
-- **A turn's timings do not add up to its wall clock.** What a delegate spends is counted in the
-  turn's tokens, because the turn asked for it and somebody is paying for it. Its seconds are not:
-  several delegates and the turn spend the same seconds at once, so a figure adding them would
-  report a turn as having taken longer than it did.
-
 - **A delegate's task is a guess about what it will need.** It cannot come back for more and it
   cannot ask, so a task missing a detail is a delegate that reports having been unable to finish,
   and the round it spent is spent. The alternative is a channel back to the planner, which is a
   conversation, and a conversation is the context this exists to avoid.
+
+- **Everything a delegate spent on something other than a request reads as the parent's own
+  remainder.** [DELEGATE-18](#DELEGATE-18) charges its requests and nothing else, so a join spent
+  running a build, waiting for somebody to answer a prompt, or between two of the delegate's own
+  requests lands in the figure [sessions.md](sessions.md) leaves over. On a turn that ran no
+  delegate that figure is the harness's own time and is read as such, and on one that delegated it
+  is not. Charging the rest to the parent's tool or stalled figures would put seconds there that
+  the parent did not spend there, which is the double count the partition exists to avoid.

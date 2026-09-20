@@ -26,7 +26,6 @@ use bravebot_core::event::Sink;
 use bravebot_core::policy::{Policy, Vouched};
 use bravebot_core::value::Labelled;
 use std::fmt;
-use std::time::Duration;
 
 use crate::confirm::Confirmer;
 use crate::conversation::Conversation;
@@ -121,13 +120,6 @@ pub struct Delegated {
     pub rounds: usize,
     /// What it cost, so the turn can report the whole of what it spent.
     pub usage: Usage,
-    /// How long it spent waiting on the model.
-    ///
-    /// Reported apart from the wall clock so the seconds land in the turn's inference figure
-    /// rather than in its tool figure. A delegate is a run of requests, and charging them to tool
-    /// execution would make a turn that delegated its work read as one that ran a very slow
-    /// subprocess.
-    pub inference: Duration,
 }
 
 /// Everything about a delegate that was settled before it existed.
@@ -274,7 +266,6 @@ pub fn run(
                 // turn whose cache never hit.
                 cached: outcome.cached,
             },
-            inference: Duration::from_millis(outcome.timing.inference_ms),
         },
         vouched: Vouched {
             trust: outcome.trust,
