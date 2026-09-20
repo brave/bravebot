@@ -4,6 +4,12 @@ The kind labels say what an issue **is**: `bug`, `security`, `spec-mismatch`, `s
 `spec-bug`, `parity`, `enhancement`. The three axes say what to **do** about it, and every open
 issue carries one value from each: an `importance`, an `urgency`, and a `size`.
 
+More than one kind can be true at once, and a `spec-mismatch` usually carries a second: `bug` where
+the code attempts the clause's behaviour and gets it wrong, `enhancement` where nothing attempts it
+at all. Which it is answers a question the clause id cannot, and `is:open label:bug` is how somebody
+asks what is broken today rather than what diverges. A `spec-coverage` takes neither, because a
+clause nothing pins is a clause whose behaviour is right.
+
 A missing axis is not a low value. It means nobody has judged the issue, and an unjudged issue is
 invisible to every query built over the backlog: it is in no importance ordering, no urgency queue,
 and no list of what fits in an afternoon.
