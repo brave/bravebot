@@ -244,7 +244,7 @@ carrying a label already refuses equality for the same reason
 ([LABEL-4](labels.md#LABEL-4)); the type carrying a secret has the stronger claim to it.
 
 `verified-by: bravebot_config::lib::secrets_are_redacted_in_debug_and_display`
-`verified-by: by-construction (Debug and Display both redact; no Deref, AsRef, Borrow, Serialize, From or PartialEq impl exists)`
+`verified-by: by-construction (Debug and Display both redact; no Deref, AsRef, Borrow, Serialize or From impl or derive exists; equality is pinned by the compile_fail doctest on Secret in crates/config/src/lib.rs, since a derive is not spelled impl and a reader grepping for one would miss it)`
 
 <a id="CRED-2"></a>
 ### CRED-2: every credential carries a tier, and the tier is where its gate walk stopped
