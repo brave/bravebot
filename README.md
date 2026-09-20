@@ -40,10 +40,9 @@ checksum, and a session started on an old version says so and gives the line tha
 [docs/getting-started.md](docs/getting-started.md) for installing, running, and what it asks you.
 
 The documentation site at
-[brave-experiments.github.io/bravebot-docs](https://brave-experiments.github.io/bravebot-docs/)
-covers the same ground for somebody using bravebot rather than working on it, and is kept downstream
-of the specs below. Its source is
-[bravebot-docs](https://github.com/brave-experiments/bravebot-docs).
+[brave.github.io/bravebot](https://brave.github.io/bravebot/)
+covers the same ground for somebody using bravebot rather than working on it, and is maintained
+in-tree under [docs/website](docs/website).
 
 ## How it works
 

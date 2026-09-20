@@ -18,12 +18,16 @@
     "npm/bin",
     "npm/scripts",
     "README.md",
-    "docs",
+    "docs/*.md",
+    "docs/best-practices",
+    "docs/development",
+    "docs/specs",
     "LICENSE"
   ],
   "scripts": {
     "postinstall": "node npm/scripts/postinstall.js",
-    "lint:lockfile": "lockfile-lint --path package-lock.json --type npm --allowed-hosts npm --validate-https --validate-package-names --validate-integrity"
+    "lint:lockfile": "lockfile-lint --path package-lock.json --type npm --allowed-hosts npm --validate-https --validate-package-names --validate-integrity",
+    "lint:lockfile:website": "lockfile-lint --path docs/website/package-lock.json --type npm --allowed-hosts npm --validate-https --validate-package-names --validate-integrity"
   },
   "engines": {
     "node": ">=18"
