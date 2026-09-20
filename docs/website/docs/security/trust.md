@@ -37,15 +37,43 @@ an earlier one.
 That is what lets `@vendor/lib.js` be trusted inside a `vendor` you marked untrusted, without the
 answer leaking to its siblings.
 
+**Every rule is keyed on a full path, and there is one set of them.** You may name a file
+relatively, which is how a file in the project is named, and the map reads that under the working
+directory: `src/main.rs` in a session working in `/work` is a rule about `/work/src/main.rs`, and the
+project's own rule is `/work`. So the project is a path like any other rather than a prefix covering
+everything, and a directory you opened by name sits in the same map without reaching into the
+project: `~/notes` does not prefix `~/proj`, and whole-segment matching is what stops a rule about
+`~/proj` covering `~/proj-secret`.
+
+A rule about a directory that *does* hold the project covers the project's files, because you
+vouched for a tree the project is in. The project's own rules are the more specific ones and still
+decide wherever they exist, so a no given inside the project is not undone by a yes given above it.
+
 A rule is about a **path**, not about the files that were in it when the rule was made, and it is
 consulted when a file is read rather than when the rule is written. A file that appears in a trusted
 directory afterwards is therefore read as trusted, whoever put it there.
 
-Relative and absolute rules are separate namespaces. A rule under the working directory decides
-nothing about a directory opened by absolute path, and the reverse. The working directory's own rule
-is the *empty* prefix, since every path in the project is named relative to it. Matching absolute
-paths against that same map would mean answering yes at startup silently vouched for every directory
-opened later.
+### Which name a path is asked about under
+
+A path is reduced to the open directory it lands in, and takes that directory's recorded name with
+the rest of the path as it was spelled. The open directories are the working directory and the ones
+you opened by name, each under the path its name resolved to. So a file in the project reaches one
+rule whichever way it is spelled: naming it in full finds the rule its relative name wrote, and
+vouching for it under either spelling records the same rule.
+
+This is what makes two spellings of a directory one rule, including the spellings only the
+filesystem can tell apart. A directory named through a link is the same directory, which matters on
+macOS where `/tmp` and `$TMPDIR` are both links: without this, a file you vouched for would be
+quarantined under half its names.
+
+Two paths are asked about exactly as written, because neither has a spelling under a recorded name:
+one landing in no open directory, and one reaching an open directory through a link straight into the
+middle of it rather than through that directory's own name. Nothing covers either.
+
+**A directory whose resolved name cannot be keyed is refused rather than opened.** A key is spelled
+from `/`, so `/add-dir` and `/cd` both refuse a path that is not, rather than recording a rule under
+a name that would be read as a path inside the project, where your answer at startup covers it. On
+Windows that is every path there is, so opening a directory by name is unavailable there for now.
 
 ## What a write does
 
@@ -120,6 +148,8 @@ asked whether to trust it:
 ╭ let the model read this file? ────────────────────────────╮
 │Trust game.js                                              │
 │                                                           │
+│  the check found no attempt to give instructions in this  │
+│                                                           │
 │  the model cannot read this file, so it is working blind  │
 │  on it. Vouching lets it read this file for the rest of   │
 │  this session, here and in every later read.              │
@@ -133,6 +163,11 @@ asked whether to trust it:
 Yes writes exactly the rule `@` would have written, so it stays consistent for every later read. It is
 asked once per path per turn, and only where the read is quarantined. Declining leaves the file as it
 was and the turn carries on with a reference.
+
+**The line above the preview is a [check](vetting.md) reading the whole file**, not the few lines you
+can see, because a yes grants the whole file. It decides nothing: a yes writes the rule whatever the
+check said, and a no writes nothing whatever it said. It is there because the preview alone left you
+answering the question that grants the most with the least in front of you.
 
 **What the file holds decides nothing about whether you are asked.** A file with nothing to show,
 because it is empty or does not read as text, is asked about like any other, and the prompt says so
@@ -150,14 +185,18 @@ over a string the planner chose rather than one you typed.
 /add-dir ~/notes
 ```
 
-records an absolute rule that does two things together: the directory becomes reachable, since an
-absolute path is otherwise refused whatever the map says, and it is recorded as trusted. Either half
-alone is no use. One leaves a rule about files nothing can open, the other a directory that prompts
-on every edit.
+records a rule under that directory's own path that does two things together: the directory becomes
+reachable, since an absolute path is otherwise refused whatever the map says, and it is recorded as
+trusted. Either half alone is no use. One leaves a rule about files nothing can open, the other a
+directory that prompts on every edit.
 
 It lasts the session, `--resume` carries both halves, and `/clear` closes it. A directory already
 inside the project is refused. A directory a resume cannot open again, because it has moved or gone,
 says so rather than being passed over.
+
+A directory that *holds* the project is **not** refused, and its rule covers the project's files as
+it covers everything else in that tree. Vouching for a directory is a standing statement about the
+place, and the project is in it, so there is nothing to except.
 
 **The command-line [`--add-dir`](../reference/cli.md#--add-dir-path) grants only the first half.** A
 one-shot run can reach the directory and vouches for nothing in it, since the gesture behind the
@@ -174,21 +213,81 @@ makes that directory the working directory and vouches for it, on the same terms
 typed the path, and a later decision replaces an earlier one. See
 [`/cd`](../reference/commands.md#cd-path) for everything else it moves.
 
-**The map comes with you, re-spelled rather than carried over.** Every rule is rewritten to say what
-it always said about the same files: one inside the new working directory becomes relative to it, and
-one outside becomes absolute. That grants nothing and withdraws nothing, which is what makes it
-something bravebot can do without asking you.
+**The map says what it always said, and carries nothing with it.** Every rule names the file it
+always named, because every key is a full path. What changes is only which rules a relative name
+reaches and how each is spelled back to you. So a yes given for one project does not become a yes for
+another, and a no given inside the old one is not forgotten. That grants nothing and withdraws
+nothing, which is what makes it something bravebot can do without asking you.
 
 Anything overlapping the new working directory closes: the directory you left, and any `/add-dir`
-directory holding it or sitting inside it. A file reachable both relatively and by absolute path has a
-rule in each namespace, and the two are kept apart precisely so that one file has one answer.
+directory holding it or sitting inside it, each said out loud as it happens. A directory reachable
+through the new root as well as under its own name would leave two names for a path to be asked about
+under, with nothing to choose between them.
 
 ## Reach stays confined
 
 No rule extends reach. Reading, writing, editing, listing and searching are confined to the working
-directory and to whatever has been opened beside it. `..` and absolute paths outside those are refused
+directory and to whatever has been opened beside it, the [directory the session was
+given](#a-directory-of-the-sessions-own) among them. `..` and absolute paths outside those are refused
 rather than resolved, in an added directory exactly as in the project, and a symlink leaving one is
 refused. A relative path always means the project, never a directory opened beside it.
+
+Confinement is about where an operation lands rather than how its path is spelled, so it holds for a
+file that does not exist yet: a write creates what it names, and a symlink out of the tree is refused
+whether or not there is anything at the other end of it.
+
+## A directory of the session's own
+
+Every session is given a directory of its own in the system temporary directory, created as the
+session opens, and it is somewhere to put an intermediate file. A one-shot run has one for as long as
+it runs. A session that cannot be given one runs without one and says so.
+
+`/status` reports it as the session's own, on a line of its own rather than among the rules, because
+it is reachable without any rule covering it.
+
+**A program a `run` starts is told where it is**, through `BRAVEBOT_SCRATCH_DIR` in the environment of
+every stage of the line, in the background as in the foreground. An assignment of that name on the
+line itself wins, as it would in a shell. A session with no directory of its own sets nothing, so a
+program finds the name absent rather than pointing somewhere that is not there. The planner is told
+the same path at the same point, since a variable nothing knows to read is a variable nothing reads.
+`$TMPDIR` for such a program stays whatever it was.
+
+The reason this exists is that the alternatives are worse. A file in the project is one a build, a
+test run, a `git add -A` and a reviewer each have to deal with, and one somebody has to remember to
+delete. Reaching `/tmp` instead would mean `/add-dir /tmp`, which vouches for whatever every other
+process on the machine has left in a world-writable directory in the same action.
+
+### What it is trusted for, which is nothing extra
+
+A path under it resolves, so a file there is read, written, listed and searched by its absolute path.
+The temporary directory it sits in is **not** reachable, and a path leaving the session's own
+directory is refused exactly as one leaving the project is. Neither `/add-dir` nor `/cd` will take it.
+
+Nothing is trusted for being there. The directory carries no rule of its own, so a path under it that
+no rule covers is answered by whatever you said about the workspace, which trusts nothing where you
+declined. Per file the answer is the one [a write records](#what-a-write-does), marking the exact path
+written. A line whose output is untrusted distrusts the file it redirected into here as anywhere else,
+which is what stops a turn reading its own untrusted output back as trusted.
+
+It is a place to write, not a place where writes stop being asked about. A path under it appears in a
+plan's write set, is shown in the prompt, and takes every write gate a path in the project takes. What
+it buys is a fixed place that needs no name invented for it, that your repository does not report,
+that no search has to skip, and that goes when the session does.
+
+### Nothing in it outlives the session
+
+The directory goes as the session ends, with everything in it, whether the session ended by being left
+or by an error on the way out. A session that carries on from another is given its own: a resume, a
+fork, and the session `/clear` begins each open a new one, and the directory belonging to the session
+they followed is removed rather than handed on. A resume can come days later, and bytes surviving that
+gap would be a cache nothing evicts.
+
+An [undo](../using/sessions.md) does not reach in here. A file a turn wrote in this directory is
+neither restored nor removed, and it is not named among the paths the rewind could not put back. What a
+turn keeps so that it can be undone is a bounded amount shared by every file that turn wrote, and an
+intermediate file is exactly the size of thing that bound is set to stay clear of: keeping one would
+spend what a source file's own copy needed, so the file you want undone would lose to the file nobody
+does.
 
 ## How long an answer lasts
 
@@ -198,7 +297,13 @@ session in that directory answered. `/clear` begins a session and therefore asks
 `--resume` does not ask: it restores the map from the record of the session you chose, because the
 answer honoured is the one that session's own user gave. It also carries the rules that session's
 writes recorded, which is what stops a resumed turn reading back a file an earlier turn of the same
-session poisoned.
+session poisoned. A record from before maps were kept has none, and is asked about.
+
+**What the record keeps is the name rather than the key.** A rule inside the project is written down
+relative to it and a rule outside is written down in full, and a resume puts the resuming directory
+back on the relative ones. That is what keeps a record about the same files after you move or rename
+the checkout: full paths on disk would each name somewhere that is no longer there, nothing would
+match, and the session would resume as though nobody had vouched for anything.
 
 The question grants standing permission. Honouring last week's answer would grant it on behalf of a
 user who was never asked, and trust assumed from silence is not trust granted.
@@ -209,14 +314,15 @@ user who was never asked, and trust assumed from silence is not trust granted.
 /status
 ```
 
-lists every rule in force, so what a line vouched for does not have to be remembered.
+lists every rule in force, however many there are, so what a line vouched for does not have to be
+remembered. The [session's own directory](#a-directory-of-the-sessions-own) gets a line of its own
+there, since it holds no rule to list.
 
 ## `~/.bravebot` is not governed by this
 
-Your own directory is read as trusted **by provenance** rather than by any rule here, because the map
-is keyed by workspace-relative paths and has nothing to say about a path outside the workspace. A
-project's own files are *not* covered by that and are read through the map, whatever their names. See
-[Instructions](../customize/instructions.md#trust).
+Your own directory is read as trusted **by provenance** rather than by any rule here: putting a file
+there is itself the grant. A project's own files are *not* covered by that and are read through the
+map, whatever their names. See [Instructions](../customize/instructions.md#trust).
 
 ## Known costs
 
@@ -241,6 +347,12 @@ All of these are deliberate.
   Said plainly: **trusting a directory trusts what lands in it**, so a tree that a build or a
   dependency manager writes into is a tree you are vouching for ahead of time.
 
+  The [session's own directory](#a-directory-of-the-sessions-own) meets this more often without
+  changing what it is. Writing a file and reading it back is incidental in a project and is the whole
+  purpose of that directory, and `cmd -o` into it is the ordinary case there rather than the odd one,
+  so the redirection exception covers less of the traffic. No rule about that would help, since the
+  same writes are available one directory up.
+
 - **A symlink inside the project gives one file two names, and each name is its own rule.** A rule is
   keyed on the path an operation spelled, while confinement resolves where that path lands, and the
   two do not have to agree. So content written as untrusted through one name is read back as trusted
@@ -253,3 +365,15 @@ All of these are deliberate.
   out by resolving it, and the read or the write happens after that. A tree already arranged to escape
   the project is refused. A tree rearranged in the window between the two, so that a directory
   resolved on the way in is a symlink by the time the file is opened, is not.
+
+- **An undone turn's intermediate files stay until the session ends.** Nothing written in the
+  session's own directory goes back, so a turn that wrote one there and was undone has left a file a
+  later turn in the same session can read. The directory goes when the session does, and what is in it
+  is the workings of a turn rather than anybody's work in progress.
+
+- **Confinement does not keep a confined program out of the session's directory.** A program that
+  cannot open a temporary file fails outright, so a [confined run](security.md) is allowed the system
+  temporary directory, and the session's own directory is inside it. Narrowing that to the one
+  directory would leave a compiler or a package manager nowhere to write. So a confined stage can read
+  what a turn left there without its plan naming the path. A program `run` starts is unconfined, so
+  this arrives with the profile rather than before it.

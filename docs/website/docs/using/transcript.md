@@ -9,8 +9,12 @@ description: What is drawn back, and the scroller Ctrl-O opens over it.
 ## What is drawn
 
 A reply is drawn as it arrives, and the round that ends replaces it. The end of a reply is visible
-when it arrives, so scrolling back is always deliberate. A resumed session redraws what the earlier
-turns did. A tiny terminal still renders.
+when it arrives, so scrolling back is always deliberate. A tiny terminal still renders.
+
+A resumed session redraws what the earlier turns did: each one keeps the prompt you sent and how it
+ended, failures and cancellations included, so reading a transcript back does not depend on
+remembering the session. A task list stays on the turn that made it, and a later turn without one
+does not inherit it.
 
 **Untrusted content is shown to you on purpose.** You are the one party allowed to read it, and the
 point of quarantine is that the decision comes to you rather than to the model. It is drawn inside a
@@ -33,12 +37,20 @@ and an ordinary one does not clutter the transcript saying what always happens.
 
 ## The end of a turn
 
-A finished turn gets a row of its own: which turn it was, what it cost, and how long it took. A turn
-that failed is reported as stopped, without a cost. The row lasts until the next turn starts.
+A finished turn gets a row of its own: which turn it was, what it cost, and how long it took. The row
+lasts until the next turn starts.
 
 This is how you tell a turn that ended from one that is hanging. A reply that asked for no tool ends
 the turn, so one ending on `now let me look at the dispatch code` would otherwise leave a promise as
 the last thing on screen.
+
+**Succeeding, failing and being cancelled each get their own label**, so a turn you stopped does not
+read as one that broke. A turn that failed carries no cost and says why, below its row and again in
+its transcript entry: fixed wording, plus whatever the model service reported and how many requests
+went out. The reason stays where you can read it with the audit trail open or shut, after the
+terminal is resized, and while you are reading older scrollback, and it wraps rather than being cut.
+A reason is drawn inert, so control characters in it cannot paint anything. A turn that succeeds
+after a failure reports its own outcome and takes none of the colour of the one before it.
 
 **A turn that changed files and ran nothing says so.** Where a run was possible, files changed and no
 program was run, the end of the turn tells you plainly that nothing was built or tested. Nothing else
@@ -87,7 +99,8 @@ whatever palette you chose rather than against each other. A mixed shade that ha
 against the background is picked for the background sensed at startup, and a terminal that will not
 say which it has is treated as dark. An aside is one of those: it would otherwise take bright black,
 the slot terminals disagree about most, where in most published schemes it is too faint against its
-own background to read.
+own background to read. So are the inks that tell [shell mode](shell-mode.md) from an ordinary prompt
+and a directory from a file, for the same reason.
 
 A theme you choose by name paints every role from its own palette, including the background and the
 default text. No named slots are used there, so two roles cannot collapse into one because your
@@ -106,6 +119,50 @@ its full 80 milliseconds. It happens once a session, before there is a box to ty
 See [Configuration](../customize/configuration.md#choosing-a-theme) for where the choice is stored
 and how to write one of your own.
 
+## The model picker
+
+[`/model`](../reference/commands.md#model) draws a bordered panel over the session with a search box
+above the list. **Typing narrows the list rather than walking it**, matching without regard to case
+anywhere in the name shown, in the name a request would carry, and in the service that answers, and
+every word you type has to match something. A roster from a gateway runs to hundreds of models, so
+arrowing to a row is not the way in.
+
+The cursor stays on the model it was on for as long as that model still matches, whether you are
+adding to the search or deleting from it, and falls to the first match only when what it was on stops
+matching. A search matching nothing says so, and there is nothing to choose while it does.
+
+**Every row is drawn under the service that will answer it**, one heading per service, in the order
+the roster first mentions each. The models Brave's own endpoint serves are a service like any other. A
+service the roster mentions in more than one place is still a single section, and is never given two
+headings at once. Scrolling through a section holds its heading on the top line, so no row is ever on
+screen without the name of what answers it: the same model name is often reachable through more than
+one service, billed and credentialled differently, and which one answers is what you are choosing
+between.
+
+## When the environment declines colour or motion
+
+Two environment variables are read before the first frame, and each answers to being set rather than
+to what it is set to. `NO_COLOR=0` is somebody who set it.
+
+| Variable | What it does |
+|---|---|
+| `NO_COLOR` | every role is drawn in your terminal's own ink, and none is added |
+| `NO_MOTION` | the glyph beside a running turn stands still instead of cycling |
+
+`NO_COLOR` outranks the theme in force: the background, the mixed shades, the named slots and the
+gradient across the wordmark are all given up, and the terminal is not asked about its background
+because nothing is drawn against a sensed one. A theme you chose stays recorded and paints again once
+the variable is unset, so this is a switch rather than an edit.
+
+Distinctions this interface makes in colour alone are lost, which is what was asked for. Nothing a
+colour was carrying goes with them: **the margin down a block the planner may not read is a glyph on
+every row**, drawn the same way as always. The row a cursor is on is kept too, in reverse video rather
+than a fill, since a list you cannot see your place in cannot be walked.
+
+Under `NO_MOTION` the glyph is still drawn, and the elapsed time and the token counts still change: a
+figure that moves when the thing it measures moves is information rather than animation. A row with
+nothing in it would be indistinguishable from a program that had hung.
+
 ## Scrolling at rest
 
 | Key | Where the view goes |
@@ -122,9 +179,10 @@ All of these work while a turn is running, and the view does not jump to follow 
 were looking at when you pressed the key is the row under your eyes afterwards. It is one view with
 two sets of keys over it, not a second copy of the transcript.
 
-While it is open the keys are the scroller's. A character does not reach the input box, Enter sends
-nothing, and the line you were half-way through keeps its text, its caret and whatever is attached to
-it, coming back exactly as it was when the scroller closes.
+While it is open the keys are the scroller's, and a key it does not take does nothing at all. A
+character does not reach the input box, Enter sends nothing, and a paste or a dropped file does not
+reach the line either. The line you were half-way through keeps its text, its caret and whatever is
+attached to it, coming back exactly as it was when the scroller closes.
 
 The transcript gets every row of the screen but the last, which is the footer. The input box goes,
 the working indicator above it goes, and anything being offered beneath it goes; all of them come
@@ -153,21 +211,30 @@ going, so a held key comes to rest somewhere the next press can move away from.
 
 `/` searches what is drawn. The needle is typed at the foot of the screen, Enter runs it, and it is
 matched as a **substring, character for character, never as a pattern**: case-insensitive while the
-needle is all lower case, exact from the moment it holds a capital. `n` and `N` walk the matches.
+needle is all lower case, exact from the moment it holds a capital.
+
+Every match is highlighted where it already is, how many there are is drawn, and `n` and `N` walk
+them and wrap at the ends. **Two matches on one row are two matches**: the count says so, and the
+second is a press of its own, which moves the count on and leaves the view where it is.
 
 What is searched is the text of the rows as they are drawn, so a match is always something you can
-see. A search matches untrusted content too, and never lifts it out of its block.
+see. A search matches untrusted content too, and never lifts it out of its block, and the footer
+never quotes what it matched.
 
 ### Leaving
 
 `q`, Escape and Ctrl-O each close the scroller, and the view stays where it left it. Escape clears a
-standing search first, since that is the nearer thing to stop; the press after that closes.
+standing search first, since that is the nearer thing to stop; the press after that closes. The other
+ways out close it even while a needle is half typed.
 
 Ctrl-C closes the scroller and does nothing else. A turn in flight goes on running, and the press
 that reaches it is the next one. Each press answers the nearest thing there is to stop, and the
 screen says which.
 
-`?` says what the scroller takes, and the scroller says that it is open.
+A footer stands for as long as the scroller is open, saying so and naming a way out. `?` lists every
+key it takes, and names every one of the four that closes it. The list is read instead of the
+transcript rather than beside it, so **any key at all puts it away** and that press is spent doing so,
+which the list says. A terminal too short for the list loses rows from the middle, never the way out.
 
 ### Getting the text out
 

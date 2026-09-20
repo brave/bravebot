@@ -18,8 +18,11 @@ Each session is two files, named after a version 4 UUID:
 
 **Both are private to you.** On Unix, session directories are created mode 0700 and records, trails
 and the temporary files beside them are written mode 0600, with anything already there tightened on
-write. A record holds the whole conversation: your prompts, the model's replies, the file snippets
+write. Every write narrows the directory it lands in, including the one a [fork](#trying-a-second-approach)
+writes into. A record holds the whole conversation: your prompts, the model's replies, the file snippets
 the planner was shown, and the standing permissions you granted.
+[`/export`](../reference/commands.md#export-path) writes the readable form of it out as markdown, so
+reading a conversation back does not mean reading JSON out of the state directory.
 
 ## Picking one back up
 
@@ -77,7 +80,8 @@ directory you resumed from.
 A [plan-then-execute run](headless.md#planning-the-whole-run-first) cannot be resumed. Its
 conversation is empty, because a session is turns over one conversation and a manifest run has none.
 The picker marks the row and refuses Enter. Naming one on the command line prints what it produced,
-and still does not continue it.
+and still does not continue it. That print is a **report rather than a refusal**: it goes to stdout
+and exits successfully, because reading a run back is what naming one is for.
 
 The record holds its goal, its proposed plan, its frozen steps and what each one did, finished or
 not.
@@ -91,7 +95,14 @@ on, and the **standing permissions its user granted**:
   resumed turn reading back a file an earlier turn of the same session poisoned;
 - the list of [commands you said to stop asking about](../security/permissions.md#vouching-for-a-command);
 - every question you asked with [`/btw`](../reference/commands.md#btw-question), and the answers the
-  record could keep, which come back into the view Ctrl-L opens and into no conversation.
+  record could keep, which come back into the view Ctrl-L opens and into no conversation;
+- the [turns a rewind can still reach](#a-rewind-survives-a-resume), so `/undo` after a resume reaches
+  the same turns it reached before.
+
+Each turn also keeps its number, the prompt as it was shown, what came of it, and its task list,
+spend and timing, a turn that failed or was cancelled included. A recorded failure carries the reason
+the interface composed and never a message from the backend. A prompt handed back to the editor when
+you cancelled stays out of the transcript on resume, though it is still there to recall with Up.
 
 Nothing else survives. A single-use endorsement is created by one approval, is bound to one value and
 is never written down, so a resumed turn cannot replay a write or a run an earlier turn was allowed.
@@ -115,13 +126,35 @@ rather than counted in both. `/status` reports the session total and each part t
 happened, leaving out a part that did not rather than showing it as zero.
 
 What a [delegate](../how-it-works.md#delegates) spends is counted in the turn's tokens. Its seconds
-are not: several delegates and the turn spend the same seconds at once, so adding them would report a
-turn as having taken longer than it did.
+count only where they overlap the stretch the turn actually spent waiting on its delegates, and two
+delegates waiting at once are counted once, so a turn is never reported as having taken longer than
+it did.
 
-A turn that failed is recorded like any other. A `/compact` asked for mid-turn is charged to the turn
-it interrupted, as its tokens are. A record written before any of this was kept reads as an empty
-breakdown, which is not the same as a session that took no time: the durations that were kept are
-still there.
+A turn that failed or was stopped is recorded like any other, charging the progress it had made,
+completed delegate work included. A successful turn charges its outcome alone, and progress resets
+each turn, so a turn that completed no request cannot inherit the previous turn's figures.
+
+A `/compact` asked for mid-turn is charged to the turn it interrupted, as its tokens are. Anything
+asked for **before the first turn**, an aside or a command as the first thing a session does, is
+charged to a leading entry ahead of that turn rather than to no turn at all. A record written before
+any of this was kept reads as an empty breakdown, which is not the same as a session that took no
+time: the durations that were kept are still there.
+
+### Asking what it has cost
+
+```
+/cost
+```
+
+reports the total and, under it, one figure per turn with that turn's share of the total beside it.
+What was spent before the first turn is reported too, without a turn number, since no turn did it. A
+record holding a total and no breakdown says the breakdown is missing, which is not the answer a
+session that has spent nothing gives.
+
+The figures are **tokens, not a bill.** A prompt a service answered out of its own cache is billed at
+a fraction of a fresh one, and the breakdown keeps no cache split per turn, so a figure in money would
+be composed here rather than measured. What is written stays comparable across turns and across
+sessions, which is what the record is read for.
 
 ## What is never written down
 
@@ -130,6 +163,19 @@ planner may see, so what lands on disk is what the planner was allowed to hold. 
 is not written at all, and the trail is labels and gate names with no content in it. A record is read
 back into a later turn's context, so anything written that the planner could not have held would
 enter that context on the next resume.
+
+A [rewind point](#taking-turns-back) is the one part of a record built from bytes no message carried:
+it holds what the files a turn wrote over held, read off the disk rather than out of the conversation.
+Those bytes go into the record only where the trust map that stood before the turn vouched for the
+path. What a file nobody vouched for held is written down as contents this session did not keep.
+
+:::caution
+Vouching for a directory is not saying every file in it is worth copying elsewhere. A turn that
+overwrites a file of credentials **inside a project you trusted** puts its previous contents into the
+record, so they leave the project and land in the state directory. They go once the point ages out a
+few turns later, and mode 0600 covers them while they are there, but a session that ends on such a
+turn leaves them in its record until the record is deleted.
+:::
 
 A pasted picture *is* written down, because it was never quarantined. It is part of your own message,
 and a session that turned on a screenshot would be no use resumed without it.
@@ -161,13 +207,84 @@ refused.
 is a new session it asks the trust question again, restores no standing permissions, and closes any
 directory `/add-dir` had opened.
 
-## Taking the last turn back
+## Starting a plan-then-execute run
 
-[`/undo`](../reference/commands.md#undo) rewinds the most recent turn: the files it wrote go back to
-what they held, and the conversation, the spend and the standing permissions go back with them. One
-turn is as far as it goes, and `/clear`, `/compact`, `/rename`, `/add-dir`, `/cd` and a shell-mode
-command each close the window, as does the next turn beginning. It cannot undo what a *program* the
-turn ran did, since the workspace never saw those writes.
+```
+/manifest collect every TODO comment into notes/todos.md
+```
+
+starts one [plan-then-execute run](headless.md#planning-the-whole-run-first) and hands the session
+back afterwards. It is a run, not a mode the session holds: a session is several turns over one
+conversation, each deciding what to do next after the last one read something, so nothing about the
+session could stay in that mode.
+
+The session is **blocked for the duration.** There is no planner inside a manifest run to hand a line
+to, so you can read, scroll and stop, but not send.
+
+**The conversation is neither read nor written.** It does not go in, because the planner that reads
+the task may hold the task and nothing else. Nothing comes back out either, because every step's
+result is quarantined and there is no planner left to show it to. What the transcript shows is the
+goal as the planner understood it, the frozen plan, each step as it runs, and the reply, none of it in
+the exchange a later turn resumes. The run leaves the conversation exactly as declining a plan leaves
+the workspace.
+
+The run is written down as **its own record** and the session records its name, so the session still
+resumes as a conversation while the run stays a run the picker refuses. A run you stopped is not
+written at all, since there is nothing in it to read.
+
+The plan is [put to you before it runs](headless.md#a-plan-is-put-to-you-first), drawn and scrolled
+here rather than printed on one line. In [plan mode](../security/permissions.md#answering-in-advance-modes)
+a plan with a write in it does not run at all, decided before the plan is put to anybody.
+
+## Taking turns back
+
+[`/undo`](../reference/commands.md#undo) puts the session back where it stood before the most recent
+turn: the files that turn wrote go back to what they held, a file it created is removed, and the
+conversation, the turn count, the spend, the timing and the standing permissions go back with them.
+**Saying it again goes back another turn**, as far as the last five.
+
+A standing permission goes back with the turn that granted it, so a path or a command vouched for
+during a rewound turn is vouched for no longer, while one vouched for before them is untouched.
+
+### Reading a rewind before running one
+
+`/rewind` on its own lists the points the session can go back to, most recent first and numbered
+from one. Each row says how many turns back it is, which turn it would land before, what that turn
+was asked, and every path that turn wrote over, or that it wrote over none.
+
+`/rewind <n>` then goes back that many turns, which is what saying `/undo` n times does, so it puts
+back every row from the first down to the one chosen. A number past what the session remembers
+rewinds nothing and says how far back it does go, rather than going as far as it can: reading a tree
+two turns younger than you believe it is would be worse than a refusal.
+
+### What will not go back
+
+- **What a program did.** The backups are taken inside the workspace, so a turn that changed a file
+  by running a command leaves nothing to put back. The rewind still reports the turn undone, and the
+  conversation is, but those changes stay on disk.
+- **An edit you made since.** What goes back is what the path held *before the turn wrote to it*, so
+  an edit of your own in between is lost. Nothing compares the file first, and nothing asks.
+- **A file past the budget.** What the last five turns wrote over is held to one budget between them
+  rather than one each. Past it the path is still remembered and its contents are not, so the rewind
+  **names that path** as one that did not go back, and the rest of the rewind still happens.
+- **The session's own scratch directory**, which is not part of the project. See
+  [Trusted directories](../security/trust.md).
+
+### What gives up every point
+
+Anything that changes the session outside a turn: `/clear`, `/compact`, `/btw`, `/rename`,
+`/add-dir`, `/cd`, and a shell-mode command, whose writes the workspace never saw. `/undo` then says
+there is nothing left to undo rather than rewinding to a point that describes a different session.
+A rewind that goes back past the first turn removes the record instead of leaving an empty one, and a
+name you gave the session before that turn stays with it.
+
+### A rewind survives a resume
+
+The points are kept with the record, so `/undo` and `/rewind` after a resume reach the same turns
+they reached before the program was closed. One path is the exception: what a file **nobody vouched
+for** held is kept only in memory, never written down, so after a resume that path is reported as one
+that did not go back. The file is left alone rather than deleted, and the turn is undone in every
+other respect.
 
 ## Prompt history
 
@@ -194,8 +311,15 @@ messages go to an archive that both still read.
 /compact
 ```
 
-asks for that work on demand, at any size, without consulting the budget. See
-[Configuration](../customize/configuration.md#context-budget) for the budget itself.
+asks for that work on demand, at any size, without consulting the budget.
+
+The budget is the window the endpoint advertises for **whichever model is in force**, where it
+advertises one, so a one-shot run and a session both get the window of the model they are asking for.
+The built-in default only stands in, for a model resolved per request and for an entry that advertises
+nothing. See [Configuration](../customize/configuration.md#context-budget) for setting it by hand.
+
+A cut has to free more than it keeps, so a conversation with nothing worth giving up is left long
+rather than summarised once per round.
 
 Compaction never touches three things: the quarantine, which holds the only copy of what a surviving
 reference names; the reference counter, since a slot name handed out twice would collide; and the
@@ -220,14 +344,16 @@ from before stays resumable. It stops being updated for as long as the incognito
 
 **Reading is untouched.** The settings, the model and theme you chose, your standing instructions,
 your skills and your imported credentials are all read as usual, so the session is the one you
-configured rather than a fresh install.
+configured rather than a fresh install. The record of command lines you asked to be remembered past a
+session is read on the same terms: a line already in it still stops the asking, and the key that would
+add one is not offered.
 
 The flag may go anywhere in the command line and combines with `-p`, `--resume`, `--mode` and a
 bare invocation alike. It cannot be turned off once the session has started.
 
 ### What it does not cover
 
-Three things still reach the filesystem:
+Four things still reach the filesystem:
 
 - **Your project.** `write_file` and `edit_file` go on editing it. Those edits are the work rather
   than a trace of it.
@@ -237,6 +363,11 @@ Three things still reach the filesystem:
 - **The editor hand-off.** Composing in `$EDITOR` writes a scratch file. It goes to the system
   temporary directory rather than `~/.bravebot`, is readable by nobody else, and does not outlive the
   edit.
+- **The session's own scratch directory.** Somewhere to put a file that is not part of the project is
+  something a turn needs, and this mode does not take it away. It sits in the system temporary
+  directory on the same terms as the editor's file and goes with the session. Its name says which
+  program made it and nothing about which project or which session, so an empty one records only that
+  this program ran at this time.
 
 [`import-leo-creds`](../customize/premium.md) is refused rather than quietly skipped, since a
 credential that did not outlive the session would not be an import. `--forget` still works, because
@@ -253,5 +384,5 @@ Two working directories can share a session store. The directory name is derived
 character outside a small set to `-`, which is lossy, so `/a/b`, `/a-b` and `/a b` all reduce to the
 same name. Because a resume restores standing permissions, permissions granted in one of those
 directories would be offered in another. This is
-[a known bug](https://github.com/brave-experiments/bravebot/issues), not a design decision.
+[a known bug](https://github.com/brave/bravebot/issues), not a design decision.
 :::

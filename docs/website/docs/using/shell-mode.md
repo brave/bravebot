@@ -18,8 +18,8 @@ The line goes to `$SHELL -c`, so globs, `$VAR`, redirection, `&&` and `$(...)` a
 they do in your terminal. `$SHELL` falls back to a POSIX shell when it is unset. An empty line is not
 run.
 
-The `!` is a mode rather than a character: the prompt changes colour, Backspace or Escape leaves it,
-and the mode lasts one command.
+The `!` is a mode rather than a character: the prompt changes colour, the hint names the shell the line
+is about to go to, Backspace or Escape leaves it, and the mode lasts one command.
 
 ## Nothing asks
 
@@ -60,3 +60,8 @@ was vouched for.
 It is the same assertion you make by vouching for a command at a run prompt, made once for one
 command. **If you would not press `a` for it, ask the agent to `run` it instead** and have the output
 quarantined.
+
+A paste into an armed command line is the same cost in miniature: the text lands in the line verbatim,
+and a line you put away comes back into an armed mode as the command being written. What Enter asserts
+is the line in the box, which you armed the mode for and are looking at, and that is the same assertion
+you make for a command typed one character at a time. What the mode never does is arm *itself*.

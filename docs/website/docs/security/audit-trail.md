@@ -35,8 +35,18 @@ ok      promote: read_file.path proposed by the model, confined and non-destruct
 ok      file_read.path [routing] (T,pub)
 observe file_read produced (T,priv)
 ok      trust: notes.md read as trusted, from a trusted path
-ok      render: read_file: content reshaped for presentation, still (T,priv)
+ok      render: read_file: content reshaped without being read, still (T,priv)
 ok      present: tool_result: notes.md is (T,priv), so the planner may read it
+```
+
+The same read where nothing is vouched for, so the content is quarantined instead:
+
+```
+observe file_read produced (U,priv)
+ok      trust: notes.md read as untrusted
+slot    ref:0 at (U,priv)
+ok      present: tool_result: notes.md is (U,priv), quarantined as ref:0; the planner
+        sees a reference only
 ```
 
 Three pieces of notation appear throughout:
@@ -63,11 +73,19 @@ It is recorded *after* the conversation is shortened, so a summary refused on th
 no line claiming one was made. Counts and nothing else, so this carries no more content than the
 rest of the trail does.
 
+## Planning is recorded
+
+A planning call is a gate like any other and gets its own line, refusals included. A run planned in
+advance makes two of them, one for reading the goal in plain words and one for fitting that goal to the
+tool set, and both appear.
+
 ## The trail holds no content
 
-Every field is a gate name, a capability, a label, a path or a slot id. That is exactly why it can be
-put on your screen and written to a file without any release, and it is what makes the record safe to
-keep for a workspace nobody vouched for.
+Every field is a gate name, a capability, a label, a path, a destination host or a slot id. A network
+decision keeps the host and drops the rest of the URL: no userinfo, no path, no query, no fragment, so
+a credential carried in a URL is not written down. That is exactly why the trail can be put on your
+screen and written to a file without any release, and it is what makes the record safe to keep for a
+workspace nobody vouched for.
 
 ## Assertions are recorded as assertions
 
@@ -89,3 +107,13 @@ jq -r 'select(.gate == "present")' ~/.bravebot/sessions/*/…​.audit.jsonl
 The labels are spelled out in words rather than abbreviated, because a file read months later has no
 legend beside it, and each event keeps the time it happened. The compact form suits a terminal, where
 the reader has the legend in front of them.
+
+An event a delegate's gate took also names that delegate, in a `delegate` field the turn's own records
+do not carry. Without it a resumed session would show one run's decisions where there were three, and
+two delegates working at once would be unattributable. On screen the same name goes in front of the
+line, so `d1 precommit: routing fields ["task"] fixed` is the first delegate's and an unprefixed line
+is the turn's own:
+
+```sh
+jq -r 'select(.delegate == "d1")' ~/.bravebot/sessions/*/….audit.jsonl
+```

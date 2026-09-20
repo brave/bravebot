@@ -8,8 +8,8 @@
 # (agents/skills/update-docs) to fold it in. The skill rewrites the sha below; nothing
 # else should.
 #
-# run: allow calls to set a deadline under a ceiling (CMDLINE-13) (#250)
-# 2026-09-12
-# https://github.com/brave/bravebot/commit/faa8ab7a32fd8e81ea18fd6941f3d63eeaaf0d13
+# fetch-url: a result names the URL that was asked for, on both roads (#531)
+# 2026-09-20
+# https://github.com/brave/bravebot/commit/cfcbd04aacb3ffb3b8a872808932191e37e9aa9d
 
-faa8ab7a32fd8e81ea18fd6941f3d63eeaaf0d13
+cfcbd04aacb3ffb3b8a872808932191e37e9aa9d

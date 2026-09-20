@@ -7,7 +7,7 @@ description: Building from source, the checks CI runs, and how this project is s
 # Development
 
 The source lives at
-[brave-experiments/bravebot](https://github.com/brave-experiments/bravebot).
+[brave/bravebot](https://github.com/brave/bravebot).
 
 ## Building
 
@@ -95,7 +95,7 @@ Every session record carries the build that produced it, and `bravebot --version
 string:
 
 ```
-bravebot 0.4.0 (f2a6e1a, modified)
+bravebot 0.9.0 (f2a6e1a, modified)
 ```
 
 Both matter when reading a transcript back: a session that behaved oddly is usually being read against
@@ -115,7 +115,7 @@ sessions, so it is a tool to reach for deliberately rather than part of `make ch
 ## Spec-enforced development
 
 This project is developed against the mini-specs in
-[docs/specs](https://github.com/brave-experiments/bravebot/tree/main/docs/specs), which are the
+[docs/specs](https://github.com/brave/bravebot/tree/main/docs/specs), which are the
 source of truth for how it behaves. Each clause carries the tests that pin it and is reviewed closely
 by a human before it changes. Code under a spec's `governs` list is reviewed against that spec rather
 than on its own, and automation checks that every clause still has coverage.

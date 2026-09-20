@@ -6,8 +6,30 @@ description: What is baked into the binary, what lives in ~/.bravebot and beside
 
 # Configuration
 
-A fresh install needs nothing set up. Configuration is built into the released binary. What it will
-actually use is reported by:
+There is one thing to set up before the first session, and it is which service answers a turn. A
+released binary arrives pointed at Brave's own endpoint, which is not the same as having a service
+configured to do this work: no account was named, no gateway was written down, and no subscription
+was imported. So rather than open a session with nothing set up to answer it, a first run **says
+what to configure and stops**. It names three routes, each by the thing to type or write:
+
+| Route | Where |
+|---|---|
+| your own AWS account | [Reaching a model through AWS Bedrock](#reaching-a-model-through-aws-bedrock) |
+| an OpenAI-compatible gateway, including a local one | [Reaching an OpenAI-compatible gateway](#reaching-an-openai-compatible-gateway) |
+| a Leo Premium subscription you already have | [Leo Premium](premium.md) |
+
+`bravebot doctor` says the same thing and fails while it holds. A run whose model a configured
+service serves is not this case, whatever the Brave fields hold, and neither is a build pointed at a
+host that is not Brave's: whoever pointed it there configured it. The check happens before a session
+opens, so picking one of Brave's models from `/model` mid-session does not raise it again.
+
+**If you have configured a service and still see this, you are one key from working.** A settings
+block copied out of another tool names its models and names no default, so the model in force is
+still the one the build came with. That case gets one line naming the [`model`](#model) key rather
+than the three routes.
+
+Once a service is configured, the rest of this page is what else you can set. What will actually be
+used is reported by:
 
 ```sh
 bravebot doctor
@@ -82,8 +104,20 @@ keeps them private.
 Every operation here degrades to doing nothing. A missing home directory, a read-only disk or a
 corrupt file does not stop a session starting.
 
-`~/.bravebot` is the directory the environment names, and there is no fallback. When there is no
-home, or the name is empty, everything kept there is absent.
+`~/.bravebot` is one fixed name under the profile directory **the environment names**, and there is
+no fallback. `HOME` names it on Unix. On Windows `HOME` is read first and `USERPROFILE` second, the
+first of them holding a value answering, so a stock Windows install works and so does a Unix-like
+shell on it. A value that is empty states nothing and is passed over.
+
+Where none of them holds a value there is no directory at all: no settings of your own, no session to
+resume, no history and no skills. Every part of the program does without in silence, so
+`bravebot doctor` is where the absence is said out loud, naming which variables were looked at and
+what is not kept without somewhere to keep it. A checkout's own settings, skills and `AGENTS.md` are
+read regardless, those being beside your work rather than here.
+
+Inventing a location is the one thing that does not happen. This is the directory whose contents are
+trusted for being yours, so falling back to a working or temporary directory would put your prompt
+history somewhere with none of that behind it.
 
 :::note
 Nothing recalled from `~/.bravebot` is fed straight to a turn. A recalled prompt is placed in the
@@ -163,10 +197,17 @@ listing that could not be fetched all leave the level to go out and be judged at
 that does advertise the parameter says it reads one without saying which words it accepts, so a model
 may reject or silently round a level it does not know.
 
-**On AWS Bedrock the answer arrives as a refusal.** Nothing there describes a model's parameters, so
-a level goes out to be judged. A model that refuses the field is asked again without it and is sent
-no level for the rest of the session, and the interface reports it as reading none rather than going
-on showing your level as in force. What one model refuses says nothing about another.
+**Where nothing describes the model, the answer arrives as a refusal.** Neither AWS Bedrock nor a
+settings block that names its own models says which parameters a model takes, so a level goes out to
+be judged. A model that refuses the field is asked again without it and is sent no level for the rest
+of the session, and the interface reports it as reading none rather than going on showing your level
+as in force. What one model refuses says nothing about another, on Bedrock or on the same gateway. A
+request refused with the level already gone settles nothing and is not remembered.
+
+A level you wrote into a model's own [`options`](#what-a-models-options-can-and-cannot-do) is not
+given up this way. That field is carried into the request as it stands, so it fills the level again
+after the one you chose in the interface has been withdrawn, and a service that does not take it
+refuses the request as it would refuse any other option it does not know.
 
 :::caution
 **The Brave endpoint accepts the level and discards it.** A nonsense value is answered exactly as a
@@ -246,7 +287,13 @@ export BRAVEBOT_LOCALE=fr         # from now on
 
 A request widens rather than failing: `fr-CA` and `fr-BE` are answered by the French catalog where
 they have none of their own, and a language nothing has shipped for reads in English. `LC_ALL=C` asks
-for no translation at all. English and French are what ship today.
+for no translation at all. English and French are what ship today. What a shell appends to say which
+encoding or modifier it wants is not part of the name.
+
+Widening is per message, not per language, so a single message a translation has not reached yet reads
+in English inside an otherwise translated screen. A message that **counts** something is pluralised by
+the rules of the language it was written in, which for one falling back is English's, rather than
+having English's rule applied to French text.
 
 ### What stays in English
 
@@ -278,6 +325,7 @@ without rebuilding it.
 | `BRAVE_SERVICES_KEY_ID` | the key id that goes with it |
 | `BRAVE_AI_CHAT_DEFAULT_MODEL` | the model to request when nobody has chosen one |
 | `BRAVEBOT_CONTEXT_BUDGET` | the token budget before a conversation is compacted |
+| `BRAVEBOT_OUTPUT_BUDGET` | how far one reply may run before the service cuts it off ([below](#how-long-a-reply-may-run)) |
 | `BRAVEBOT_LOCALE` | the language the interface is read in |
 | `BRAVEBOT_SUBPROCESS_ENV_SCRUB` | `0` hands a program the agent runs bravebot's own credentials ([`run.scrubEnv`](#runscrubenv)) |
 
@@ -296,6 +344,11 @@ and that choice wins, so this applies until somebody makes one.
 `BRAVEBOT_CONTEXT_BUDGET` is never baked into a binary. It is a knob one person turns while working,
 so it has to be set in the environment.
 
+**Thirteen names can also go in a settings file's [`env`](#settingsjson) block**, under the same
+spelling: seven of the nine above, plus the six AWS ones. The two exceptions are `BRAVEBOT_LOCALE` and
+`BRAVEBOT_SUBPROCESS_ENV_SCRUB`, which are read from the environment alone. Exporting a name wins over
+the file, except where an [administrator pinned it](#pinned-by-an-administrator).
+
 ## `settings.json`
 
 Long-lived configuration can go in a file instead of your shell profile:
@@ -312,7 +365,7 @@ Long-lived configuration can go in a file instead of your shell profile:
 }
 ```
 
-**Three files are read, the closest to your work last:**
+**Three files are found, the closest to your work last:**
 
 | File | What it is for |
 |---|---|
@@ -320,12 +373,16 @@ Long-lived configuration can go in a file instead of your shell profile:
 | `.bravebot/settings.json` | the directory you started bravebot in |
 | `.bravebot/settings.local.json` | that directory, on this machine only |
 
+[`--settings <path>`](../reference/cli.md) reads a **fourth** above those three, for one run.
+A file [an administrator pinned](#pinned-by-an-administrator) answers above all of them, and above the
+environment too.
+
 A later file overrides an earlier one **a name at a time** rather than wholesale, so a file that sets
 one thing leaves everything else in force:
 
 | What | How the files combine |
 |---|---|
-| `env`, `provider` | per name one level down; the value under a name is replaced whole |
+| `env`, `provider`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, every list under `permissions` | every file's entries are kept |
 | `model`, anything else | the closest file that set it wins |
 
@@ -348,6 +405,10 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
 | `provider` | an OpenAI-compatible gateway ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](#naming-more-than-three-models)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([below](#runscrubenv)) |
+| `attribution` | what a commit message or a pull request this agent writes may carry ([below](#attribution)) |
+| `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
+| `search` | how large a tree a search may walk ([below](#search)) |
+| `vetting` | whether quarantined content is checked without asking you ([below](#vetting)) |
 
 In `env`, only string values: a number or a boolean is skipped rather than coerced, so write `"1"` and
 `"true"`. Every name in the block is read rather than a chosen subset.
@@ -393,6 +454,9 @@ the thing it configures.
 
 A [`permissions`](#permissions) block can refuse an action and it can answer a prompt, and it can do
 nothing else: no rule there makes a path reachable, and no rule makes a command's output trusted.
+
+[`vetting`](#vetting) is the one key that decides whether you are asked something, which is why it is
+the one key read from your home file alone and never from a checkout's.
 :::
 
 ### `model`
@@ -550,6 +614,139 @@ The rules are read **once per session**, so a file you edit while a session is o
 one. A session with no `permissions` block behaves exactly as one did before the block existed: every
 gate asks what it asked before, and nothing is refused for being unmentioned.
 
+### `attribution`
+
+```json
+{ "attribution": { "commit": "", "pr": "Co-authored-by: …" } }
+```
+
+What a commit message or a pull request this agent writes may carry. **The empty string is an answer
+and means carry nothing**, which is the point of the block: asking for none of it in your standing
+instructions puts the answer somewhere the model has to still be reading at the moment it writes one,
+while a key states it once.
+
+A name no file wrote is unset, which is a different answer from empty: it leaves the decision to
+whoever writes the commit. Anything that is not a string reads as absence.
+
+### `keybindings`
+
+```json
+{ "keybindings": { "stash": "alt-s", "scroller": "alt-o" } }
+```
+
+Seven actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
+
+| Action | Default | What it does |
+|---|---|---|
+| `editor` | `ctrl-g` | open the current prompt in your editor |
+| `watch` | `ctrl-l` | watch a background delegate, or inspect what is running |
+| `scroller` | `ctrl-o` | open the [transcript scroller](../using/transcript.md) |
+| `history` | `ctrl-r` | search your prompt history |
+| `stash` | `ctrl-s` | put the current line aside, or bring it back |
+| `trail` | `ctrl-t` | toggle the [audit trail](../security/audit-trail.md) |
+| `paste` | `ctrl-v` | paste from the clipboard |
+
+**A chord has to carry Ctrl or Alt.** Every unmodified key is already answered (a character is typed,
+Enter sends, Escape clears, Tab takes what is offered, the arrows move), so handing one to an action
+would take it out of the alphabet. `shift-a` and `ctrl-shift-a` name an event a terminal never
+reports, and Ctrl-C, Ctrl-D, Ctrl-J and Shift-Enter are refused because leaving and starting a line
+are not rebindable.
+
+**Every action keeps a key of its own.** A chord that cannot be read, or that the input box already
+answers, leaves that action on its default. So does one two actions both asked for: both fall back
+rather than one winning, since which won would come down to the order the file was read in. Two
+actions *trading* chords is not a conflict and both get what they asked for.
+
+The block layers per action the way `env` does, so a project file moving one action says nothing about
+the other six. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
+
+### `search`
+
+```json
+{ "search": { "maxFiles": 500000, "maxSeconds": 60 } }
+```
+
+How many files a search may walk and how long it may spend opening them. Either may be **raised** as
+well as lowered. The built-in caps are past what a repository people usually work in holds; a monorepo,
+a tree of generated sources, or a checkout on a network filesystem is where they are not, and there
+every search comes back partial. A partial search is the answer that reads like a complete one, which
+is why this is worth setting.
+
+The two are independent, so naming one says nothing about the other in any layer. A cap of zero, or
+any value that is not a whole count, is absence and leaves the built-in cap in force rather than
+permitting a search that reads nothing. Raising a cap does not unbound a search: the walk still stops
+at `maxFiles`, the reading still stops at `maxSeconds`, and the match cap holds regardless of both. See
+[`search`](../reference/tools.md#search).
+
+### `vetting`
+
+```json
+{ "vetting": { "auto": true } }
+```
+
+Whether content nobody vouched for may be checked without asking you first. It is **off until you turn
+it on**, and it is a boolean: `"true"` as a string, a number, or anything else is absence, so a file
+that meant to turn this on and mistyped the value leaves the asking in place.
+
+:::note
+**This is the one block read from `~/.bravebot/settings.json` alone.** A `.bravebot/settings.json` in a
+checkout that names it is reported by `doctor` rather than obeyed. Every other key here configures
+where a request goes or how the interface behaves; this one decides whether you are asked before
+content nobody vouched for reaches the planner, so a line in a repository you just cloned could
+otherwise turn the asking off for whoever opened it.
+:::
+
+A choice you record for yourself while working outranks this file, and a flag outranks both.
+
+## Pinned by an administrator
+
+One file answers **above the process environment**, and therefore above every other source:
+
+| Platform | Path |
+|---|---|
+| Linux | `/etc/bravebot/managed.json` |
+| macOS | `/Library/Application Support/bravebot/managed.json` |
+| Windows | `C:\ProgramData\bravebot\managed.json` |
+
+The path is a literal, and no variable names it. `%ProgramData%` and the rest are stated in the
+environment of the person this layer binds, so reading one would let them choose which file answers for
+them.
+
+This inverts the rule that the environment wins, deliberately. That rule exists so a released binary
+can be pointed at a local backend without rebuilding it, and a pin an exported variable outranked
+would pin nothing. An organisation requiring that inference traffic reach an approved endpoint, or
+refusing to have models reached through somebody's personal cloud account, would otherwise have no way
+to say so.
+
+**Only these names may be pinned**, being the ones that decide where a request goes:
+`BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
+`AWS_PROFILE`, the three `ANTHROPIC_DEFAULT_*_MODEL` tiers, and the `provider` block. Every other name
+in the file decides nothing, the signing key and key id included. A name it does not pin resolves
+exactly as it would with no such file.
+
+A layer that can pin a preference is a layer somebody uses to pin one. What two parties have a
+legitimate say in is where a request goes and whose account pays for it; which theme is on and which
+keys do what are neither.
+
+**No credential is read from this file.** A gateway entry's `apiKey` is dropped and the entry's host,
+models and variable names are honoured without it. Everyone on the machine can read this file, so a
+token in it is a token handed to every account rather than one held by its owner. The service says what
+is missing on the first request.
+
+**The `provider` block is pinned whole** rather than a name at a time, because pinning an endpoint
+pins nothing while anybody may add a destination beside it. A block that is present and empty says
+there are no gateways. A file without the block, or one spelling it as anything but a block, leaves the
+gateways a person configured in force: taking every gateway on the machine away on the strength of a
+stray `null` is the one reading nobody would intend.
+
+Refusing every account but the organisation's therefore takes **both** halves, the switch pinned off
+and the `provider` block pinned, since a gateway entry can name an AWS account too.
+
+The authority here is the filesystem's rather than this program's. Nothing checks who owns the file or
+what its permissions are: somebody who can write that path can replace the binary. It fails softly like
+any other layer, so a file that is missing, over 64 KB or unparseable pins nothing, and a blank or
+non-string value pins nothing under that name.
+
 ## Reaching a model through AWS Bedrock
 
 Set these variables to reach models through your own AWS account:
@@ -647,7 +844,8 @@ model named here is also chosen by that id exactly as written, without the gatew
 
 `limit.context` states that model's window, which is worth setting here because the figure otherwise
 assumed is [deliberately low](#the-assumed-context-window). Following opencode, it needs `output`
-beside it or it is not read.
+beside it or it is not read, and `output` is itself
+[how far a reply may run](#how-long-a-reply-may-run).
 
 ### Signing in
 
@@ -727,8 +925,36 @@ read too, because it is opencode's field, but a variable wins where both are pre
 token in a settings file is a token in a file people paste into issues.
 
 It is read at the point a request needs it rather than once at startup, so exporting a new one takes
-effect in a session already open. A request that cannot be authenticated is refused with the remedy
-named rather than sent. `bravebot doctor` says whether a credential was found, and never what it was.
+effect in a session already open. A block that names somewhere for a credential to live and finds
+nothing there is a stale or missing token, and its requests are refused with the remedy named rather
+than sent. `bravebot doctor` says whether a credential was found, and never what it was.
+
+**A block naming no credential at all is a different statement, and a supported one.** No `env` and no
+`options.apiKey` is you saying this gateway wants none: its requests carry no `authorization` header
+and its roster is asked for without one. `doctor` reports it as needing none rather than as missing
+one. Deciding this by endpoint instead would refuse the same local service reached across a LAN or
+through a reverse proxy, and a dummy `apiKey` would just teach people to write fake credentials into a
+file they paste into issues.
+
+### A local Ollama, or another gateway that wants no key
+
+Ollama wants no API key, so its block names none:
+
+```json
+{
+  "provider": {
+    "ollama": {
+      "name": "Ollama (local)",
+      "options": { "baseURL": "http://localhost:11434/v1" }
+    }
+  },
+  "model": "ollama/qwen3-coder:30b"
+}
+```
+
+`baseURL` is written down because `ollama` is not one of the names an endpoint is
+[compiled in](#where-the-requests-go) for. There is no `models` key, so Ollama is asked what it has
+pulled and `/model` lists what came back.
 
 ### Which models are offered
 
@@ -766,7 +992,8 @@ keeps working.
 same deliberately low figure a Bedrock tier gets and for the same reason: a budget above the real
 window does not compact a conversation late, it stops compacting it at all. A window a gateway reports
 is taken where the file stated none; a figure in the file outranks it. Following opencode, `limit`
-needs `output` alongside `context` or it is not a `limit` and its figure is not read.
+needs `output` alongside `context` or it is not a `limit` and its figure is not read. `output` states
+[how far a reply may run](#how-long-a-reply-may-run).
 
 ### What a model's `options` can and cannot do
 
@@ -813,6 +1040,42 @@ has not measured anything yet compacts nothing.
 
 `/compact` asks for the same work on demand, at any size, and does not consult the budget. See
 [Sessions](../using/sessions.md#long-conversations).
+
+A one-shot run adopts the advertised window too, so a script gets the same budget a session would
+rather than falling back to the default.
+
+## How long a reply may run
+
+A Bedrock request states a ceiling on the reply, and a model that states none is assumed to allow
+**8,192** tokens. That figure is deliberately low, for the reason the context window's is, with the
+asymmetry the other way round: a ceiling below what a model allows costs the tail of a long answer,
+while one above what it allows is a request the service refuses outright and refuses every time. A
+guess upward would not cost a reply its ending, it would cost the model the ability to answer at all.
+
+Raise it for every model this build reaches:
+
+```sh
+BRAVEBOT_OUTPUT_BUDGET=48000 bravebot
+```
+
+Or state it for one model, out of the same `limit` block its context window comes from:
+
+```json
+{ "limit": { "context": 200000, "output": 32000 } }
+```
+
+An exported figure outranks every stated one. The variable exists because the three tier words have no
+block to state anything in, and they are how most people reach Bedrock.
+
+Nothing is asked over the network to find this out, and nobody has to supply it. **The Brave endpoint
+states no ceiling at all**, so none of this applies there: whatever bounds a reply belongs to the
+service.
+
+**A reply the ceiling stopped is kept for what it wrote.** It comes back marked as having stopped
+short, with its usage, because everything written before the cutoff is the turn's work. Its tool calls
+are not kept, whatever the service sent: a cutoff lands wherever the model happened to be, so arguments
+that stopped mid-string are not arguments, and the round it ends is the last one. A reply that reached
+the ceiling having written nothing is a failure, and the failure names the ceiling.
 
 ## Building with different configuration
 

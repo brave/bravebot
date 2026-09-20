@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The sixteen commands the interface acts on itself, and the rules every one of them shares.
+description: The twenty commands the interface acts on itself, and the rules every one of them shares.
 ---
 
 # Slash commands
@@ -11,23 +11,29 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | Command | Argument | What it does |
 |---|---|---|
 | `/status` | | Report this session, what it may touch, and what it has spent |
+| `/cost` | | Show what each turn of this session has spent |
 | `/model` | | Choose which model to think with |
-| `/theme` | `[name]` | Choose the palette the interface is painted in |
+| `/theme` | `[name]` | Choose which theme paints the interface |
 | `/effort` | `[level]` | Choose how hard to think before answering |
-| `/config` | | Choose a preference about the interface |
+| `/config` | | Choose how the input box edits text |
 | `/add-dir` | `<path>` | Open another directory, and trust it for this session |
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
-| `/loop` | `[interval] <prompt>` | Send one prompt again and again until you stop it |
-| `/goal` | `<condition>` | Keep working until a condition you set is judged met |
 | `/rename` | `<name>` | Call this conversation something else |
 | `/compact` | | Summarise the conversation so far, keeping the recent part |
-| `/btw` | `<question>` | Ask something beside the work, kept out of the conversation |
+| `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
-| `/export` | `[path]` | Write the transcript out as a markdown file |
-| `/undo` | | Rewind the last turn, on disk and in the conversation |
+| `/loop` | `[interval] <prompt>` | Send a prompt again and again, on your interval or at a pace each turn sets |
+| `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
+| `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
+| `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
+| `/export` | `[path]` | Export the session transcript to a markdown file |
+| `/undo` | | Rewind one turn and put back the files it wrote |
+| `/rewind` | `[turns]` | List the turns a rewind could go back to, or go back that many |
 | `/exit` | | Leave |
 
-Typing `/` offers the list, and Tab completes.
+Typing `/` offers the list in that order, and Tab completes. The list is one row per command, and a
+terminal without the room for all twenty drops the last of them: every command is still typeable in
+full, but a short terminal costs you the discovery the list is there for.
 
 ## `/status`
 
@@ -54,6 +60,25 @@ transcript.
 
 The endpoint host and the key id are left out, though `bravebot doctor` prints both. A status panel
 is the thing people paste into an issue or a screenshot.
+
+## `/cost`
+
+Reports what the session has spent as a total, and under it **one figure per turn with that turn's
+share of the total beside it**. What was spent before the first turn is reported too, without a turn
+number, since no turn did it.
+
+A total cannot tell twenty even turns from one that ran away, and the share is what makes the second
+one visible without your dividing each row by the total. It is a word of its own rather than more rows
+on [`/status`](#status) because the list grows with the session: a panel that answers "what is this
+session" in fifteen rows would answer it in fifty on the fiftieth turn.
+
+:::caution
+**The figures are tokens, and they are not a bill.** A prompt a service answered out of its own cache
+is charged at a fraction of a fresh one, so two turns recorded at the same figure can differ about
+tenfold in money. The breakdown keeps no cache split per turn, so a figure in money would be composed
+here rather than measured. What is written stays comparable across turns and across sessions, which is
+what it is read for.
+:::
 
 ## `/model`
 
@@ -147,10 +172,22 @@ A due tick waits for an idle session and never interrupts, and a prompt you type
 loop is not a tick of it.
 
 An interval is read off the front of the argument, or off an `every` clause at the end, in that order
-and nowhere else. A leading token counts only when it is a number and one of `s`, `m`, `h` or `d`, and
-a trailing clause only when a time expression is the whole of what follows `every`. That is what
-keeps `/loop check every PR` a sentence rather than one with its last two words taken off. Given no
-interval, each turn says when the next tick is due.
+and nowhere else. A leading token counts only when it is a number and one of `s`, `m`, `h` or `d`. A
+trailing clause counts only when `every` is a word of its own and a time expression is the whole of
+what follows it. Given no interval, each turn says when the next tick is due.
+
+| The argument | The interval | The prompt |
+|---|---|---|
+| `5m check the deploy` | 5 minutes | `check the deploy` |
+| `check the deploy every 20m` | 20 minutes | `check the deploy` |
+| `check the deploy every 20 minutes` | 20 minutes | `check the deploy` |
+| `check every PR` | none, so each turn paces it | `check every PR` |
+| `check everything 20m` | none, so each turn paces it | `check everything 20m` |
+| `5m check the deploy every 20m` | 5 minutes | `check the deploy every 20m` |
+
+That is what keeps `/loop check every PR` a sentence rather than one with its last two words taken
+off, and a word that merely begins with those five letters, such as `everything`, is not the clause at
+all.
 
 **The line a loop repeats is the one you typed.** It is settled the moment you press Enter and sent
 unchanged for the life of the loop: nothing a turn reads, writes or returns can add to it, edit it or
@@ -173,7 +210,7 @@ somebody reads it. Where you gave an interval, no turn can change it; a self-pac
 nothing is woken once more twenty minutes later, and a second silence ends the loop.
 
 Each tick is announced with its number, and with how many in a row have reported finding nothing.
-That count is the difference between a loop that is working and a loop with nothing to do. Five
+That count is the difference between a loop that is working and a loop with nothing to do. Four
 things end one, and each says so:
 
 | What | When |
@@ -181,8 +218,11 @@ things end one, and each says so:
 | you interrupt | Ctrl-C, reached after the turn in flight and the half-typed line, and before leaving |
 | a turn is stopped | any turn cancelled while a loop runs, tick or not |
 | the session moves on | `/clear`, and leaving |
-| a goal is set | [`/goal`](#goal-condition) replaces it, since a session works towards one thing at a time |
 | age | seven days after it started |
+
+**A loop, a [goal](#goal-condition) and a [watch](#watch-stop-n) are never live together**, because a
+session does one of the three at a time. Whichever of a loop and a goal was asked for second stands,
+and the one it replaced is reported as stopped. Asking for either ends every live watch.
 
 **A loop is never written down.** It is not in the session record, so `--resume` restores none and it
 does not outlive the process. A schedule that survived the session that set it would start sending
@@ -277,6 +317,58 @@ clean`, spends all ten rounds and gives up, and nothing warns you in advance. Ev
 the whole conversation, so ten rounds of a long session cost more than ten ordinary turns.
 :::
 
+## `/watch [stop <n>]`
+
+Lists the files this session is watching, and ends one by its number.
+
+```
+/watch             # what is live, numbered
+/watch stop 2      # end that one, leaving the others
+```
+
+**It arms none.** A watch is asked for in a prompt, and what a command is needed for is the half you
+cannot read off the transcript: which watches are live, and how to end one. See
+[Watches](../using/watches.md) for what a watch observes and what a firing puts in the conversation.
+
+| Bound | Value |
+|---|---|
+| a watch's age | 7 days, after which it ends itself and says so |
+| live watches in one session | 8, and arming a ninth is refused rather than dropping one |
+| between two fires of the same watch | 5 seconds, measured from the end of the turn the last fire started |
+| between two looks at a watched path | at most 5 seconds, which is what a firing's latency is |
+
+Seven things end a watch and each says so: `/watch stop <n>`, Ctrl-C with nothing nearer to stop
+(which ends every live watch), a firing's turn being stopped, asking for a
+[`/loop`](#loop-interval-prompt) or a [`/goal`](#goal-condition) (a session does one of the three at a
+time), the path ceasing to be readable, `/clear` and leaving, and age.
+
+**A watch is never written down**, so `--resume` restores none and none outlives the process.
+
+## `/manifest <task>`
+
+Plans one task in full, shows you the plan, then runs it with nothing re-planned.
+
+```
+/manifest add a --verbose flag, wire it through, and add a test
+```
+
+**It is a run, not a mode the session holds.** The session starts one run, waits for it, and comes
+back to the turn loop. It is blocked for the duration: you can read, edit and stop, but not send.
+
+The conversation is neither read nor written. The task string is what the planner gets, so nothing
+from the conversation goes in, and a step's result is quarantined with no planner left to show it to,
+so nothing comes back out. What the transcript shows is the goal as the planner understood it, the
+frozen plan, each step as it runs, and the reply. The run leaves the conversation exactly as a
+declined plan leaves the workspace.
+
+**You approve the plan before the first step**, once, and the approval does not cover the writes. A
+run you stopped is not written down, because there is nothing in it to read. The run is recorded as its
+own record and the session records its name, so the session still resumes as a conversation.
+
+In [plan mode](../security/permissions.md#answering-in-advance-modes) a plan with a write in it does
+not run at all, decided from the frozen plan before the plan is put to anybody. See
+[Non-interactive use](../using/headless.md) for the `--mode manifest` form.
+
 ## `/rename <name>`
 
 Rewrites the session record immediately, and the chosen name survives the next turn. An empty name is
@@ -332,25 +424,71 @@ included. The file is written readable by you alone, as the record it came from 
 
 ## `/undo`
 
-Puts the session back where it stood before the most recent turn. Every path that turn wrote through
-a file tool goes back to what it held first, and a file it created is removed. The conversation
-returns to its pre-turn state, and the turn count, the spend, the timing, the trust map, the
-commands you vouched for and the transcript go back with it; the turn's audit lines are dropped,
-since they decided about a turn that is no longer in the conversation. Rewinding past a session's
-first turn removes its record rather than leaving one with nothing in it.
+Puts the session back where it stood before the most recent turn, and **saying it again goes back
+another**. Every path in the project a rewound turn wrote through a file tool goes back to what it
+held first, and a file one created is removed; where two rewound turns wrote the same path, it goes
+back to what it held before the first of them.
+
+The conversation returns to the snapshot taken before the earliest rewound turn, and the turn count,
+the spend, the timing, the trust map, the commands you vouched for and the transcript go back with it.
+Those turns' audit lines are dropped, since they decided about turns that are no longer in the
+conversation. A standing permission goes back with the turn that granted it, so a path or a command
+vouched for during a rewound turn is vouched for no longer, and one vouched for before them is
+untouched. Rewinding past a session's first turn removes its record rather than leaving one with
+nothing in it, and a name you gave the session before that turn stays with it.
 
 Disk and conversation move together because either alone leaves the transcript describing a tree that
 is not there.
 
-**A rewind names any file it could not put back**, and the rest of the rewind still happens. What one
-turn keeps for this is bounded, so a very large file may be remembered as a path whose contents were
-not held. That path is reported as one that did not go back rather than treated as a file that was
-never there.
+**Five turns back is as far as it goes.** The turn that just ended is the one least likely to need
+rewinding, because it is the one still on the screen; what people notice late is a mistake made two or
+three prompts ago, after approving several diffs in a row. Depth stops at five because every point
+holds a copy of the conversation as well as the bytes, and one is written after every turn whether or
+not it is ever read.
 
-**One turn is as far as it goes**, and the window closes as soon as the next turn begins. Anything
-else that changes the session outside a turn closes it too: `/clear`, `/compact`, `/rename`,
-`/add-dir`, `/cd`, and a shell-mode command. After that `/undo` says there is nothing left to undo
-rather than rewinding to a snapshot describing a different session.
+**A rewind names any file it could not put back**, and the rest of the rewind still happens. What is
+kept is bounded twice over: a session remembers its last five turns, and what those turns wrote over
+is held to one budget between them rather than one each. Past it the turns furthest back are dropped
+whole, and the most recent is kept whatever it cost. Inside a turn the same budget decides a path:
+past it the path is still remembered but its contents are not, and a rewind reports it as a path that
+would not go back rather than as a file that was never there.
+
+**The points survive closing the program.** They are written into the session record with the
+conversation, so `/undo` and `/rewind` after a `--resume` reach the same turns they reached before.
+
+**Anything that changes the session outside a turn gives up every point at once**: `/clear`,
+`/compact`, `/btw`, `/rename`, `/add-dir`, `/cd`, and a shell-mode command, whose writes the workspace
+never saw. Every point goes rather than the most recent alone, since such a change lands after the
+most recent point and so before none of them. After that `/undo` says there is nothing left to undo
+rather than rewinding to a point describing a different session.
+
+## `/rewind [turns]`
+
+Reads the rewind points before acting on one.
+
+```
+/rewind          # list the points, most recent first, numbered from one
+/rewind 3        # go back three turns
+```
+
+Each row says how many turns back it is, which turn it would land before, what that turn was asked,
+and **every path that turn wrote over**, or that it wrote over none. `/rewind <n>` then goes back that
+many turns, which is what `/undo` said n times does, so what it puts back is every row from the first
+down to the one chosen.
+
+A rewind acts the moment it is typed and it overwrites files, including edits you made yourself since
+the turn. Deciding to run one is deciding about those files, so they have to be readable first, for
+the same reason a write is shown as a diff before it is approved rather than reported after. The paths
+are named rather than counted, because a count decides nothing.
+
+`/rewind` given something that is not a number says what it takes. **A number past what the session
+remembers rewinds nothing** and says how far back it does go, rather than going as far as it can:
+somebody who asked for four turns and got two would be reading a tree two turns younger than they
+believe it is.
+
+It is a word of its own rather than an argument to `/undo` because a command that takes no argument is
+only ever the bare word, which is what keeps `/undo the last thing I asked for` a prompt. A surface
+that takes a number cannot also have that.
 
 :::caution
 **A rewind sees file-tool writes and nothing else.** A turn that changed a file by running a program
@@ -371,14 +509,31 @@ Every command here decides something a turn is not allowed to decide on its own:
 reachable, what the conversation consists of, which model thinks. The endorsement is the keystroke, so
 the keystroke is the only thing that may produce one.
 
-**The whole word, and an argument only after a space.** `/statusline` is not `/status`.
+**The whole word, and an argument only after a space.** `/statusline` is not `/status`, and
+`what does /add-dir do` is a question. The set of words this program claims is taken out of the
+language you can use to talk to the planner, so it is claimed as narrowly as possible. The bare word
+with nothing after it is the command with an empty argument, answered by saying what it needs rather
+than by doing nothing quietly.
 
-**In shell mode the line is a command line, not a command.** `! /usr/bin/env` runs a program.
+**In shell mode the line is a command line, not a command.** `! /usr/bin/env` runs a program. Nothing
+is offered for completion there either, since `/usr/bin/env` is a path, and a turn running changes
+none of that.
 
 **A command is never sent as a prompt.** A line that is a command is acted on and does not reach the
-model.
+model. A session asked to shorten itself must not answer by talking about shortening itself.
 
-**The argument is taken verbatim.**
+**The argument is taken verbatim**, spaces and all, with the surrounding whitespace trimmed and
+nothing else done to it. A leading `~` is expanded only as a whole first segment, so a directory whose
+own name begins with a tilde is not a home-relative path. Nothing shortens it, splits it, or asks the
+planner what it meant.
+
+**While a turn runs the word waits.** A command typed mid-turn comes off the box and joins the lines
+waiting for the turn to end, exactly as a prompt does: the box clears, the history remembers it, and it
+is drawn under the box marked as waiting. It is never offered to the turn in flight, so nothing about
+it reaches the planner, and when the queue reaches it, it is carried out rather than sent. The queue
+drains in the order you typed, so a command behind a prompt waits for that prompt's turn. Nothing
+enters the transcript while it waits, and taking back what is waiting gives the command back to the
+box like any other line.
 
 **A command name is written in this program, never read from a directory.** There is no way to add one
 by putting a file somewhere.

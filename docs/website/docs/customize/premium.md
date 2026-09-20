@@ -66,13 +66,20 @@ Finding nothing has two causes, and they are not the same fact.
 
 **Nothing imported** is the free tier working as intended, and nothing is said about it. An endpoint
 belonging to no environment, such as a local one, is this case too. No credential belongs near it by
-design.
+design. So is a machine with nowhere to keep credentials at all: reported as a broken batch, that
+would tell somebody who has never held a subscription that theirs could not be used.
 
 **A batch that exists and cannot be spent** is reported to you, with the reason and what to do about
-it. That covers a file that could not be read, one another version wrote, and one imported for an
-environment this endpoint does not accept. A credential only verifies against the deployment that
-signed it, so a batch from the wrong Brave channel is refused with the reason rather than passed
-over.
+it. That covers a file that could not be read, one holding nothing, one another version wrote, and
+one imported for an environment this endpoint does not accept. A credential only verifies against the
+deployment that signed it, so a batch from the wrong Brave channel is refused with the reason rather
+than passed over.
+
+**Only a turn that could have spent a credential is told.** Which service answers is decided by the
+model you picked, and only Brave's endpoint has any notion of a subscription. A turn whose model is
+served by AWS Bedrock or by a gateway therefore says nothing about the store, however unusable what is
+stored may be. That turn ran on the model you chose, so there is no downgrade to report, and the
+credential it did not spend is one that service would not have accepted.
 
 The downgrade is said out loud because its only other symptom is the agent appearing to get worse for
 no reason. The request goes out on the free tier, where the endpoint answers a premium model name by
@@ -93,8 +100,9 @@ settle the tier either. A pane too narrow for the wordmark still reports both.
 
 Where the server reports using a model other than the one you asked for, **both are shown**: the
 choice you made and the model that actually answered. This is said once when it starts happening
-rather than every turn. The automatic entry resolving to a concrete model is not a substitution:
-that is the server choosing per request, which is what it means.
+rather than every turn. The automatic entry (`automatic-brave-bot`, shown as **Automatic**) resolving
+to a concrete model is not a substitution: that is the server choosing per request, which is what
+picking it means.
 
 ## Requirements and limits
 
