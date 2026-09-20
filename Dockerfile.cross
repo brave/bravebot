@@ -3,9 +3,14 @@
 # Parameterised by TARGET, so one file builds macOS, Linux, and Windows binaries
 # identically on any host with Docker. The pinned base image is what makes the
 # output reproducible rather than dependent on whatever toolchain the host has.
+#
+# Pinned by digest and not by the tag beside it: a tag is whatever its publisher
+# points at today, and this container compiles every shipped binary with the whole
+# checkout at /src and the configured credential mounted. `make check-security`
+# fails on an image here that names a tag alone.
 ARG TARGET=aarch64-apple-darwin
 
-FROM ghcr.io/rust-cross/cargo-zigbuild:0.23.0 AS builder
+FROM ghcr.io/rust-cross/cargo-zigbuild:0.23.0@sha256:b8364c2c60cdcc9b95c402d17654bff517410926a35678bd89dd924b8158d6ae AS builder
 ARG TARGET
 
 WORKDIR /src

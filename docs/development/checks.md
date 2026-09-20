@@ -43,14 +43,15 @@ agree about how many exceptions to the rule are admitted, whether the register a
 as many prompts out of a verdict's reach as the clause deciding that does, whether a field
 documented as read in one place is read in one place, whether a trait reaches into a `Labelled`,
 whether a spec pins the constructors of one as well as the releases, whether every workflow step
-is on a commit rather than a tag its owner can move, and whether a job holding `id-token: write` or a
-secret installs or runs an npm dependency, which every step in that job could read the credential
-from. CI runs it too, so a pull request that moves a workflow step onto a movable tag, that puts an
-install back beside the publish credential, or that drops the entry pinning a constructor, fails
-rather than holding only for whoever remembers to run this. It is the deterministic half of the
-[security-audit skill](../../agents/skills/security-audit/SKILL.md); the lanes that read code are
-the other half, and a person runs those. Run it before a commit that touches a label,
-`.github/workflows`, or the trust specs.
+is on a commit rather than a tag its owner can move, whether every container image this tree runs
+names a digest rather than a tag its publisher can move, and whether a job holding `id-token: write`
+or a secret installs or runs an npm dependency, which every step in that job could read the
+credential from. CI runs it too, so a pull request that moves a workflow step or a build image onto a
+movable tag, that puts an install back beside the publish credential, or that drops the entry pinning
+a constructor, fails rather than holding only for whoever remembers to run this. It is the
+deterministic half of the [security-audit skill](../../agents/skills/security-audit/SKILL.md); the
+lanes that read code are the other half, and a person runs those. Run it before a commit that
+touches a label, `.github/workflows`, a Dockerfile, the Makefile's containers, or the trust specs.
 
 `make check-locales` holds every message catalog to
 [../../untranslated-messages.txt](../../untranslated-messages.txt), the record of what each
@@ -78,7 +79,9 @@ involved and the suite is not run on one. Worth running for anything with a plat
 and for any test that has one: a `#[cfg(unix)]` left off a test is invisible from every platform
 that has `unix`.
 
-`make check-linux` runs fmt, clippy and the tests on Linux under the current stable toolchain.
+`make check-linux` runs fmt, clippy and the tests on Linux under the stable toolchain its container
+is pinned to, which is a digest rather than whatever `rust:slim` resolves to today, so moving it on
+is an edit somebody makes when `make check-toolchain` says the host has fallen behind.
 Worth doing before pushing platform-specific code, since a macOS host never compiles the Linux
 backend. Its one gap is the Landlock tests: the kernel in play is Docker's, and Docker Desktop's
 implements no Landlock at all, so that target sets the switch that skips them instead of failing and

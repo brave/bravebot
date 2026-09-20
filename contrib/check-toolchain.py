@@ -61,8 +61,10 @@ def main():
         f"\nrustc {version} came out on {released_on}, {days} days ago, so stable is about "
         f"{behind} release{'' if behind == 1 else 's'} ahead of it.\n"
         "CI lints with current stable, and clippy gains lints between releases, so clippy here\n"
-        "passes warnings CI fails on.\n\n"
-        "  make check-linux                     the fmt, clippy and tests CI runs, on stable\n"
+        "passes warnings CI fails on. check-linux runs the stable its container is pinned to, so\n"
+        "moving that pin on is the other half of catching up.\n\n"
+        "  make check-linux                     the fmt, clippy and tests CI runs, on the pinned\n"
+        "                                       stable, which the Makefile names by digest\n"
         "  rustup update stable                 or, on a homebrew rust, brew upgrade rust\n"
         "  BRAVEBOT_ALLOW_STALE_TOOLCHAIN=1     to say this is known and proceed anyway",
         file=sys.stderr,

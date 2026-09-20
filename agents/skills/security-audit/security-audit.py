@@ -17,15 +17,18 @@ as many prompts out of a verdict's reach as the clause deciding that does, that 
 as read in one place is read in one place, that nothing has been implemented on
 `Labelled` that would let a caller read a label's content without asking, that the constructor which
 is how a value gets a better label than its inputs had is pinned somewhere, that every workflow step
-names a commit rather than a tag its owner can move, and that no job holding a credential installs or
-runs a dependency beside it. A rule that can be written as one of these belongs here rather than in a
+names a commit rather than a tag its owner can move, that every container image this tree runs names a
+digest rather than a tag its publisher can move, and that no job holding a credential installs or runs
+a dependency beside it. A rule that can be written as one of these belongs here rather than in a
 reviewer's head.
 """
 
 import argparse
 import importlib.util
 import json
+import os
 import re
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -1013,6 +1016,238 @@ def check_privileged_job_runs_only_its_own_code():
             )
 
 
+# The other thing that runs with this tree inside it. A container image on a tag is whatever its
+# publisher points at today, exactly as an action on a tag is, and the pass above skips `docker://`
+# for the narrow reason that an image is not a `uses:` step, so until this nothing read one at all.
+# The cross-build compiles every shipped binary with the whole checkout at /src and the configured
+# credential mounted, and `make strip` rewrites each finished asset inside the same image, both
+# before anything is signed. A digest names bytes. A tag names whoever can push to it.
+DOCKER_COMMAND = re.compile(r"\bdocker\s+(?:run|create|pull)\b")
+FROM_LINE = re.compile(r"^\s*FROM\s+(.+?)\s*$", re.IGNORECASE)
+COPY_FROM = re.compile(r"^\s*COPY\s+.*?--from=(\S+)", re.IGNORECASE)
+ARG_DEFAULT = re.compile(r"^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)=(\S+)\s*$", re.IGNORECASE)
+YAML_IMAGE = re.compile(r"^\s*image:\s*([^\s#]+)")
+BY_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
+ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*[:?]?=\s*(.*?)\s*$")
+# Directories that name no image this tree decides, and that walking costs minutes.
+NOT_WALKED = {".git", "target", "node_modules", "dist", ".venv"}
+# The `docker run` options that take the token after them as their value. An option missing from
+# this set is read as taking none, so its value is reported as an unpinned image: a false report
+# somebody answers by adding the option here. The other direction -- reading past the image and
+# finding nothing to report -- is the failure this check exists so as not to have.
+TAKES_A_VALUE = {
+    "--add-host", "--cap-add", "--cap-drop", "--device", "--entrypoint", "--env", "--env-file",
+    "--label", "--memory", "--mount", "--name", "--network", "--platform", "--publish",
+    "--security-opt", "--tmpfs", "--ulimit", "--user", "--volume", "--volumes-from", "--workdir",
+    "-e", "-l", "-m", "-p", "-u", "-v", "-w",
+}
+
+
+def joined_lines(text):
+    """A file's lines with backslash continuations joined, each keeping the number it starts on.
+
+    A `docker run` in a Makefile recipe puts its options on one line and its image on the next, so a
+    pass that reads a line at a time reads the options and never the image.
+    """
+    start, held = None, ""
+    for number, raw in enumerate(text.split("\n"), start=1):
+        if start is None:
+            start, held = number, ""
+        if raw.endswith("\\"):
+            held += raw[:-1] + " "
+            continue
+        yield start, held + raw
+        start = None
+    if start is not None:
+        yield start, held
+
+
+def tokens_of(line):
+    """A shell line split into tokens, as far as the lexer can read it.
+
+    Quoting matters twice over: `-v "$(PWD):/src:ro"` is one argument, and a split on whitespace
+    makes the token after `-v` something other than that option's value, which moves what is read as
+    the image on to the token after that. A line the lexer cannot finish is returned as far as it
+    got, and an image past that point is `None` to the caller rather than absent from it.
+    """
+    lexer = shlex.shlex(line, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    found = []
+    try:
+        for token in lexer:
+            found.append(token)
+    except ValueError:
+        pass
+    return found
+
+
+def image_argument(tokens):
+    """The image a `docker run` names: the first token that is neither an option nor one's value."""
+    at = 0
+    while at < len(tokens):
+        token = tokens[at]
+        if token in TAKES_A_VALUE:
+            at += 2
+            continue
+        if token.startswith("-"):
+            at += 1
+            continue
+        return token
+    return None
+
+
+def images_run(line, values):
+    """Every image a line's `docker run`, `docker create` or `docker pull` names, and `None` for one
+    that could not be read.
+
+    Read from each command rather than from the start of the line, so a command inside a quoted
+    script -- `sh -c 'docker run ...'` -- is read too, where a pass over the line's own tokens sees
+    that whole script as one token and never looks inside it.
+
+    A reference with no tag and no registry path is the image the build itself produced a line or
+    two earlier, and there is nothing upstream of it to pin. A reference assembled by a `$(shell
+    ...)` is the limit of this pass: it is left alone rather than run.
+    """
+    found = []
+    for match in DOCKER_COMMAND.finditer(line):
+        image = image_argument(tokens_of(line[match.end():]))
+        if image is not None:
+            image = expanded(unquoted(image), values)
+            if "$" in image and ":" not in image and "/" not in image:
+                continue
+        found.append(image)
+    return found
+
+
+def workflow_images(line):
+    """The image a workflow names outside a `run:` block: a job or service container, and the step
+    form `check_pinned_actions` passes over because an image is not a `uses:` step."""
+    named = YAML_IMAGE.match(line)
+    if named:
+        yield unquoted(named.group(1))
+    step = USES.match(line)
+    if step and unquoted(step.group(1)).startswith("docker://"):
+        yield unquoted(step.group(1))[len("docker://"):]
+
+
+def unquoted(token):
+    return token.strip("\"'")
+
+
+def make_values(text):
+    """The `NAME = value` assignments of a Makefile, which is how an image reference in one can be
+    written. A value that is computed rather than written -- a `$(shell ...)` -- is left alone,
+    because resolving it means running it."""
+    values = {}
+    for raw in text.split("\n"):
+        found = ASSIGNMENT.match(raw)
+        if found and "$(shell" not in found.group(2):
+            values[found.group(1)] = found.group(2)
+    return values
+
+
+def expanded(reference, values):
+    """A reference with the variables it is written through substituted in.
+
+    Longest name first, so `$BASE` does not rewrite the front of `$BASE_IMAGE`.
+    """
+    for _ in range(3):
+        before = reference
+        for name in sorted(values, key=len, reverse=True):
+            for form in (f"$({name})", "${%s}" % name, f"${name}"):
+                reference = reference.replace(form, values[name])
+        if reference == before:
+            break
+    return reference
+
+
+def image_files():
+    """Every file that can name an image: the Dockerfiles, the Makefile, and the workflows."""
+    for root, directories, names in os.walk("."):
+        directories[:] = sorted(one for one in directories if one not in NOT_WALKED)
+        for name in sorted(names):
+            if name.startswith("Dockerfile") or name == "Makefile":
+                yield Path(root) / name
+    for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
+        yield path
+
+
+def dockerfile_images(text):
+    """`(number, reference)` for each image a Dockerfile pulls: what its stages are built on, and
+    what a `COPY --from` reaches into.
+
+    `scratch` is the empty image and has no bytes to name, a name this file declared with `AS` is a
+    stage of this same build, and `--from=0` is one by position. Everything else is pulled, and a
+    base written through an `ARG` is read through the default that `ARG` declares rather than passed
+    over for having a `$` in it: parameterising the base is how one stops being written down.
+    """
+    stages, values = set(), {}
+    for number, line in joined_lines(text):
+        default = ARG_DEFAULT.match(line)
+        if default:
+            values[default.group(1)] = default.group(2)
+        copied = COPY_FROM.match(line)
+        if copied:
+            reference = expanded(copied.group(1), values)
+            if reference not in stages and not reference.isdigit():
+                yield number, reference
+            continue
+        found = FROM_LINE.match(line)
+        if not found:
+            continue
+        words = [one for one in found.group(1).split() if not one.startswith("--")]
+        if not words:
+            continue
+        if len(words) >= 3 and words[1].upper() == "AS":
+            stages.add(words[2])
+        if words[0] == "scratch" or words[0] in stages:
+            continue
+        yield number, expanded(words[0], values)
+
+
+def check_pinned_images():
+    """Every container image this tree runs names a digest, not a tag its publisher can move.
+
+    The same question `check_pinned_actions` asks, about the other thing that runs with the tree in
+    it. `Dockerfile.cross` compiles every shipped binary with the checkout at `/src` and the
+    configured credential mounted, and `make strip` rewrites each finished asset inside a second
+    container, both before Jenkins signs what comes out; the three check targets run a third with
+    the tree mounted. An image on a tag is a decision left to whoever can push that tag.
+    """
+    for path in image_files():
+        text = path.read_text(encoding="utf-8")
+        if path.name.startswith("Dockerfile"):
+            found = list(dockerfile_images(text))
+        else:
+            found = []
+            values = make_values(text) if path.name == "Makefile" else {}
+            for number, line in joined_lines(text):
+                # A comment naming a command is prose about it, not a command.
+                if line.lstrip().startswith("#"):
+                    continue
+                found.extend((number, one) for one in images_run(line, values))
+                if path.is_relative_to(WORKFLOWS):
+                    found.extend((number, one) for one in workflow_images(line))
+        for number, reference in found:
+            if reference is not None and BY_DIGEST.search(reference):
+                continue
+            named = f"`{reference}`" if reference else "an image this pass could not read"
+            yield finding(
+                ERROR,
+                "unpinned-image",
+                f"{path.name} runs {reference or 'an image nothing can read'} unpinned, so its "
+                "publisher decides what runs with this tree",
+                f"{named} is not pinned to a digest, so whoever can push that tag decides what "
+                "runs with the whole checkout inside it",
+                "infrastructure",
+                "high",
+                evidence=[f"{path}:{number}"],
+                fix="name the digest as well as the tag, `image:tag@sha256:<64 hex>`, the way "
+                "every workflow step here already names a commit as well as a version",
+            )
+
+
 def check_guarantee_specs_exist():
     """A named guarantee spec that no file answers to.
 
@@ -1208,7 +1443,9 @@ def changed_lanes(base):
     if any(one.startswith("docs/specs/") for one in touched):
         lanes.update({"clause-permits-violation", "unpinned-guarantee"})
     if any(
-        one.startswith(".github/") or one.endswith(("Cargo.toml", "Cargo.lock", "deny.toml"))
+        one.startswith(".github/")
+        or Path(one).name.startswith("Dockerfile")
+        or one.endswith(("Makefile", "Cargo.toml", "Cargo.lock", "deny.toml"))
         for one in touched
     ):
         lanes.add("supply-chain")
@@ -1255,6 +1492,7 @@ def main():
     findings += list(check_construction_pinned(specs, sources))
     findings += list(check_key_sites_exhaustive(specs, sources))
     findings += list(check_pinned_actions())
+    findings += list(check_pinned_images())
     findings += list(check_privileged_job_runs_only_its_own_code())
     findings += list(check_guarantee_specs_exist())
     findings += list(check_unpinned_guarantee_clauses(specs))
