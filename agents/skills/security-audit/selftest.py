@@ -630,6 +630,192 @@ def test_privileged_job_runs_only_its_own_code():
     )
 
 
+# A real reference and the digest it resolved to, because a fixture written with a made-up hash
+# would pass a check that only counted hex digits and say nothing about the one that runs.
+ZIGBUILD = "ghcr.io/rust-cross/cargo-zigbuild:0.23.0"
+DIGEST = "@sha256:b8364c2c60cdcc9b95c402d17654bff517410926a35678bd89dd924b8158d6ae"
+RUN_LINE = (
+    'check:\n\tdocker run --rm --platform linux/amd64 -e A=1 \\\n'
+    '\t\t-v "$(PWD):/src:ro" -w /work {image} sh -c "cargo build"\n'
+)
+
+
+def test_pinned_images():
+    moving = in_tree({"Dockerfile.cross": f"FROM {ZIGBUILD} AS builder\nCOPY . .\n"})
+    found = with_cwd(moving, lambda: list(audit.check_pinned_images()))
+    check(
+        "a Dockerfile base image on a tag is an error",
+        kinds(found) == ["unpinned-image"] and found[0]["impact"] == "high",
+        str(kinds(found)),
+    )
+
+    fixed = in_tree({"Dockerfile.cross": f"FROM {ZIGBUILD}{DIGEST} AS builder\nCOPY . .\n"})
+    check(
+        "a base image that names a digest is clean",
+        with_cwd(fixed, lambda: list(audit.check_pinned_images())) == [],
+    )
+
+    # The last stage of Dockerfile.cross is `FROM scratch`, and the one before it is copied out of
+    # a stage this file named: neither is pulled from anywhere.
+    staged = in_tree(
+        {
+            "Dockerfile.cross": f"FROM {ZIGBUILD}{DIGEST} AS builder\n"
+            "FROM scratch\nCOPY --from=builder /out/bravebot /bravebot\n"
+        }
+    )
+    check(
+        "the empty image and a stage of this build are not pulled from anywhere",
+        with_cwd(staged, lambda: list(audit.check_pinned_images())) == [],
+    )
+
+    # The image of a `docker run` is not the token after it: `--platform linux/amd64` and
+    # `-v "$(PWD):/src:ro"` both come first, and both would read as an image reference.
+    recipe = in_tree({"Makefile": RUN_LINE.format(image="rust:slim")})
+    found = with_cwd(recipe, lambda: list(audit.check_pinned_images()))
+    check(
+        "the image a recipe runs is read past the options and their values",
+        kinds(found) == ["unpinned-image"] and "`rust:slim`" in found[0]["summary"],
+        str(kinds(found)) + " " + (found[0]["summary"] if found else ""),
+    )
+
+    pinned = in_tree({"Makefile": RUN_LINE.format(image=f"rust:slim{DIGEST}")})
+    check(
+        "a recipe that names a digest is clean",
+        with_cwd(pinned, lambda: list(audit.check_pinned_images())) == [],
+    )
+
+    # `make strip` runs a second image inside a shell loop, where the option before it holds a
+    # space: a split on whitespace ends up reading the second half of that value as the image.
+    quoted = in_tree(
+        {
+            "Makefile": 'strip:\n\t@for f in dist/*; do \\\n'
+            '\t\tdocker run --rm -e ASSET="/dist/$$(basename $$f)" \\\n'
+            f'\t\t\t{ZIGBUILD} sh -c "true"; \\\n\tdone\n'
+        }
+    )
+    found = with_cwd(quoted, lambda: list(audit.check_pinned_images()))
+    check(
+        "an option whose value holds a space does not hide the image after it",
+        kinds(found) == ["unpinned-image"] and f"`{ZIGBUILD}`" in found[0]["summary"],
+        str(kinds(found)) + " " + (found[0]["summary"] if found else ""),
+    )
+
+    # `docker create` in the extract step runs the image the build produced a line earlier. There
+    # is no registry above it and nothing to pin.
+    built = in_tree(
+        {
+            "Makefile": "extract:\n\tdocker build -f Dockerfile.cross -t $(BINARY)-$(1) .\n"
+            "\tdocker create --name tmp-$(BINARY)-$(2) $(1) /dev/null\n"
+        }
+    )
+    check(
+        "an image this build produced is not pulled from anywhere",
+        with_cwd(built, lambda: list(audit.check_pinned_images())) == [],
+    )
+
+    # A name the Makefile assigns is still a reference: it is read through the assignment rather
+    # than passed over for having a `$` in it.
+    through = in_tree(
+        {"Makefile": "IMAGE = rust:slim\n" + RUN_LINE.format(image="$(IMAGE)")}
+    )
+    check(
+        "an image written through a variable is read through it",
+        kinds(with_cwd(through, lambda: list(audit.check_pinned_images()))) == ["unpinned-image"],
+    )
+
+    # The failure this check must not have is going quiet: a command it cannot read is a finding,
+    # because a pass that reports nothing reads as a tree with nothing in it.
+    unreadable = in_tree({"Makefile": "check:\n\tdocker run --rm --platform linux/amd64\n"})
+    found = with_cwd(unreadable, lambda: list(audit.check_pinned_images()))
+    check(
+        "a docker command whose image cannot be read is reported rather than passed over",
+        kinds(found) == ["unpinned-image"],
+    )
+
+    # A quote the lexer cannot close swallows the rest of the line, and what it swallowed here is
+    # the whole of the command.
+    swallowed = in_tree(
+        {
+            "Makefile": "strip:\n\t@echo don't ship this; \\\n"
+            '\t\tdocker run --rm rust:slim sh -c "true"\n'
+        }
+    )
+    check(
+        "a command behind a quote the lexer cannot close is reported too",
+        kinds(with_cwd(swallowed, lambda: list(audit.check_pinned_images()))) == ["unpinned-image"],
+    )
+
+    # A base written through an `ARG` is still a base. Parameterising it is how the one image that
+    # compiles every shipped binary stops being written down anywhere.
+    through_arg = in_tree(
+        {"Dockerfile.cross": f"ARG BASE={ZIGBUILD}\nFROM $BASE AS builder\n"}
+    )
+    check(
+        "a base image written through an ARG is read through it",
+        kinds(with_cwd(through_arg, lambda: list(audit.check_pinned_images())))
+        == ["unpinned-image"],
+    )
+
+    # `COPY --from` pulls whatever it names, the same as a `FROM` does, unless what it names is a
+    # stage of this build.
+    reached = in_tree(
+        {
+            "Dockerfile.cross": f"FROM {ZIGBUILD}{DIGEST} AS builder\n"
+            "FROM scratch\nCOPY --from=builder /out/bravebot /bravebot\n"
+            "COPY --from=alpine:3 /etc/ssl /etc/ssl\n"
+        }
+    )
+    found = with_cwd(reached, lambda: list(audit.check_pinned_images()))
+    check(
+        "a COPY that reaches into an image is that image, and one into a stage is not",
+        kinds(found) == ["unpinned-image"] and "`alpine:3`" in found[0]["summary"],
+        str(kinds(found)),
+    )
+
+    # A command inside a quoted script is a command: the line's own tokens hold that script as one
+    # token, so a pass that reads them alone never looks inside it.
+    nested = in_tree(
+        {"Makefile": "check:\n\tsh -c 'docker run --rm rust:slim true'\n"}
+    )
+    check(
+        "a command inside a quoted script is read too",
+        kinds(with_cwd(nested, lambda: list(audit.check_pinned_images()))) == ["unpinned-image"],
+    )
+
+    # The Makefile explains its own `docker create` in a comment above it.
+    described = in_tree(
+        {
+            "Makefile": "# `docker create` on a scratch image needs a command argument.\n"
+            "check:\n\ttrue\n"
+        }
+    )
+    check(
+        "a comment naming a command is prose about it, not a command",
+        with_cwd(described, lambda: list(audit.check_pinned_images())) == [],
+    )
+
+    # `check_pinned_actions` passes over `docker://` because an image is not a `uses:` step, which
+    # left the two forms a workflow can name one in read by nothing at all.
+    job = in_tree(
+        {
+            ".github/workflows/ci.yml": "    container:\n      image: rust:slim\n"
+            "    steps:\n      - uses: docker://alpine:3\n"
+        }
+    )
+    found = with_cwd(job, lambda: list(audit.check_pinned_images()))
+    check(
+        "a job container and a `docker://` step are both images",
+        kinds(found) == ["unpinned-image"] * 2,
+        str(kinds(found)),
+    )
+
+    # Every image in the tree names a digest today, and this is what keeps it that way.
+    check(
+        "the tree's own build images are pinned",
+        with_cwd(ROOT, lambda: list(audit.check_pinned_images())) == [],
+    )
+
+
 def test_construction_pinned():
     sources = {
         Path("crates/agent/src/tools.rs"): [
@@ -1395,6 +1581,7 @@ def main():
         test_exhaustive_reader_docs,
         test_labelled_impls,
         test_pinned_actions,
+        test_pinned_images,
         test_privileged_job_runs_only_its_own_code,
         test_construction_pinned,
         test_key_sites_exhaustive,

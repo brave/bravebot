@@ -7,8 +7,22 @@ TAG = v$(VERSION)
 # refuses an update. Set it per clone rather than per release, with
 # `git config bravebot.releaseRemote upstream`.
 RELEASE_REMOTE = $(or $(shell git config bravebot.releaseRemote),origin)
-# The minimum toolchain CI builds against, declared once in Cargo.toml.
+# Each of the three images below names a digest as well as a tag, because a tag is whatever its
+# publisher points at today and every one of them runs with the whole tree inside it.
+# `make check-security` fails on one that names a tag alone. Moving to a newer image is a
+# deliberate edit: read the digest with
+#   docker buildx imagetools inspect rust:slim --format '{{.Manifest.Digest}}'
+# and rewrite the tag beside it in the same line, so the line still says what it runs.
+#
+# The minimum toolchain CI builds against, declared once in Cargo.toml, and the image that ships
+# it. Docker goes by the digest and ignores the tag beside it, so check-msrv refuses to run while
+# the two disagree rather than building against a minimum nobody declared.
 MSRV = $(shell sed -nE 's/^rust-version[[:space:]]*=[[:space:]]*"([0-9.]+)".*/\1/p' Cargo.toml | head -n 1)
+MSRV_IMAGE = rust:1.88-slim@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89
+# The stable the check targets run, and the image the cross-build is built on, which `make strip`
+# runs a second time over the finished assets.
+STABLE_IMAGE = rust:1.98-slim@sha256:f47a8de237dcbb0b0ce1099901e60a89728e3d51f24e664b40e947171538ade7
+ZIGBUILD_IMAGE = ghcr.io/rust-cross/cargo-zigbuild:0.23.0@sha256:b8364c2c60cdcc9b95c402d17654bff517410926a35678bd89dd924b8158d6ae
 # Every file that states the version, which is what a bump rewrites and commits.
 VERSION_FILES = Cargo.toml Cargo.lock package.json package-lock.json
 
@@ -138,9 +152,10 @@ check-spec:
 # admitting them leaves as many prompts out of a verdict's reach as the clause deciding that does,
 # whether a field documented as read in one place is read in one place, whether anything reaches
 # into a Labelled, whether a spec pins the constructors as well as the releases, whether every
-# workflow step is on a commit rather than a tag somebody else can move, and whether a job holding
-# `id-token: write` or a secret installs or runs an npm dependency, which every step in that job
-# could read the credential from. No model takes part, so it belongs in CI. The lanes that read
+# workflow step is on a commit rather than a tag somebody else can move, whether every container
+# image this tree runs names a digest rather than a tag its publisher can move, and whether a job
+# holding `id-token: write` or a secret installs or runs an npm dependency, which every step in that
+# job could read the credential from. No model takes part, so it belongs in CI. The lanes that read
 # code are the skill, and a person runs those.
 #
 # It passes on this tree now that `Labelled::trusted` has a `guards` entry beside `Labelled::new`,
@@ -218,8 +233,10 @@ check-deps:
 # Catches a feature that only compiles on a newer toolchain than the release build has.
 .PHONY: check-msrv
 check-msrv:
+	@case "$(MSRV_IMAGE)" in rust:$(MSRV)-slim@sha256:*) ;; \
+		*) echo "MSRV is $(MSRV) and MSRV_IMAGE is $(MSRV_IMAGE): bump both"; exit 1;; esac
 	docker run --rm --platform linux/amd64 -e BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 \
-		-v "$(PWD):/src:ro" -w /work rust:$(MSRV)-slim sh -c '\
+		-v "$(PWD):/src:ro" -w /work $(MSRV_IMAGE) sh -c '\
 		cp -r /src/. /work && \
 		cargo build --all --locked'
 
@@ -232,7 +249,7 @@ check-msrv:
 .PHONY: check-windows
 check-windows:
 	docker run --rm --platform linux/amd64 -e BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 \
-		-v "$(PWD):/src:ro" -w /work rust:slim sh -c '\
+		-v "$(PWD):/src:ro" -w /work $(STABLE_IMAGE) sh -c '\
 		cp -r /src/. /work && \
 		apt-get update >/dev/null && \
 		apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 >/dev/null && \
@@ -286,9 +303,11 @@ check-locales:
 	python3 contrib/check-locales.py --selftest
 	python3 contrib/check-locales.py
 
-# Runs the same checks on Linux with the current stable toolchain. Worth doing before
-# pushing platform-specific code: a macOS host never compiles the Linux backend, and
-# clippy gains lints between releases, so both can fail in CI while passing locally.
+# Runs the same checks on Linux with the stable toolchain its image is pinned to. Worth doing
+# before pushing platform-specific code: a macOS host never compiles the Linux backend, and
+# clippy gains lints between releases, so both can fail in CI while passing locally. The image
+# names a digest, so what it runs stays where it is put while stable moves on: when
+# `make check-toolchain` reports the host is behind, the tag and digest below are what to bump.
 # The environment the container needs: the build script refuses an unconfigured build
 # without the first, which ci.yml sets for CI, and the shell-mode test reads `$$USER` the way
 # a terminal would, which a CI runner image provides and a bare container does not. The third
@@ -303,7 +322,7 @@ check-locales:
 check-linux:
 	docker run --rm --platform linux/amd64 -e BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 -e USER=root \
 		-e BRAVEBOT_ALLOW_MISSING_LANDLOCK=1 \
-		-v "$(PWD):/src:ro" -w /work rust:slim sh -c '\
+		-v "$(PWD):/src:ro" -w /work $(STABLE_IMAGE) sh -c '\
 		cp -r /src/. /work && \
 		rustup component add clippy rustfmt >/dev/null 2>&1 && \
 		cargo fmt --all -- --check && \
@@ -359,7 +378,7 @@ strip:
 	@for f in dist/$(BINARY)-*; do \
 		case "$$f" in *.sha256|*SHA256SUMS) continue;; esac; \
 		docker run --rm -v "$(PWD)/dist:/dist" -e ASSET="/dist/$$(basename $$f)" \
-			ghcr.io/rust-cross/cargo-zigbuild:0.23.0 sh -c '\
+			$(ZIGBUILD_IMAGE) sh -c '\
 			lib=$$(rustc --print sysroot)/lib && \
 			host=$$(rustc -vV | sed -n "s/^host: //p") && \
 			LD_LIBRARY_PATH=$$lib \
