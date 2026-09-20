@@ -38,6 +38,14 @@ DANGLING = re.compile(
     re.IGNORECASE,
 )
 
+# A clause reference opens with the id, so `LSP-3`, `FETCH-6 with LABEL-3` and
+# `CHECK-12 (docs/specs/vetting.md:369)` all qualify and a sentence about a clause does not.
+CLAUSE_ID = re.compile(r"[A-Z][A-Z0-9]*-\d+")
+
+# A name has to open a file. Nothing bounds the length of the fields it is built from, and the longest
+# thing a name is allowed to cost is a truncated word.
+SLUG_LIMIT = 80
+
 # Every issue this skill files is about the guarantee, so `security` is on all of them. The kind label
 # says which kind of defect it is, and the two are not alternatives.
 SECURITY = "security"
@@ -161,9 +169,15 @@ def prose(text):
 
 
 def subsystem(finding):
-    """What the title leads with: the clause, else the area, else the lane."""
-    if finding.get("clause"):
-        return finding["clause"]
+    """What the title leads with: the clause, else the area, else the lane.
+
+    `verify.md` asks for "the clause id where one is involved, else omit", and a verifier that
+    answers the question instead of omitting the field writes a sentence into it. Such a value is
+    not a clause reference, so it is read as the omission it was meant to be rather than led with.
+    """
+    clause = (finding.get("clause") or "").strip()
+    if CLAUSE_ID.match(clause):
+        return clause
     area = (finding.get("area") or "").strip().removeprefix("area/")
     if area in AREAS or area == INFRASTRUCTURE:
         return area
@@ -214,10 +228,14 @@ def key_for(finding, title):
     `docs/specs/layering.md` where the title says `layering.md`, and a key nothing can match sends
     dedup back to comparing wording. The findings about specs with unpinned clauses are one sentence
     with one word changed, so on wording alone the first of them swallows the rest.
+
+    The clause counts only where it is a clause reference, for the same reason `subsystem` reads it
+    that way: a sentence written into the field is a key no title can hold, and dedup falling back
+    to wording is the behaviour this function exists to avoid.
     """
     named = []
-    if finding.get("clause"):
-        named.append(finding["clause"])
+    if CLAUSE_ID.match((finding.get("clause") or "").strip()):
+        named.append(finding["clause"].strip())
     for text in (finding.get("title"), finding.get("summary")):
         named.extend(re.findall(r"`([^`]+)`", text or ""))
 
@@ -233,9 +251,15 @@ def key_for(finding, title):
 
 
 def slug_for(finding, taken):
+    """The stem every file this finding gets is named with, short enough to be one.
+
+    A clause reference is as long as whoever wrote it made it, so the length is bounded here rather
+    than trusted. Two findings truncated to the same stem are told apart by the counter below, which
+    is what it was already there for.
+    """
     base = re.sub(
         r"[^A-Za-z0-9._-]+", "-", f"{subsystem(finding)}-{finding.get('kind', 'finding')}"
-    ).strip("-")
+    ).strip("-")[:SLUG_LIMIT].strip("-")
     slug, extra = base, 1
     while slug in taken:
         extra += 1
