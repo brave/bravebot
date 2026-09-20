@@ -4,6 +4,7 @@ title: spawn_processor
 status: normative
 governs:
   - crates/agent/src/processor.rs
+documented-by: docs/website/docs/reference/tools.md
 ---
 
 ## Scope

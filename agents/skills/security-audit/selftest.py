@@ -199,6 +199,261 @@ def test_pinned_actions():
     )
 
 
+# The publish workflow in the two shapes that matter. In the first the grant is declared once for a
+# whole workflow whose single job also installs the lockfile and runs what it installed; in the second
+# those two commands are a job of their own and the grant is on the job that publishes. The second is
+# what this repository ships, so a check that reported it would be one nobody could keep.
+GRANT_OVER_THE_INSTALL = """\
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install from the lockfile
+        run: npm ci --ignore-scripts
+
+      - name: Lint the lockfile
+        run: npm run lint:lockfile
+
+      - name: Publish
+        run: npm publish --access public --provenance --ignore-scripts
+"""
+
+GRANT_BESIDE_THE_INSTALL = """\
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install from the lockfile
+        run: npm ci --ignore-scripts
+
+      - name: Lint the lockfile
+        run: npm run lint:lockfile
+
+  publish:
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Publish
+        run: |
+          # No npm ci here: the lint job installed and linted the lockfile already.
+          npm publish --access public --provenance --ignore-scripts
+"""
+
+
+def test_privileged_job_runs_only_its_own_code():
+    over = in_tree({".github/workflows/publish-npm.yml": GRANT_OVER_THE_INSTALL})
+    found = with_cwd(over, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+    evidence = " | ".join(found[0]["evidence"]) if found else "(nothing)"
+    check(
+        "a grant declared for a whole workflow reaches the job that installs and runs the lockfile",
+        kinds(found) == ["privileged-job-runs-dependencies"]
+        and "installs a dependency: npm ci" in evidence
+        and "runs a dependency: npm run lint:lockfile" in evidence,
+        f"{kinds(found)}: {evidence}",
+    )
+    check(
+        "the publish step is not what is reported: it runs nothing that was installed",
+        bool(found) and "npm publish" not in evidence,
+        evidence,
+    )
+
+    beside = in_tree({".github/workflows/publish-npm.yml": GRANT_BESIDE_THE_INSTALL})
+    found = with_cwd(beside, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+    check(
+        "the same two commands in a job holding only contents: read are clean",
+        found == [],
+        str(kinds(found)),
+    )
+
+    # A job's own `permissions` replaces the workflow's rather than adding to it, which is how GitHub
+    # reads it, so the narrowed job below holds no grant however the workflow above it is written.
+    narrowed = in_tree(
+        {
+            ".github/workflows/publish-npm.yml": "permissions:\n"
+            "  contents: read\n"
+            "  id-token: write\n"
+            "\n"
+            "jobs:\n"
+            "  lint:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    permissions:\n"
+            "      contents: read\n"
+            "    steps:\n"
+            "      - run: npm ci --ignore-scripts\n"
+        }
+    )
+    found = with_cwd(narrowed, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+    check(
+        "a job that narrows the workflow's permissions holds what it declares and nothing more",
+        found == [],
+        str(kinds(found)),
+    )
+
+    on_the_job = in_tree(
+        {
+            ".github/workflows/publish-npm.yml": "jobs:\n"
+            "  publish:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    permissions:\n"
+            "      id-token: write\n"
+            "    steps:\n"
+            "      - run: npx tsc --outDir dist\n"
+        }
+    )
+    found = with_cwd(on_the_job, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+    check(
+        "a grant declared on the job is read as well as one declared above it",
+        kinds(found) == ["privileged-job-runs-dependencies"]
+        and "runs a dependency: npx tsc" in " | ".join(found[0]["evidence"]),
+        str(kinds(found)),
+    )
+
+    # A secret is the other thing a step can read out of the job it is in, and what a job holding one
+    # can lose is the secret rather than a publishing credential.
+    secret = in_tree(
+        {
+            ".github/workflows/publish-npm.yml": "jobs:\n"
+            "  measure:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - name: Measure\n"
+            "        env:\n"
+            "          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"
+            "        run: npm ci --ignore-scripts\n"
+        }
+    )
+    found = with_cwd(secret, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+    check(
+        "a job holding a secret rather than a grant is reported, and says which it holds",
+        kinds(found) == ["privileged-job-runs-dependencies"]
+        and "holds a secret" in found[0]["summary"],
+        str(kinds(found)),
+    )
+
+    unreadable = in_tree(
+        {
+            ".github/workflows/publish-npm.yml": "jobs:\n"
+            "    publish:\n"
+            "        runs-on: ubuntu-latest\n"
+            "        permissions:\n"
+            "            id-token: write\n"
+            "        steps:\n"
+            "          - run: npm ci --ignore-scripts\n"
+        }
+    )
+    found = with_cwd(unreadable, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+    check(
+        "a workflow whose jobs this cannot read is an error rather than a silent pass",
+        kinds(found) == ["workflow-unreadable"],
+        str(kinds(found)),
+    )
+
+    # Every spelling the grant has in a file GitHub accepts. A check that reads one of them is a check
+    # somebody undoes by quoting a value or collapsing a map, neither of which changes what is granted.
+    for name, declaration in (
+        ("quoted", '    permissions:\n      id-token: "write"\n'),
+        ("an inline map", "    permissions: { contents: read, id-token: write }\n"),
+        ("write-all", "    permissions: write-all\n"),
+    ):
+        spelt = in_tree(
+            {
+                ".github/workflows/publish-npm.yml": "jobs:\n"
+                "  publish:\n"
+                "    runs-on: ubuntu-latest\n" + declaration + "    steps:\n"
+                "      - run: npm ci --ignore-scripts\n"
+            }
+        )
+        found = with_cwd(spelt, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+        check(
+            f"a grant written as {name} grants the same thing and is read the same way",
+            kinds(found) == ["privileged-job-runs-dependencies"],
+            str(kinds(found)),
+        )
+
+    # A comment is prose. Naming a secret in one does not put it in any job's environment, and this
+    # tree's workflows have comments that discuss tokens.
+    discussed = in_tree(
+        {
+            ".github/workflows/ci.yml": "# The token here is ${{ secrets.GITHUB_TOKEN }}, which this\n"
+            "# workflow deliberately does not use.\n"
+            "jobs:\n"
+            "  npm-lockfile:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: npm ci --ignore-scripts\n"
+        }
+    )
+    found = with_cwd(discussed, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+    check(
+        "a secret named in a comment is not a secret the jobs below it hold",
+        found == [],
+        str(kinds(found)),
+    )
+
+    # The step's own keys are not its script. `- run: x` puts the dash left of the key, so reading the
+    # body from the dash column would take the `env:` beside it and report whatever the value says.
+    beside_the_run = in_tree(
+        {
+            ".github/workflows/publish-npm.yml": "jobs:\n"
+            "  publish:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    permissions:\n"
+            "      id-token: write\n"
+            "    steps:\n"
+            "      - run: ./contrib/report.sh\n"
+            "        env:\n"
+            '          NOTE: "do not npm ci here"\n'
+        }
+    )
+    found = with_cwd(beside_the_run, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+    check(
+        "a step's env is not a command, however the value reads",
+        found == [],
+        str(kinds(found)),
+    )
+
+    # The other spellings of running what was installed. `npm run` is one of several, and a lockfile
+    # is installed by more than one program.
+    for name, command in (
+        ("npm exec", "npm exec -- lockfile-lint"),
+        ("yarn install", "yarn install --frozen-lockfile"),
+    ):
+        other = in_tree(
+            {
+                ".github/workflows/publish-npm.yml": "jobs:\n"
+                "  publish:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+                "    steps:\n"
+                f"      - run: {command}\n"
+            }
+        )
+        found = with_cwd(other, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+        check(
+            f"{name} runs code nobody here wrote as surely as npm run does",
+            kinds(found) == ["privileged-job-runs-dependencies"],
+            str(kinds(found)),
+        )
+
+    # The publish workflow holds the one grant in this tree, and this is what keeps the install out of
+    # the job that holds it.
+    check(
+        "no job in the tree's own workflows runs a dependency beside a credential",
+        with_cwd(ROOT, lambda: list(audit.check_privileged_job_runs_only_its_own_code())) == [],
+    )
+
+
 def test_construction_pinned():
     sources = {
         Path("crates/agent/src/tools.rs"): [
@@ -943,6 +1198,7 @@ def main():
         test_exception_counts,
         test_labelled_impls,
         test_pinned_actions,
+        test_privileged_job_runs_only_its_own_code,
         test_construction_pinned,
         test_key_sites_exhaustive,
         test_guarantee_specs_are_read,

@@ -6,6 +6,7 @@ governs:
   - crates/tui/src/app.rs
 guards:
   - symbol: commands
+documented-by: docs/website/docs/reference/commands.md
 ---
 
 ## Scope

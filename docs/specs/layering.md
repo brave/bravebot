@@ -7,6 +7,7 @@ governs:
   - crates/*/src/lib.rs
   - crates/*/src/main.rs
   - crates/*/build.rs
+documented-by: none (internal: which crate may depend on what is how the repository is built, not something a reader acts on)
 ---
 
 ## Scope

@@ -20,6 +20,7 @@ governs:
   - crates/aichat/src/models.rs
   - crates/config/src/provider.rs
   - crates/config/src/settings.rs
+documented-by: docs/website/docs/customize/configuration.md
 ---
 
 ## Scope

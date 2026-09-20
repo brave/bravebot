@@ -7,6 +7,9 @@ governs:
   - crates/cli/src/exit.rs
   - crates/cli/src/json.rs
   - crates/cli/src/plain.rs
+documented-by:
+  - docs/website/docs/reference/cli.md
+  - docs/website/docs/using/headless.md
 ---
 
 ## Scope

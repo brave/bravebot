@@ -4,6 +4,7 @@ title: The tool surface
 status: normative
 governs:
   - crates/agent/src/tools.rs
+documented-by: docs/website/docs/reference/tools.md
 ---
 
 ## Scope

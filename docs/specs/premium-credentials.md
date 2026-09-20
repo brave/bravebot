@@ -12,6 +12,7 @@ governs:
   - crates/agent/src/turn.rs
   - crates/tui/src/status.rs
   - crates/tui/src/logo.rs
+documented-by: docs/website/docs/customize/premium.md
 ---
 
 ## Scope

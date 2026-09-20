@@ -37,7 +37,9 @@ draft = importlib.util.module_from_spec(_drafts)
 _drafts.loader.exec_module(draft)
 
 
-CLEAN_SPEC = """\
+DOCUMENTED_BY = "documented-by: docs/website/docs/demo.md"
+
+CLEAN_SPEC = f"""\
 ---
 id: DEMO
 title: A demonstration
@@ -51,6 +53,7 @@ guards:
   - symbol: Gate::new
     sites:
       - crates/demo/src/lib.rs: 1
+{DOCUMENTED_BY}
 ---
 
 ## Clauses
@@ -126,6 +129,9 @@ def build_fixture(root):
     (root / "docs" / "specs" / "README.md").write_text(CLEAN_README, encoding="utf-8")
     # No clause here is verified by nothing, so the list the fixture starts with is empty.
     (root / check.UNVERIFIED_FILE).write_text(check.render_unverified([]), encoding="utf-8")
+    website = root / "docs" / "website" / "docs"
+    website.mkdir(parents=True)
+    (website / "demo.md").write_text("# Demo\n", encoding="utf-8")
     (root / "crates" / "demo" / "src").mkdir(parents=True)
     (root / "crates" / "demo" / "Cargo.toml").write_text(
         '[package]\nname = "bravebot-demo"\n', encoding="utf-8"
@@ -149,6 +155,7 @@ def run_checks():
         findings.extend(check.check_guards(one, sources))
         findings.extend(check.check_isolation(one, prefixes))
         findings.extend(check.check_prose(one))
+        findings.extend(check.check_documentation(one))
     findings.extend(check.check_readme(specs))
     findings.extend(check.check_unverified_file(specs, index, crates))
     return findings
@@ -323,6 +330,33 @@ CASES = [
         "a spec governing nothing",
         lambda root: edit_spec(root, "governs:\n  - crates/demo/src/lib.rs\n", ""),
         "front-matter-missing",
+    ),
+    (
+        "a spec saying nothing about which pages describe it",
+        lambda root: edit_spec(root, f"{DOCUMENTED_BY}\n", ""),
+        "spec-undocumented",
+    ),
+    (
+        "a spec naming a page that is not there",
+        lambda root: edit_spec(root, DOCUMENTED_BY, "documented-by: docs/website/docs/gone.md"),
+        "documented-by-missing",
+    ),
+    (
+        "a spec naming the page from the site's own directory instead of the repository root",
+        lambda root: edit_spec(root, DOCUMENTED_BY, "documented-by: demo.md"),
+        "documented-by-missing",
+    ),
+    (
+        "a spec saying none without saying why",
+        lambda root: edit_spec(root, DOCUMENTED_BY, "documented-by: none"),
+        "none-unexplained",
+    ),
+    (
+        "a spec saying none with a reason is answered, not undocumented",
+        lambda root: edit_spec(
+            root, DOCUMENTED_BY, "documented-by: none (internal: nobody reads it)"
+        ),
+        None,
     ),
     (
         "a clause numbered out of order",

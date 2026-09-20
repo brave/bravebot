@@ -18,6 +18,7 @@ guards:
   - symbol: cmdline::compile
   - symbol: Policy::before_plan
   - symbol: Policy::read_output
+documented-by: docs/website/docs/reference/tools.md
 ---
 
 ## Scope

@@ -4,6 +4,7 @@ title: schedule_next
 status: normative
 governs:
   - crates/agent/src/tools.rs
+documented-by: docs/website/docs/reference/tools.md
 ---
 
 ## Scope

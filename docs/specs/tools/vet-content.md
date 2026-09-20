@@ -4,6 +4,7 @@ title: vet_content
 status: normative
 governs:
   - crates/agent/src/tools.rs
+documented-by: none (gap: no page documents the call that asks to be shown one quarantined slot)
 ---
 
 ## Scope

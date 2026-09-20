@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/app.rs
   - npm/bin/bravebot.js
   - install.sh
+documented-by: docs/website/docs/quickstart.md
 ---
 
 ## Scope
