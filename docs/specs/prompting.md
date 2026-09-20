@@ -6,6 +6,7 @@ governs:
   - crates/tui/src/confirm.rs
   - crates/tui/src/trust_prompt.rs
   - crates/tui/src/remote_confirm.rs
+documented-by: docs/website/docs/security/permissions.md
 ---
 
 ## Scope

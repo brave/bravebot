@@ -13,7 +13,6 @@ README = SPEC_DIR / "README.md"
 
 CLAUSE_HEADING = re.compile(r"^###\s+([A-Z]+)-(\d+)\s*:\s*(.*)$")
 VERIFIED_BY = re.compile(r"verified-by:\s*([^`\n]+)")
-DOCUMENTED_BY = re.compile(r"documented-by:\s*([^`\n]+)")
 TEST_FN = re.compile(r"^\s*fn\s+([A-Za-z0-9_]+)\s*\(")
 EM_DASH = "—"
 
@@ -27,7 +26,6 @@ class Clause:
         self.line = line
         self.body = []
         self.verified_by = []
-        self.documented_by = []
 
     @property
     def id(self):
@@ -47,7 +45,6 @@ class Clause:
             "title": self.title,
             "line": self.line,
             "verified_by": self.verified_by,
-            "documented_by": self.documented_by,
             "withdrawn": self.withdrawn,
         }
 
@@ -70,6 +67,13 @@ class Spec:
     @property
     def governs(self):
         return self.front.get("governs", [])
+
+    @property
+    def documented_by(self):
+        """The website pages describing this spec, or a single `none (why)`. One value reads better
+        written inline than as a one-item list, so a scalar and a list mean the same thing here."""
+        value = self.front.get("documented-by", [])
+        return [value] if isinstance(value, str) else value
 
     @property
     def guards(self):
@@ -192,9 +196,6 @@ def load_spec(path):
         found = VERIFIED_BY.search(raw)
         if found:
             current.verified_by.append(found.group(1).strip().rstrip("`").strip())
-        doc_found = DOCUMENTED_BY.search(raw)
-        if doc_found:
-            current.documented_by.append(doc_found.group(1).strip().rstrip("`").strip())
     return spec
 
 

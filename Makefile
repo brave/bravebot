@@ -34,7 +34,6 @@ help:
 	@echo "  make docs-changes          What has landed in the specs since the site was updated"
 	@echo "  make docs-updated-to-sha   The commit the documentation site is current as of"
 	@echo "  make write-unverified      Write unverified-clauses.txt, which check-spec holds it to"
-	@echo "  make write-undocumented    Write undocumented-clauses.txt, which check-spec holds it to"
 	@echo "  make write-untranslated    Write untranslated-messages.txt, which check-locales holds it to"
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
@@ -156,13 +155,6 @@ check-security:
 .PHONY: write-unverified
 write-unverified:
 	python3 agents/skills/check-spec/check-spec.py --write-unverified
-
-# undocumented-clauses.txt, written from the specs. It is the list of clauses no website page documents,
-# and check-spec fails while it and the specs disagree, so this is what to run after documenting a
-# clause, or adding one.
-.PHONY: write-undocumented
-write-undocumented:
-	python3 agents/skills/check-spec/check-spec.py --write-undocumented
 
 # untranslated-messages.txt, written from the catalogs. It is the list of messages each translation
 # is missing, and check-locales fails while it and the catalogs disagree, so this is what to run

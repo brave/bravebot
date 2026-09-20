@@ -15,6 +15,7 @@ guards:
   - symbol: Policy::compose_vetting_input
   - symbol: Policy::vetting_verdict
   - symbol: Policy::promote_vetted
+documented-by: none (gap: no page describes a second model reading a quarantined slot, or what answering that check does)
 ---
 
 ## Scope

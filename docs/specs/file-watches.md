@@ -9,6 +9,7 @@ governs:
   - crates/tui/src/status.rs
   - crates/agent/src/watch.rs
   - crates/agent/src/tools.rs
+documented-by: none (gap: no page describes a standing watch on a path or what a firing puts in the conversation)
 ---
 
 ## Scope

@@ -11,6 +11,7 @@ guards:
   - symbol: Policy::before_fetch_rules
   - symbol: Policy::before_fetch
   - symbol: Policy::before_network
+documented-by: docs/website/docs/reference/tools.md
 ---
 
 ## Scope

@@ -4,6 +4,9 @@ title: load_skill
 status: normative
 governs:
   - crates/agent/src/skills.rs
+documented-by:
+  - docs/website/docs/reference/tools.md
+  - docs/website/docs/customize/skills.md
 ---
 
 ## Scope

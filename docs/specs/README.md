@@ -111,6 +111,13 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
   number to record.
   Within one spec, either every entry pins its sites or none does: an unpinned entry beside pinned
   ones reads as though it were checked too.
+- **`documented-by`** names the pages under `docs/website/docs/` that describe this spec to somebody
+  using Brave Bot, written from the repository root the same way `governs` is, so one front matter
+  never means two different things by a path. A decision per spec, not per clause: a page is written
+  for a reader with a task, so it covers a topic and rarely lines up with a single clause.
+  `none` is a valid answer and says why in brackets, in one of two forms the check leaves alone but a
+  reader can grep for: `none (internal: ...)` for behaviour nobody using Brave Bot acts on, and
+  `none (gap: ...)` for a page still owed, which is the site's backlog.
 - **`verified-by:`** lines name the tests that pin a clause, as `crate::module::test_name`. The
   coverage check reads them, fails when a name does not resolve to a test that exists, and drafts a
   bug for any clause whose value is `none`. `by-construction` is for a clause nothing can execute,

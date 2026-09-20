@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/render.rs
   - crates/tui/src/app.rs
   - crates/agent/src/aside.rs
+documented-by: docs/website/docs/using/interactive-mode.md
 ---
 
 ## Scope

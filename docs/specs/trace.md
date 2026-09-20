@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/core/src/event.rs
   - crates/session/src/audit.rs
+documented-by: docs/website/docs/security/audit-trail.md
 ---
 
 ## Scope

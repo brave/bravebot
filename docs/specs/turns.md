@@ -4,6 +4,9 @@ title: What bounds a turn
 status: normative
 governs:
   - crates/agent/src/turn.rs
+documented-by:
+  - docs/website/docs/troubleshooting.md
+  - docs/website/docs/reference/cli.md
 ---
 
 ## Scope

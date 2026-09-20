@@ -10,6 +10,7 @@ governs:
   - crates/tui/src/theme.rs
   - crates/tui/src/theme_prompt.rs
   - crates/tui/src/model_prompt.rs
+documented-by: docs/website/docs/using/transcript.md
 ---
 
 ## Scope

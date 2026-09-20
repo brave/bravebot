@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/tools.rs
   - crates/agent/src/watch.rs
+documented-by: none (gap: no page documents arming a watch on a file)
 ---
 
 ## Scope

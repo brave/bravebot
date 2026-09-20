@@ -7,6 +7,7 @@ governs:
   - crates/sandbox/src/policy.rs
   - crates/sandbox/src/linux.rs
   - crates/sandbox/src/macos.rs
+documented-by: docs/website/docs/security/security.md
 ---
 
 ## Scope

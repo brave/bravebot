@@ -7,6 +7,9 @@ governs:
   - crates/agent/src/conversation.rs
 guards:
   - symbol: Policy::adopt_summary
+documented-by:
+  - docs/website/docs/using/sessions.md
+  - docs/website/docs/customize/configuration.md
 ---
 
 ## Scope

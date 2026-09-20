@@ -8,6 +8,7 @@ governs:
   - crates/tui/src/app.rs
 guards:
   - symbol: Policy::admit_pasted_image
+documented-by: docs/website/docs/using/context.md
 ---
 
 ## Scope

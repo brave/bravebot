@@ -7,6 +7,7 @@ governs:
   - crates/mcp/src/stdio.rs
   - crates/mcp/src/http.rs
   - crates/mcp/src/protocol.rs
+documented-by: none (internal: no settings key wires up a server yet, so there is nothing a reader can configure)
 ---
 
 ## Scope
