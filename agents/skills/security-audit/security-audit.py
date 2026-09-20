@@ -12,7 +12,9 @@ Stdout is `{"work_dir": ..., "manifest": ...}`. The mechanical report goes to st
 findings are already decided and a reader should see them before any lane runs.
 
 The mechanical half checks what a tool can check and the specs do not yet: that the two documents
-naming the admitted exceptions agree on how many there are, that nothing has been implemented on
+naming the admitted exceptions agree on how many there are, that the register admitting them leaves
+as many prompts out of a verdict's reach as the clause deciding that does, that a field documented
+as read in one place is read in one place, that nothing has been implemented on
 `Labelled` that would let a caller read a label's content without asking, that the constructor which
 is how a value gets a better label than its inputs had is pinned somewhere, that every workflow step
 names a commit rather than a tag its owner can move, and that no job holding a credential installs or
@@ -98,6 +100,27 @@ PLACES = re.compile(
     r"\b(" + "|".join(NUMBERS) + r")\s+places?\s+(?:in|do|that)", re.IGNORECASE
 )
 FUNCTION = re.compile(r"\bfn\s+([A-Za-z0-9_]+)")
+
+# The clause that decides which of the prompts a check runs for a safe verdict may answer, the cell
+# in its table that says one of them is answered, and the sentence in `labels.md` counting the rest.
+# `other` falls on either side of the number depending on how the sentence is phrased, and the
+# sentence wraps, so both orders are read and the search is over a paragraph rather than a line.
+VETTING_SPEC = Path("docs/specs/vetting.md")
+PROMPT_SPLIT = "CHECK-12"
+ANSWERED = "a safe verdict answers"
+OUT_OF_REACH = re.compile(
+    r"\b(" + "|".join(NUMBERS) + r")\s+(?:other\s+)?prompts?\s+a\s+check\s+runs\s+for",
+    re.IGNORECASE,
+)
+
+# A field whose doc names the functions that read it and says those are all of them. The claim is
+# what a reviewer meeting one of those functions reads instead of grepping for the others, and it
+# is read as the span it occupies rather than as the doc it sits in: a name below it is prose.
+CLAIM = re.compile(r"Read by (.*?)\band by nothing else\b")
+DOC_LINE = re.compile(r"^\s*///(.*)$")
+FIELD_DECLARATION = re.compile(r"^\s*pub(?:\([^)]*\))?\s+([a-z_][a-z0-9_]*)\s*:")
+ATTRIBUTE = re.compile(r"^\s*#\[")
+NAMED = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")
 
 # The struct a standing answer is keyed on, and where its fields are declared. A key built out of
 # fewer of them than the prompt displayed covers a line nobody read, which is the defect RUN-8's
@@ -313,6 +336,207 @@ def check_exception_counts():
             fix="bring the review document to the number the spec records, since the spec is where "
             "an exception is written down and the review document is what is read before a diff",
         )
+
+
+def paragraphs(lines):
+    """Every block between blank lines, joined into one line, with the line it starts at.
+
+    A sentence in a document wraps wherever the margin falls, so a regex over single lines reads
+    half of one and a count written either side of a break is invisible.
+    """
+    start, held = 0, []
+    for number, raw in enumerate(lines, start=1):
+        if raw.strip():
+            if not held:
+                start = number
+            held.append(raw.strip())
+            continue
+        if held:
+            yield start, " ".join(held)
+            held = []
+    if held:
+        yield start, " ".join(held)
+
+
+def clause_body(lines, clause):
+    """The lines of one clause, from its anchor to the next clause or heading."""
+    anchor = f'<a id="{clause}">'
+    body = []
+    for raw in lines:
+        # Past the clause's own title, since that follows the anchor it belongs to.
+        if len(body) > 1 and (raw.lstrip().startswith("<a id=") or raw.startswith("#")):
+            break
+        if body or anchor in raw:
+            body.append(raw)
+    return body
+
+
+def table_rows(lines):
+    """The data rows of the first table in `lines`, each one its cells.
+
+    The header and the dashes under it are dropped, so what comes back is what the table asserts
+    rather than how it is drawn.
+    """
+    rows = []
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped.startswith("|"):
+            if rows:
+                break
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if all(set(cell) <= set("-: ") for cell in cells):
+            continue
+        rows.append(cells)
+    return rows[1:]
+
+
+def check_prompt_split():
+    """The clause and the register leave the same number of prompts out of a verdict's reach.
+
+    `CHECK-12` is where the split is decided: its table names every prompt a check runs for and says
+    of each whether a safe verdict answers it. The third Known cost in `labels.md` is what a
+    reviewer meeting a branch on a verdict reads instead, and it counts the prompts the mode does
+    not reach.
+    Either way the two disagree is a finding. A register short of the clause leaves a live branch
+    site unlisted, and `reviewing-for-the-rule.md` makes an unlisted exception indistinguishable
+    from a violation, which is how a genuinely new branch passes a review as already admitted. A
+    register past the clause is the other half: it admits a prompt the clause says still asks.
+    """
+    if not VETTING_SPEC.is_file() or not LABELS_SPEC.is_file():
+        return
+
+    clause = clause_body(VETTING_SPEC.read_text(encoding="utf-8").split("\n"), PROMPT_SPLIT)
+    rows = table_rows(clause)
+    answered = [row for row in rows if any(ANSWERED in cell for cell in row)]
+
+    # The first such sentence in the document, as the exception count above is read: there is one,
+    # and a second would be making the same claim about the same three prompts.
+    counted = None
+    for number, paragraph in paragraphs(LABELS_SPEC.read_text(encoding="utf-8").split("\n")):
+        found = OUT_OF_REACH.search(paragraph)
+        if found:
+            counted = (NUMBERS[found.group(1).lower()], number, found.group(0))
+            break
+
+    if not rows or not answered or counted is None:
+        missing = []
+        if not rows:
+            missing.append(f"`{VETTING_SPEC}` has no table under {PROMPT_SPLIT}")
+        elif not answered:
+            missing.append(
+                f"no row of {PROMPT_SPLIT}'s table says `{ANSWERED}`, so the cell this reads no "
+                "longer says which prompts the mode reaches"
+            )
+        if counted is None:
+            missing.append(f"`{LABELS_SPEC}` counts no prompts a check runs for")
+        yield finding(
+            WARNING,
+            "prompt-split-unstated",
+            "the prompts a verdict may answer are counted in only one of the two documents, so "
+            "nothing holds them to one split",
+            " and ".join(missing),
+            "trust",
+            "low",
+            fix=f"state the split in both: {PROMPT_SPLIT}'s table is where it is decided and the "
+            f"third Known cost in `{LABELS_SPEC}` is what a reviewer reads",
+        )
+        return
+
+    reach = len(rows) - len(answered)
+    if counted[0] != reach:
+        yield finding(
+            ERROR,
+            "prompt-split-disagreement",
+            "the register and the clause count a different number of prompts out of a verdict's "
+            "reach, so an admitted branch and an unlisted one read alike",
+            f"{PROMPT_SPLIT} gives a safe verdict {len(answered)} of the {len(rows)} prompts a "
+            f"check runs for, leaving {reach} out of reach, and `{LABELS_SPEC}` says {counted[0]}",
+            "trust",
+            "low",
+            evidence=[
+                f"{VETTING_SPEC} {PROMPT_SPLIT}: "
+                + "; ".join(f"{row[0][:60]} -> {row[-1][:40]}" for row in rows),
+                f"{LABELS_SPEC}:{counted[1]} {counted[2][:120]}",
+            ],
+            fix=f"bring the Known cost to {PROMPT_SPLIT}'s split, which is where it is decided and "
+            "which the code follows",
+            gain="a branch on a verdict is read against a list that does not describe the code: "
+            "short of the clause, it makes a live site look unadmitted and the next unadmitted one "
+            "look live; past it, it admits a prompt the clause says still asks",
+        )
+
+
+def check_exhaustive_reader_docs(sources):
+    """A field doc claiming to name every reader of the field has to name every reader of it.
+
+    `Read by ... and by nothing else` is the claim, and a reviewer meeting a branch on the field
+    reads it rather than grepping for the other sites. A second reader landing without touching the
+    doc turns it into a reason to believe the site in front of them is the only one, which is worse
+    than no claim at all.
+
+    Read within the file that declares the field, since a field name is not unique in a tree and a
+    match on `.name` elsewhere is as likely to be another struct's. Two bounds come with that: a
+    reader in another file is out of reach, and two structs in one file sharing a field name are
+    read as one. The doc is still where a reader is recorded, in either case.
+
+    Only the claim is checked, not its converse. A name in it that reads nothing here reads
+    something in another file as readily as it reads nothing at all, and this cannot tell those
+    apart.
+    """
+    for path, lines in sources.items():
+        stripped = None
+        for number, raw in enumerate(lines, start=1):
+            field = FIELD_DECLARATION.match(raw)
+            if not field:
+                continue
+            doc = []
+            index = number - 2
+            while index >= 0 and ATTRIBUTE.match(lines[index]):
+                index -= 1
+            while index >= 0 and DOC_LINE.match(lines[index]):
+                doc.append(DOC_LINE.match(lines[index]).group(1).strip())
+                index -= 1
+            claim = CLAIM.search(" ".join(reversed(doc)))
+            if claim is None:
+                continue
+
+            named = set(NAMED.findall(claim.group(1)))
+            if stripped is None:
+                stripped = mechanics.strip_comments(lines)
+            reads = re.compile(r"\.\s*" + field.group(1) + r"\b(?!\s*\()")
+            unnamed = {}
+            for other, text in enumerate(stripped, start=1):
+                if other == number or not reads.search(text):
+                    continue
+                if in_test_module(sources, path, other):
+                    continue
+                inside = enclosing(stripped, other)
+                if inside not in named:
+                    unnamed.setdefault(inside, other)
+            if not unnamed:
+                continue
+
+            yield finding(
+                ERROR,
+                "reader-doc-incomplete",
+                f"the doc on {field.group(1)} says it names every reader of it and does not, so a "
+                "second branch on the field reads as the only one",
+                f"`{field.group(1)}` in `{path}` is documented as read by "
+                + ", ".join(f"`{one}`" for one in sorted(named))
+                + " and by nothing else, and is read by "
+                + ", ".join(f"`{one}`" for one in sorted(unnamed))
+                + " as well",
+                "trust",
+                "low",
+                evidence=[
+                    f"{path}:{line} {lines[line - 1].strip()[:120]}"
+                    for line in sorted(unnamed.values())
+                ],
+                fix="name every reader in the doc, or drop the claim that it names them all",
+                gain="a reviewer checking one branch against the field's own documentation is told "
+                "the other branches do not exist",
+            )
 
 
 def check_labelled_impls(sources):
@@ -1025,7 +1249,9 @@ def main():
     sources = mechanics.load_sources()
 
     findings = list(check_exception_counts())
+    findings += list(check_prompt_split())
     findings += list(check_labelled_impls(sources))
+    findings += list(check_exhaustive_reader_docs(sources))
     findings += list(check_construction_pinned(specs, sources))
     findings += list(check_key_sites_exhaustive(specs, sources))
     findings += list(check_pinned_actions())

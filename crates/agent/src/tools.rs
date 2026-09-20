@@ -1140,9 +1140,11 @@ pub struct Tools<'a> {
     /// [`bravebot_core::vetting::auto`]; by the time it reaches here it is one answer, settled
     /// before the session opened and unchanged for its life.
     ///
-    /// Read by `vet_content` and by nothing else. The other two prompts a check runs for release
-    /// what a program printed and write a trust rule, and neither is something a word from a model
-    /// may answer with nobody asked.
+    /// Read by `vet_content` and by `read_output` and by nothing else: the two prompts that
+    /// promote one slot's bytes once, which `docs/specs/vetting.md`'s CHECK-12 divides from the
+    /// third. That third one writes a trust rule about a whole path, which is a standing decision
+    /// rather than bytes in front of a reader, and not something a word from a model may answer
+    /// with nobody asked.
     pub auto_vetting: bool,
     /// The current working directory for `run` commands in this turn.
     ///
@@ -3433,8 +3435,11 @@ fn watch_file<S: Sink>(
 /// display, put in front of the person in full, and only then, if they agree, does an endorsement
 /// exist for the kernel to consume.
 ///
-/// **The verdict is not consulted here.** Nothing in this function branches on what the check said:
-/// the word travels to the prompt, the prompt draws it, and what decides is the answer.
+/// **While auto-vetting is off, which is the default, the verdict decides nothing here.** The word
+/// travels to the prompt, the prompt draws it, and the answer is what releases the bytes. Where
+/// somebody turned it on, a verdict of nothing found releases them with no prompt drawn and every
+/// other verdict still draws it, which is CHECK-12 and the third of the known costs
+/// `docs/specs/labels.md` admits.
 ///
 /// The driver never reads the output. The text goes from the slot to the screen and, on approval,
 /// from the kernel to the planner; nothing here branches on a byte of it.

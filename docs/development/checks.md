@@ -39,7 +39,9 @@ rather than a warning nobody has to read. `make write-unverified` writes the fil
 writes.
 
 `make check-security` decides the things `check-spec` structurally cannot: whether two documents
-agree about how many exceptions to the rule are admitted, whether a trait reaches into a `Labelled`,
+agree about how many exceptions to the rule are admitted, whether the register admitting them leaves
+as many prompts out of a verdict's reach as the clause deciding that does, whether a field
+documented as read in one place is read in one place, whether a trait reaches into a `Labelled`,
 whether a spec pins the constructors of one as well as the releases, whether every workflow step
 is on a commit rather than a tag its owner can move, and whether a job holding `id-token: write` or a
 secret installs or runs an npm dependency, which every step in that job could read the credential

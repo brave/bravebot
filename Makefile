@@ -134,7 +134,9 @@ check-spec:
 	@python3 contrib/terminal-screenshot.py --selftest
 
 # The deterministic half of the security audit. It answers the questions check-spec cannot: whether
-# two documents agree about how many exceptions to the rule are admitted, whether anything reaches
+# two documents agree about how many exceptions to the rule are admitted, whether the register
+# admitting them leaves as many prompts out of a verdict's reach as the clause deciding that does,
+# whether a field documented as read in one place is read in one place, whether anything reaches
 # into a Labelled, whether a spec pins the constructors as well as the releases, whether every
 # workflow step is on a commit rather than a tag somebody else can move, and whether a job holding
 # `id-token: write` or a secret installs or runs an npm dependency, which every step in that job
