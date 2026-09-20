@@ -1577,14 +1577,18 @@ fn collect_delegates<S: Sink, R: Reporter>(
         let working = delegates.remove(at);
         let id = working.id;
         reporter.delegate_waiting(id);
-        // A thread that panicked is a delegate that stopped, which is all anybody can be told
-        // about it: what it was doing died with it, and the turn is still running.
+        // After the report above, not before it: what a delegate's requests are clipped to is the
+        // wait itself, and a reporter that draws a screen or blocks on the lock another delegate
+        // holds is the parent's own overhead. Starting the window first would charge whatever a
+        // request happened to overlap of it as inference the parent never spent waiting.
         let joined_at = Instant::now();
         #[cfg(test)]
         if let Some(started) = working.join_started {
             // A closed receiver means the test observer has already exited.
             let _ = started.send(());
         }
+        // A thread that panicked is a delegate that stopped, which is all anybody can be told
+        // about it: what it was doing died with it, and the turn is still running.
         let (finished, partial, requests) = match working.handle.join() {
             Ok(finished) => finished,
             Err(_) => (
