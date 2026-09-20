@@ -662,6 +662,104 @@ def test_titles():
             {"title": "`Labelled` now implements `PartialEq`, so content can be compared", "area": "trust"}
         ).startswith("trust: Labelled now implements PartialEq"),
     )
+    colon = drafts.title_for(
+        {
+            "clause": "LAYER-2",
+            "title": "LAYER-2's by-construction bracket justifies the clause from the properties of "
+            "Labelled: reading one takes a witness, and two accessors are public",
+        }
+    )
+    check(
+        "a summary that says the mechanism before a colon is cut at the colon",
+        colon.endswith("from the properties of Labelled"),
+        colon,
+    )
+    coordination = drafts.title_for(
+        {
+            "area": "delegation",
+            "title": "the drafter dereferences the place string a lane or a verifier wrote and "
+            "inlines seven lines of it into a body it posts to a public tracker",
+        }
+    )
+    check(
+        "half a coordination whose other half went over the limit is dropped",
+        coordination.endswith("a lane or a verifier wrote"),
+        coordination,
+    )
+    comparison = drafts.title_for(
+        {
+            "area": "infrastructure",
+            "title": "three containers that run with this whole tree are named by a movable tag "
+            "rather than by the digest the build was tested against",
+        }
+    )
+    check(
+        "a comparison cut before what it compares to does not end on 'rather than'",
+        comparison.endswith("by a movable tag"),
+        comparison,
+    )
+
+
+def test_a_name_stays_a_name():
+    """The fields a name is built from are prose, and a name has to open a file.
+
+    `verify.md` asks for a clause id "else omit". A verifier that answered the question instead wrote
+    265 characters into the field, and every draft in that run was lost: the name went past what the
+    file system will open, so the drafter raised before writing any of them.
+    """
+    answered = {
+        "kind": "reachable",
+        "impact": "medium",
+        "area": "infrastructure",
+        "clause": "none. No clause governs agents/skills/, which is part of why nothing caught this; "
+        "`infrastructure` is arguably the truer area label here, and draft-issues.py defines it as "
+        "the build and the tracker rather than the product, so no spec lists this directory among "
+        "the trees the guarantee is read to rest on.",
+        "summary": "the drafter inlines the file `first_site` returns into an issue it posts",
+        "place": "agents/skills/check-spec/draft-issues.py:126 in first_site",
+        "gain": "a file outside the checkout is published verbatim",
+        "evidence": ["agents/skills/check-spec/draft-issues.py:126 the path is read"],
+        "fix": "hold the path inside the checkout",
+        "lane": "supply-chain",
+        "source": "audit",
+        "verified_reason": "the body is posted to a public tracker",
+    }
+    out = Path(tempfile.mkdtemp(prefix="security-audit-selftest-")) / "issues"
+    written = with_cwd(ROOT, lambda: drafts.draft([answered], out))
+    check(
+        "the body is written rather than the run dying on the name",
+        len(written) == 1 and (out / f"{written[0]['slug']}.md").is_file(),
+    )
+    slug = drafts.slug_for(answered, set())
+    check(
+        "a sentence in the clause field does not become the name",
+        len(slug) <= drafts.SLUG_LIMIT and slug.startswith("infrastructure"),
+        slug,
+    )
+    check(
+        "the title leads with the area the sentence was written instead of",
+        drafts.title_for(answered).startswith("infrastructure: "),
+        drafts.title_for(answered),
+    )
+    check(
+        "a clause reference is still what a title leads with",
+        drafts.subsystem({"clause": "FETCH-6 with LABEL-3", "area": "trust"})
+        == "FETCH-6 with LABEL-3",
+    )
+    check(
+        "the key dedup runs on is one the title keeps rather than the sentence",
+        drafts.key_for(answered, drafts.title_for(answered)) == "first_site",
+        drafts.key_for(answered, drafts.title_for(answered)),
+    )
+    taken = set()
+    reference = "LABEL-4" + " and LABEL-5" * 40
+    first = drafts.slug_for(dict(answered, clause=reference), taken)
+    second = drafts.slug_for(dict(answered, clause=reference), taken)
+    check(
+        "a clause reference is as long as it was written, and two cut to one stem still differ",
+        first != second and len(second) <= drafts.SLUG_LIMIT + 3,
+        f"{first} / {second}",
+    )
 
 
 def test_bodies_say_where_and_why():
@@ -854,6 +952,7 @@ def main():
         test_impact_sets_severity,
         test_labels,
         test_titles,
+        test_a_name_stays_a_name,
         test_bodies_say_where_and_why,
         test_posting_skips_what_the_tracker_already_holds,
         test_a_run_writes_a_manifest_and_posts_nothing,
