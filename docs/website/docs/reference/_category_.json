@@ -1,0 +1,8 @@
+{
+  "label": "Reference",
+  "position": 7,
+  "link": {
+    "type": "generated-index",
+    "description": "The command line, the slash commands, and the tools the model may call."
+  }
+}
