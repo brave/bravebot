@@ -1243,6 +1243,7 @@ from a reply, and without it the report names a limit and no way to change it.
 `verified-by: bravebot_agent::backend::each_status_a_service_answers_with_is_reported_as_what_it_means`
 `verified-by: bravebot_agent::backend::a_gateway_with_nothing_holding_a_token_is_reported_as_unconfigured`
 `verified-by: bravebot_agent::backend::aws_refusing_the_credentials_it_was_signed_with_is_reported_as_unauthorized`
+`verified-by: bravebot_agent::backend::a_hop_refused_for_leaving_https_is_reported_as_a_gate_rather_than_a_failed_request`
 `verified-by: bravebot_agent::backend::what_is_kept_about_a_failure_carries_nothing_the_service_or_the_setting_said`
 `verified-by: bravebot_agent::backend::a_reply_stopped_at_the_ceiling_reports_which_ceiling`
 `verified-by: bravebot_tui::state::a_reply_stopped_at_a_ceiling_says_which_ceiling`

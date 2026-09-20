@@ -41,7 +41,8 @@ permitted host could hand off to a denied one.
 Revalidating is what makes a hop checkable; what the check consists of depends on why the request is
 being made. For a `fetch_url` call it is [FETCH-4](tools/fetch-url.md#FETCH-4), which holds the
 chain to the host a person approved. For this program's own connection to its endpoint it is the
-capability and nothing more, for the reason that clause gives.
+capability and nothing more, for the reason that clause gives. Whichever it is, the hop is also held
+to the transport the hop before it used, by [NET-9](#NET-9).
 
 `verified-by: bravebot_net::egress::every_redirect_hop_is_revalidated`
 `verified-by: bravebot_core::policy::a_fetch_cannot_be_redirected_to_a_host_nobody_approved`
@@ -191,6 +192,23 @@ is failing, and `NO_PROXY=*` leaves one configured and used for nothing.
 `verified-by: bravebot_cli::main::the_network_section_names_the_roots_in_force_and_the_proxy`
 `verified-by: bravebot_cli::main::the_network_section_never_prints_a_proxy_credential`
 
+<a id="NET-9"></a>
+### NET-9: a redirect may not take an https chain into cleartext
+
+A hop from an https URL to a cleartext http one is refused, on every request that goes out the one
+way [NET-1](#NET-1) describes and whatever asked for it. Each hop is held to the transport the hop
+before it used, so a chain with no TLS to lose continues and one that picks TLS up part way through
+cannot put it down again: what is refused is leaving https, not a hop that changes scheme.
+
+**Why.** Every hop re-sends the whole request, headers and body alike, so a chain that lost TLS would
+put on the wire in the clear what the hop before it carried under TLS: this program's credential and
+the conversation on its own connection, and on a `fetch_url` call a page a person approved after
+reading `https` in the prompt. Checking a hop's host and not its transport passes a downgrade,
+because the host is the one that was approved, which leaves an endpoint able to turn its own traffic
+into plaintext and hand a third party what only it had.
+
+`verified-by: bravebot_net::lib::a_redirect_may_not_take_an_https_chain_into_cleartext`
+
 ## Known costs
 
 - **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds its own
@@ -201,7 +219,11 @@ is failing, and `NO_PROXY=*` leaves one configured and used for nothing.
   transport configuration this module resolved, by a caller that depends on both crates, so NET-7
   and NET-8 hold of it too and a machine whose authority or route off it is stated in the
   environment reaches the subscription service on the terms it reaches everything else. What stays
-  separate is the policy gate, which that client has nothing to put to.
+  separate is the policy gate, which that client has nothing to put to, and the redirect loop, so
+  NET-9 does not reach it either: that client follows its hops through its library's default, which
+  refuses nothing, so the subscription service can redirect its own traffic into cleartext and put an
+  order id and a credential on the wire. Holding it to the same rule means either following its
+  redirects here or configuring that client to follow none, and neither is decided in this document.
 
 - **The machine's own trust store is not read.** `SSL_CERT_FILE` and `SSL_CERT_DIR` are, so on a
   machine where neither is set an authority installed into the platform store is invisible here.
@@ -231,6 +253,17 @@ is failing, and `NO_PROXY=*` leaves one configured and used for nothing.
   rather than to a program somebody asked for. Confining one is decided in
   [sandboxing.md](sandboxing.md) as a bound on the paths it may reach and not on its egress, because
   a profile cannot tell an approved `git push` from an exfiltration, so this cost stands either way.
+
+- **Within https, a hop on this program's own connection may go to any host.** Every hop re-sends the
+  whole request, which on those connections means the `authorization` header the aichat and gateway
+  backends carry, the `authorization` and `x-amz-security-token` pair a Bedrock request is signed
+  with, the `mcp-session-id` an HTTP MCP server issued, and a body holding the conversation. The
+  per-hop check there is the capability and nothing more, for the reason NET-2 gives, so an endpoint
+  somebody configured can name any https host in a `Location` header and be sent all of it. NET-9
+  bounds what a downgrade costs, not where a hop may land. What stands in front of this is that the
+  endpoint is one a person chose and already sends every request to; what would bound it is holding
+  those chains to a host as well, which is a decision about which hosts a configured endpoint may
+  redirect to and is not made here.
 
 - **Two pairs of phases share a bound rather than having one each.** The transport gives a phase
   the earliest of its own deadline and those of the phases before it, so a bound tight enough to

@@ -190,7 +190,11 @@ impl BackendError {
 fn of_egress(error: &bravebot_net::EgressError) -> Diagnosis {
     use bravebot_net::EgressError;
     match error {
-        EgressError::Denied(_) => Diagnosis::of(Category::Blocked),
+        // Both are this process refusing to let the request leave. A downgraded hop is not the
+        // configuration being wrong: the endpoint a person named is reachable and answered.
+        EgressError::Denied(_) | EgressError::InsecureRedirect { .. } => {
+            Diagnosis::of(Category::Blocked)
+        }
         EgressError::InvalidUrl { .. } => Diagnosis::of(Category::Unconfigured),
         EgressError::Transport { .. }
         | EgressError::TooManyRedirects { .. }
@@ -1221,6 +1225,22 @@ mod tests {
         assert_eq!(of_status(503).category, Category::Unavailable);
         assert_eq!(of_status(400).category, Category::Refused);
         assert_eq!(of_status(503).status, Some(503));
+    }
+
+    /// A hop refused for dropping TLS is this process declining to send, not a request that did
+    /// not arrive. Reported as a transport failure it would read as a service worth waiting for and
+    /// asking again, and the endpoint is reachable: it answered, with a redirect out of https.
+    #[test]
+    fn a_hop_refused_for_leaving_https_is_reported_as_a_gate_rather_than_a_failed_request() {
+        let diagnosis = BackendError::from(ChatError::Egress(
+            bravebot_net::EgressError::InsecureRedirect {
+                url: "https://service.example/v1/chat/completions".into(),
+            },
+        ))
+        .diagnosis();
+
+        assert_eq!(diagnosis.category, Category::Blocked);
+        assert_eq!(diagnosis.status, None);
     }
 
     /// The one number a failure repeats. It is this program's own configured ceiling rather than

@@ -259,6 +259,7 @@ docs/specs/network-egress.md:NET-5: each phase of a request is bounded separatel
 docs/specs/network-egress.md:NET-6: a failure that means "not now" may be retried, and nothing else may
 docs/specs/network-egress.md:NET-7: what a handshake is validated against is the machine's answer, not this build's alone
 docs/specs/network-egress.md:NET-8: a proxy is configured on purpose, and named in the report
+docs/specs/network-egress.md:NET-9: a redirect may not take an https chain into cleartext
 docs/specs/pasting.md:PASTE-1: a long paste folds to a marker, and the words are what get sent
 docs/specs/pasting.md:PASTE-2: only a picture a human pasted
 docs/specs/pasting.md:PASTE-3: the media type is the driver's, never the content's

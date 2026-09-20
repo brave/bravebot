@@ -111,6 +111,10 @@ host against the one approved. A redirect within that host is ordinary and conti
 anywhere else is refused unless a rule allows that host too. A `deny` rule refuses a hop whatever
 else says otherwise.
 
+This is the host and not the transport. A hop that keeps the approved host satisfies everything this
+clause asks even where it drops TLS to do it, so whether one may is decided for every request that
+leaves this process, in [network-egress.md](../network-egress.md).
+
 **Why.** The approval named one URL, and the host at the end of a redirect chain is one nobody was
 ever shown. Without this, a page on a host somebody approved could send the request wherever it
 liked, and the answer a person gave would be covering a destination they never saw.
@@ -164,6 +168,7 @@ detail stops.
 
 `verified-by: bravebot_net::egress::a_redirect_that_leads_nowhere_names_the_url_that_was_asked_for`
 `verified-by: bravebot_net::egress::a_status_after_a_redirect_names_the_url_that_was_asked_for`
+`verified-by: bravebot_net::lib::a_refused_downgrade_names_the_url_that_was_asked_for`
 `verified-by: bravebot_core::policy::a_refused_redirect_names_the_approved_host_and_not_the_one_a_server_chose`
 `verified-by: bravebot_agent::turn::a_failed_fetch_names_the_url_that_was_asked_for_and_not_where_a_redirect_went`
 `verified-by: bravebot_agent::turn::a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose`
