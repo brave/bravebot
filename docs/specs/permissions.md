@@ -103,6 +103,7 @@ directory, is reported as unusable rather than silently matching nothing.
 `verified-by: bravebot_core::permissions::an_anchored_pattern_matches_only_where_it_is_anchored`
 `verified-by: bravebot_core::permissions::a_pattern_whose_anchor_is_unknown_is_reported_rather_than_matching_nothing`
 `verified-by: bravebot_agent::permissions::a_single_slash_rule_is_anchored_at_the_settings_directory`
+`verified-by: bravebot_agent::home::a_settings_rule_is_anchored_at_the_home_directory_the_accessor_names`
 
 <a id="PERM-4"></a>
 ### PERM-4: a one-segment relative pattern floats where it restricts, not where it grants

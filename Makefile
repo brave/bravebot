@@ -134,10 +134,9 @@ check-spec:
 # workflow step is on a commit rather than a tag somebody else can move. No model takes part, so it
 # belongs in CI. The lanes that read code are the skill, and a person runs those.
 #
-# Not in check-all yet, because it fails on this tree: `Labelled::new` and `Labelled::trusted` have
-# no `guards` entry in docs/specs/labels.md. Adding it before that lands would make a red check-all
-# the normal state, which is how a check stops being read. Add it to check-all in the change that
-# fixes it.
+# It passes on this tree now that `Labelled::trusted` has a `guards` entry beside `Labelled::new`,
+# so ci.yml runs it and check-all has it below. It was held out of both while it failed, because a
+# red check-all is the normal state nobody reads.
 .PHONY: check-security
 check-security:
 	python3 agents/skills/security-audit/selftest.py
@@ -234,7 +233,7 @@ check-windows:
 # container builds and a scan -- so `check` stays the inner loop and this is the
 # before-you-push pass.
 .PHONY: check-all
-check-all: check check-spec check-npm check-deps check-msrv check-windows check-reviewdog
+check-all: check check-spec check-security check-npm check-deps check-msrv check-windows check-reviewdog
 
 .PHONY: locales
 locales:

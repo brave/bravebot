@@ -566,6 +566,17 @@ pub struct Task {
     /// on whatever the developer happened to have installed, and a run would differ from the
     /// same run elsewhere for reasons nothing in the task described.
     pub home: Option<PathBuf>,
+    /// The user's profile directory, which is the directory `home` sits inside.
+    ///
+    /// What a leading `~` in a command line the planner sends stands for (CMDLINE-4). Carried
+    /// beside `home` rather than derived from it, because the two answer different questions and
+    /// the four things read out of `home` all want the state directory: a `~` names a file of the
+    /// user's, and resolving it against `~/.bravebot` would put every home-relative path the
+    /// planner writes inside the directory this program keeps its own files in.
+    ///
+    /// Supplied by the caller for the reason `home` is, and `None` by default, which refuses a
+    /// `~` for want of anything to stand for rather than guessing at one.
+    pub profile: Option<PathBuf>,
     /// The run prompts this session has already put to the person, by program and arguments.
     ///
     /// Empty by default and for a caller that keeps nothing between turns. It grants nothing and
@@ -703,6 +714,7 @@ impl Task {
             images: Vec::new(),
             piped: None,
             home: None,
+            profile: None,
             // Nothing has been asked about until a caller says so, which is what a caller keeping
             // nothing between turns is saying.
             asked_about: bravebot_core::programs::AskedAbout::new(),
@@ -779,6 +791,16 @@ impl Task {
     /// the correct behaviour for a caller that has not said where those live.
     pub fn with_home(mut self, home: Option<PathBuf>) -> Self {
         self.home = home;
+        self
+    }
+
+    /// Name the directory a leading `~` stands for, usually [`crate::home::profile`].
+    ///
+    /// Without one a command line that starts a path with `~` is refused, which is the correct
+    /// answer for a caller that has not said where the user's home is: the alternative is showing
+    /// somebody an approval prompt naming a directory this program invented.
+    pub fn with_profile(mut self, profile: Option<PathBuf>) -> Self {
+        self.profile = profile;
         self
     }
 
@@ -2696,6 +2718,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             arming: task.arming,
                             armed: &mut armed,
                             home: task.home.as_deref(),
+                            profile: task.profile.as_deref(),
                             remembering: task.remembering.as_deref(),
                             // A delegate is offered no way to delegate, and dispatch refuses one anyway.
                             delegated: task.delegate.is_some(),
@@ -2743,6 +2766,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 egress,
                                 workspace,
                                 task.home.as_deref(),
+                                task.profile.as_deref(),
                                 task.model.as_deref(),
                                 task.permission_mode,
                                 cancel,
