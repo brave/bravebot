@@ -6,8 +6,8 @@ governs:
   - crates/core/src/incognito.rs
   - crates/agent/src/home.rs
   - crates/agent/src/remembered.rs
-  - crates/tui/src/store.rs
-  - crates/tui/src/sessions.rs
+  - crates/session/src/store.rs
+  - crates/session/src/sessions.rs
   - crates/cli/src/main.rs
 ---
 

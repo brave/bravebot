@@ -243,8 +243,8 @@ record says which run took the decision it holds, and the turn's own records are
 `verified-by: bravebot_agent::turn::one_trail_records_the_delegate_and_the_turn_that_spawned_it`
 `verified-by: bravebot_core::delegate::a_description_names_what_it_holds_but_never_the_task`
 `verified-by: bravebot_core::event::a_record_says_which_run_took_the_decision`
-`verified-by: bravebot_tui::audit::a_delegates_records_are_named_and_the_turns_own_are_not`
-`verified-by: bravebot_tui::audit::the_written_record_names_the_delegate_that_took_the_decision`
+`verified-by: bravebot_session::audit::a_delegates_records_are_named_and_the_turns_own_are_not`
+`verified-by: bravebot_session::audit::the_written_record_names_the_delegate_that_took_the_decision`
 
 <a id="DELEGATE-14"></a>
 ### DELEGATE-14: each delegate is numbered, and every report about one says which

@@ -31,10 +31,68 @@
 //! that a name the server does not recognise is reset to [`bravebot_config::DEFAULT_MODEL`] rather
 //! than obeyed.
 
-use crate::history::Entry;
 use bravebot_aichat::protocol::Effort;
 use std::io::Write;
 use std::path::PathBuf;
+
+/// One prompt as it was sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    /// What was typed, newlines and all.
+    pub prompt: String,
+    /// When it was sent, in seconds since the epoch.
+    ///
+    /// `None` for an entry stored before times were kept. Read as "no age to show" rather than as
+    /// the epoch, which would date every old prompt to 1970.
+    pub at: Option<u64>,
+    /// The workspace it was sent from.
+    ///
+    /// `None` for an entry stored before that was kept, and for one sent from nowhere in
+    /// particular. Such an entry belongs to no project and so is never what a narrowed search
+    /// answers with, but it is still there under the wider one.
+    pub project: Option<String>,
+}
+
+impl Entry {
+    /// A prompt sent now, from `project`.
+    pub fn sent(prompt: impl Into<String>, project: Option<String>) -> Self {
+        Self {
+            prompt: prompt.into(),
+            at: Some(now()),
+            project,
+        }
+    }
+
+    /// A prompt read back from a file that stored nothing else about it.
+    pub fn recalled(prompt: impl Into<String>) -> Self {
+        Self {
+            prompt: prompt.into(),
+            at: None,
+            project: None,
+        }
+    }
+
+    /// The first line, which is what a one-row list can show of a paragraph.
+    pub fn opening(&self) -> &str {
+        self.prompt.lines().next().unwrap_or("")
+    }
+
+    /// How many lines the prompt runs to.
+    pub fn lines(&self) -> usize {
+        self.prompt.lines().count().max(1)
+    }
+}
+
+/// Seconds since the epoch, or zero on a clock that cannot say.
+///
+/// Zero rather than a failure: a prompt is still worth storing on a machine whose clock is wrong,
+/// and an age nobody can compute is a missing column rather than a reason to lose the prompt.
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or(0)
+}
 
 /// The history file inside the global state directory.
 const HISTORY_FILE: &str = "history";
@@ -71,6 +129,14 @@ const MAX_MODEL_BYTES: usize = 128;
 /// A name is only looked up in the built-in set and in `~/.bravebot/themes`. Bounded so a corrupt
 /// file cannot turn into an absurd lookup.
 const MAX_THEME_BYTES: usize = 128;
+
+/// The longest style of editing worth reading back.
+///
+/// The word is only matched against the styles the interface knows, and it used to come back as one
+/// of them: the type made the bound. What crosses this boundary now is a word, so the bound is
+/// stated here instead, and a caller that does something other than match it is not handed an
+/// arbitrary file.
+const MAX_EDITING_BYTES: usize = 128;
 
 /// Prompts kept on disk.
 ///
@@ -370,22 +436,30 @@ pub fn save_effort(effort: Option<Effort>) {
     }
 }
 
-/// The style of editing the user chose, or `None` if they never have.
+/// The word naming the style of editing the user chose, or `None` if they never chose one.
 ///
 /// Global rather than per-directory, on the same footing as the effort level: how somebody edits text
 /// is a habit of theirs, not a property of a checkout.
-pub fn load_editing() -> Option<crate::vim::Editing> {
+///
+/// A word rather than a style, as the model and the theme are: which words name a style is a fact
+/// about the box being typed into, and a record on disk outlives the set of boxes there are. The
+/// caller resolves the word, so a file and a settings file are read by one set of rules.
+pub fn load_editing() -> Option<String> {
     let path = directory()?.join(EDITING_FILE);
     parse_editing(&std::fs::read_to_string(path).ok()?)
 }
 
-/// Read the style out of the file's contents.
+/// Read the word out of the file's contents.
 ///
-/// Separate from the I/O so the rules are testable. A blank file, or one naming a style this program
-/// does not have, is no choice at all: the caller then falls back to what the settings say and to the
-/// ordinary box, rather than to a box whose letters do something nobody asked for.
-pub fn parse_editing(contents: &str) -> Option<crate::vim::Editing> {
-    crate::vim::Editing::named(contents.lines().next()?)
+/// Separate from the I/O so the rules are testable. A blank or over-long file is no choice at all:
+/// the caller then falls back to what the settings say and to the ordinary box. A word this program
+/// does not know is no choice either, which is the caller's rule to apply rather than this one's.
+pub fn parse_editing(contents: &str) -> Option<String> {
+    let word = contents.lines().next()?.trim();
+    if word.is_empty() || word.len() > MAX_EDITING_BYTES {
+        return None;
+    }
+    Some(word.to_string())
 }
 
 /// Record the style of editing the user chose.
@@ -397,7 +471,7 @@ pub fn parse_editing(contents: &str) -> Option<crate::vim::Editing> {
 /// absent file and the chosen absence are the same request, and here they are not. Somebody who turns
 /// vi editing off has made a choice that has to outlast the session, and removing the file would let a
 /// settings file turn it back on for them tomorrow.
-pub fn save_editing(editing: crate::vim::Editing) {
+pub fn save_editing(word: &str) {
     let Some(dir) = writable() else {
         return;
     };
@@ -406,9 +480,7 @@ pub fn save_editing(editing: crate::vim::Editing) {
     }
 
     let temporary = dir.join("editor-mode.tmp");
-    if bravebot_agent::home::write_file(&temporary, format!("{}\n", editing.as_str()).as_bytes())
-        .is_ok()
-    {
+    if bravebot_agent::home::write_file(&temporary, format!("{word}\n").as_bytes()).is_ok() {
         let _ = std::fs::rename(&temporary, dir.join(EDITING_FILE));
     }
 }
@@ -730,25 +802,34 @@ and this?
 
     #[test]
     fn a_stored_style_of_editing_is_read_back_without_its_newline() {
-        assert_eq!(parse_editing("vim\n"), Some(crate::vim::Editing::Vi));
-        assert_eq!(
-            parse_editing("emacs\n"),
-            Some(crate::vim::Editing::Ordinary)
-        );
+        assert_eq!(parse_editing("vim\n").as_deref(), Some("vim"));
+        assert_eq!(parse_editing("  emacs  \n").as_deref(), Some("emacs"));
     }
 
-    /// A corrupt or hand-edited file must leave the box everybody has. Read as vi editing, a word this
-    /// program does not know would give somebody a box whose letters do things they never asked for,
-    /// and the typo that caused it is the one thing they cannot see.
+    /// A corrupt or hand-edited file must leave the box everybody has. An empty word read back as a
+    /// choice would be looked up as a style and found to be none, which works, but it would also be
+    /// written back as the choice on the next save, so the file has to stop being one here. Which
+    /// words name a style is checked where the styles are, by `vim::Editing::named`.
     #[test]
     fn a_file_naming_no_style_of_editing_is_not_a_choice() {
-        for contents in ["", "\n", "   \n", "vi\n", "modal\n"] {
+        for contents in ["", "\n", "   \n", "\nvim\n"] {
             assert_eq!(
                 parse_editing(contents),
                 None,
                 "{contents:?} became a choice"
             );
         }
+    }
+
+    /// The word used to come back as a style, so its length was the type's business. It comes back
+    /// as a word now, and a word crossing a crate boundary from a file anybody with the account can
+    /// edit is bounded here rather than wherever it ends up.
+    #[test]
+    fn an_over_long_style_of_editing_is_not_a_choice() {
+        let huge = "x".repeat(MAX_EDITING_BYTES + 1);
+        assert_eq!(parse_editing(&huge), None);
+        let exact = "x".repeat(MAX_EDITING_BYTES);
+        assert_eq!(parse_editing(&exact).as_deref(), Some(exact.as_str()));
     }
 
     #[test]

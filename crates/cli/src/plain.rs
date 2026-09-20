@@ -108,7 +108,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         false => PermissionMode::Ask,
     };
 
-    let model = bravebot_tui::store::load_model();
+    let model = bravebot_session::store::load_model();
     let mut asking = Prompting::new(std::io::BufReader::new(std::io::stdin()), std::io::stderr());
 
     asking.say(&t!(
@@ -171,7 +171,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         asked_about: AskedAbout::new(),
         auto_vetting: bravebot_core::vetting::auto(
             bravebot_core::vetting::asked_for(),
-            bravebot_tui::store::load_vetting(),
+            bravebot_session::store::load_vetting(),
             settings.auto_vetting(),
         ),
     };
@@ -320,7 +320,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             // it, this session having taken none of the keyboard.
             .with_rounds(None)
             .with_model(self.model.clone())
-            .with_effort(bravebot_tui::store::load_effort())
+            .with_effort(bravebot_session::store::load_effort())
             .with_permissions(self.permissions.clone())
             .with_permission_mode(self.mode)
             .with_auto_vetting(self.auto_vetting)

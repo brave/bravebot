@@ -238,8 +238,8 @@ user file may not take either name: it would load and then be unreachable.
 `verified-by: bravebot_tui::theme::none_in_json_inherits_the_terminal_default`
 `verified-by: bravebot_tui::theme::the_old_system_name_still_finds_brave`
 `verified-by: bravebot_tui::theme::a_user_file_cannot_take_a_name_that_reaches_the_default_theme`
-`verified-by: bravebot_tui::store::an_empty_theme_file_is_not_a_choice`
-`verified-by: bravebot_tui::store::an_over_long_theme_name_is_not_a_choice`
+`verified-by: bravebot_session::store::an_empty_theme_file_is_not_a_choice`
+`verified-by: bravebot_session::store::an_over_long_theme_name_is_not_a_choice`
 
 <a id="VIEW-12"></a>
 ### VIEW-12: the theme picker is a centred panel over the session

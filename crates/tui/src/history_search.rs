@@ -13,11 +13,11 @@
 //! presses Enter themselves, which is what makes it theirs: a history file can be edited, on a
 //! shared machine by somebody else, so a stored line is content until a keystroke adopts it.
 
-use crate::history::Entry;
 use crate::state::Session;
 use crate::theme;
 use crate::wrap::{self, display_width};
 use bravebot_i18n::t;
+use bravebot_session::store::Entry;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};

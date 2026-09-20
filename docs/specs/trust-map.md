@@ -6,7 +6,7 @@ governs:
   - crates/core/src/trust.rs
   - crates/core/src/policy.rs
   - crates/tui/src/trust_prompt.rs
-  - crates/tui/src/sessions.rs
+  - crates/session/src/sessions.rs
   - crates/tui/src/dropped.rs
   - crates/agent/src/workspace.rs
   - crates/agent/src/scratch.rs
@@ -171,13 +171,13 @@ an exception: the answer honoured is the one that session's own user gave, and i
 that session's writes recorded, which is what stops a resumed turn reading back a file an earlier
 turn of the same session poisoned.
 
-`verified-by: bravebot_tui::sessions::a_record_resumes_its_rules_under_the_directory_it_is_read_in`
+`verified-by: bravebot_session::sessions::a_record_resumes_its_rules_under_the_directory_it_is_read_in`
 `verified-by: bravebot_tui::app::a_fresh_session_is_asked_rather_than_inheriting_a_map`
 `verified-by: bravebot_tui::app::a_resume_starts_with_the_map_its_own_record_kept`
 `verified-by: bravebot_tui::app::a_record_from_before_maps_were_kept_is_asked_about`
-`verified-by: bravebot_tui::sessions::a_record_that_predates_the_map_has_none_rather_than_an_empty_one`
-`verified-by: bravebot_tui::sessions::a_distrusted_path_inside_a_trusted_tree_survives_the_record`
-`verified-by: bravebot_tui::sessions::two_recorded_spellings_of_one_path_resume_as_untrusted`
+`verified-by: bravebot_session::sessions::a_record_that_predates_the_map_has_none_rather_than_an_empty_one`
+`verified-by: bravebot_session::sessions::a_distrusted_path_inside_a_trusted_tree_survives_the_record`
+`verified-by: bravebot_session::sessions::two_recorded_spellings_of_one_path_resume_as_untrusted`
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
 
 <a id="TRUST-7"></a>

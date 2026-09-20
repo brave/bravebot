@@ -931,8 +931,10 @@ answer is to set the budget rather than to compact.
 
 The style is a preference about the person, so it outlives the session that chose it and applies in
 every directory. A choice they made outranks a settings file, the file answers for somebody who has
-never made one, and with neither the box is the ordinary one. A configured word naming no style
-leaves the ordinary box and stops nothing from starting.
+never made one, and with neither the box is the ordinary one. The choice and the setting are both a
+word, and a word naming no style is no choice at all whichever of the two spelled it: a settings file
+that names none leaves the ordinary box, a record that names none leaves the file answering, and
+neither stops anything from starting.
 
 **A choice is made from a panel `/config` opens**, over the transcript, listing the styles with what
 each one means and marking the one in force. Enter takes the row under the cursor and says so on the
@@ -966,8 +968,9 @@ would find out by reading the line rather than by pressing the key.
 `verified-by: bravebot_tui::state::a_letter_typed_in_normal_mode_does_not_reach_the_line`
 `verified-by: bravebot_tui::state::a_configured_style_is_adopted_and_an_unknown_word_is_not`
 `verified-by: bravebot_tui::state::choosing_a_style_of_editing_leaves_the_box_taking_letters`
-`verified-by: bravebot_tui::store::a_stored_style_of_editing_is_read_back_without_its_newline`
-`verified-by: bravebot_tui::store::a_file_naming_no_style_of_editing_is_not_a_choice`
+`verified-by: bravebot_session::store::a_stored_style_of_editing_is_read_back_without_its_newline`
+`verified-by: bravebot_session::store::a_file_naming_no_style_of_editing_is_not_a_choice`
+`verified-by: bravebot_tui::persist::a_recorded_style_of_editing_is_read_back_and_a_word_naming_none_is_not`
 `verified-by: bravebot_config::settings::a_style_of_editing_resolves_like_any_other_single_value`
 `verified-by: bravebot_config::settings::a_blank_value_is_not_a_choice`
 `verified-by: bravebot_config::settings::a_style_of_editing_is_among_the_names_reported`
