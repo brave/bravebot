@@ -45,8 +45,13 @@ fix this site rather than documenting around it.
 `make check-spec` at the repository root holds the specs to this site. A clause no page
 documents is listed in [`undocumented-clauses.txt`](../../undocumented-clauses.txt), and
 `make write-undocumented` rewrites that list once a clause has been documented, or once one
-has been added. To fold a span of bravebot commits into these pages, run the
-[update-docs](../../agents/skills/update-docs/SKILL.md) skill.
+has been added.
+
+That check answers which clauses are documented, not whether what a page says is still true
+after the behaviour underneath it changed. `make docs-changes` answers the second question:
+it lists what has landed in the specs since the commit recorded in
+[`docs-updated-to-sha`](../../docs-updated-to-sha). To fold those commits into these pages,
+run the [update-docs](../../agents/skills/update-docs/SKILL.md) skill.
 
 ## License
 

@@ -2,21 +2,48 @@
 name: update-docs
 description:
   'Bring the documentation site under docs/website/ up to date with bravebot.
-  Reviews what has landed in a span of commits or inspects unmapped clauses,
-  folds the user-facing behaviour into the pages it belongs on, and builds the
-  site cleanly. Triggers on: update docs, /update-docs, sync docs with specs,
-  docs drift.'
+  Picks up from the commit recorded in docs-updated-to-sha, or reviews an
+  explicit span of commits, folds the user-facing behaviour into the pages it
+  belongs on, records how far it got, and builds the site cleanly. Triggers on:
+  update docs, /update-docs, sync docs with specs, docs drift.'
 argument-hint: '[rev-range] [dry-run]'
-allowed-tools: Bash(make -C docs/website *), Bash(git *), Bash(grep *), Bash(rg *), Read, Edit, Write
+allowed-tools: Bash(make -C docs/website *), Bash(python3 agents/skills/update-docs/docs-ref.py *), Bash(git *), Bash(grep *), Bash(rg *), Read, Edit, Write
 ---
 
 # Bring the Documentation Site Up to Date With Brave Bot
 
 This skill documents user-facing behaviour changes across a span of commits or spec clauses, folding them into the appropriate pages under `docs/website/docs/`.
 
-* **Range run** (`/update-docs <rev-range>`): inspects commits in `<rev-range>` (e.g., `HEAD~20..HEAD` or `<tag>..HEAD`), determines what user-facing behaviour or configuration changed, and updates the relevant pages.
+* **Baseline run** (`/update-docs`, no argument): starts from the commit recorded in `docs-updated-to-sha` and works forward. This is the normal mode.
+* **Range run** (`/update-docs <rev-range>`): inspects commits in `<rev-range>` (e.g., `HEAD~20..HEAD` or `<tag>..HEAD`), determines what user-facing behaviour or configuration changed, and updates the relevant pages. Use this to walk a large backlog in slices.
 * **Unmapped check**: runs `make check-spec` to find normative clauses lacking a page reference or unverified against pages.
 * `dry-run`: reports what would change and writes nothing.
+
+---
+
+## Where to Start Reading, and Recording Where You Stopped
+
+`docs-updated-to-sha` at the repository root holds the commit the site has been brought up to, so a run reads forward from there instead of re-reading the whole history. `docs-ref.py` is the deterministic half of this skill: no model is involved, so it is cheap and its output is reproducible.
+
+```sh
+python3 agents/skills/update-docs/docs-ref.py changes --full
+```
+
+That prints the span oldest first, with bodies and file lists, and replays anything still deferred ahead of it. On `Up to date.` there is nothing to do and the run stops there.
+
+A run is not finished until it records where it got to, because the next run reads only that:
+
+```sh
+# everything up to here is folded in
+python3 agents/skills/update-docs/docs-ref.py set <sha>
+
+# reviewed, deliberately not documented yet, and why
+python3 agents/skills/update-docs/docs-ref.py defer <sha> <reason>
+```
+
+Use `defer` rather than silently skipping. `set` claims everything behind a sha is done and the next span begins after it, so a commit passed over mid-span is invisible to every run that follows. A deferral stays on the list and keeps being offered until `resolve <sha>` drops it.
+
+A deferral needs a reason a later run can act on. "Behaviour is in the code but no settings key reaches it yet" is one; "unclear" is not.
 
 ---
 
