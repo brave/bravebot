@@ -7,9 +7,9 @@
 //! middle of it rather than as the way it starts. Escape leaves without resuming anything, which
 //! starts an ordinary session: nothing here can strand a user who opened it by mistake.
 
-use crate::sessions::{self, Summary};
 use crate::theme;
 use bravebot_i18n::t;
+use bravebot_session::sessions::{self, Summary};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;

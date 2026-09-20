@@ -11,7 +11,6 @@ mod testutil;
 
 pub mod app;
 pub mod ask;
-pub mod audit;
 pub mod clipboard;
 pub mod config_prompt;
 pub mod confirm;
@@ -33,10 +32,8 @@ pub mod remote_confirm;
 pub mod render;
 pub mod resume;
 pub mod select;
-pub mod sessions;
 pub mod state;
 pub mod status;
-pub mod store;
 pub mod table;
 pub mod theme;
 pub mod theme_prompt;
@@ -68,8 +65,18 @@ pub(crate) fn asked_for(value: Option<&std::ffi::OsStr>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::asked_for;
+    use super::{BUILD, asked_for};
     use std::ffi::OsStr;
+
+    /// The stamp is what a session record is matched against later, so a stamp that does not name
+    /// the version says nothing about which code wrote the transcript in front of you.
+    #[test]
+    fn the_build_stamp_names_the_version_it_was_built_from() {
+        assert!(
+            BUILD.starts_with(env!("CARGO_PKG_VERSION")),
+            "the build stamp does not name the version: {BUILD}"
+        );
+    }
 
     /// The whole of the convention, and the half of it that surprises people: any value at all
     /// counts, including one that reads as a denial.

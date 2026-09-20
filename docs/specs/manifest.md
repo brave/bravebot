@@ -8,7 +8,7 @@ governs:
   - crates/agent/src/manifest.rs
   - crates/agent/src/mode.rs
   - crates/cli/src/main.rs
-  - crates/tui/src/sessions.rs
+  - crates/session/src/sessions.rs
   - crates/tui/src/resume.rs
   - crates/tui/src/confirm.rs
   - crates/tui/src/app.rs
@@ -250,9 +250,9 @@ meets one. Bypassing approves the plan, as MANIFEST-10 says. Plan mode is the on
 plan with a write in it does not run at all, decided from the frozen plan before the plan is put to
 anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 
-`verified-by: bravebot_tui::sessions::a_manifest_run_is_recorded_apart_from_the_session`
-`verified-by: bravebot_tui::sessions::a_session_that_started_a_run_can_still_be_resumed`
-`verified-by: bravebot_tui::sessions::a_cancelled_run_leaves_no_record`
+`verified-by: bravebot_session::sessions::a_manifest_run_is_recorded_apart_from_the_session`
+`verified-by: bravebot_session::sessions::a_session_that_started_a_run_can_still_be_resumed`
+`verified-by: bravebot_session::sessions::a_cancelled_run_leaves_no_record`
 `verified-by: bravebot_tui::app::a_run_the_person_stopped_is_read_off_the_key_and_not_off_the_error`
 `verified-by: bravebot_tui::app::a_manifest_run_is_not_a_prompt`
 

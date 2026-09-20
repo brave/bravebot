@@ -14,64 +14,7 @@
 //! an age says which of two similar prompts is the one they mean and the workspace says whether a
 //! prompt belongs to what they are doing now.
 
-/// One prompt as it was sent.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Entry {
-    /// What was typed, newlines and all.
-    pub prompt: String,
-    /// When it was sent, in seconds since the epoch.
-    ///
-    /// `None` for an entry stored before times were kept. Read as "no age to show" rather than as
-    /// the epoch, which would date every old prompt to 1970.
-    pub at: Option<u64>,
-    /// The workspace it was sent from.
-    ///
-    /// `None` for an entry stored before that was kept, and for one sent from nowhere in
-    /// particular. Such an entry belongs to no project and so is never what a narrowed search
-    /// answers with, but it is still there under the wider one.
-    pub project: Option<String>,
-}
-
-impl Entry {
-    /// A prompt sent now, from `project`.
-    pub fn sent(prompt: impl Into<String>, project: Option<String>) -> Self {
-        Self {
-            prompt: prompt.into(),
-            at: Some(now()),
-            project,
-        }
-    }
-
-    /// A prompt read back from a file that stored nothing else about it.
-    pub fn recalled(prompt: impl Into<String>) -> Self {
-        Self {
-            prompt: prompt.into(),
-            at: None,
-            project: None,
-        }
-    }
-
-    /// The first line, which is what a one-row list can show of a paragraph.
-    pub fn opening(&self) -> &str {
-        self.prompt.lines().next().unwrap_or("")
-    }
-
-    /// How many lines the prompt runs to.
-    pub fn lines(&self) -> usize {
-        self.prompt.lines().count().max(1)
-    }
-}
-
-/// Seconds since the epoch, or zero on a clock that cannot say.
-///
-/// Zero rather than a failure: a prompt is still worth storing on a machine whose clock is wrong,
-/// and an age nobody can compute is a missing column rather than a reason to lose the prompt.
-fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_secs())
-        .unwrap_or(0)
-}
+use bravebot_session::store::Entry;
 
 /// One submission's claim on a recall entry. Kept only while this process runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

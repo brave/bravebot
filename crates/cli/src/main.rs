@@ -26,7 +26,7 @@ use bravebot_net::transport::{
 };
 use bravebot_sandbox::SandboxError;
 use bravebot_sandbox::policy::Capabilities;
-use bravebot_tui::sessions::Resumable;
+use bravebot_session::sessions::Resumable;
 use std::io::{BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -603,8 +603,11 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     let mut task = Task::new(prompt)
         .with_home(bravebot_agent::home::directory())
         .with_profile(bravebot_agent::home::profile())
-        .with_model(model_asked_for(named, bravebot_tui::store::load_model()))
-        .with_effort(bravebot_tui::store::load_effort())
+        .with_model(model_asked_for(
+            named,
+            bravebot_session::store::load_model(),
+        ))
+        .with_effort(bravebot_session::store::load_effort())
         .with_permissions(permissions)
         .with_permission_mode(permission_mode)
         // Whether a check that finds nothing answers in a person's place. Resolved here, once, out
@@ -613,7 +616,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         // without this every check on this path ends in a refusal.
         .with_auto_vetting(bravebot_core::vetting::auto(
             bravebot_core::vetting::asked_for(),
-            bravebot_tui::store::load_vetting(),
+            bravebot_session::store::load_vetting(),
             settings.auto_vetting(),
         ));
     for file in files {
@@ -711,7 +714,12 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     // picker says so, but "cannot be continued" is a different thing from "leaves no trace":
     // the run somebody needs to read is the one that stopped, and until now it left nothing.
     if mode == Mode::Manifest {
-        bravebot_tui::sessions::record_manifest_run(workspace.root(), &task.prompt, &outcome);
+        bravebot_session::sessions::record_manifest_run(
+            workspace.root(),
+            &task.prompt,
+            &outcome,
+            bravebot_tui::BUILD,
+        );
     }
 
     match outcome {
@@ -1003,7 +1011,7 @@ fn model_asked_for(named: Option<String>, stored: Option<String>) -> Option<Stri
 fn model_for_this_run(named: Option<&str>, config: &Config) -> String {
     model_asked_for(
         named.map(|name| config.model_named(name)),
-        bravebot_tui::store::load_model(),
+        bravebot_session::store::load_model(),
     )
     .unwrap_or_else(|| config.default_model.clone())
 }
@@ -1311,7 +1319,7 @@ fn resume_named(id: &str, skip_permissions: bool) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
         return fail(Ending::Failed, t!(cli_directory_unknown));
     };
-    match bravebot_tui::sessions::load(&directory, id) {
+    match bravebot_session::sessions::load(&directory, id) {
         // Printing what a run produced is what naming one here is for (SESSION-10), and a session
         // that started a run says to name it. So this answers on stdout and succeeds: the id was
         // real, the record was read, and the person got the thing they asked for. Reporting it as a
@@ -1339,7 +1347,7 @@ fn fork_named(id: &str, skip_permissions: bool) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
         return fail(Ending::Failed, t!(cli_directory_unknown));
     };
-    match bravebot_tui::sessions::load(&directory, id) {
+    match bravebot_session::sessions::load(&directory, id) {
         Some(record) if record.manifest.is_some() => {
             let refused = fail(Ending::Failed, bravebot_tui::resume::manifest_note());
             if let Some(stored) = &record.manifest {
@@ -1351,7 +1359,7 @@ fn fork_named(id: &str, skip_permissions: bool) -> ExitCode {
             }
             refused
         }
-        Some(_) => match bravebot_tui::sessions::fork(&directory, id) {
+        Some(_) => match bravebot_session::sessions::fork(&directory, id) {
             Some(record) => interactive(
                 bravebot_tui::app::Start::Resuming(Box::new(record)),
                 skip_permissions,
@@ -1371,7 +1379,7 @@ fn continue_here(skip_permissions: bool) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
         return fail(Ending::Failed, t!(cli_directory_unknown));
     };
-    match bravebot_tui::sessions::most_recent(&directory) {
+    match bravebot_session::sessions::most_recent(&directory) {
         // By the id, so this arrives at the interface the way a named resume does, down to a
         // record that went away between the list and the read.
         Some(session) => resume_named(&session.id, skip_permissions),
@@ -1748,7 +1756,7 @@ fn doctor() -> ExitCode {
 
             // What a run would actually request, since a choice made with `/model` overrides the
             // configured default and reporting only the default would explain the wrong thing.
-            match bravebot_tui::store::load_model() {
+            match bravebot_session::store::load_model() {
                 Some(chosen) => fact(t!(doctor_model), t!(doctor_model_chosen, model = chosen)),
                 None => fact(
                     t!(doctor_model),

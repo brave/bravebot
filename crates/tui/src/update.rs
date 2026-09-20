@@ -33,7 +33,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::audit::Trail;
+use bravebot_session::audit::Trail;
 
 /// How this copy was installed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

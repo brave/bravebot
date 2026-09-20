@@ -357,11 +357,11 @@ does not appear, so it has to be readable back.
 `verified-by: bravebot_core::policy::a_line_remembered_past_the_session_vouches_for_nothing`
 `verified-by: bravebot_tui::status::every_vouched_command_is_listed_however_many_there_are`
 `verified-by: bravebot_tui::status::the_report_names_the_tree_each_vouched_command_runs_unasked_in`
-`verified-by: bravebot_tui::sessions::an_entry_recorded_without_a_tree_comes_back_scoped_to_the_root`
-`verified-by: bravebot_tui::sessions::a_tree_inside_the_project_is_written_down_relative`
-`verified-by: bravebot_tui::sessions::a_tree_written_down_relative_comes_back_under_the_resumed_root`
-`verified-by: bravebot_tui::sessions::a_binary_no_rendering_can_show_comes_back_as_itself`
-`verified-by: bravebot_tui::sessions::an_entry_whose_recorded_binary_is_a_rendering_vouches_for_nothing`
+`verified-by: bravebot_session::sessions::an_entry_recorded_without_a_tree_comes_back_scoped_to_the_root`
+`verified-by: bravebot_session::sessions::a_tree_inside_the_project_is_written_down_relative`
+`verified-by: bravebot_session::sessions::a_tree_written_down_relative_comes_back_under_the_resumed_root`
+`verified-by: bravebot_session::sessions::a_binary_no_rendering_can_show_comes_back_as_itself`
+`verified-by: bravebot_session::sessions::an_entry_whose_recorded_binary_is_a_rendering_vouches_for_nothing`
 
 <a id="RUN-10"></a>
 ### RUN-10: the vouched-for list is not an allowlist and must never become one

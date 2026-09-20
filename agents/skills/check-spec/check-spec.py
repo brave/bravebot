@@ -947,7 +947,11 @@ For each clause in your scope:
 3. Every `violation` needs a concrete failure: the input or state, the path through the
    code, and the outcome the clause forbids. `file:line` for each step. A finding you
    cannot walk somebody through is a finding you have not verified, and it does not go in.
-4. Where the wrong behaviour is something a person could look at, a screen drawn wrongly
+4. On a `violation`, say which of two things the code does: attempts the behaviour and gets
+   it wrong, or does not attempt it at all. Set `absent` only for the second. Nothing is
+   broken today where nothing was built, and whoever picks the issue up needs to know which
+   of the two they are taking on before they open the file.
+5. Where the wrong behaviour is something a person could look at, a screen drawn wrongly
    or a prompt that says the wrong thing, put in `screen` how to reach it: what to type,
    in order, from a fresh session. Leave the field out otherwise, and never guess at one.
    You do not run anything; that field is a script for whoever files this, so that the
@@ -977,6 +981,7 @@ Write JSON to `{results_file}` and nothing else to stdout:
       "severity": "error | warning",
       "evidence": ["crates/.../file.rs:123 what is there"],
       "failure": "input or state, path through the code, outcome the clause forbids",
+      "absent": "true only where nothing in the code attempts the behaviour; leave it out otherwise",
       "fix": "what the implementation should do instead, in a sentence",
       "screen": "how to reach the screen this shows up on, only where a person could look at it"
     }}

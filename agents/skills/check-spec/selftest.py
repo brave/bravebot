@@ -560,6 +560,8 @@ UNCOVERED = {
     "evidence": "docs/specs/demo.md:9",
     "source": "mechanical",
 }
+# A clause whose behaviour no code attempts. Nothing is broken by it, so it is not a bug.
+NEVER_BUILT = dict(VIOLATION, absent=True, clause="DEMO-2")
 # A run that did not finish, and a review that could not tell. Neither names anything to go and fix.
 UNFINISHED = dict(VIOLATION, kind="review-incomplete", clause="DEMO-2")
 UNDECIDED = dict(VIOLATION, kind="unclear", severity="warning", clause="DEMO-2")
@@ -592,10 +594,17 @@ def draft_checks():
             by_kind["violation"]["body_file"] != by_kind["clause-uncovered"]["body_file"],
         ),
         ("the title leads with the clause", by_kind["violation"]["title"].startswith("DEMO-1: ")),
-        ("a violation is labelled a mismatch", by_kind["violation"]["label"] == "spec-mismatch"),
         (
-            "a clause nothing pins is labelled coverage",
-            by_kind["clause-uncovered"]["label"] == "spec-coverage",
+            "a violation is a mismatch, and a bug in what ships today",
+            by_kind["violation"]["labels"] == ["spec-mismatch", "bug"],
+        ),
+        (
+            "a clause whose behaviour was never built is missing rather than broken",
+            draft.labels_for(NEVER_BUILT) == ["spec-mismatch", "enhancement"],
+        ),
+        (
+            "a clause nothing pins is labelled coverage and nothing else",
+            by_kind["clause-uncovered"]["labels"] == ["spec-coverage"],
         ),
         (
             "the body quotes the clause that was broken",

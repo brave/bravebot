@@ -38,10 +38,10 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::audit::{Stamped, Trail};
 use crate::render;
 use crate::select;
 use crate::state::{Session, Status};
+use bravebot_session::audit::{Stamped, Trail};
 
 /// How long to wait for a key before redrawing. Short enough that a status change appears
 /// promptly, long enough not to spin.
@@ -1716,7 +1716,7 @@ pub enum Start {
     /// Ask which of this directory's sessions to pick up, if there are any.
     Choose,
     /// A session read back off disk, continuing where it left off.
-    Resuming(Box<crate::sessions::Record>),
+    Resuming(Box<bravebot_session::sessions::Record>),
 }
 
 /// Run the interface until the user leaves.
@@ -1727,7 +1727,7 @@ pub fn run(
     confinement: String,
     start: Start,
     skip_permissions: bool,
-) -> io::Result<Option<crate::sessions::Resumable>> {
+) -> io::Result<Option<bravebot_session::sessions::Resumable>> {
     // Before the terminal is taken, because the request for no colour decides whether it is asked
     // about its background on the way in, and that question happens inside the takeover.
     crate::theme::sense_no_color();
@@ -2000,7 +2000,9 @@ fn show_transcript(
 ///
 /// Where it is, and not only what it is called: `/cd` moves the record, and the shell this is
 /// eventually printed into did not move with it.
-fn left_behind(stored: &crate::sessions::Handle) -> Option<crate::sessions::Resumable> {
+fn left_behind(
+    stored: &bravebot_session::sessions::Handle,
+) -> Option<bravebot_session::sessions::Resumable> {
     stored.to_resume()
 }
 
@@ -2040,10 +2042,10 @@ fn rewind_point(
     conversation: &Conversation,
     trust: &TrustStore,
     programs: &TrustedPrograms,
-    stored: &crate::sessions::Handle,
-) -> crate::state::TurnSnapshot {
+    stored: &bravebot_session::sessions::Handle,
+) -> bravebot_session::sessions::TurnSnapshot {
     let began = session.turn_start();
-    crate::state::TurnSnapshot {
+    bravebot_session::sessions::TurnSnapshot {
         conversation: conversation.snapshot(),
         turns: began.turns,
         tokens: session.tokens,
@@ -2077,7 +2079,7 @@ fn list_rewind_points(session: &mut Session) {
         .map(|(back, point)| {
             let turns = back + 1;
             let turn = point.snapshot.turns + 1;
-            let asked = crate::sessions::title_from(&point.prompt);
+            let asked = bravebot_session::sessions::title_from(&point.prompt);
             if point.backups.is_empty() {
                 t!(
                     session_rewind_point_wrote_nothing,
@@ -2122,7 +2124,7 @@ fn rewind(
     conversation: &mut Conversation,
     trust: &mut TrustStore,
     programs: &mut TrustedPrograms,
-    stored: &mut crate::sessions::Handle,
+    stored: &mut bravebot_session::sessions::Handle,
     workspace: &Workspace,
     steps: usize,
 ) {
@@ -2159,7 +2161,7 @@ fn rewind(
     } else {
         stored.save(
             &snapshot.title,
-            crate::sessions::Standing {
+            bravebot_session::sessions::Standing {
                 history: Some(session.turn_history()),
                 conversation: &conversation.snapshot(),
                 turns: session.turns,
@@ -2202,7 +2204,7 @@ fn event_loop(
     confinement: String,
     start: Start,
     skip_permissions: bool,
-) -> io::Result<Option<crate::sessions::Resumable>> {
+) -> io::Result<Option<bravebot_session::sessions::Resumable>> {
     // Owned rather than borrowed, because `/add-dir` opens another directory partway through and
     // the turns after it must see one. The primary root never changes, so nothing keyed on it
     // (the session record, where AGENTS.md is looked for) moves underneath.
@@ -2238,18 +2240,22 @@ fn event_loop(
         // Already answered before the loop was entered: the picker runs once, in `run`.
         Start::Fresh | Start::Choose => (
             Conversation::new(),
-            crate::sessions::Handle::begin(workspace.root()),
+            bravebot_session::sessions::Handle::begin(workspace.root(), crate::BUILD),
             // A session that was never asked vouches for nothing, exactly as with the map.
             TrustedPrograms::new(),
         ),
         Start::Resuming(record) => {
-            let handle = crate::sessions::Handle::resuming(workspace.root(), &record);
+            let handle = bravebot_session::sessions::Handle::resuming(
+                workspace.root(),
+                &record,
+                crate::BUILD,
+            );
             let conversation = Conversation::restored(record.conversation.clone());
             // Shown before anything else, because a session that silently continues something
             // the user cannot see is one they will contradict without meaning to. The trail comes
             // out of the audit beside the record, so Ctrl-T answers for the whole session rather
             // than only for the turns this process ran.
-            let recalled = crate::sessions::recall(workspace.root(), &record);
+            let recalled = bravebot_session::sessions::recall(workspace.root(), &record);
             session.replay(&conversation, &record.title, &recalled);
             session.restore_spend(record.tokens, record.spend.clone());
             session.restore_timing(record.timing.clone());
@@ -2262,15 +2268,17 @@ fn event_loop(
             }
             // Said after the transcript, so it reads as a caveat on what was just shown: the work
             // it describes may not be in the tree the user is now looking at.
-            if let Some(note) = crate::sessions::branch_note(
+            if let Some(note) = bravebot_session::sessions::branch_note(
                 record.branch.as_deref(),
-                crate::sessions::branch_of(workspace.root()).as_deref(),
+                bravebot_session::sessions::branch_of(workspace.root()).as_deref(),
             ) {
                 session.note(note);
             }
             // The same caveat about the other half of what produced that transcript: not the
             // tree it ran against, but the code that ran.
-            if let Some(note) = crate::sessions::build_note(record.build.as_deref(), crate::BUILD) {
+            if let Some(note) =
+                bravebot_session::sessions::build_note(record.build.as_deref(), crate::BUILD)
+            {
                 session.note(note);
             }
             // The programs go the way the map does and for the same reason: the person resuming
@@ -2453,7 +2461,7 @@ fn event_loop(
             }
             Action::Export(path) => {
                 let markdown = crate::render::as_markdown(&session, stored.title());
-                let exported_path = crate::sessions::export(
+                let exported_path = bravebot_session::sessions::export(
                     workspace.root(),
                     stored.id(),
                     path.as_deref(),
@@ -2543,7 +2551,7 @@ fn event_loop(
                 ) {
                     stored.move_to(
                         workspace.root(),
-                        crate::sessions::Standing {
+                        bravebot_session::sessions::Standing {
                             history: Some(session.turn_history()),
                             conversation: &conversation.snapshot(),
                             turns: session.turns,
@@ -2630,7 +2638,7 @@ fn event_loop(
                 let title = stored.title().to_string();
                 stored.save(
                     &title,
-                    crate::sessions::Standing {
+                    bravebot_session::sessions::Standing {
                         history: Some(session.turn_history()),
                         conversation: &conversation.snapshot(),
                         turns: session.turns,
@@ -2678,7 +2686,7 @@ fn event_loop(
                         let title = stored.title().to_string();
                         stored.save(
                             &title,
-                            crate::sessions::Standing {
+                            bravebot_session::sessions::Standing {
                                 history: Some(session.turn_history()),
                                 conversation: &conversation.snapshot(),
                                 turns: session.turns,
@@ -2735,7 +2743,7 @@ fn event_loop(
                         let title = stored.title().to_string();
                         stored.save(
                             &title,
-                            crate::sessions::Standing {
+                            bravebot_session::sessions::Standing {
                                 history: Some(session.turn_history()),
                                 conversation: &conversation.snapshot(),
                                 turns: session.turns,
@@ -2767,7 +2775,7 @@ fn event_loop(
                 // throwing away the record would be answering a question they did not ask.
                 session.clear();
                 conversation = Conversation::new();
-                stored = crate::sessions::Handle::begin(workspace.root());
+                stored = bravebot_session::sessions::Handle::begin(workspace.root(), crate::BUILD);
                 session.note(t!(session_cleared));
 
                 // A new session, so it is asked what a new session is asked. The map goes with the
@@ -2857,7 +2865,7 @@ fn event_loop(
                     // woke. Best-effort, like everything else under ~/.bravebot.
                     stored.save(
                         &prompt,
-                        crate::sessions::Standing {
+                        bravebot_session::sessions::Standing {
                             history: Some(session.turn_history()),
                             conversation: &conversation.snapshot(),
                             turns: session.turns,
@@ -2910,7 +2918,7 @@ fn event_loop(
                 // it can no longer see.
                 stored.save(
                     &line,
-                    crate::sessions::Standing {
+                    bravebot_session::sessions::Standing {
                         history: Some(session.turn_history()),
                         conversation: &conversation.snapshot(),
                         turns: session.turns,
@@ -3465,7 +3473,7 @@ fn choose_theme(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, session: 
     if let Some(chosen) = crate::theme_prompt::choose(terminal, themes, &current, |frame| {
         render::draw(frame, session);
     }) {
-        crate::store::save_theme(&chosen.name);
+        bravebot_session::store::save_theme(&chosen.name);
         session.note(t!(session_theme_set, theme = &chosen.name));
     }
 }
@@ -3535,7 +3543,7 @@ fn set_theme(session: &mut Session, name: &str) {
     match crate::theme::find(name) {
         Some(theme) => {
             crate::theme::apply(&theme);
-            crate::store::save_theme(&theme.name);
+            bravebot_session::store::save_theme(&theme.name);
             session.note(t!(session_theme_set, theme = &theme.name));
         }
         None => session.note(t!(session_no_such_theme, theme = name)),
@@ -4111,7 +4119,7 @@ fn aside_answered(session: &mut Session, asked: String, answered: bravebot_agent
     // about an exchange the planner has read no part of is one a reader takes it to have had, and
     // what says afterwards that an aside happened is the hint line, which counts the rows and
     // names the key that opens them.
-    session.asked_aside(crate::state::Aside {
+    session.asked_aside(bravebot_session::sessions::Aside {
         question: asked,
         answer: Some(answered.shown),
         kept: answered.kept.is_some(),
@@ -4389,7 +4397,12 @@ fn manifest_animated(
     // outcome is written before anything is said, so the note can name it.
     let recorded = match stopped_by_the_person {
         true => None,
-        false => crate::sessions::record_manifest_run(workspace.root(), &asked, &outcome),
+        false => bravebot_session::sessions::record_manifest_run(
+            workspace.root(),
+            &asked,
+            &outcome,
+            crate::BUILD,
+        ),
     };
 
     match &outcome {
@@ -11869,7 +11882,7 @@ mod tests {
 
     /// A session that ran in this directory and vouched for it, which is what an earlier answer
     /// of yes leaves behind in the directory's list of sessions.
-    fn a_record_that_answered_yes_here() -> Box<crate::sessions::Record> {
+    fn a_record_that_answered_yes_here() -> Box<bravebot_session::sessions::Record> {
         Box::new(
             serde_json::from_value(serde_json::json!({
                 "id": "1-2",
@@ -11958,11 +11971,11 @@ mod tests {
 
         let mut record = a_record_that_answered_yes_here();
         record.trust = Some(vec![
-            crate::sessions::StoredRule {
+            bravebot_session::sessions::StoredRule {
                 path: ".".to_string(),
                 integrity: "trusted".to_string(),
             },
-            crate::sessions::StoredRule {
+            bravebot_session::sessions::StoredRule {
                 path: "vendor".to_string(),
                 integrity: "untrusted".to_string(),
             },
@@ -11994,7 +12007,7 @@ mod tests {
         let conversation = Conversation::new();
         let trust = TrustStore::new("/work");
         let programs = TrustedPrograms::new();
-        let stored = crate::sessions::Handle::begin(&root);
+        let stored = bravebot_session::sessions::Handle::begin(&root, crate::BUILD);
 
         type_line(&mut session, "delete the tests");
         session.submit().expect("the prompt is sent");
@@ -12134,8 +12147,8 @@ mod tests {
     }
 
     /// The state before some turn, for a test that only needs a point to exist.
-    fn a_point_before(turns: usize) -> crate::state::TurnSnapshot {
-        crate::state::TurnSnapshot {
+    fn a_point_before(turns: usize) -> bravebot_session::sessions::TurnSnapshot {
+        bravebot_session::sessions::TurnSnapshot {
             conversation: Conversation::new().snapshot(),
             turns,
             tokens: 0,
@@ -12750,8 +12763,8 @@ mod tests {
     /// Rewind's actual save and audit truncation must agree before a turn number is reused.
     #[test]
     fn rewinding_reopened_history_removes_outcomes_plans_and_audit_before_reuse() {
-        use crate::sessions::{self, Standing};
         use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions::{self, Standing};
         fn save(
             stored: &mut sessions::Handle,
             session: &Session,
@@ -12794,7 +12807,7 @@ mod tests {
         fn audit(stored: &sessions::Handle, turn: usize, detail: &str) {
             stored.append_audit(
                 turn,
-                &[crate::audit::Stamped {
+                &[bravebot_session::audit::Stamped {
                     at: turn as u64,
                     from: None,
                     event: bravebot_core::event::Event::GatePassed {
@@ -12809,7 +12822,7 @@ mod tests {
         let workspace = Workspace::new(&root).unwrap();
         let mut trust = TrustStore::new(&root);
         let mut programs = TrustedPrograms::new();
-        let mut stored = sessions::Handle::begin(&root);
+        let mut stored = sessions::Handle::begin(&root, crate::BUILD);
         let mut session = Session::new("test");
         let mut conversation = Conversation::new();
         for (index, prompt) in ["kept", "failed", "cancelled"].into_iter().enumerate() {

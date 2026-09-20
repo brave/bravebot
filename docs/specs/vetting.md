@@ -6,7 +6,7 @@ governs:
   - crates/core/src/vetting.rs
   - crates/core/src/policy.rs
   - crates/agent/src/vet.rs
-  - crates/tui/src/store.rs
+  - crates/session/src/store.rs
   - crates/tui/src/status.rs
 guards:
   - symbol: VettingSpec::new
@@ -346,8 +346,8 @@ does not know, and a value that is not a boolean, are no answer at all rather th
 `verified-by: bravebot_config::settings::a_named_layer_cannot_turn_auto_vetting_on`
 `verified-by: bravebot_config::settings::a_project_layer_does_not_override_what_the_home_layer_said_about_vetting`
 `verified-by: bravebot_config::settings::a_vetting_key_that_is_not_a_boolean_says_nothing`
-`verified-by: bravebot_tui::store::a_recorded_answer_about_vetting_is_read_back_both_ways`
-`verified-by: bravebot_tui::store::a_file_naming_no_answer_about_vetting_is_not_a_choice`
+`verified-by: bravebot_session::store::a_recorded_answer_about_vetting_is_read_back_both_ways`
+`verified-by: bravebot_session::store::a_file_naming_no_answer_about_vetting_is_not_a_choice`
 `verified-by: bravebot_tui::state::a_session_asks_until_something_says_otherwise`
 `verified-by: bravebot_tui::state::the_flag_and_the_settings_key_each_reach_the_session`
 `verified-by: bravebot_tui::state::pressing_the_standing_key_turns_vetting_on_for_the_session`

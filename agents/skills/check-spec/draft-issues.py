@@ -47,10 +47,15 @@ _collector.loader.exec_module(collect)
 # something to hand somebody, since neither names anything they could go and fix.
 NOT_A_BUG = {"review-incomplete", "review-unreadable", "unclear"}
 
-# The kind label, which says what the issue is. The three axes that say what to do about it are the
+# The kind labels, which say what the issue is. The three axes that say what to do about it are the
 # [triage-issues skill](../triage-issues/SKILL.md)'s job, and a run that guessed at them would be
 # claiming a place in somebody's queue for a finding nobody has read.
+#
+# Two of these go on a divergence, because a clause and today's behaviour are different questions. A
+# person searching `is:open label:bug` is asking what is broken, and a clause whose behaviour was
+# never built breaks nothing: it is missing.
 MISMATCH, COVERAGE = "spec-mismatch", "spec-coverage"
+BROKEN, MISSING = "bug", "enhancement"
 
 # What a reader is being told they are affected by. Composed from the finding rather than written
 # per issue, because the alternative is a sentence about impact that nobody measured.
@@ -232,6 +237,17 @@ def slug_for(finding, taken):
     return slug
 
 
+def labels_for(finding):
+    """Which clause the finding is about, and what it is against the code that ships today.
+
+    A clause nothing pins gets the one label: the behaviour is right, so nothing is broken, and
+    nothing is missing either.
+    """
+    if finding.get("kind") != "violation":
+        return [COVERAGE]
+    return [MISMATCH, MISSING if finding.get("absent") else BROKEN]
+
+
 def impact_for(finding):
     if finding.get("source") == "review":
         return IMPACT.get(finding.get("kind"), IMPACT["violation"])
@@ -357,7 +373,7 @@ def draft(findings, out):
                 "clause": finding.get("clause"),
                 "severity": finding.get("severity"),
                 "kind": finding.get("kind"),
-                "label": MISMATCH if finding.get("kind") == "violation" else COVERAGE,
+                "labels": labels_for(finding),
                 "screen_wanted": finding.get("screen"),
                 "screen_file": str(screen_file),
                 "session_file": str(session_file),
@@ -373,7 +389,7 @@ def report(drafts, out):
     for entry in drafts:
         mark = "error" if entry["severity"] == collect.ERROR else "warn "
         lines.append(f"  {mark}  {entry['title']}")
-        lines.append(f"         {entry['label']}, body {entry['body_file']}")
+        lines.append(f"         {' '.join(entry['labels'])}, body {entry['body_file']}")
         if entry["screen_wanted"] and not entry["has_screen"]:
             lines.append(f"         wants a screen: {entry['screen_wanted']}")
             lines.append(

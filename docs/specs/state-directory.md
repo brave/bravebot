@@ -6,9 +6,9 @@ governs:
   - crates/agent/src/home.rs
   - crates/agent/src/remembered.rs
   - crates/config/src/settings.rs
-  - crates/tui/src/store.rs
+  - crates/session/src/store.rs
   - crates/tui/src/update.rs
-  - crates/tui/src/sessions.rs
+  - crates/session/src/sessions.rs
   - crates/skus/src/store.rs
   - crates/lsp/src/server.rs
   - install.sh

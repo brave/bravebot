@@ -3,10 +3,10 @@ id: SESSION
 title: Sessions and history
 status: normative
 governs:
-  - crates/tui/src/sessions.rs
+  - crates/session/src/sessions.rs
   - crates/tui/src/state.rs
   - crates/tui/src/history.rs
-  - crates/tui/src/store.rs
+  - crates/session/src/store.rs
   - crates/cli/src/main.rs
   - crates/agent/src/aside.rs
 ---
@@ -39,11 +39,11 @@ process id would put two facts about the machine somewhere they are nobody's bus
 orders sessions by it; the list is sorted on what each record says it was last written.
 
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
-`verified-by: bravebot_tui::sessions::a_session_is_named_by_a_uuid`
-`verified-by: bravebot_tui::sessions::no_two_sessions_are_given_the_same_name`
-`verified-by: bravebot_tui::sessions::a_list_puts_the_most_recently_written_session_first`
-`verified-by: bravebot_tui::sessions::a_working_directory_becomes_one_readable_segment`
-`verified-by: bravebot_tui::sessions::a_path_with_nothing_in_it_still_names_a_directory`
+`verified-by: bravebot_session::sessions::a_session_is_named_by_a_uuid`
+`verified-by: bravebot_session::sessions::no_two_sessions_are_given_the_same_name`
+`verified-by: bravebot_session::sessions::a_list_puts_the_most_recently_written_session_first`
+`verified-by: bravebot_session::sessions::a_working_directory_becomes_one_readable_segment`
+`verified-by: bravebot_session::sessions::a_path_with_nothing_in_it_still_names_a_directory`
 
 <a id="SESSION-2"></a>
 ### SESSION-2: nothing untrusted is ever written down
@@ -89,9 +89,9 @@ What the record says about each individual turn is SESSION-23.
 The first line of what was asked. A long one is cut and says it was, and a prompt with nothing in
 it still has a title.
 
-`verified-by: bravebot_tui::sessions::a_title_is_the_first_line_of_the_prompt`
-`verified-by: bravebot_tui::sessions::a_long_title_is_cut_and_says_it_was`
-`verified-by: bravebot_tui::sessions::a_prompt_with_nothing_in_it_still_has_a_title`
+`verified-by: bravebot_session::sessions::a_title_is_the_first_line_of_the_prompt`
+`verified-by: bravebot_session::sessions::a_long_title_is_cut_and_says_it_was`
+`verified-by: bravebot_session::sessions::a_prompt_with_nothing_in_it_still_has_a_title`
 
 <a id="SESSION-5"></a>
 ### SESSION-5: everything here degrades to doing nothing
@@ -103,8 +103,8 @@ corrupt history reads as no history rather than as an error.
 **Why.** None of this is load bearing for correctness. Failing a turn because a convenience could
 not be saved would trade something that matters for something that does not.
 
-`verified-by: bravebot_tui::sessions::a_session_from_the_future_is_not_a_crash`
-`verified-by: bravebot_tui::sessions::a_stored_time_becomes_an_age`
+`verified-by: bravebot_session::sessions::a_session_from_the_future_is_not_a_crash`
+`verified-by: bravebot_session::sessions::a_stored_time_becomes_an_age`
 `verified-by: bravebot_tui::persist::a_corrupt_file_reads_as_no_history`
 `verified-by: bravebot_tui::persist::no_home_directory_is_not_an_error`
 `verified-by: bravebot_tui::persist::the_directory_is_created_on_first_write`
@@ -144,10 +144,10 @@ format that could not read the previous one would be paid for in exactly the thi
 `verified-by: bravebot_tui::persist::when_and_where_a_prompt_was_sent_outlive_the_session`
 `verified-by: bravebot_tui::persist::a_history_from_an_older_version_is_still_read`
 `verified-by: bravebot_tui::state::a_sent_prompt_records_when_and_where_it_was_sent`
-`verified-by: bravebot_tui::store::when_and_where_a_prompt_was_sent_survive_a_round_trip`
-`verified-by: bravebot_tui::store::a_line_from_an_older_history_is_still_a_prompt`
-`verified-by: bravebot_tui::store::a_prompt_with_no_stamp_is_not_given_one_on_the_way_out`
-`verified-by: bravebot_tui::store::a_prompt_holding_tabs_is_still_one_prompt`
+`verified-by: bravebot_session::store::when_and_where_a_prompt_was_sent_survive_a_round_trip`
+`verified-by: bravebot_session::store::a_line_from_an_older_history_is_still_a_prompt`
+`verified-by: bravebot_session::store::a_prompt_with_no_stamp_is_not_given_one_on_the_way_out`
+`verified-by: bravebot_session::store::a_prompt_holding_tabs_is_still_one_prompt`
 `verified-by: bravebot_tui::persist::a_session_recalls_a_prompt_stored_by_an_earlier_session`
 `verified-by: bravebot_tui::persist::an_appended_prompt_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::a_cancelled_prompt_is_removed_from_the_stored_history`
@@ -214,10 +214,10 @@ corrupt file is no choice at all, falling back to `brave`. Custom theme files li
 nothing about a theme depends on which files are open.
 
 `verified-by: bravebot_tui::persist::a_chosen_theme_is_read_back_next_session`
-`verified-by: bravebot_tui::store::a_stored_theme_is_read_back_without_its_newline`
-`verified-by: bravebot_tui::store::an_empty_theme_file_is_not_a_choice`
-`verified-by: bravebot_tui::store::only_the_first_theme_line_is_read`
-`verified-by: bravebot_tui::store::an_over_long_theme_name_is_not_a_choice`
+`verified-by: bravebot_session::store::a_stored_theme_is_read_back_without_its_newline`
+`verified-by: bravebot_session::store::an_empty_theme_file_is_not_a_choice`
+`verified-by: bravebot_session::store::only_the_first_theme_line_is_read`
+`verified-by: bravebot_session::store::an_over_long_theme_name_is_not_a_choice`
 
 <a id="SESSION-10"></a>
 ### SESSION-10: a manifest run is recorded, and cannot be continued
@@ -311,7 +311,7 @@ harness's own overhead.
 `verified-by: bravebot_tui::state::unanswered_turns_keep_the_session_clock_and_the_completed_breakdown`
 `verified-by: bravebot_tui::state::a_resumed_session_carries_on_from_the_time_it_had_spent`
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
-`verified-by: bravebot_tui::sessions::a_record_written_before_timing_was_kept_still_loads`
+`verified-by: bravebot_session::sessions::a_record_written_before_timing_was_kept_still_loads`
 `verified-by: bravebot_tui::status::the_panel_says_where_the_session_spent_its_time`
 `verified-by: bravebot_tui::status::a_part_that_never_happened_is_not_reported_as_zero`
 `verified-by: bravebot_tui::status::a_session_with_no_turn_yet_reports_no_time`
@@ -362,9 +362,9 @@ that printed one, in a terminal that is often the thing that went away. Starting
 would be answering a different question by discarding the one asked: an empty transcript is
 indistinguishable from a session that was lost, and the way to reach an older one is the picker.
 
-`verified-by: bravebot_tui::sessions::continuing_takes_the_most_recent_session`
-`verified-by: bravebot_tui::sessions::continuing_passes_over_a_manifest_run`
-`verified-by: bravebot_tui::sessions::a_list_with_nothing_continuable_in_it_offers_nothing`
+`verified-by: bravebot_session::sessions::continuing_takes_the_most_recent_session`
+`verified-by: bravebot_session::sessions::continuing_passes_over_a_manifest_run`
+`verified-by: bravebot_session::sessions::a_list_with_nothing_continuable_in_it_offers_nothing`
 `verified-by: bravebot_tui::sessions::the_session_continued_is_the_one_written_here`
 
 <a id="SESSION-15"></a>
@@ -383,9 +383,9 @@ request field.
 
 `verified-by: bravebot_tui::persist::a_chosen_effort_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::asking_for_no_effort_is_read_back_as_no_choice`
-`verified-by: bravebot_tui::store::a_stored_effort_is_read_back_without_its_newline`
-`verified-by: bravebot_tui::store::a_file_naming_no_level_is_not_a_choice`
-`verified-by: bravebot_tui::store::only_the_first_effort_line_is_read`
+`verified-by: bravebot_session::store::a_stored_effort_is_read_back_without_its_newline`
+`verified-by: bravebot_session::store::a_file_naming_no_level_is_not_a_choice`
+`verified-by: bravebot_session::store::only_the_first_effort_line_is_read`
 
 <a id="SESSION-16"></a>
 ### SESSION-16: session records and directories are private to the user
@@ -431,13 +431,13 @@ as the command, so it gets the confinement any other path from that line would g
 carries whatever the session read, and an export that could be steered to an arbitrary path would
 be a way to write it anywhere.
 
-`verified-by: bravebot_tui::sessions::exporting_a_transcript_is_confined_to_the_project_root`
-`verified-by: bravebot_tui::sessions::exporting_refuses_traversal_components`
-`verified-by: bravebot_tui::sessions::exporting_refuses_a_path_through_a_symlinked_directory`
-`verified-by: bravebot_tui::sessions::exporting_refuses_to_overwrite_an_existing_file`
-`verified-by: bravebot_tui::sessions::exporting_refuses_a_path_that_is_a_dangling_symlink`
-`verified-by: bravebot_tui::sessions::an_exported_transcript_is_readable_only_by_its_owner`
-`verified-by: bravebot_tui::sessions::exporting_creates_intermediate_directories`
+`verified-by: bravebot_session::sessions::exporting_a_transcript_is_confined_to_the_project_root`
+`verified-by: bravebot_session::sessions::exporting_refuses_traversal_components`
+`verified-by: bravebot_session::sessions::exporting_refuses_a_path_through_a_symlinked_directory`
+`verified-by: bravebot_session::sessions::exporting_refuses_to_overwrite_an_existing_file`
+`verified-by: bravebot_session::sessions::exporting_refuses_a_path_that_is_a_dangling_symlink`
+`verified-by: bravebot_session::sessions::an_exported_transcript_is_readable_only_by_its_owner`
+`verified-by: bravebot_session::sessions::exporting_creates_intermediate_directories`
 
 <a id="SESSION-18"></a>
 ### SESSION-18: an interactive session can be forked to explore an alternative path
@@ -451,7 +451,7 @@ the continuation rule in SESSION-10.
 context already built up without polluting the original session. Refusing manifest runs maintains
 the invariant that finished autonomous runs have a definite end.
 
-`verified-by: bravebot_tui::sessions::forking_a_manifest_session_is_refused`
+`verified-by: bravebot_session::sessions::forking_a_manifest_session_is_refused`
 
 <a id="SESSION-19"></a>
 ### SESSION-19: turns can be rewound, on disk and in the conversation together
@@ -518,9 +518,9 @@ whether or not it is ever read.
 `verified-by: bravebot_agent::workspace::a_rewind_names_the_paths_it_could_not_put_back`
 `verified-by: bravebot_agent::workspace::a_created_file_already_gone_is_not_reported_as_refused`
 `verified-by: bravebot_agent::workspace::a_file_past_the_rewind_budget_is_remembered_but_not_kept`
-`verified-by: bravebot_tui::sessions::truncating_an_audit_log_removes_events_from_undone_turns`
-`verified-by: bravebot_tui::sessions::discarding_a_record_leaves_nothing_to_resume`
-`verified-by: bravebot_tui::sessions::discarding_keeps_a_name_chosen_before_the_turn`
+`verified-by: bravebot_session::sessions::truncating_an_audit_log_removes_events_from_undone_turns`
+`verified-by: bravebot_session::sessions::discarding_a_record_leaves_nothing_to_resume`
+`verified-by: bravebot_session::sessions::discarding_keeps_a_name_chosen_before_the_turn`
 `verified-by: bravebot_tui::app::a_rewind_point_excludes_the_turn_it_undoes`
 `verified-by: bravebot_tui::state::clearing_drops_the_transcript_and_what_it_spent`
 `verified-by: bravebot_tui::state::closing_the_rewind_window_leaves_nothing_to_rewind_to`
@@ -644,7 +644,7 @@ file somebody was working on; treating it as one that will not go back leaves th
 names it on the line that reports the rewind.
 
 `verified-by: bravebot_tui::sessions::a_rewind_point_survives_being_written_and_read_back`
-`verified-by: bravebot_tui::sessions::a_kept_file_this_build_cannot_read_will_not_go_back_rather_than_being_deleted`
+`verified-by: bravebot_session::sessions::a_kept_file_this_build_cannot_read_will_not_go_back_rather_than_being_deleted`
 `verified-by: bravebot_tui::state::a_restored_point_finds_its_place_in_the_transcript_it_comes_back_into`
 
 <a id="SESSION-23"></a>

@@ -9,9 +9,9 @@ use bravebot_agent::Conversation;
 use bravebot_aichat::protocol::Message;
 use bravebot_core::programs::TrustedPrograms;
 use bravebot_core::trust::TrustStore;
-use bravebot_tui::history::Entry;
-use bravebot_tui::sessions::{Handle, Standing};
-use bravebot_tui::store;
+use bravebot_session::sessions::{Handle, Standing};
+use bravebot_session::store;
+use bravebot_session::store::Entry;
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -112,7 +112,7 @@ fn a_recorded_choice_is_readable_only_by_its_owner() {
     store::save_model("claude-sonnet-4-5");
     store::save_theme("nord");
     store::save_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
-    store::save_editing(bravebot_tui::vim::Editing::Vi);
+    store::save_editing(bravebot_tui::vim::Editing::Vi.as_str());
 
     for file in ["model", "theme", "effort", "editor-mode"] {
         assert_eq!(scratch.mode_of(file), 0o600, "{file}");
@@ -174,7 +174,7 @@ fn writing_a_session_narrows_the_state_directory() {
 
     let mut conversation = Conversation::new();
     conversation.push(Message::user("a prompt worth keeping private"));
-    let mut handle = Handle::begin(&project);
+    let mut handle = Handle::begin(&project, bravebot_tui::BUILD);
     handle.save(
         "a prompt worth keeping private",
         Standing {

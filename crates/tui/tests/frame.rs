@@ -5,7 +5,7 @@
 //! file. Every assertion here reads the frame or the export rather than the session, because the
 //! session holding a reason nobody can see is the failure being tested for.
 
-use bravebot_tui::audit::TrailLine;
+use bravebot_session::audit::TrailLine;
 use bravebot_tui::render;
 use bravebot_tui::state::Session;
 use ratatui::Terminal;
