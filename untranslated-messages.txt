@@ -6,15 +6,3 @@
 # translation is useful from its first line, and what it still lacks is visible in a diff.
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
-
-fr:doctor-agents-broken
-fr:doctor-agents-conflict
-fr:doctor-agents-copy-ok
-fr:doctor-agents-copy-stale
-fr:doctor-agents-missing
-fr:doctor-agents-ok
-fr:doctor-agents-unreadable
-fr:doctor-agents-wrong
-fr:doctor-development
-fr:doctor-direnv-missing
-fr:doctor-direnv-ok
