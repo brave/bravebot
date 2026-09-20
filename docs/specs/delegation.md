@@ -367,3 +367,11 @@ again.
   cannot ask, so a task missing a detail is a delegate that reports having been unable to finish,
   and the round it spent is spent. The alternative is a channel back to the planner, which is a
   conversation, and a conversation is the context this exists to avoid.
+
+- **Everything a delegate spent on something other than a request reads as the parent's own
+  remainder.** [DELEGATE-18](#DELEGATE-18) charges its requests and nothing else, so a join spent
+  running a build, waiting for somebody to answer a prompt, or between two of the delegate's own
+  requests lands in the figure [sessions.md](sessions.md) leaves over. On a turn that ran no
+  delegate that figure is the harness's own time and is read as such, and on one that delegated it
+  is not. Charging the rest to the parent's tool or stalled figures would put seconds there that
+  the parent did not spend there, which is the double count the partition exists to avoid.

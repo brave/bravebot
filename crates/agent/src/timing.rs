@@ -53,11 +53,13 @@ pub struct Timing {
 }
 
 impl Timing {
-    /// What the turn spent on none of the three, which is the driver's own.
+    /// What the turn spent on none of the three.
     ///
     /// Reading a session back, this is the figure with nobody to blame for it: not the model, not a
-    /// subprocess, not the person. Anything large here is time the harness spent on itself, and
-    /// there is no other way to see it.
+    /// subprocess, not the person. On a turn that ran no delegate, anything large here is time the
+    /// harness spent on itself and there is no other way to see it. On a turn that delegated it is
+    /// also whatever a delegate spent inside a join on something other than a request, which
+    /// `DELEGATE-18` leaves here rather than charging to a figure the parent did not spend it on.
     ///
     /// Saturating, because the parts are measured separately and a clock that steps back must not
     /// produce a wrapped figure in the billions.
