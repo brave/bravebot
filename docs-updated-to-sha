@@ -1,0 +1,15 @@
+# The commit the documentation site is current as of.
+#
+# Every page under docs/website describes behaviour specified clause by clause in
+# docs/specs. This file records how far along that history the site has been brought, so
+# the next update knows where to start reading.
+#
+# Run `make docs-changes` to see what has landed since, and the update-docs skill
+# (agents/skills/update-docs) to fold it in. The skill rewrites the sha below; nothing
+# else should.
+#
+# run: allow calls to set a deadline under a ceiling (CMDLINE-13) (#250)
+# 2026-09-12
+# https://github.com/brave/bravebot/commit/faa8ab7a32fd8e81ea18fd6941f3d63eeaaf0d13
+
+faa8ab7a32fd8e81ea18fd6941f3d63eeaaf0d13

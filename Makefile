@@ -31,6 +31,8 @@ help:
 	@echo "  make check-security        The security audit's deterministic half"
 	@echo "  make check-locales         Hold the catalogs to untranslated-messages.txt"
 	@echo "  make check-docs            Build the documentation website under docs/website"
+	@echo "  make docs-changes          What has landed in the specs since the site was updated"
+	@echo "  make docs-updated-to-sha   The commit the documentation site is current as of"
 	@echo "  make write-unverified      Write unverified-clauses.txt, which check-spec holds it to"
 	@echo "  make write-undocumented    Write undocumented-clauses.txt, which check-spec holds it to"
 	@echo "  make write-untranslated    Write untranslated-messages.txt, which check-locales holds it to"
@@ -250,6 +252,19 @@ check-windows:
 check-docs:
 	npm --prefix docs/website ci --ignore-scripts
 	npm --prefix docs/website run build
+
+# How far the site has fallen behind the specs it describes. docs-updated-to-sha records how
+# far reading got; these two report against it. Neither is a gate and no CI job runs them:
+# the site going stale is not something a diff can decide, so what they are for is answering
+# the question without spending a model run. The update-docs skill calls the same script to
+# move the baseline or defer a commit, which is why neither of those is a target here.
+.PHONY: docs-changes
+docs-changes:
+	@python3 agents/skills/update-docs/docs-ref.py changes
+
+.PHONY: docs-updated-to-sha
+docs-updated-to-sha:
+	@python3 agents/skills/update-docs/docs-ref.py show
 
 # Everything any CI enforces, in one target: the jobs in ci.yml plus the security
 # scan the organization-level workflow runs. Slower than `check` by a lot -- two

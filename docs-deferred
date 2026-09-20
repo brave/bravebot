@@ -1,0 +1,9 @@
+# Commits reviewed by the update-docs skill and deliberately left for a later
+# run, with why. The baseline in docs-updated-to-sha cannot hold these: it says
+# everything before it was folded in, and the next span begins after it, so a
+# commit skipped mid-span would never be offered again.
+#
+# `docs-ref.py changes` replays these ahead of the new span. Drop one with
+# `docs-ref.py resolve <sha>` once its behaviour is documented.
+
+bd84f979124de860f4c1874291ca8d86ea3ead75 MCP tool failures carry the server's detail, but no settings key wires up a server yet
