@@ -41,10 +41,12 @@ writes.
 `make check-security` decides the things `check-spec` structurally cannot: whether two documents
 agree about how many exceptions to the rule are admitted, whether a trait reaches into a `Labelled`,
 whether a spec pins the constructors of one as well as the releases, and whether every workflow step
-is on a commit rather than a tag its owner can move. It fails on this tree today, which is why it is
-not in `check-all` yet, and the findings are what the
-[security-audit skill](../../agents/skills/security-audit/SKILL.md) files. Run it before a commit
-that touches a label, `.github/workflows`, or the trust specs.
+is on a commit rather than a tag its owner can move. CI runs it too, so a pull request that moves a
+workflow step onto a movable tag, or that drops the entry pinning a constructor, fails rather than
+holding only for whoever remembers to run this. It is the deterministic half of the
+[security-audit skill](../../agents/skills/security-audit/SKILL.md); the lanes that read code are
+the other half, and a person runs those. Run it before a commit that touches a label,
+`.github/workflows`, or the trust specs.
 
 `make check-locales` holds every message catalog to
 [../../untranslated-messages.txt](../../untranslated-messages.txt), the record of what each
