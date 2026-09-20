@@ -10,9 +10,9 @@ governs:
 guards:
   - symbol: Labelled::new
     sites:
-      - crates/agent/src/lsp.rs: 3
+      - crates/agent/src/lsp.rs: 4
       - crates/agent/src/manifest.rs: 3
-      - crates/agent/src/tools.rs: 19
+      - crates/agent/src/tools.rs: 20
       - crates/agent/src/workspace.rs: 6
       - crates/agent/tests/workspace.rs: 27
       - crates/aichat/src/lib.rs: 4
@@ -45,7 +45,7 @@ guards:
       - crates/agent/src/manifest.rs: 10
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
-      - crates/agent/src/tools.rs: 14
+      - crates/agent/src/tools.rs: 13
       - crates/agent/src/turn.rs: 3
       - crates/agent/tests/workspace.rs: 147
       - crates/core/src/policy.rs: 22
@@ -82,7 +82,7 @@ guards:
     sites:
       - crates/agent/src/aside.rs: 1
       - crates/agent/src/goal.rs: 1
-      - crates/agent/src/lsp.rs: 2
+      - crates/agent/src/lsp.rs: 3
       - crates/agent/src/turn.rs: 9
       - crates/core/src/policy.rs: 8
   - symbol: Policy::label_model_output
