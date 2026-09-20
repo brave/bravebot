@@ -14,6 +14,7 @@ what stays out of it, and which runs may write the file.
 
 import os
 import shutil
+import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
 from pathlib import Path
@@ -131,6 +132,10 @@ def build_fixture(root):
         '[package]\nname = "bravebot-demo"\n', encoding="utf-8"
     )
     (root / "crates" / "demo" / "src" / "lib.rs").write_text(CLEAN_SOURCE, encoding="utf-8")
+    # A tracked tree, because a body may quote only what the tree publishes and the drafter asks
+    # git which files those are. An index is enough; nothing here needs a commit.
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
 
 
 def run_checks():
@@ -568,6 +573,7 @@ UNDECIDED = dict(VIOLATION, kind="unclear", severity="warning", clause="DEMO-2")
 # A mechanical error fails `make check-spec`, so it is red on the branch that caused it.
 RED_IN_CI = dict(UNCOVERED, kind="clause-numbering", severity="error", clause="DEMO-2")
 
+THE_TOKEN = "github.com:\n  oauth_token: gho_SELFTEST\n"
 A_SCREEN = "the gate is open\nand a ``` fence, which must not close the block\n"
 
 
@@ -655,6 +661,57 @@ def draft_checks():
     return checks
 
 
+def site_checks():
+    """Which place a body will open and show, against one a lane could have been steered to write.
+
+    A place arrives as prose from a model reading a tree somebody else wrote, and whatever the
+    drafter opens is inlined into a body that gets filed on a tracker. So the only file a body may
+    quote is one the tree already publishes: a path out of the checkout reaches the machine the run
+    happened on, and one the checkout ignores reaches the credentials it keeps there.
+    """
+    outside = Path(tempfile.mkdtemp(prefix="check-spec-selftest-outside-")) / "hosts.yml"
+    outside.write_text(THE_TOKEN, encoding="utf-8")
+    climbing = os.path.relpath(outside.resolve(), Path.cwd())
+    ignored = Path.cwd() / "secrets.env"
+    ignored.write_text(THE_TOKEN, encoding="utf-8")
+    linked = Path.cwd() / "crates" / "demo" / "src" / "linked.rs"
+    linked.symlink_to(outside)
+    # Tracked, so what rejects it is where it points rather than that nothing published it.
+    subprocess.run(["git", "add", "crates/demo/src/linked.rs"], check=True)
+    draft._TRACKED.clear()
+    gate = (Path("crates/demo/src/lib.rs"), 4)
+    try:
+        return [
+            (
+                "a place the tree publishes is the code a body shows",
+                draft.first_site(["crates/demo/src/lib.rs:4 the gate"]) == gate,
+            ),
+            (
+                "an absolute place outside the checkout is not opened",
+                draft.first_site([f"{outside}:2 the token"]) == (None, None),
+            ),
+            (
+                "a place that climbs out of the checkout is not opened",
+                draft.first_site([f"{climbing}:2 the token"]) == (None, None),
+            ),
+            (
+                "a file the checkout keeps but does not track is not opened",
+                draft.first_site(["secrets.env:2 the token"]) == (None, None),
+            ),
+            (
+                "a tracked name that is a symlink out of the tree is not opened",
+                draft.first_site(["crates/demo/src/linked.rs:2 the token"]) == (None, None),
+            ),
+            (
+                "a place a body may not quote is skipped rather than ending the search",
+                draft.first_site([f"{outside}:2 the token", "crates/demo/src/lib.rs:4 the gate"])
+                == gate,
+            ),
+        ]
+    finally:
+        shutil.rmtree(outside.parent, ignore_errors=True)
+
+
 # Which runs may write the file. A run given a filter read part of the tree, and the list is
 # about all of it.
 SELECTIONS = [
@@ -713,7 +770,11 @@ def main():
     for name, held in drafted:
         note(name, held, "the body does not say it")
 
-    total = len(CASES) + len(UNVERIFIED_CASES) + len(SELECTIONS) + len(drafted)
+    sited = in_fixture(None, site_checks)
+    for name, held in sited:
+        note(name, held, "the drafter chose a different place")
+
+    total = len(CASES) + len(UNVERIFIED_CASES) + len(SELECTIONS) + len(drafted) + len(sited)
     print()
     if failures:
         for failure in failures:

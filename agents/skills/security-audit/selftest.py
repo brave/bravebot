@@ -792,6 +792,25 @@ def test_bodies_say_where_and_why():
     check("a body says a tool filed it", "rather than by a person" in body)
     check("no em dash reaches an issue body", "—" not in body)
 
+    named = dict(finding, evidence=["crates/agent/src/tools.rs:1 the branch"])
+    shown = with_cwd(ROOT, lambda: drafts.body_for(named))
+    excerpt = shown.split("## Reproduce")[0]
+    check(
+        "the code a body shows is the place, not the first evidence item",
+        "`crates/core/src/policy.rs:1`" in excerpt and "tools.rs" not in excerpt,
+        excerpt,
+    )
+
+    outside = Path(tempfile.mkdtemp(prefix="security-audit-selftest-")) / "hosts.yml"
+    outside.write_text("github.com:\n  oauth_token: gho_SELFTEST\n", encoding="utf-8")
+    poisoned = dict(finding, place=f"{outside}:2 in decide")
+    drafted = with_cwd(ROOT, lambda: drafts.body_for(poisoned))
+    check(
+        "a place outside the checkout is not excerpted into a body",
+        "gho_SELFTEST" not in drafted and str(outside) not in drafted,
+        str(outside),
+    )
+
     local = dict(finding, reproduce=[f"grep -n problem {ROOT}/crates/agent/src/tools.rs"])
     said = with_cwd(ROOT, lambda: drafts.body_for(local))
     check(
