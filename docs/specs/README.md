@@ -38,21 +38,21 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [scroller.md](scroller.md) | `SCROLL` | 9 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [credential-protection.md](credential-protection.md) | `CRED` | 25 | where credentials come from, which of them may be held at all, and what each tier owes |
 | [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | importing a Leo Premium subscription and spending its credentials |
-| [sandboxing.md](sandboxing.md) | `SANDBOX` | 8 | operating-system confinement for processes running code we did not write |
+| [sandboxing.md](sandboxing.md) | `SANDBOX` | 9 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 9 | tools that come from outside this repository, and what they are allowed to do |
 | [hooks.md](hooks.md) | `HOOK` | 7 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 8 | every request that leaves this process, and what comes back |
-| [backends.md](backends.md) | `BACKEND` | 40 | which service answers a request, and what a person may choose between |
+| [backends.md](backends.md) | `BACKEND` | 42 | which service answers a request, and what a person may choose between |
 | [compaction.md](compaction.md) | `COMPACT` | 12 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 14 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 17 | one condition a person set, judged after every turn, until it holds |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
-| [sessions.md](sessions.md) | `SESSION` | 26 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
+| [sessions.md](sessions.md) | `SESSION` | 27 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
 | [state-directory.md](state-directory.md) | `STATE` | 2 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
 | [trace.md](trace.md) | `TRACE` | 6 | what is recorded about every decision the system makes, and what that record may contain |
 | [localization.md](localization.md) | `LOCALE` | 7 | every word said to a person, and which of them change with the reader's language |
-| [layering.md](layering.md) | `LAYER` | 4 | which crate is allowed to do what |
+| [layering.md](layering.md) | `LAYER` | 5 | which crate is allowed to do what |
 | [releases.md](releases.md) | `RELEASE` | 12 | what names a version, what starts a release, and what an installer trusts about what it fetched |
 | [updates.md](updates.md) | `UPDATE` | 10 | learning that a newer version is out, and the line that installs it |
 
@@ -76,7 +76,7 @@ the routing-versus-content split they share.
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
 | [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 3 | `read_output` |
 | [tools/vet-content.md](tools/vet-content.md) | `VET` | 3 | `vet_content` |
-| [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 5 | `fetch_url` |
+| [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 6 | `fetch_url` |
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 3 | `load_skill` |
 | [tools/todo-write.md](tools/todo-write.md) | `TODO` | 2 | `todo_write` |
 | [tools/schedule-next.md](tools/schedule-next.md) | `SCHED` | 5 | `schedule_next` |
@@ -102,9 +102,13 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
   used, as a `sites:` list of `path: count` items, and the check fails when the tree and the list
   disagree in either direction. The count is how many times the symbol occurs in that file's code:
   two uses on one line are two, one call rustfmt wrapped across three lines is one, and a comment
-  naming the symbol is not a use of it at all. A count rather than a line number, so moving a call
-  inside a file changes nothing, while adding or removing one is an edit to this spec that a
-  reviewer sees. `make check-spec` prints the number it found, which is the number to record.
+  naming the symbol is not a use of it at all. The line defining the symbol counts as one of those
+  occurrences. A method is counted where it is called on a receiver too, since `gate.open()` is how
+  most call sites read; an associated function has no receiver, so `Labelled::new` counts its
+  definition and every place the qualified name is written, and nothing besides. A count rather than
+  a line number, so moving a call inside a file changes nothing, while adding or removing one is an
+  edit to this spec that a reviewer sees. `make check-spec` prints the number it found, which is the
+  number to record.
   Within one spec, either every entry pins its sites or none does: an unpinned entry beside pinned
   ones reads as though it were checked too.
 - **`verified-by:`** lines name the tests that pin a clause, as `crate::module::test_name`. The

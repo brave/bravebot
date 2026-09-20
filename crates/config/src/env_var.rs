@@ -27,6 +27,18 @@ pub const DEFAULT_MODEL: &str = "BRAVE_AI_CHAT_DEFAULT_MODEL";
 /// release.
 pub const CONTEXT_BUDGET: &str = "BRAVEBOT_CONTEXT_BUDGET";
 
+/// How many tokens one reply may run to before the service cuts it off.
+///
+/// Read by the Bedrock backend, which is the only one that states a ceiling at all: the aichat
+/// protocol carries no such field, so a request there is bounded by whatever the service decides.
+/// A model may state its own in a `provider` block, and this outranks that, for the reason the
+/// rest of the file's order gives.
+///
+/// Absent from ALL and from [`BEDROCK_ALL`], on the same footing as [`CONTEXT_BUDGET`]: it is a
+/// knob one person turns while working rather than a property of a build or of an account, and a
+/// value exported to get one long answer should not ship to everyone who used that release.
+pub const OUTPUT_BUDGET: &str = "BRAVEBOT_OUTPUT_BUDGET";
+
 /// Set to `1` to reach a model through AWS Bedrock rather than the aichat backend.
 ///
 /// Brave-prefixed like the rest of this file: the switch decides which backend this program uses,

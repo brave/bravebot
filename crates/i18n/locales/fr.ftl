@@ -688,6 +688,16 @@ environment-prod = prod
 environment-custom = personnalisé
 
 
+## Ce que /cost rapporte de chaque tour
+
+# Le français sépare le nombre du signe pour cent.
+cost-share = { $percent } %
+cost-turn = Tour { $number }
+cost-before-the-first-turn = Avant le tour 1
+cost-nothing-spent = rien de dépensé pour l'instant
+cost-unattributed = non imputé à un tour
+
+
 ## L'indicateur dessiné pendant qu'un tour tourne
 
 elapsed-seconds = { $seconds } s
@@ -790,6 +800,7 @@ scroller-footer-search = / rechercher
 ## Ce qu'une ligne commençant par une barre oblique peut être
 
 command-status = Décrire cette session, ce qu'elle peut toucher, et ce qu'elle a dépensé
+command-cost = Montrer ce que chaque tour de cette session a dépensé
 command-model = Choisir avec quel modèle réfléchir
 command-theme = Choisir quel thème habille l'interface
 command-effort = Choisir l'effort de réflexion avant de répondre
@@ -898,6 +909,7 @@ failure-transport = la requête n'est pas passée
 failure-incomplete = la réponse s'est arrêtée avant la fin
 failure-undecodable = la réponse n'a pas pu être lue
 failure-too-long = le modèle a atteint sa limite de sortie
+failure-too-long-at = le modèle a atteint sa limite de sortie de { $tokens } jetons, que BRAVEBOT_OUTPUT_BUDGET relève
 failure-unconfigured = rien ici n'était configuré pour envoyer la requête
 failure-blocked = un contrôle local a refusé de laisser sortir la requête
 failure-workspace = l'espace de travail n'a pas pu être utilisé
@@ -1136,3 +1148,16 @@ watching-calls = { $count ->
 # au tour qui l'a dessinee. Le compte y est car une touche sans rien derriere ne vaut pas la
 # peine. Delegues et commandes sont comptes ensemble, une seule touche ouvrant la liste des deux.
 watching-hint = { $chord } { $count } a ouvrir
+
+# Vérifications indicatives affichées uniquement dans un dépôt de sources de Bravebot.
+doctor-development = environnement de développement { $path }
+doctor-agents-ok = OK (lien vers agents/AGENTS.md)
+doctor-agents-copy-ok = OK (copie Windows de agents/AGENTS.md)
+doctor-agents-missing = absent ; lancez `python3 agents/setup.py link` à la racine du dépôt
+doctor-agents-broken = lien rompu ou illisible ; lancez `python3 agents/setup.py link` à la racine du dépôt
+doctor-agents-wrong = le lien pointe vers la mauvaise cible ; lancez `python3 agents/setup.py link` à la racine du dépôt
+doctor-agents-copy-stale = copie Windows obsolète ou illisible ; lancez `python3 agents/setup.py link` à la racine du dépôt
+doctor-agents-conflict = conflit : résolvez d'abord le fichier ou le répertoire existant, puis lancez `python3 agents/setup.py link` à la racine du dépôt
+doctor-agents-unreadable = impossible d'inspecter ce chemin ; résolvez d'abord ses permissions d'accès
+doctor-direnv-ok = disponible dans le PATH
+doctor-direnv-missing = introuvable dans le PATH ; consultez https://direnv.net/ ou lancez `brew install direnv`

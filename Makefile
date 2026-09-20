@@ -29,7 +29,9 @@ help:
 	@echo "  make check                 Format check, clippy, tests, and toolchain age"
 	@echo "  make check-spec            Check docs/specs against the implementation"
 	@echo "  make check-security        The security audit's deterministic half"
+	@echo "  make check-locales         Hold the catalogs to untranslated-messages.txt"
 	@echo "  make write-unverified      Write unverified-clauses.txt, which check-spec holds it to"
+	@echo "  make write-untranslated    Write untranslated-messages.txt, which check-locales holds it to"
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
 	@echo "  make check-npm             Install from the lockfile and lint it, as CI does"
@@ -134,10 +136,9 @@ check-spec:
 # workflow step is on a commit rather than a tag somebody else can move. No model takes part, so it
 # belongs in CI. The lanes that read code are the skill, and a person runs those.
 #
-# Not in check-all yet, because it fails on this tree: `Labelled::new` and `Labelled::trusted` have
-# no `guards` entry in docs/specs/labels.md. Adding it before that lands would make a red check-all
-# the normal state, which is how a check stops being read. Add it to check-all in the change that
-# fixes it.
+# It passes on this tree now that `Labelled::trusted` has a `guards` entry beside `Labelled::new`,
+# so ci.yml runs it and check-all has it below. It was held out of both while it failed, because a
+# red check-all is the normal state nobody reads.
 .PHONY: check-security
 check-security:
 	python3 agents/skills/security-audit/selftest.py
@@ -150,9 +151,13 @@ check-security:
 write-unverified:
 	python3 agents/skills/check-spec/check-spec.py --write-unverified
 
-# What each catalog has of the reference, and what it is missing. The build says so too, in a
-# warning, but a warning is only printed when the build script actually runs, so a translator
-# working through a file learns nothing from a cached build. This always answers.
+# untranslated-messages.txt, written from the catalogs. It is the list of messages each translation
+# is missing, and check-locales fails while it and the catalogs disagree, so this is what to run
+# after translating a message, or after adding one to the reference that no catalog has yet.
+.PHONY: write-untranslated
+write-untranslated:
+	python3 contrib/check-locales.py --write
+
 # The security scan that comments on our pull requests, before pushing rather than
 # after. Nothing here configures it: it arrives as an organization-level workflow
 # calling brave/security-action, so contrib/check-reviewdog.sh clones that repository
@@ -234,21 +239,24 @@ check-windows:
 # container builds and a scan -- so `check` stays the inner loop and this is the
 # before-you-push pass.
 .PHONY: check-all
-check-all: check check-spec check-npm check-deps check-msrv check-windows check-reviewdog
+check-all: check check-spec check-security check-locales check-npm check-deps check-msrv check-windows check-reviewdog
 
+# What each catalog has of the reference, and what it is missing. The build says so too, in a
+# warning, but a warning is only printed when the build script actually runs, so a translator
+# working through a file learns nothing from a cached build. This always answers, and no gap it
+# finds makes it fail: it is the report to read while translating, and check-locales is the gate.
 .PHONY: locales
 locales:
-	@ref=crates/i18n/locales/en-US.ftl; \
-	ids() { grep -oE '^[a-z][a-z0-9-]+ =' "$$1" | tr -d ' ='; }; \
-	total=$$(ids $$ref | wc -l | tr -d ' '); \
-	echo "en-US  $$total messages, the reference"; \
-	for f in crates/i18n/locales/*.ftl; do \
-		case "$$f" in *en-US.ftl) continue;; esac; \
-		tag=$$(basename "$$f" .ftl); \
-		have=$$({ ids $$ref; ids "$$f"; } | sort | uniq -d | wc -l | tr -d ' '); \
-		echo "$$tag  $$have of $$total"; \
-		{ ids $$ref; ids "$$f"; } | sort | uniq -u | sed 's/^/    missing: /'; \
-	done
+	@python3 contrib/check-locales.py --report
+
+# Whether every catalog matches untranslated-messages.txt, which records the messages each
+# translation is knowingly missing. A gap is allowed and silence about one is not: falling back to
+# English is deliberate, so what this gates on is a gap nobody wrote down, and a recorded gap that
+# is no longer there. No toolchain and no build, so CI answers in seconds.
+.PHONY: check-locales
+check-locales:
+	python3 contrib/check-locales.py --selftest
+	python3 contrib/check-locales.py
 
 # Runs the same checks on Linux with the current stable toolchain. Worth doing before
 # pushing platform-specific code: a macOS host never compiles the Linux backend, and

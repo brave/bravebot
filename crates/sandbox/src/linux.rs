@@ -603,6 +603,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The refusal above is the right answer to a caller that named the wrong path and the
+    /// wrong answer to a machine that does not carry a toolchain some list knows, so what a
+    /// caller does about it has to be measured against this backend rather than against a
+    /// boolean: a resolution that still leaves the policy refused buys nothing, and one that
+    /// resolves a policy this backend would have taken as written has thrown a grant away.
+    #[test]
+    fn a_policy_refused_over_an_absent_path_is_one_this_backend_installs_once_it_is_resolved() {
+        let dir = crate::testutil::scratch_dir("bravebot-landlock-resolved-policy");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let absent = dir.join("not-created-yet");
+
+        let wanted = loadable_policy().allow_write(&dir).allow_write(&absent);
+        LandlockSandbox
+            .command("/bin/true", &[], &wanted)
+            .expect_err("a grant over a path that is not there is one this backend refuses");
+
+        let resolved = wanted.nameable_under(&LandlockSandbox.capabilities());
+        assert_eq!(resolved.omitted, vec![absent]);
+        assert!(
+            resolved.policy.writable.contains(&dir),
+            "the path that is there went with the one that is not"
+        );
+        LandlockSandbox
+            .command("/bin/true", &[], &resolved.policy)
+            .expect("the resolved policy names only paths this backend can grant");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A caller reads this to decide whether an absent path in a policy needs creating
     /// first or the directory holding it named instead, and a report disagreeing with the
     /// backend costs it one of those on a platform where neither was necessary. Both

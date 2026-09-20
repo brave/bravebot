@@ -152,6 +152,35 @@ jobs:
       - name: Check the specs against the implementation
         run: make check-spec
 
+  # The mechanical half of the security audit: whether two documents agree on how many exceptions
+  # to the label rule are admitted, whether anything reaches into a Labelled, whether a spec pins
+  # the constructors, and whether every workflow step is on a commit rather than a movable tag.
+  # Standard library Python like the specs job. It was held out of CI while `Labelled::trusted`
+  # had no `guards` entry and the check therefore failed; it has one as of this change.
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Audit the label rule mechanically
+        run: make check-security
+
+  # Whether every message catalog matches untranslated-messages.txt. A translation may lag the
+  # reference, since what it lacks is shown in English and a catalog nobody could use unfinished
+  # would never be started, so what this decides is whether the lag is written down. The build
+  # script counts it too and prints a warning, which is silent on a cached build and does not fail
+  # a green job, so before this nothing stopped a message shipping untranslated: eleven had.
+  # Standard library Python like the two jobs above.
+  locales:
+    name: Locales
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Hold the catalogs to the record of what they are missing
+        run: make check-locales
+
   # Builds against the declared minimum toolchain. The pinned cross-build container
   # ships an older Rust than most developers have locally, so without this a feature
   # that only compiles on a newer toolchain reaches the release build unnoticed.
