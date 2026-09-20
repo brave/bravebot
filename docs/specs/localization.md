@@ -144,7 +144,12 @@ sees is worth nothing if two people running it see different things.
   it against the specs that use those same names, so it stays in one language. See
   [trace.md](trace.md).
 
-- **A missing translation is invisible from the English side.** A catalog with fewer messages than
-  the reference builds, and the messages it does not have are shown in English, pluralised by
-  English's rules. The build says how many are missing and nothing fails, because a translation
-  that had to be finished before it could be used would never be started.
+- **A translation may lag the reference, and what it lacks is written down.** A catalog with fewer
+  messages than the reference builds, and the messages it does not have are shown in English,
+  pluralised by English's rules. Nothing fails over the gap itself, because a translation that had
+  to be finished before it could be used would never be started. What fails is a gap nobody
+  recorded: [untranslated-messages.txt](../../untranslated-messages.txt) lists them, and
+  `make check-locales` holds the two to each other in both directions, so adding a message without
+  translating it is a line in a diff rather than a warning in a build that passed. The build still
+  counts the gap as it compiles the catalogs, and that count is a convenience rather than the
+  check: a warning is silent on a build that did not re-run.

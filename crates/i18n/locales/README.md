@@ -11,6 +11,13 @@ whole of it: the build script finds the file, compiles it, and the binary offers
 Nothing else changes. The messages a translation leaves out are shown in English, and the build
 says how many those are, so a catalog is useful from its first line rather than from its last.
 
+One thing does have to be kept up. What a catalog is still missing is listed in
+[untranslated-messages.txt](../../../untranslated-messages.txt) at the root of the repository, and
+`make check-locales` fails while that file and the catalogs disagree. You do not write it by hand:
+translate some messages, run `make write-untranslated`, and commit the shorter file along with them.
+A new language starts by listing everything and shrinking the file as it goes, which is the point.
+`make locales` prints the same count and fails on no gap, and is the one to watch while working.
+
 ## What the build will not let through
 
 - **A message the reference does not have.** Messages are added to `en-US.ftl` first, so the call
