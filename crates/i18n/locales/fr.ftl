@@ -220,6 +220,9 @@ doctor-dropped-gateway-token-not-minted-for-one-step =
     porte { $gate }, { $answer } : il n'est pas émis pour une seule étape, car le jeton est ce que porte le fichier de réglages ou la variable, et il est gardé pendant toute l'exécution
 doctor-dropped-subscription-batch-nothing-decides-each-use =
     porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus présente lui-même un identifiant du lot et rien n'est sollicité pour autoriser la requête
+doctor-relay = requêtes
+doctor-relay-key = clé d'API (paramètres relayés, premium indisponible)
+doctor-relay-signed = signées
 doctor-backend = service
 doctor-backend-bedrock = AWS Bedrock
 doctor-backend-aichat = Brave Leo

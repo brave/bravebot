@@ -341,6 +341,20 @@ fn config_for(endpoint: &str) -> Config {
     .expect("config")
 }
 
+/// The same, plus the key that opts into the relay.
+fn relay_config_for(endpoint: &str) -> Config {
+    Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-signing-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-key-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.to_string()),
+        "BRAVE_AI_CHAT_API_KEY" => Some(RELAY_KEY.into()),
+        _ => None,
+    })
+    .expect("config")
+}
+
+const RELAY_KEY: &str = "brv_live_testkeytestkeytestkeytestkey00";
+
 /// A settings block naming one model at `endpoint`, which is the shape somebody writes for a
 /// gateway of their own: a base URL, a model list, and nothing about what the model reads. No
 /// roster is fetched for such a block, so nothing anywhere describes the model's parameters.
@@ -459,6 +473,46 @@ fn the_request_carries_the_signing_headers() {
             "the signing key leaked in {name}"
         );
     }
+}
+
+/// What the unit tests cannot check: that a relayed request survives the whole transport and arrives
+/// at the same path as a signed one, carrying the key and no signature, with the effort level in the
+/// body. The level is the reason the relay exists, so it is asserted on the bytes the server read
+/// rather than on a structure this crate built.
+#[test]
+fn a_relayed_request_reaches_the_server_with_the_key_and_the_level() {
+    let (endpoint, received) = serve(REPLY);
+    let config = relay_config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut client = AichatClient::new(&config, &egress);
+    let request =
+        ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]).with_effort(Some(Effort::Xhigh));
+    let reply = client.complete(&mut policy, &request).expect("completion");
+
+    let captured = received.recv().expect("request captured");
+
+    assert_eq!(captured.request_line, "POST /v1/chat/completions HTTP/1.1");
+    assert_eq!(captured.header("x-api-key"), Some(RELAY_KEY));
+    assert_eq!(captured.header("digest"), None);
+    assert_eq!(captured.header("authorization"), None);
+    assert_eq!(captured.header("content-type"), Some("application/json"));
+    assert_eq!(captured.header("Brave-Product"), Some("bravebot"));
+
+    let body: serde_json::Value = serde_json::from_str(&captured.body).expect("json body");
+    assert_eq!(body["reasoning_effort"], serde_json::json!("xhigh"));
+
+    // The reply is read the same way whichever handler answered it, and labelled the same way.
+    assert_eq!(reply.model, "served-model");
+    assert_eq!(reply.content.label(), Label::untrusted_public());
 }
 
 #[test]

@@ -2467,6 +2467,15 @@ fn report_aichat(config: &Config) {
         t!(doctor_key_name),
         t!(doctor_key, key = &config.signing_key),
     );
+    // Which handler answers is otherwise invisible: the host and the path are the same either way,
+    // so somebody debugging an effort level that does nothing has nothing to look at.
+    fact(
+        t!(doctor_relay),
+        match config.api_key.is_some() {
+            true => t!(doctor_relay_key),
+            false => t!(doctor_relay_signed),
+        },
+    );
 }
 
 /// Where the values line up in what `doctor` reports, and in its confinement section.

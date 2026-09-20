@@ -162,7 +162,9 @@ over one set of failures is one of them going out of date.
 <a id="CLI-7"></a>
 ### CLI-7: `doctor` reports configuration and confinement without changing anything
 
-It prints every backend this build can reach and what identifies it, which names the settings set,
+It prints every backend this build can reach and what identifies it, whether a request to Brave's
+endpoint will be signed or will present an API key instead
+([BACKEND-43](backends.md#BACKEND-43)), which names the settings set,
 which settings files are in force and which of them won a name more than one set, which names a
 machine-level file pinned and where that file is, how to configure a service where nothing
 configured will serve a turn, the model in force

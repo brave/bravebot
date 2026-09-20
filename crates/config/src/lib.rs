@@ -836,6 +836,16 @@ pub struct Config {
     /// Key id sent in the Authorization header. The server derives its copy of the
     /// signing key from a master seed plus this id, so the two are a matched pair.
     pub key_id: String,
+    /// API key for Brave's relay, presented instead of a signature when there is one.
+    ///
+    /// `None` is the ordinary case and the one every release ships: requests are signed. `Some` is
+    /// somebody opting into the relay by exporting [`env_var::API_KEY`], and it changes how a chat
+    /// request authenticates and what the service does with its body. See
+    /// [`env_var::API_KEY`] for what that buys and what it costs.
+    ///
+    /// Not a replacement for [`Config::signing_key`], which stays required: the model listing is
+    /// signed whichever way chat requests go out.
+    pub api_key: Option<Secret>,
     /// Base URL. The API path is appended by the client.
     pub endpoint: String,
     /// Base URL for the premium tier, when this build has one.
@@ -1012,6 +1022,14 @@ impl Config {
         let key_id = required(env_var::KEY_ID)?;
         let endpoint = required(env_var::ENDPOINT)?;
 
+        // Blank is not a key. A placeholder .envrc exports the name with nothing in it, and reading
+        // that as an opt-in would send `x-api-key:` empty and be refused at the far end for a
+        // reason nothing here could explain.
+        let api_key = lookup(env_var::API_KEY)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(Secret::new);
+
         // A blank endpoint only reaches here when another backend is configured and no aichat URL
         // is built. Checking the scheme of a value nothing will use would refuse a working
         // configuration over a field it does not have.
@@ -1068,6 +1086,7 @@ impl Config {
             providers,
             signing_key,
             key_id,
+            api_key,
             endpoint: endpoint.trim_end_matches('/').to_string(),
             premium_endpoint,
             default_model,
@@ -1284,6 +1303,45 @@ mod tests {
         let config = Config::from_lookup(complete_env).unwrap();
         assert_eq!(config.key_id, "test-key-id");
         assert_eq!(config.signing_key.expose(), "test-signing-key");
+    }
+
+    /// Every environment that exists before this variable does, and the one every release still
+    /// builds. The relay is opted into, so an environment that says nothing about it has not opted in
+    /// and its requests are signed as they always were.
+    #[test]
+    fn a_complete_environment_presents_no_api_key() {
+        let config = Config::from_lookup(complete_env).unwrap();
+        assert!(config.api_key.is_none());
+    }
+
+    /// `.envrc.example` names the variable so people know it exists, which means an exported empty
+    /// string is a thing real environments have. Reading that as an opt-in would send an empty
+    /// `x-api-key`, and the far end would refuse it for a reason nothing here could explain.
+    #[test]
+    fn a_blank_api_key_is_not_an_opt_in() {
+        for blank in ["", "   "] {
+            let config = Config::from_lookup(|k| match k {
+                env_var::API_KEY => Some(blank.into()),
+                other => complete_env(other),
+            })
+            .unwrap();
+            assert!(config.api_key.is_none(), "{blank:?} was read as a key");
+        }
+    }
+
+    /// The trim is not cosmetic: a key copied out of Slack arrives with a newline on it, and a header
+    /// value with a newline in it is the one thing an HTTP client cannot send.
+    #[test]
+    fn an_api_key_is_read_without_the_whitespace_around_it() {
+        let config = Config::from_lookup(|k| match k {
+            env_var::API_KEY => Some("  brv_live_abc123\n".into()),
+            other => complete_env(other),
+        })
+        .unwrap();
+        assert_eq!(
+            config.api_key.as_ref().map(|key| key.expose()),
+            Some("brv_live_abc123")
+        );
     }
 
     #[test]
@@ -2237,6 +2295,7 @@ mod tests {
                 "BRAVE_SERVICES_KEY_ID": "key-id-from-the-file",
                 "BRAVE_AI_CHAT_ENDPOINT": "https://endpoint.invalid",
                 "BRAVE_AI_CHAT_PREMIUM_ENDPOINT": "https://premium.invalid",
+                "BRAVE_AI_CHAT_API_KEY": "brv_live_from-the-file",
                 "BRAVE_AI_CHAT_DEFAULT_MODEL": "model-from-the-file",
                 "BRAVEBOT_CONTEXT_BUDGET": "4096",
                 "BRAVEBOT_OUTPUT_BUDGET": "48000",
@@ -2256,6 +2315,10 @@ mod tests {
         assert_eq!(
             config.premium_endpoint.as_deref(),
             Some("https://premium.invalid")
+        );
+        assert_eq!(
+            config.api_key.as_ref().map(|key| key.expose()),
+            Some("brv_live_from-the-file")
         );
         assert_eq!(config.default_model, "model-from-the-file");
         assert_eq!(config.context_budget, 4096);
