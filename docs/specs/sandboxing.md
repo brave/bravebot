@@ -170,6 +170,39 @@ write.
 `verified-by: bravebot_sandbox::linux::the_environment_a_confined_process_receives_is_the_callers`
 `verified-by: bravebot_sandbox::macos::the_environment_a_confined_process_receives_is_the_callers`
 
+<a id="SANDBOX-9"></a>
+### SANDBOX-9: a path that is not on disk is left out before the policy is built, and named
+
+A caller assembling a policy out of paths whose existence is not its own to decide resolves it
+against the backend before handing it over. Where the backend grants a path that does not exist
+([SANDBOX-5](#SANDBOX-5)), the policy is what was wanted and nothing is left out. Where it does
+not, a wanted path that is not on disk is left out and reported back, each such path once, and
+every path that is there is kept in the list it was named in. Resolution adds no path, moves none
+between the two lists, and carries the network and subprocess grants as they were, so what it
+produces is a subset of what was wanted.
+
+Neither of the other two answers to an absent path is taken. Naming the directory holding it
+grants over every other file in that directory, and the path this would fire on first is
+`~/.ssh/known_hosts`, whose directory holds the private key no scope reaches. Creating the file
+writes where nothing asked for a write, and a policy names a path without saying whether it is a
+file or a directory, so a caller creating one guesses between an empty file and an empty directory,
+and the wrong guess is a program that fails on a path it was granted.
+
+**Why.** [SANDBOX-6](#SANDBOX-6) refuses a policy naming a path the backend cannot grant, which is
+the right answer to a caller that named a path wrongly and the wrong answer to a machine that does
+not carry a toolchain some list knows: a profile is assembled from lists naming more paths than any
+one machine has, so without this a machine with no `~/.pyenv` is a machine where every program is
+refused. This decides what the policy names and is therefore not the backend dropping a grant that
+SANDBOX-6 forbids: the caller is told which paths went, so the difference between the grant somebody
+decided on and the grant a program got is visible where it can be acted on.
+
+`verified-by: bravebot_sandbox::policy::a_backend_that_grants_an_absent_path_is_asked_for_the_policy_as_wanted`
+`verified-by: bravebot_sandbox::policy::a_path_that_is_not_on_disk_is_left_out_and_named`
+`verified-by: bravebot_sandbox::policy::a_path_that_is_there_stays_in_the_list_it_was_named_in`
+`verified-by: bravebot_sandbox::policy::resolution_carries_the_network_and_subprocess_grants_unchanged`
+`verified-by: bravebot_sandbox::policy::a_path_wanted_for_reading_and_for_writing_is_named_once_when_it_is_left_out`
+`verified-by: bravebot_sandbox::linux::a_policy_refused_over_an_absent_path_is_one_this_backend_installs_once_it_is_resolved`
+
 ## Programs a person asked for
 
 A program `run` ([tools/run.md](tools/run.md)) starts is unconfined: it gets the access the user's
@@ -375,17 +408,17 @@ output trusted.
   the socket instead. On Linux the right that governs connecting to a pathname socket arrives many
   ABI versions after the one this backend targets, so a connect there is neither granted nor
   deniable, and a profile meaning to bound one needs that ABI and a kernel carrying it.
-- A profile has to name paths that are already there, on the backend that cannot name any other
-  kind. A path that does not exist yet goes into a macOS profile and the file can then be created,
-  while on Linux a grant is a right on an open descriptor, so such a path cannot be named in one at
-  all and the policy is refused ([SANDBOX-6](#SANDBOX-6)). A scope naming `~/.ssh/known_hosts` on a
-  fresh account is therefore a `run` that does not start rather than a push that fails for no stated
-  reason, and what the compiler owes the profile is to create the file, name the directory holding
-  it, or leave the scope out, and which of those is necessary is what the backend reports about
-  naming a path that does not exist rather than the platform the build targets. The program lists
-  name more such paths than the base or any scope does, since a machine carries the toolchain one
-  list names and none of the rest, so leaving an absent row out is what the compiler owes a list as
-  well: a machine with no `~/.pyenv` is not a machine where every `run` is refused.
+- A profile has to say, for a path it means a program to create, whether that path is a file or a
+  directory. A wanted path that is not on disk is left out of the policy on the backend that cannot
+  name one ([SANDBOX-9](#SANDBOX-9)), which is the whole answer for a row that is only read, since
+  there is nothing at such a path to read either way, and which is why a machine with no `~/.pyenv`
+  is not a machine where every `run` is refused. What it costs is a row a program is meant to write into
+  and would have created for itself: a toolchain cache directory on a machine that has not run that
+  toolchain, and `~/.ssh/known_hosts` on a fresh account, each of which becomes a push or a build
+  that fails rather than a `run` that does not start. Keeping those means creating the path before
+  the policy is built, which a profile cannot ask for while a row says only a path, and naming the
+  directory holding it instead is not open to `known_hosts`, whose directory holds the key no scope
+  reaches.
 - Windows has published binaries and no backend, and [SANDBOX-1](#SANDBOX-1) refuses to run a
   process it cannot confine, so confinement there refuses every program until that platform has one
   (issue #88). Running unconfined where no backend exists is the degradation that clause forbids.
