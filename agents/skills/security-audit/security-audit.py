@@ -14,9 +14,10 @@ findings are already decided and a reader should see them before any lane runs.
 The mechanical half checks what a tool can check and the specs do not yet: that the two documents
 naming the admitted exceptions agree on how many there are, that nothing has been implemented on
 `Labelled` that would let a caller read a label's content without asking, that the constructor which
-is how a value gets a better label than its inputs had is pinned somewhere, and that every workflow
-step names a commit rather than a tag its owner can move. A rule that can be written as one of these
-belongs here rather than in a reviewer's head.
+is how a value gets a better label than its inputs had is pinned somewhere, that every workflow step
+names a commit rather than a tag its owner can move, and that no job holding a credential installs or
+runs a dependency beside it. A rule that can be written as one of these belongs here rather than in a
+reviewer's head.
 """
 
 import argparse
@@ -118,6 +119,36 @@ NOT_A_KEY = "reads_a_step_without_keying"
 WORKFLOWS = Path(".github/workflows")
 USES = re.compile(r"^\s*(?:-\s*)?uses:\s*([^\s#]+)")
 PINNED = re.compile(r"^[\w.-]+/[\w.:/-]+@[0-9a-f]{40}$")
+
+# The structure of a workflow, to the depth these checks read: the jobs, what each one is granted,
+# and the text of every `run` in it.
+JOBS = re.compile(r"^jobs:\s*$")
+JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
+PERMISSIONS = re.compile(r"^\s*permissions:\s*(.*)$")
+RUN = re.compile(r"^\s*(?:-\s+)?run:\s*(.*)$")
+BLOCK = ("", "|", "|-", "|+", ">", ">-", ">+")
+
+# What a job can hold that is worth stealing, and the commands that run bytes nobody here wrote. The
+# grant is a permission to request a token rather than a token, which is the whole of the difference:
+# the runner hands every step in the job the two variables that turn it into one.
+#
+# Every spelling of the grant, because the check is worth no more than the narrowest one it reads:
+# a block, an inline map, a quoted value, and `write-all`, which grants this along with the rest.
+GRANT = re.compile(r"""id-token\s*:\s*["']?write\b|\bwrite-all\b""")
+SECRET = re.compile(r"\bsecrets\.[A-Za-z_]")
+DEPENDENCY = (
+    (
+        re.compile(r"(?:^|[\s;&|(])(?:npm|pnpm|yarn)\s+(?:ci|install|i|add)\b"),
+        "installs a dependency",
+    ),
+    (
+        re.compile(
+            r"(?:^|[\s;&|(])(?:(?:npm|pnpm|yarn)\s+(?:run|exec|test|start|dlx)\b|npx\b"
+            r"|\.?/?node_modules/\.bin/)"
+        ),
+        "runs a dependency",
+    ),
+)
 
 LANES = (
     "laundering",
@@ -570,6 +601,194 @@ def check_pinned_actions():
             )
 
 
+def indented(raw):
+    return len(raw) - len(raw.lstrip(" "))
+
+
+def nested(lines, start, base=None):
+    """The lines under a key, by indentation. A blank line does not end a block; a shallower key does.
+
+    `base` is the column the key itself is at, and is worth passing where the key is the first in a
+    sequence entry: the `-` sits left of the key, so the dash column would take the entry's other
+    keys for the key's own content.
+
+    A comment line is not content. Inside a `run` block it is a line the shell ignores, and above a
+    key it is prose, so neither is a command or a permission however it reads.
+    """
+    base = indented(lines[start]) if base is None else base
+    found = []
+    for raw in lines[start + 1 :]:
+        if not raw.strip():
+            continue
+        if indented(raw) <= base:
+            break
+        if raw.lstrip().startswith("#"):
+            continue
+        found.append(raw)
+    return found
+
+
+def workflow_jobs(lines):
+    """Every job in a workflow, with what it is granted and the text of every `run` in it.
+
+    Indentation rather than a YAML parser, because the rest of the mechanical half is standard
+    library Python over the checkout and this reads two keys deep. `permissions` at job scope
+    replaces the workflow's rather than adding to it, which is what GitHub does with it, so a job
+    without its own block is given the workflow's.
+
+    A secret is attributed to the job whose text names it and to every job where the name is above
+    `jobs:`, since a workflow-level `env` is in the environment of all of them.
+
+    Jobs are read at one column, which is every job or none rather than some of them: sibling keys in
+    YAML share a column, so a job written at another one is a key inside the job above it, which
+    GitHub refuses to run at all. A file whose jobs are all at a column this does not read is the
+    `workflow-unreadable` error below.
+    """
+    start = next((number for number, raw in enumerate(lines) if JOBS.match(raw)), len(lines))
+    everywhere = any(
+        SECRET.search(raw) for raw in lines[:start] if not raw.lstrip().startswith("#")
+    )
+
+    grants = []
+    jobs = []
+    current = None
+    in_jobs = False
+    for number, raw in enumerate(lines):
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        column = indented(raw)
+        if column == 0:
+            in_jobs = bool(JOBS.match(raw))
+            current = None
+            found = PERMISSIONS.match(raw)
+            if found:
+                grants = [found.group(1)] + nested(lines, number)
+            continue
+        found = JOB.match(raw) if in_jobs and column == 2 else None
+        if found:
+            current = {
+                "name": found.group(1),
+                "line": number + 1,
+                "grants": None,
+                "secret": everywhere,
+                "steps": [],
+            }
+            jobs.append(current)
+            continue
+        if current is None:
+            continue
+        if SECRET.search(raw):
+            current["secret"] = True
+        found = PERMISSIONS.match(raw) if column == 4 else None
+        if found:
+            current["grants"] = [found.group(1)] + nested(lines, number)
+        found = RUN.match(raw)
+        if found:
+            inline = found.group(1).strip()
+            current["steps"].append(
+                {
+                    "line": number + 1,
+                    "body": nested(lines, number, base=raw.index("run:"))
+                    if inline in BLOCK
+                    else [inline],
+                }
+            )
+    for job in jobs:
+        if job["grants"] is None:
+            job["grants"] = grants
+    return jobs
+
+
+def dependency_commands(body):
+    """The commands in a `run` that install something from the lockfile or execute what it installed.
+
+    `npm publish` is neither: it uploads the files `package.json` lists and needs nothing installed.
+    A line the shell treats as a comment is not a command, so a `run` that mentions one in passing is
+    not a use of it.
+    """
+    found = []
+    for raw in body:
+        line = raw.strip()
+        if line.startswith("#"):
+            continue
+        for pattern, verb in DEPENDENCY:
+            if pattern.search(line):
+                found.append((verb, line[:120]))
+                break
+    return found
+
+
+def check_privileged_job_runs_only_its_own_code():
+    """A job that can mint a credential installs and runs nothing from `node_modules`.
+
+    A grant or a secret is readable by every step of the job holding it, so a job is the smallest
+    boundary either has. A step that installs from `package-lock.json` and then runs what it
+    installed executes bytes nobody here wrote, deliberately: that is what a lint is. In a job
+    holding `id-token: write` those bytes can exchange the runner's OIDC token for a publishing
+    credential at the registry and ship a tarball with this repository's provenance on it, and the
+    same two commands in a job holding `contents: read` reach a green check and nothing else. So the
+    finding is the pairing rather than either half.
+
+    What it reads is the npm tree, which is the third-party code a workflow here installs and runs by
+    name. A job that compiled the tree would run a crate's build script in the same environment and
+    this says nothing about that, which is a widening of this check rather than a second one.
+    """
+    if not WORKFLOWS.is_dir():
+        return
+    for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
+        lines = path.read_text(encoding="utf-8").split("\n")
+        jobs = workflow_jobs(lines)
+        if not jobs:
+            if any(JOBS.match(raw) for raw in lines):
+                yield finding(
+                    ERROR,
+                    "workflow-unreadable",
+                    f"{path.name} declares jobs this check cannot read, so it is passing in silence",
+                    f"`{path}` has a `jobs:` key and no job this check could read under it, so it "
+                    "cannot tell what any of them is granted and reports nothing whatever they run",
+                    "infrastructure",
+                    "medium",
+                    fix="write the jobs at the two space indentation every workflow here uses, or "
+                    "widen `JOB` in this file to match where they moved to",
+                    gain="nothing directly. It removes the check that would report the next "
+                    "credential handed to a job that runs somebody else's code",
+                )
+            continue
+        for job in jobs:
+            granted = any(GRANT.search(raw) for raw in job["grants"])
+            if not granted and not job["secret"]:
+                continue
+            reached = [
+                f"{path}:{step['line']} {verb}: {command}"
+                for step in job["steps"]
+                for verb, command in dependency_commands(step["body"])
+            ]
+            if not reached:
+                continue
+            holds = "id-token: write" if granted else "a secret"
+            yield finding(
+                ERROR,
+                "privileged-job-runs-dependencies",
+                f"{path.name} runs a dependency in {job['name']}, the job that holds {holds}, so "
+                "whoever owns that dependency can use it",
+                f"`{job['name']}` in `{path}` holds {holds} and runs "
+                f"{len(reached)} command"
+                + ("" if len(reached) == 1 else "s")
+                + " that install or execute something from `node_modules`, which every step in that "
+                "job can read the credential from",
+                "infrastructure",
+                "medium",
+                evidence=[f"{path}:{job['line']} job `{job['name']}` holds {holds}"] + reached,
+                fix="move the install and everything it runs into a job of their own holding only "
+                "`contents: read`, and give this job a `needs:` on that one. Where the grant is "
+                "declared for the whole workflow, declare it on this job instead: a job is the "
+                "smallest boundary it has",
+                gain="whoever owns one of the installed packages runs code beside the credential "
+                "this job exists to mint, and what they publish with it carries this repository's "
+                "provenance",
+            )
+
+
 def check_guarantee_specs_exist():
     """A named guarantee spec that no file answers to.
 
@@ -810,6 +1029,7 @@ def main():
     findings += list(check_construction_pinned(specs, sources))
     findings += list(check_key_sites_exhaustive(specs, sources))
     findings += list(check_pinned_actions())
+    findings += list(check_privileged_job_runs_only_its_own_code())
     findings += list(check_guarantee_specs_exist())
     findings += list(check_unpinned_guarantee_clauses(specs))
 
