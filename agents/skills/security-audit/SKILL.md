@@ -272,6 +272,9 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 |---|---|---|
 | Two documents disagree about how many exceptions are admitted | mechanical | error |
 | A document admits exceptions without counting them | mechanical | warning |
+| The register and the clause disagree on how many prompts a verdict may answer | mechanical | error |
+| Only one of the two counts the prompts a verdict may answer | mechanical | warning |
+| A field documented as read in one place that is read in two | mechanical | error |
 | A trait `impl` on `Labelled` that reaches its content | mechanical | error |
 | A constructor of `Labelled` that no spec pins to a count | mechanical | error |
 | A workflow step on a tag or a branch rather than a commit | mechanical | error |

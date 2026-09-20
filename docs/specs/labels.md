@@ -428,6 +428,7 @@ what catches it.
     [issue #23](https://github.com/brave/bravebot/issues/23).
 
   What is **not** on the list: choosing which slot is checked, choosing any destination, lowering
-  confidentiality, writing a trust rule, or answering either of the other two prompts a check runs
-  for. While auto-vetting is off, reaching the planner at all is not on it either, and a verdict is
-  advice about bytes already on a person's screen.
+  confidentiality, writing a trust rule, or answering the one other prompt a check runs for, which
+  is the vouch offer and is the one that writes such a rule
+  ([CHECK-12](vetting.md#CHECK-12)). While auto-vetting is off, reaching the planner at all is not
+  on it either, and a verdict is advice about bytes already on a person's screen.

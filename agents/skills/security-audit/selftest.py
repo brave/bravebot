@@ -132,6 +132,182 @@ def test_exception_counts():
     )
 
 
+# CHECK-12's table and the sentence in the Known cost that counts what it leaves out of reach. Two
+# of the three prompts are answered here, as in the tree, so a register naming more than one out of
+# reach is the drift being caught.
+CLAUSE_TWO_OF_THREE = """<a id="CHECK-12"></a>
+### CHECK-12: with it on, a safe verdict promotes one slot
+
+| The prompt | What a yes does | With the mode on |
+|---|---|---|
+| vet-content | promotes one slot's bytes once | a safe verdict answers |
+| read-output | promotes one slot's bytes once | a safe verdict answers |
+| the vouch offer | writes a rule about the path | still asks |
+
+<a id="CHECK-13"></a>
+"""
+COST_ONE_OUT_OF_REACH = "or answering the one other prompt a check runs for, the vouch offer.\n"
+COST_TWO_OUT_OF_REACH = "or answering either of the other two prompts a check runs for.\n"
+
+
+def test_prompt_split():
+    undercounting = in_tree(
+        {
+            "docs/specs/vetting.md": CLAUSE_TWO_OF_THREE,
+            "docs/specs/labels.md": COST_TWO_OUT_OF_REACH,
+        }
+    )
+    found = with_cwd(undercounting, lambda: list(audit.check_prompt_split()))
+    check(
+        "a register putting more prompts out of reach than the clause does is an error",
+        kinds(found) == ["prompt-split-disagreement"] and found[0]["severity"] == audit.ERROR,
+        str(kinds(found)),
+    )
+
+    agreeing = in_tree(
+        {
+            "docs/specs/vetting.md": CLAUSE_TWO_OF_THREE,
+            "docs/specs/labels.md": COST_ONE_OUT_OF_REACH,
+        }
+    )
+    found = with_cwd(agreeing, lambda: list(audit.check_prompt_split()))
+    check("a register stating the clause's split is clean", found == [], str(kinds(found)))
+
+    # The same sentence the clean tree above passes on, against a clause that answers one prompt
+    # rather than two, so two are out of reach and the register names one. The count comes from the
+    # table or it comes from nowhere, and a check reading a constant instead would call this clean.
+    narrowed = in_tree(
+        {
+            "docs/specs/vetting.md": CLAUSE_TWO_OF_THREE.replace(
+                "| read-output | promotes one slot's bytes once | a safe verdict answers |",
+                "| read-output | promotes one slot's bytes once | still asks |",
+            ),
+            "docs/specs/labels.md": COST_ONE_OUT_OF_REACH,
+        }
+    )
+    found = with_cwd(narrowed, lambda: list(audit.check_prompt_split()))
+    check(
+        "the split is read from the clause's table rather than assumed",
+        kinds(found) == ["prompt-split-disagreement"],
+        str(kinds(found)),
+    )
+
+    # A table saying which prompts the mode reaches in some other words is a table this cannot
+    # read, and reporting that as a disagreement sends the reader to edit the register, which is
+    # the document still telling the truth.
+    reworded = in_tree(
+        {
+            "docs/specs/vetting.md": CLAUSE_TWO_OF_THREE.replace(
+                "a safe verdict answers", "the check answers in the person's place"
+            ),
+            "docs/specs/labels.md": COST_ONE_OUT_OF_REACH,
+        }
+    )
+    found = with_cwd(reworded, lambda: list(audit.check_prompt_split()))
+    check(
+        "a table this cannot read is a warning against the clause, not a disagreement",
+        kinds(found) == ["prompt-split-unstated"] and found[0]["severity"] == audit.WARNING,
+        str(kinds(found)),
+    )
+
+    uncounted = in_tree(
+        {
+            "docs/specs/vetting.md": CLAUSE_TWO_OF_THREE,
+            "docs/specs/labels.md": "The cost is that the bytes reach the planner.\n",
+        }
+    )
+    found = with_cwd(uncounted, lambda: list(audit.check_prompt_split()))
+    check(
+        "a register counting nothing is a warning, not an error",
+        kinds(found) == ["prompt-split-unstated"] and found[0]["severity"] == audit.WARNING,
+        str(kinds(found)),
+    )
+
+
+# A field claiming to name every function that reads it, and the two functions in the file that do.
+# The declaration is what the claim is attached to, so the fixture carries the doc as written.
+def reader_doc(claim, between="", visibility="pub"):
+    return {
+        Path("crates/agent/src/tools.rs"): [
+            "pub struct Tools<'a> {",
+            f"    /// {claim}",
+            *([f"    {between}"] if between else []),
+            f"    {visibility} auto_vetting: bool,",
+            "}",
+            "",
+            "fn vet_content(tools: &mut Tools<'_>) -> bool {",
+            "    tools.auto_vetting",
+            "}",
+            "",
+            "fn read_output(tools: &mut Tools<'_>) -> bool {",
+            "    tools.auto_vetting",
+            "}",
+        ]
+    }
+
+
+def test_exhaustive_reader_docs():
+    stale = reader_doc("Read by `vet_content` and by nothing else.")
+    found = list(audit.check_exhaustive_reader_docs(stale))
+    check(
+        "a doc naming one reader of a field two functions read is an error",
+        kinds(found) == ["reader-doc-incomplete"] and found[0]["severity"] == audit.ERROR,
+        str(kinds(found)),
+    )
+    check(
+        "the finding names the reader the doc left out",
+        found and "`read_output`" in found[0]["summary"] and "`vet_content`" in found[0]["summary"],
+        found[0]["summary"] if found else "",
+    )
+
+    current = reader_doc("Read by `vet_content` and by `read_output` and by nothing else.")
+    found = list(audit.check_exhaustive_reader_docs(current))
+    check("a doc naming both readers is clean", found == [], str(kinds(found)))
+
+    # No claim, no check: a field doc that says nothing about who reads it is not asserting this.
+    quiet = reader_doc("Whether a check that finds nothing may promote a slot.")
+    found = list(audit.check_exhaustive_reader_docs(quiet))
+    check(
+        "a doc claiming nothing about its readers is not held to this",
+        found == [],
+        str(kinds(found)),
+    )
+
+    # A name backticked outside the claiming sentence is prose, not a reader the doc accounted for.
+    elsewhere = reader_doc(
+        "Read by `vet_content` and by nothing else. Not to be confused with `read_output`."
+    )
+    found = list(audit.check_exhaustive_reader_docs(elsewhere))
+    check(
+        "a reader named outside the claim does not count as named",
+        kinds(found) == ["reader-doc-incomplete"],
+        str(kinds(found)),
+    )
+
+    # An attribute sits between a field's doc and the field, and is not the end of the doc. A walk
+    # back that stops at one reads no claim, and a claim nothing reads is a claim nothing holds.
+    attributed = reader_doc(
+        "Read by `vet_content` and by nothing else.", between="#[serde(default)]"
+    )
+    found = list(audit.check_exhaustive_reader_docs(attributed))
+    check(
+        "an attribute between the doc and the field does not hide the claim",
+        kinds(found) == ["reader-doc-incomplete"],
+        str(kinds(found)),
+    )
+
+    # Narrowing a field's visibility narrows who can read it, not what its doc claims.
+    narrowed = reader_doc(
+        "Read by `vet_content` and by nothing else.", visibility="pub(crate)"
+    )
+    found = list(audit.check_exhaustive_reader_docs(narrowed))
+    check(
+        "a pub(crate) field is held to its claim as a pub one is",
+        kinds(found) == ["reader-doc-incomplete"],
+        str(kinds(found)),
+    )
+
+
 def test_labelled_impls():
     reaching = {
         Path("crates/core/src/value.rs"): [
@@ -1196,6 +1372,8 @@ def test_a_run_writes_a_manifest_and_posts_nothing():
 def main():
     for test in (
         test_exception_counts,
+        test_prompt_split,
+        test_exhaustive_reader_docs,
         test_labelled_impls,
         test_pinned_actions,
         test_privileged_job_runs_only_its_own_code,
