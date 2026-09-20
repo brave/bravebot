@@ -170,12 +170,17 @@ others, and never post one whose clause already has an open issue:
 
 ```bash
 gh issue list --repo OWNER/REPO --state open --search "CLAUSE-N in:title"
-gh issue create --repo OWNER/REPO --title "TITLE" --label LABEL --body-file BODY_FILE
+gh issue create --repo OWNER/REPO --title "TITLE" --label FIRST --label SECOND --body-file BODY_FILE
 ```
 
-The label is the kind label from the draft, and the only one to apply. `importance`, `urgency`
-and `size` are the [triage-issues skill](../triage-issues/SKILL.md)'s to judge, and guessing at
-them here would put a finding nobody has read into somebody's queue.
+Apply every label the draft names and none it does not. A divergence carries two, because which
+clause it breaks and what it is in the code that ships today are different questions: `spec-mismatch`
+with `bug` where the code attempts the behaviour and gets it wrong, and `spec-mismatch` with
+`enhancement` where nothing attempts it, since a clause nobody built breaks nothing. A clause
+nothing pins carries `spec-coverage` alone: the behaviour is right, so it is neither.
+
+`importance`, `urgency` and `size` are the [triage-issues skill](../triage-issues/SKILL.md)'s to
+judge, and guessing at them here would put a finding nobody has read into somebody's queue.
 
 `gh` is deliberately not in this skill's `allowed-tools`, so every one of those calls asks
 first. That is the gate, not a nuisance to work around.
