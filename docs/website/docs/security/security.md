@@ -43,14 +43,16 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
 - **What lands in a trusted directory afterwards.** A rule is about a path, not about the files that
   were in it. See [Trusted directories](trust.md#known-costs).
 - **A program the agent was allowed to run.** Programs are not confined: they run with the access your
-  own shell would give them, because `git push` needs `~/.ssh`.
+  own shell would give them, because `git push` needs `~/.ssh`. Their own network requests do not go
+  through the one way out described below, so an approved `curl`, `git push` or package install can
+  read a private file and send it with nothing here routing or inspecting the traffic.
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
 
-## Two deliberate exceptions
+## Three deliberate exceptions
 
-The policy layer looks at untrusted bytes in exactly two places, both written down rather than left to
-be found.
+The policy layer looks at untrusted bytes in exactly three places, all written down rather than left
+to be found.
 
 **Splitting a processor's answer.** A processor returns one piece of text holding two things: a remark
 for the person watching, and the document to be written. It marks where the document begins, and the
@@ -65,6 +67,15 @@ a diff.
 **A trailing newline.** Before a file is written back, the code checks whether the file being replaced
 ended in a newline, so the new one can end the same way.
 
+**Reading a verdict out of a check.** A second model can be shown quarantined content and asked to
+answer in one word whether it looks like an attempt to give instructions. Reading that word is a
+decision taken from a reply that is a function of untrusted content, so the word is untrusted too.
+That check is off until you turn it on, and while it is off the only thing its answer decides is
+which banner the approval prompt carries: the bytes are drawn below it either way, the keys that
+answer the question are offered either way, and nothing is promoted until you say so. An attacker who
+owns the content can force the reassuring word, and what that buys them is a quieter sentence above
+content you are still reading for yourself.
+
 ## What leaves the process
 
 There is **one way out**, and it is not optional: every outbound request carrying labelled content
@@ -73,6 +84,11 @@ second path.
 
 - **Redirects are revalidated on every hop.** They are followed by hand and each new URL is put to the
   gate before it is fetched, so a permitted host cannot hand off to a denied one. The chain is bounded.
+- **A redirect may not leave `https` for cleartext.** A hop from an `https` URL to a plain `http` one
+  is refused, whatever asked for the request. Every hop re-sends the whole request, headers and body
+  alike, so a chain that lost TLS would put in the clear what the hop before it carried under TLS. A
+  chain that had no TLS to begin with continues, and one that picks TLS up part way through cannot put
+  it down again: what is refused is leaving `https`, not a hop that changes scheme.
 - **Only `http` and `https` ever reach the network.** Any other scheme is refused before a connection
   is attempted, rather than handed to a library to interpret.
 - **A body is capped, and a truncated one says so.** A body that stops partway is a failure rather than
@@ -84,22 +100,85 @@ second path.
 
 One crate opens a socket of its own: the subscription client, for [Leo
 Premium](../customize/premium.md). That traffic carries credentials and an order id, never workspace
-content or model output, so no labelled value escapes the gate.
+content or model output, so no labelled value escapes the gate. It follows its own redirects through
+its library's default rather than through the loop above, so the refusals in that list, the cleartext
+one included, do not reach it.
+
+## Certificates and proxies
+
+Both are read from the environment on purpose and set on every client explicitly, rather than left to
+a library's default, so what is in force is a decision here and not a property of a dependency's
+version. `bravebot doctor` reports both, which is where to look first when a connection fails.
+
+**Certificate authorities.** A build ships a set of them, and `SSL_CERT_FILE` (a bundle) or
+`SSL_CERT_DIR` (a directory of them) names others **in their place**. What they name replaces the
+shipped set rather than adding to it, because that is what every other client on the machine does with
+these variables: somebody pinning a private authority has ruled the public ones out on purpose. The
+two are read independently, so setting one that turns out to be empty does not discard what the other
+held. Where neither holds anything, nothing is trusted rather than the shipped set quietly coming
+back, and `doctor` names the path that yielded nothing.
+
+This is what to set on a network that inspects TLS, where the certificate presented comes from an
+authority whoever set the machine up installed. The **platform trust store is not read**: on a machine
+where neither variable is set, an authority installed into the system store is invisible here, and a
+line in a shell profile is the remedy.
+
+**A proxy.** `ALL_PROXY`, `HTTPS_PROXY` and `HTTP_PROXY` are read in that order and in either case,
+with `NO_PROXY` naming the hosts that bypass it. `doctor` names the proxy by protocol, host and port,
+the hosts it is not used for, and whether it requires a credential; the credential itself is never
+printed, because a diagnostic is something people paste into issues. A proxy whose protocol this build
+cannot connect through is not used at all, and `doctor` says that one was named and is not the route.
+
+A proxy carries request bodies, which here means conversation content. It can read them only where it
+also terminates TLS, which takes an authority this process trusts and therefore one of the two
+variables above: a second statement by the same person, on the same machine, that every other client
+on it is held to as well. A proxy nobody stated sees nothing, and one somebody stated sees what they
+already let it see.
 
 ## Confinement
 
-`bravebot doctor` reports the operating-system confinement available on your platform and the
-mechanisms behind it, printed rather than assumed, because the guarantee differs by platform and
-kernel.
+`bravebot doctor` reports the operating-system confinement available on your platform, the level in
+force and whether the kernel enforces the network denial, printed rather than assumed, because the
+guarantee differs by platform and kernel.
 
 Where confinement is used, it **fails closed**: if it cannot be established the process does not run,
 rather than running unconfined. A profile starts denying everything and grants accumulate onto it, and
 a policy that would confine nothing is rejected rather than applied. The network is denied unless it
-was asked for.
+was asked for. A backend reports what the kernel actually enforces rather than what it was asked for,
+and a policy demanding something it cannot deliver is refused.
+
+**A policy is granted as written, or it is refused.** A backend that cannot install a grant for one of
+the paths refuses the whole policy and names that path, rather than confining the process to the rest
+of them. Running under fewer paths than the policy names while the record says the policy was applied
+is the same silent degradation, reached one grant at a time.
+
+**A write grant covers moving a file inside it.** Writing a temporary file and renaming it into place
+is how a compiler, a package manager and an editor write anything, so a grant to write a path covers
+moving a file from anywhere under it to anywhere else under it. On Linux this needs a kernel right that
+arrived in Landlock's second version, so on kernels between 5.13 and 5.19, which a long-term
+distribution release still ships, confinement is unavailable and a process is refused rather than run
+under a policy that cannot be applied in full. A confinement that denied the move would leave a tool
+that renames files for a living copying and unlinking instead, so the work appears to succeed and has
+quietly stopped being atomic.
+
+**A path that is not on disk is left out, and named.** Profiles are assembled from lists naming more
+paths than any one machine has, so refusing every policy that mentions an absent path would mean a
+machine with no `~/.pyenv` is a machine where nothing runs. Where the platform can grant a path that
+does not exist, the policy is what was wanted. Where it cannot, an absent path is left out before the
+policy is built and reported back, so the difference between the grant that was decided on and the
+grant a program got stays visible. Nothing is invented in its place: naming the parent directory would
+grant every other file in it, and creating the file would write where nothing asked for a write.
+
+**The environment is the caller's.** A confined process starts with the environment this process
+holds. A grant over paths can neither withhold nor hand over what sits in a variable, and a credential
+or an agent socket does, so which of its own variables a program is trusted with stays the caller's
+decision rather than something that differs per platform.
 
 Confinement does not cover the rest of the system. A processor is a model call made by our own code,
 and a program you asked for runs with the access your own shell would give it. Everywhere else, the
-boundary is the capability set and the label on a value.
+boundary is the capability set and the label on a value. Windows has published binaries and no
+confinement backend yet, and failing closed means refusing rather than running unconfined, so anything
+that has to be confined is refused there until that platform has one.
 
 ## Data collection, usage, and retention
 
@@ -119,10 +198,12 @@ username on its own, no file contents, no directory listing. See
 :::
 
 Local state is stored in `~/.bravebot` on your own machine: session records, prompt history and the
-model you chose. Session records hold what the planner was allowed to hold. **Nothing untrusted is
-ever written down**, by construction rather than by filtering, and quarantined content is not written
-at all. A pasted picture is written, because it was part of your own message. Deleting the session
-removes it.
+model you chose. Session records hold what the planner was allowed to hold, which means whatever file
+content it was shown. **Nothing untrusted is ever written down**, by construction rather than by
+filtering, and quarantined content is not written at all. A pasted picture is written, because it was
+part of your own message. Deleting a session record removes that session; the prompt history is a
+separate file holding every prompt you have submitted across all runs, and deleting a session does not
+touch it.
 
 Leo Premium credentials live in a mode-0600 file under `~/.bravebot`, readable only by you. They are
 not encrypted at rest, which is what the browser they are imported from does with the same secret.
@@ -131,6 +212,6 @@ See [Leo Premium](../customize/premium.md#where-they-are-kept).
 ## Reporting a problem
 
 Brave Bot is experimental and developed in the open. Please report security issues through the
-[repository](https://github.com/brave-experiments/bravebot/issues), and see the
-[mini-specs](https://github.com/brave-experiments/bravebot/tree/main/docs/specs) for the clause-level
+[repository](https://github.com/brave/bravebot/issues), and see the
+[mini-specs](https://github.com/brave/bravebot/tree/main/docs/specs) for the clause-level
 statement of everything on this page.

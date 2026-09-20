@@ -6,30 +6,39 @@ description: Every tool the model may call, what it takes, and what it is allowe
 
 # Tools
 
-There are fifteen tools, and no way to add another from a configuration file. Each one splits its
+There are eighteen tools, and no way to add another from a configuration file. Each one splits its
 arguments into **routing**, the part that decides where the effect lands, and **content**, the part
 that is merely carried.
 
 | Tool | Routing | Content | Asks you? |
 |---|---|---|---|
-| [`read_file`](#read_file) | `path`, `path_ref` | none | only to trust a quarantined file |
+| [`read_file`](#read_file) | `path`, `path_ref`, `offset`, `limit` | none | only to trust a quarantined file |
 | [`list_files`](#list_files) | `directory`, `pattern`, `depth` | none | no |
-| [`search`](#search) | `pattern`, `directory`, `include` | none | no |
-| [`lsp`](#lsp) | `operation`, `path`, `line`, `character` | none | **yes, to start a language server** |
-| [`write_file`](#write_file) | `path`, `path_ref` | `contents`, `contents_ref` | **yes, every time** |
-| [`edit_file`](#edit_file) | `path`, `path_ref` | `old_text`, `new_text` | **yes, every time** |
-| [`run`](#run) | `command`, compiled to a plan | stdin | **yes, unless vouched for or proven** |
+| [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive` | none | no |
+| [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
+| [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
+| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | **yes, every time** |
+| [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref` | none | **yes** |
-| [`job_output`](#job_output) | `job`, `kill` | none | no |
+| [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
+| [`job_output`](#job_output) | `job`, `kill`, `wait_seconds` | none | no |
 | [`fetch_url`](#fetch_url) | `url` | none | **yes, unless a rule names the host** |
-| [`spawn_processor`](#spawn_processor) | `about` | `reads`, `instruction` | no |
+| [`spawn_processor`](#spawn_processor) | `reads`, `about` | `instruction` | no |
 | [`spawn_agent`](#spawn_agent) | `kind` | `task`, `each` | not the call, but its writes and runs do |
 | [`load_skill`](#load_skill) | `name` | none | no |
 | [`ask_user`](#ask_user) | the questions | none | it *is* the question |
 | [`todo_write`](#todo_write) | none | `todos` | no |
 
-A sixteenth, [`schedule_next`](#schedule_next), is offered to a turn inside a self-paced
+Two more are offered only where they mean something.
+[`schedule_next`](#schedule_next) goes to a turn inside a self-paced
 [`/loop`](commands.md#loop-interval-prompt) and to no other turn.
+[`watch_file`](#watch_file) goes to a session that keeps watches, so not to a delegate, a one-shot
+run or a planned run.
+
+A number or a flag that shapes a call is routing too, not content: nothing carries it anywhere, so it
+sits on the same footing as the fields beside it. A routing argument naming a **reference** rather
+than a path is bound to the context the planner named it in, so a turn whose context has met
+untrusted content can name no reference at all.
 
 An unknown tool is reported to the planner rather than ignored.
 
@@ -72,6 +81,22 @@ a picture, since a yes there would grant nothing. An empty file, or one that tur
 is asked about like any other. See
 [the quarantined-read prompt](../security/trust.md#the-quarantined-read-prompt).
 
+### Every read carries a change token
+
+A read the planner may see comes back with a short opaque token. The same token on a later read means
+nobody wrote the file in between; a different one means somebody did. It covers the whole file rather
+than the window returned, so asking for less of a file is not mistaken for the file changing, and there
+is no hour to be read out of it.
+
+**It says the file was written, not what changed.** A rewrite restoring the same bytes moves the
+token, and a filesystem that leaves the modification time alone moves nothing. What it answers is
+whether the file looks written to since the last look.
+
+This is how "tell me when this changes" is answered where no watch can be armed: the file is read now,
+and the turn schedules the look that would catch a change. In a session that keeps watches,
+[`watch_file`](#watch_file) is the better answer and this tool says so. For a file the planner may not
+be shown there is no token, and the size in the reference is what there is to compare.
+
 ## `list_files`
 
 Lists files under a directory.
@@ -105,6 +130,7 @@ Finds lines matching a **regular expression** in workspace files.
 | `pattern` | a regular expression. May be a list, in which case a line matches if it matches any of them |
 | `directory` | workspace-relative, defaults to `.` |
 | `include` | optional glob limiting which files are searched: `*`, `?`, `**` and brace groups like `**/*.{cc,h,mm}` |
+| `offset` | which match to resume from, to read past the match cap ([below](#a-capped-search-can-be-asked-past-its-cap)) |
 | `case_sensitive` | defaults to true |
 
 Supported: literals, `.`, `*`, `+`, `?`, `|`, `(...)`, `[...]` with ranges and negation, `\d`, `\w`,
@@ -136,6 +162,33 @@ the planner it is incomplete. A search that found nothing says which kind of not
 matching lines in the files it read, or an `include` that selected no files at all. Those are
 opposite facts, and drawn identically the planner reads one as the other. A glob leaning on syntax the
 matcher does not have is named for the same reason.
+
+There are three ways to come back partial, and all three say so: stopping at the match cap, stopping
+before every file was opened, and running out of time. The last two are the dangerous ones, because
+with nothing found there is nothing that looks incomplete. Which files a capped search kept does not
+depend on the order the filesystem handed them over: each directory is sorted and its own files are
+taken before descending, so a partial answer is the shallow part of the tree and is the same answer
+on every machine.
+
+### A capped search can be asked past its cap
+
+A search stopped by the **match** cap reports the offset of the first match it left behind, and asking
+again with that `offset` returns the matches from there. An offset past the last match returns nothing
+and says how many matches there were.
+
+Only the match cap can be asked past. A walk that stopped short of the tree or ran out of time is not
+a page to be continued: narrow the pattern or point at a subdirectory instead.
+
+### The caps are configurable
+
+`search.maxFiles` and `search.maxSeconds` set how many files a search may walk and how long it may
+spend opening them. Either can be raised as well as lowered, and the two are independent. The built-in
+caps are past what an ordinary repository holds; a monorepo, a tree of generated sources, or a
+checkout on a network filesystem is where they are not, and there every search comes back partial.
+See [Configuration](../customize/configuration.md).
+
+Raising a cap does not unbound a search. The walk still stops at `search.maxFiles`, the reading still
+stops at `search.maxSeconds`, and the match cap holds regardless of both.
 
 ## `lsp`
 
@@ -196,6 +249,11 @@ your tree, read as a name.
 
 A server is started by the first question that needs it, so a session that asks nothing about a
 language starts nothing.
+
+**You are asked once per language per session, not once per call.** The server that first question
+starts is kept for the session and answers every later question, and your approval is kept with it.
+It is shut down when the session ends, and killed if it does not go quietly. Indexing is the whole
+cost of a server, so paying it per request would make each call slower than the search it replaces.
 
 ### A location is structure; the text at it is content
 
@@ -297,6 +355,7 @@ Runs a command line. **You approve the compiled plan before anything runs.**
 | Parameter | |
 |---|---|
 | `command` | one command line; a newline is refused, since this is a line and not a script |
+| `directory` | where to run, inside the workspace or a directory you added ([below](#the-directory-carries-over-and-nothing-else-does)) |
 | `deadline_seconds` | how long to wait, defaulting to 300 ([below](#a-line-has-a-deadline)) |
 | `background` | start the line and hand back a job name instead of waiting ([below](#leaving-a-pipeline-running)) |
 
@@ -311,6 +370,22 @@ literal argument vector, together with every file the line would write. That pla
 
 A name is looked up on `PATH`; a path is taken relative to the workspace.
 
+### The directory carries over, and nothing else does
+
+A call may name a `directory` to run in, inside the workspace or inside a directory you added. Without
+one, a line runs where the last one ran, and the first line of a turn runs at the workspace root. The
+carrying lasts the turn: the next turn starts at the root again.
+
+**Shell state does not carry.** `NAME=value` on one line has no effect on the next, because there is
+no shell process between calls to hold it. A line that needs a variable set puts it on that line. A
+directory is a routing field, shown at every prompt and endorsed with the plan, so carrying it is
+visible; an environment that accumulated invisibly would change what a later plan does without
+appearing in that plan.
+
+A directory that is not the workspace root **is asked about**, and what the line prints is quarantined,
+unless something you answered names that exact tree. A directory that does not exist is an error and
+moves nothing, and a refused directory does not become the one the next line runs in.
+
 ### What the grammar takes
 
 | | |
@@ -319,8 +394,14 @@ A name is looked up on `PATH`; a path is taken relative to the workspace.
 | redirection | `>`, `>>`, `<`, `2>`, `2>>`, `2>&1`, `&>`, each naming one literal file |
 | patterns | `*`, `?`, `[…]`, `**` |
 | brace expansion | `{a,b}`, `{1..9}` |
-| home | a leading `~` |
+| home | a leading `~`, and only a leading one |
 | per-command environment | `NAME=literal cmd` |
+
+A leading `~` is **your home directory**, the one `~/.bravebot` sits inside, and never that directory
+itself: a home-relative path the planner writes names a file of your own rather than one among this
+program's settings, credentials and session records. A `~` you type in the input box and a `~` the
+planner writes stand for the same directory, and a machine naming no home refuses the `~` rather than
+inventing one.
 
 Everything else is refused, as an error naming the part of the line that caused it, and **a refusal
 runs nothing**. There is no falling back to a shell and no running the prefix that did compile.
@@ -336,6 +417,8 @@ runs nothing**. There is no falling back to a shell and no running the prefix th
 | `eval`, `source`, `.`, `exec`, `trap` | they put an interpreter back in the plan |
 | `if`, `while`, `for`, `case`, `function` | control flow is a program |
 | `!` | history expansion is text you typed reaching a line the planner wrote |
+| a pattern in program position | a program worked out from what is on disk changes when the tree does |
+| anything that would open `/dev/tty` | the terminal is not this program's to hand over |
 
 Quoted, every one of them is an ordinary argument: `'$HOME'` is six characters that reach the program
 as one word.
@@ -356,6 +439,62 @@ directory.
 `a ; b` will, so all of them are in the plan and all of them are approved up front. Nothing is put to
 you part-way through a running line, where you could not tell what state the first half had left
 behind.
+
+### The answers, and how long each one lasts
+
+```
+  y run it    a always this session    r remember it    n don't    ctrl-c stop the turn
+```
+
+| Key | Lasts | Grants |
+|---|---|---|
+| `y` | this call | the line runs once |
+| `a` | this session | the line runs unasked, **and** what it prints becomes readable |
+| `r` | past the session | the line runs unasked, and what it prints stays quarantined |
+| `n` | nothing | the line does not run |
+
+`a` is [vouching](../security/permissions.md#vouching-for-a-command), and it is the only answer that
+makes output readable, because that is an assertion about the command that only somebody looking at it
+can make.
+
+**`r` records that one exact command line** under `~/.bravebot`, keyed by the directory you were in.
+Every session begun in that directory honours it from then on, including the one you pressed it in, and
+the prompt shows what would be recorded and where before you agree. It stops the asking and nothing
+else: a covered line still runs with its side effects, and what it prints is still quarantined. Press
+`a` if you want to read the output.
+
+What is recorded is the line and never a pattern: the program's name, the binary that name resolved
+to, each argument as its own field, and where the output was sent. A later line is covered only when
+every one of those is the same and the name still resolves to the same binary. Sending the errors
+somewhere else makes a different line. Nothing in the record can mean "any text", so no answer here can
+reach a second line.
+
+A record is read only where a prompt could have been drawn. A [one-shot run](../using/headless.md) reads
+none, and puts a covered line where it puts every other one. A tick of a
+[`/loop`](commands.md#loop-interval-prompt) does draw its prompts to a live session, so pressing `r`
+and then leaving a loop running overnight grants more than pressing it and staying.
+
+### `a` is withheld where an entry would cover a line you did not read
+
+At three kinds of prompt the `a` key is not offered at all, and an answer given there vouches for
+nothing. A vouched entry records a program and its exact arguments, so wherever the line's meaning sits
+outside those, an entry would cover a line nobody was shown.
+
+| Withheld for | Because an entry would otherwise cover |
+|---|---|
+| a line reading a file in, `< secrets.txt` | the same program fed any other file |
+| a line writing a file, `> out.txt` | the same program with the redirection gone |
+| a line carrying `NAME=value` | the same program under no assignment at all |
+
+The assignment is the sharpest of the three: it decides what a program loads before its own arguments
+are read, so `LD_PRELOAD=./evil.so git log` is asked about however often `git log` was vouched for, and
+what it prints is quarantined.
+
+**A known cost.** `NO_COLOR=1 cargo test` and `RUST_LOG=debug ./demo` are ordinary work, and they are
+asked about every time, in this session and the next. The spelling that can be remembered puts the
+assignment where you can read it in the argv: `env NO_COLOR=1 cargo test` is a program called `env`
+with three arguments, so vouching for it covers that line and no other. What is refused is a line whose
+meaning is not in its argv, not the setting of a variable.
 
 ### A line that only reads what you vouched for does not ask
 
@@ -428,17 +567,14 @@ private-input gate whatever the trust map says about the path, whatever you have
 whatever a rule in the settings file allows. Any step's redirection counts, since a step in the middle
 of a pipeline is handed the file the same way.
 
-`a` is not offered at that prompt, and an answer given there vouches for nothing. The key records a
-program and its exact arguments, and a redirection is in neither, so an entry made while one file was
-read in would have covered the same program fed any other file.
-
 A target must compile to exactly one literal path. A pattern is refused even where it matches one
 file today, because a destination worked out from what is on disk moves when the tree does, and the
 plan would stop saying where the bytes go.
 
-**A line that writes is put to you every time**, whatever you have vouched for. Vouching is keyed on
-a program and its arguments, and a destination is neither, so a remembered command cannot pick one up
-unseen.
+**A line that writes is put to you every time**, whatever you have vouched for and whatever you have
+remembered. Vouching is keyed on a program and its arguments, and a destination is neither, so a
+remembered command cannot pick one up unseen. Both redirections are among the prompts that
+[offer no `a`](#a-is-withheld-where-an-entry-would-cover-a-line-you-did-not-read).
 
 ### Something that wants a terminal is refused before it starts
 
@@ -558,6 +694,40 @@ the planner as text.
 It works only for output from `run`. A quarantined *file* is not readable this way. This is why
 `which`, `find` and `uname` tell the planner nothing until it asks.
 
+**A confined check reads the output before you are asked**, and the word it gave and the sentence it
+wrote are on the screen beside the bytes. The check runs before the question rather than after your
+answer, and nothing it wrote goes back to the planner either way. No expectation is sent with it: the
+planner asked for the output to be read, not for it to be judged. See [Vetting](../security/vetting.md).
+
+## `vet_content`
+
+Asks to be shown one quarantined slot, after a confined check has read it. This is the one prompt of
+its kind the planner asks for by name, rather than one arriving with a read it made for its own reasons.
+
+| Parameter | |
+|---|---|
+| `ref` | the reference naming the slot |
+| `expects` | what the planner expects the slot to hold, in its own words |
+
+`expects` decides nothing. It is sent to the check, so a page can be judged against what it was
+supposed to be, and it is drawn on the prompt, so you can see why the planner wants this. It may not be
+private.
+
+**Where the content came from is said in bravebot's words, as a path, a URL or a command**, never as a
+reference name. A reference means something to the planner and nothing at all to you.
+
+If you agree, the bytes come back as text the planner may read. If you do not, it is told so and told
+to work with what it has or to say what it needed, rather than being left to ask again. Nothing the
+check wrote goes back either way.
+
+Refused for a reference to nothing, for a picture (a check reads text, and a picture slot holds a data
+URI), for a private `expects`, and for a call from a delegate. A reference to a file nothing has read
+yet is opened rather than refused, since naming one is the ordinary way to ask about a file the planner
+may not read.
+
+See [Vetting](../security/vetting.md) for what the check is, what it may say, and what
+[auto-vetting](../security/vetting.md) changes.
+
 ## `job_output`
 
 Reports what a [background job](#leaving-a-pipeline-running) has printed since the last look.
@@ -566,9 +736,35 @@ Reports what a [background job](#leaving-a-pipeline-running) has printed since t
 |---|---|
 | `job` | the job name a `run` handed back |
 | `kill` | stop the pipeline |
+| `wait_seconds` | sit and watch for up to this long ([below](#a-look-may-wait)) |
 
 Each look reports what is new, counted in bytes, and whether the job has ended. Asking about a job
-that does not exist says so.
+that does not exist says so. What is new is counted separately for standard output and standard error,
+so a line arriving on one does not hide what arrived on the other.
+
+**A finished job reaches the turn without being asked about.** Between rounds the turn checks whether
+any of its jobs has ended, and the handle, the exit codes and whatever was printed since anybody last
+looked go into the conversation on their own. So a background job that ends quietly is still reported.
+The account is given once, by whichever route got there first.
+
+### A look may wait
+
+`wait_seconds` makes one look sit and watch instead of taking a snapshot. It comes back at the first of
+four things: output arriving that the planner has not been handed, the job ending, the wait running
+out, or the turn being cancelled.
+
+Between 1 second and 10 minutes, and **a value outside that is refused rather than quietly shortened**.
+A wait that was silently cut short would come back with silence, and silence carries no length: a
+caller that asked for ten minutes and got one would report the same nothing as ten minutes of nothing.
+[A deadline](#a-line-has-a-deadline) is clamped instead, because a run that ends says how long it took.
+
+The answer says how many seconds were spent watching and that nothing is watching now, so a wait that
+ended early because output arrived is not read as a standing account of the job. A job still running is
+reported as running rather than as stopped, and a job that has ended is reported by the codes its steps
+exited with rather than as having succeeded.
+
+**A wait cannot outlive the turn.** It is a way to spend part of one turn watching, not a way to be told
+about something later. Watching that has to survive a turn is a [`/loop`](commands.md#loop-interval-prompt).
 
 **The output keeps the label its plan was given** when the job started, rather than one worked out
 again at the moment it is read. What you have vouched for can change while a job runs, and a pipeline
@@ -587,6 +783,12 @@ Fetches an `http` or `https` URL. **You approve every fetch, unless a rule names
 it to [`spawn_processor`](#spawn_processor) or write it to a file with
 [`write_file`](#write_file), and it cannot read it or be told what it says. A page saying "ignore
 your previous instructions" says it to a processor with no tools.
+
+It is untrusted but **public**, unlike a file of your own: a fetched page is not your data, so writing
+it raises no question about confidentiality and there is nothing of yours in it to release.
+
+An `allow` rule matching the host answers the prompt. A `deny` rule **refuses without asking**, so a
+host you ruled out is never put to you as a question.
 
 There is no answer at this prompt that trusts a body, because approving a fetch is consent to talk to
 a host and says nothing about what that host returns. `a` at a run prompt can trust output: you read
@@ -608,6 +810,17 @@ elsewhere is refused unless a rule allows that host too, since the end of a redi
 somewhere nobody was shown. That check applies only while a fetch is in flight: reaching the model
 endpoint is this program operating rather than something a turn asked for, so a rule about a website
 cannot stop bravebot talking to its own backend.
+
+A hop that keeps the approved host but drops TLS is a separate question, decided for every request that
+leaves the process: an `https` chain is not followed into cleartext. See
+[Security](../security/security.md).
+
+**A result names the URL you asked for, never where a redirect went.** A fetch that succeeds names it
+as the origin of what came back; one that fails or is refused names it as the request that did not work,
+with the kind of failure. Past the first hop the address a request is on is a string a server wrote into
+a header, and a result naming that would be handing the planner a server's words with bravebot's
+attribution on them. A refusal for leaving the host names the host that was approved rather than the
+one the server chose.
 
 A body that is not valid UTF-8 is carried anyway rather than reported as an error, since nothing here
 reads it. Bodies are size-capped, and a truncated one says so.
@@ -756,6 +969,39 @@ The wait is held between a minute and an hour **before** it is reported back, so
 planner is told is the number it is getting. A call missing the delay or the verdict is refused rather
 than filled in, since the count of quiet ticks you are shown is built from the verdict. `reason`
 reaches your screen and stops there.
+
+## `watch_file`
+
+Arms a standing watch on one file. The result confirms the watch exists.
+
+| Parameter | |
+|---|---|
+| `path` | the one file to watch |
+
+**The path is the only argument**, and that is deliberate. No interval, no condition, no sentence for
+the firing to say, and no second path. Reading the call tells you which file this session may be told
+about, and that is the whole of the decision. A field for what a firing should say would let a turn
+write its own next prompt, and a field for how often to look would make the latency the planner's to
+choose.
+
+**Nothing is asked that a read would not ask.** Inside the working directory a watch is the promotion a
+read of the planner's own choice of file already gets; outside it, whatever answer already stands. A path
+a read would be refused is a watch that is refused. Asking to be told when a file changes is asking for
+less than reading it, so a prompt of its own here would be a second question to somebody who answered
+the first.
+
+The path must name a file that **exists now**. A directory is refused, because what changed inside one
+is a filename the filesystem produced and a firing may carry nothing off the filesystem. A name with
+nothing at it is refused because the first look is taken when the watch is armed, so there would be
+nothing to compare against and the first look that found the file would report a change it never
+underwent.
+
+A call the session cannot honour is refused with the reason rather than armed silently: a session
+already running a [`/loop`](commands.md#loop-interval-prompt) or working towards a goal, and a session
+already holding as many watches as it keeps, each say which of the three it is.
+
+See [Watches](../using/watches.md) for what a watch then is, what a firing puts in the conversation, how
+long one lives and what ends it.
 
 ---
 

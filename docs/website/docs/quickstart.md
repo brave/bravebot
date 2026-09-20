@@ -23,7 +23,7 @@ and Windows are supported, on both x86_64 and arm64. To build from source instea
 On macOS and Linux there is an install script, for a machine with no npm on it:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/brave-experiments/bravebot/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | sh
 ```
 
 It fetches the newest release for your platform, checks it against the published checksum, and
@@ -31,7 +31,7 @@ writes nothing if the two differ. It puts the binary in `/usr/local/bin`, asking
 that directory is not yours to write to. `INSTALL_DIR` puts it somewhere else:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/brave-experiments/bravebot/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh \
   | INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
@@ -54,8 +54,24 @@ configuration OK
   model     automatic-brave-bot (default)
   key       … (never transmitted)
 
+state directory ~/.bravebot, from HOME
+
 confinement …
+
+network
+  trust roots  built in (SSL_CERT_FILE, SSL_CERT_DIR names others)
+  proxy        none (HTTPS_PROXY, HTTP_PROXY names one, in upper case or lower)
 ```
+
+It names the state directory it resolved, or says there is none, why, and what is not kept without
+one: with no state directory there are no settings of your own, no session to resume, no prompt
+history and no skills. The `network` section names the trust roots in force, the proxy, and the hosts
+it is not used for, which is the first place to look when every request fails with an unknown issuer.
+
+A build with no model service configured does not start work at all. It says so and lists the ways to
+set one up, each naming what to type or write, rather than running against an endpoint that will not
+serve it. `doctor` says the same and fails. See
+[Configuration](customize/configuration.md).
 
 ## Staying current
 

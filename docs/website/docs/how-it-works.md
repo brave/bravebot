@@ -43,9 +43,16 @@ work, the design is wrong rather than the label.
 
 A *first* label is not an upgrade. Model output is a function of the model's context, so when the
 context held only trusted input, what it produced is labelled accordingly. The same applies to a
-program's output, a line you ran yourself in shell mode, your own configuration and a picture you
-pasted. Each of those is a label a value receives for the first time, assigned from provenance the
-policy layer tracked, never a relabelling of something that already had one.
+program's output, a file read from the workspace, a line you ran yourself in shell mode, an answer you
+typed to a question, and your own configuration. Each of those is a label a value receives for the
+first time, assigned from provenance the policy layer tracked, never a relabelling of something that
+already had one.
+
+**The ways in are enumerated, and none of them reads what it labels.** Provenance decides, so opening
+a new road means adding a row to that list where a reviewer sees it. Two of the entries are that there
+is nothing to label: a picture you paste and a prompt you type while a turn is running both join your
+own message, which carries no label either, so they are recorded in the [audit
+trail](security/audit-trail.md) instead.
 
 ## Quarantine and references
 
@@ -64,7 +71,11 @@ it when the write or the call actually happens. So the model can:
 - write quarantined content into a file with `contents_ref`;
 - hand it to a processor to be changed.
 
-What it cannot do is see the bytes, or take a decision from them.
+What it cannot do is see the bytes, or take a decision from them. A reference also cannot choose
+**where** something lands: resolving one to the name it stands for authorises nothing by itself, and a
+reference naming no file, which is everything a processor produced, is refused as a destination
+outright. For a write the name goes to you, and the grant is issued for the path you saw, which is why
+such a write always asks.
 
 ## Processors
 
@@ -83,6 +94,11 @@ A processor's answer is quarantined like anything else, and the planner never se
 output's label is computed **before** the processor runs, by taint over the inputs, so nothing it
 writes has any say in how what it writes is labelled.
 
+A [check](security/vetting.md) is a call of the same shape pointed at one quarantined slot, asking
+whether it looks like an attempt to give instructions. It is narrower still, because it can write
+nothing at all: no reference, no file, no destination of any kind. Its answer is a word on your screen
+and never a decision.
+
 This is how a file the agent may not read still gets fixed: the planner names the file's reference,
 says what has to be true of the file afterwards, and passes the reference that comes back to
 `write_file` as `contents_ref`. You approve the write from the resulting diff.
@@ -91,6 +107,15 @@ A processor's answer is for **one** document, and may be written only to the fil
 the call was about. Everything before the document marker in its reply is a remark for the person
 watching: it reaches your screen and stops there. No model reads it, it is part of no file, and it
 cannot be another processor's input.
+
+**The remark is put in the approval box, above the diff it describes.** It decides nothing: no gate
+reads it, you approve from the diff of the real bytes, and the write goes the same way with the remark
+as without it. It is there so the claim and the evidence are read in one place. Nothing checks a remark
+against its document and nothing could, so a processor can say it fixed one line while the document
+does something else. "I only fixed the typo" beside three hundred changed lines is visibly untrue;
+remembered from several rounds earlier it is not. It is drawn as untrusted content, inside a margin it
+cannot forge, and capped, since a remark long enough to push the diff out of the box would cost you the
+evidence to gain the claim. A write the planner composed itself has no remark and shows none.
 
 ## Delegates
 
@@ -180,6 +205,8 @@ it, and each grants one thing:
 | `@path` in a prompt, or `--file` | that one file, for the rest of the session |
 | dragging a file onto the terminal | that one file, wherever on disk it is |
 | `/add-dir <path>` | that directory: reachable **and** trusted, for this session |
+| `/cd <path>` | that directory, as the new working directory, for this session |
+| accepting a directory your settings file named | that directory, on the terms `/add-dir` uses |
 | answering yes at a quarantined read | that one path, for the rest of the session |
 | `a` at a run prompt | that exact command: runs unasked, and its output is trusted |
 | putting a file in `~/.bravebot` | trusted by provenance, as your own configuration |

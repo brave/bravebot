@@ -35,6 +35,49 @@ a source build, check that `BRAVEBOT_ENV`, the key and the hosts all agree.
 issued it. Import from the Brave channel matching the environment the binary is configured for. See
 [Leo Premium](customize/premium.md#requirements-and-limits).
 
+**`no model service is configured yet`**. Nothing is set up to send the request, so the run stops
+instead of starting work that has no service to do it. It lists the ways to configure one, each
+naming what to type or write. `doctor` says the same and fails. See
+[Configuration](customize/configuration.md).
+
+## When a turn fails
+
+A failed turn is announced as `turn N failed` with a reason, and a turn you stopped yourself as
+`turn N cancelled`, which is neither a success nor a failure. The reason stays on screen while you
+scroll or resize.
+
+The reason is drawn from a fixed set rather than from whatever the service said, so no error body,
+header, URL or credential is ever quoted back at you. Where the status is known it is appended as
+`(HTTP 429)`, and where requests were sent it says `after 3 attempts`, counting retries and
+capability probes.
+
+| What it says | What it means |
+|---|---|
+| the service would not accept the credentials | the credential is wrong for this deployment, or has lapsed |
+| the service asked for fewer requests | rate limited, so wait and ask again |
+| the service could not answer | the service is unavailable at the moment |
+| the service rejected the request | the request was refused as invalid |
+| the request did not get through | nothing reached the service: network, proxy or TLS roots |
+| the reply stopped before it was finished | the reply was cut off part way |
+| the reply could not be read | a reply arrived that could not be decoded |
+| the model reached its output limit | the reply hit a ceiling, which `BRAVEBOT_OUTPUT_BUDGET` raises |
+| nothing here was configured to send the request | no model service is set up |
+| a gate here would not let the request out | a gate refused it before it left, so it never went |
+| the workspace could not be used | the working directory could not be read or written |
+
+For the network cases, `bravebot doctor` has a `network` section naming the trust roots in force, the
+proxy, and the hosts it is not used for.
+
+**A turn failed but I was still charged for it.** That is deliberate. A later error or a stop does
+not undo the cost of requests that already finished, so what completed work spent stays counted in
+`/status` and in the session record. Requests that failed or never finished add nothing, and no
+estimate is made for them.
+
+**Every request failed after I picked a model through a gateway.** A gateway that will not accept an
+effort level makes the turn give up the level and carry on without it, rather than refusing every
+request the turn could make. If you are seeing the whole turn fail instead, you are on a version from
+before that, so update.
+
 ## The interface
 
 **Shift-Enter sends instead of starting a new line.** Use **Ctrl-J**, which always works, or use a
@@ -131,10 +174,33 @@ back.
 **A resumed session says it was recorded by a different build.** It is telling you the transcript is
 being read against code that has moved since.
 
+## The state directory
+
+**`no state directory: … names nothing`**. Nothing resolved a directory to keep things in, so this
+run has no settings of your own, no session to resume, no prompt history and no skills. `doctor`
+names the variables it looked at and what is not kept without one. On Windows `USERPROFILE` answers
+where `HOME` is unset, so a stock install resolves one.
+
+**A session is not where I expected it.** `doctor` prints the state directory it resolved and the
+variable it came from, which is the quickest way to settle where anything is being written.
+
+## Windows
+
+**Ctrl-G says no editor was found when one is installed.** A bare name like `notepad` or `code` has
+to be found along the `PATH`, and the four terminal editors are tried there too, so Git for Windows'
+vim is found. Set `$VISUAL` or `$EDITOR` to name one outright. If nothing is found on a machine that
+clearly has an editor, update: an older version looked in fewer places.
+
+**`/add-dir` and `/cd` refuse the path I gave them.** Every trust rule is keyed under a name spelled
+with `/`, and a path spelled from a drive letter is not one, so on Windows both commands refuse. That
+is the closed direction of the two: admitting such a directory would key its rule under a name read
+as a path inside the project, where the answer you gave about the project at startup covers every file
+in it. See [Trusted directories](security/trust.md).
+
 ## Still stuck
 
 Bugs and questions go to
-[the issue tracker](https://github.com/brave-experiments/bravebot/issues). The
-[mini-specs](https://github.com/brave-experiments/bravebot/tree/main/docs/specs) state each
+[the issue tracker](https://github.com/brave/bravebot/issues). The
+[mini-specs](https://github.com/brave/bravebot/tree/main/docs/specs) state each
 behaviour as a numbered clause and name the tests that pin it, so they are usually the fastest way to
 find out whether something is intended.

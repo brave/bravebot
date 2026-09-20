@@ -89,6 +89,46 @@ carried, and what was released.
 bravebot "what does this do?" --file src/main.rs --trace 2> trail.txt
 ```
 
+## Reading a run from a program
+
+```sh
+bravebot --json -p "fix the failing test" | jq .status
+```
+
+`--json` puts **one object, on one line**, in the reply's place on stdout. The prose reply is written
+for a person, and a program can recover almost nothing from it: which tools ran, what the turn cost,
+and why an effect was refused are either absent or only readable by parsing English that changes with
+the reader's language.
+
+The object says how the run ended, its exit status and identifier, the message where there is one, the
+reply, the model that answered, how many rounds it took, what it cost in tokens, every tool it called
+with what it acted on and whether that call was refused, and every refusal with the principle it
+upholds. What a call acted on is the name it was given rather than a resolved path.
+
+It is written on **every** run, including one that failed before the turn began and one that stopped
+part way, which still says what it had done by then. A caller never has to tell an empty stdout from a
+result.
+
+The object carries a **schema number**. Within one number a field may be added, and never removed,
+renamed or given a different meaning, so a caller reading the fields it knows keeps working.
+
+Progress, the message and the trail stay on stderr, exactly as they do without the flag.
+
+## Configuring one run differently from the next
+
+```sh
+bravebot --settings ci/bravebot.json -p "review the diff"
+```
+
+`--settings` reads one more settings file **above** the three that are found for your home directory,
+the checkout and the machine, for the length of the run. It resolves a name at a time, so a file
+setting one value leaves the rest of what you and the checkout configured in force, and a CI job can
+change one key without restating a whole configuration.
+
+Given twice, the last file wins. A path naming no file, and a blank path, are refused by name and the
+run stops before it starts. A named file that did not parse leaves the layers below it in force, and is
+visible by its absence from what [`doctor`](../reference/cli.md) lists.
+
 ## Planning the whole run first
 
 ```sh
@@ -106,6 +146,44 @@ turn to a whole run.
 A plan that fails validation **fails the run whole**: nothing is half adopted, no step is patched to
 make a plan usable, and nothing re-plans once a step has read something. Where every effect will land
 is fixed before the first byte is read, and the driver cannot insert, skip, reorder or invent a step.
+A destination has to be text, so a plan that filled one with a number or a list is refused whole
+rather than reaching the step that would have used it. An unknown mode name is refused rather than
+guessed, since guessing would run the mode you did not ask for.
+
+A session can start one of these runs too, with `/manifest`. See
+[Sessions](sessions.md#starting-a-plan-then-execute-run).
+
+### A plan is put to you first
+
+Between freezing the plan and walking it, the frozen plan is put to you: the task in your own words,
+then **every step in order**, each naming its tier, what it would do, and every destination the step
+fixed. The routing is part of what you are answering for, so the line carries the directory a search
+runs in and the glob it filters by, not the pattern alone.
+
+Declining stops the run, and the declined plan comes back with the error so you can still read it.
+Nothing has been read or written by then, so a declined run leaves the workspace exactly as it was.
+
+The question is asked **once**, and has no standing form: nothing between the plan and the run can
+reshape the plan, and a plan is written afresh for each run, so remembering an answer would be
+approving steps nobody has seen.
+
+**Approving a plan is not approving its writes.** This mode widens the scope of what you commit to in
+advance and does not replace the gates inside it, so each write is still put to you as its step
+reaches it.
+
+Where nobody can be asked the answer is no, as it is everywhere else. A command typed at a terminal is
+somebody: the plan goes out beside the progress and the answer is read back, which is the one question
+a one-shot run answers. Piped or redirected there is nobody, so the run stops before its first step
+unless permissions were skipped outright. `--dangerously-skip-permissions` approves the plan, and that
+is not a standing answer: it covers this run, is recorded nowhere, and the next run asks again unless
+the flag is given again.
+
+:::note
+At a terminal the plan is printed and a line is read, so a plan longer than the window is scrolled to
+in your terminal's own scrollback, and there is no going back to re-read a step once the answer is
+typed. A run [started from a session](sessions.md#starting-a-plan-then-execute-run) does not have this
+cost: that prompt is drawn and scrolled.
+:::
 
 ### What a plan cannot use
 
@@ -149,8 +227,30 @@ what it has.
 
 ## Exit codes
 
-A failure exits non-zero. A configuration error, a refused argument, and a turn that could not run
-all fail rather than exiting successfully with an explanation on stdout.
+A failure exits non-zero, and **the status says which failure it was**. A configuration error, a
+refused argument, and a turn that could not run all fail rather than exiting successfully with an
+explanation on stdout.
+
+| Status | Identifier | The run |
+|---|---|---|
+| 0 | | did what it was asked |
+| 1 | `BB1001` | failed for a reason none of the others name |
+| 2 | `BB1002` | refused an argument, so nothing ran |
+| 3 | `BB1003` | cannot use the configuration, so nothing ran |
+| 4 | `BB1004` | had an effect refused by a gate |
+| 5 | `BB1005` | never reached the backend |
+
+A status is never renumbered and never given a second meaning, so a script can branch on one: "the
+endpoint was not there, try again", "the configuration is wrong, fail the build" and "a gate refused
+the write, this needs a person" are three different things to do about a failed run.
+
+Only the transport's own failures are status 5. A non-success answer *from* the service is the service
+answering, so a caller that read a refused credential as a connection worth retrying would retry it
+until it gave up.
+
+The identifier is printed in front of the message on stderr, never instead of it, and is the same
+whatever language the message is in. A sentence in your own language is the right thing to print and
+the wrong thing to search for.
 
 ## Flags
 
@@ -161,5 +261,8 @@ all fail rather than exiting successfully with an explanation on stdout.
 | `-p`, `--print` | non-interactive; reads piped stdin as quarantined context |
 | `--trace` | print the audit trail to stderr |
 | `--model <name>` | the model this run asks for |
+| `--json` | one result object on stdout, in the reply's place |
+| `--settings <path>` | read a settings file above the ones found, for this run |
+| `--mode manifest` | plan the whole run first, then walk the plan |
 
 The full set is in the [CLI reference](../reference/cli.md).

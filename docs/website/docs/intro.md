@@ -7,6 +7,14 @@ description: What Brave Bot is, what makes it different, and where to start.
 
 # Brave Bot
 
+:::warning[Not a released or supported Brave product]
+
+Brave does not release or support Brave Bot at this time. It is early, and it is being developed in
+the open. The binaries, the install script and the npm package are published for early testing and
+feedback only. Brave expects to release and support it as a product in the future.
+
+:::
+
 Brave Bot is a general-purpose coding agent for your terminal. It reads a repository, edits files,
 runs programs and answers questions about the code in front of it, and it is a drop-in replacement
 for the agents you already use.
@@ -41,6 +49,11 @@ it reads.
   driver ever seeing the bytes. See [How Brave Bot works](how-it-works.md#processors).
 - **Take standing instructions.** `AGENTS.md` and skills apply to every task in a directory. See
   [Instructions](customize/instructions.md) and [Skills](customize/skills.md).
+- **Watch a file and act when it changes.** A standing watch outlives the turn that armed it and
+  starts a turn of its own when the file changes, so a change is noticed with nothing running. See
+  [Watches](using/watches.md).
+- **Run a command of your own at a moment you choose.** A `hooks.json` runs an argument vector when
+  a turn starts, when a tool call finishes, or when the turn is over. See [Hooks](customize/hooks.md).
 - **Show its work.** Every gate decision is recorded: what was checked, what label a value carried,
   what was released. Read it live with Ctrl-T or after the fact with `--trace`. See
   [The audit trail](security/audit-trail.md).
@@ -50,7 +63,7 @@ it reads.
 | | |
 |---|---|
 | **Labels, not vibes** | Every value carries a label on two axes: trusted or untrusted, public or private. Labels only ever degrade, and no code path can hand a value a better one than its inputs had. |
-| **Quarantine, not warnings** | Untrusted content is never placed in a message to the model. The planner gets a reference (origin, line count, byte count, label) and acts on content it cannot read. |
+| **Quarantine, not warnings** | Untrusted content is never placed in a message to the model. The planner gets a reference (origin, line count, byte count, label) and acts on content it cannot read. Before you are asked to let any of it out, a [second model reads the bytes](security/vetting.md) and says whether they look like an attempt to give instructions. |
 | **Approval bound to what you saw** | An approval is single-use and bound to the exact value it was given for. Approving a write is not approving a run, and no approval survives into a later session unless it was explicitly a standing one. |
 | **No shell for the planner** | The model never gets a shell tool. Not behind a capability, not behind a prompt. It writes a command line, and bravebot compiles it rather than interpreting it. |
 | **Specified clause by clause** | Behaviour is written down as numbered clauses, each naming the tests that pin it, and the code is reviewed against them. |
@@ -64,8 +77,8 @@ it reads.
 
 ## Status
 
-Brave Bot is experimental. It is developed in the open at
-[brave-experiments/bravebot](https://github.com/brave-experiments/bravebot), where the
-[mini-specs](https://github.com/brave-experiments/bravebot/tree/main/docs/specs) are the source of
+Brave Bot is experimental, and not a released or supported Brave product. It is developed in the
+open at [brave/bravebot](https://github.com/brave/bravebot), where the
+[mini-specs](https://github.com/brave/bravebot/tree/main/docs/specs) are the source of
 truth for how it behaves. Where this site and a spec disagree, believe the spec and please
-[file an issue](https://github.com/brave-experiments/bravebot/issues).
+[file an issue](https://github.com/brave/bravebot/issues).

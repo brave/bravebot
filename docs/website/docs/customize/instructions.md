@@ -16,6 +16,10 @@ Prefer `edit_file` over rewriting a file.
 Commit subjects are imperative; the body explains why, never what.
 ```
 
+Instructions tell the planner how work is done here. To run a command of your own when something
+happens, rather than to ask the planner for it, see [Hooks](hooks.md). For a whole procedure the
+planner loads only when the task calls for it, see [Skills](skills.md).
+
 ## The four sources
 
 | File | Applies to |
@@ -38,6 +42,11 @@ both would say everything twice in a system prompt that goes out afresh every re
 fallback**. When there is no home, or the name is empty, everything kept there is absent. Nothing is
 guessed and no other location is tried. Daemons and containers run without a home, and everything
 kept there is optional, so absence is a case to do without rather than a reason to refuse to start.
+
+`HOME` is what names it. Stock Windows sets no `HOME`, so there `USERPROFILE` is read after it and
+the first of the two that is set wins: that is the platform stating where the profile is, the same
+thing `HOME` does on Unix, rather than a guess past an answer. See
+[Configuration](configuration.md) for the rest of what lives in that directory.
 
 Note the two roots are spelled differently. Your own skills sit directly beneath `~/.bravebot`; a
 project's sit under a dotted `.bravebot` directory rather than at the root where `AGENTS.md` sits.
@@ -87,22 +96,23 @@ user directory at all: each is the ordinary case and offers nothing.
 
 ## Where you are working
 
-The system prompt also states six facts about your machine, so the planner does not have to run a
-command to learn them:
+The system prompt also states a handful of facts about your machine, so the planner does not have to
+run a command to learn them:
 
 | Line | Value |
 |---|---|
 | Working directory | The absolute path of the workspace root |
 | Is a git repository | Whether this tree or a directory above it holds a `.git` |
 | Platform | `macos`, `linux`, or whatever this build runs on |
-| OS version | The kernel release string, as `uname` reports it. Unix only |
+| OS version | The kernel release string on Unix, as `uname` reports it. On Windows, the three numbers a build is named by |
 | Shell | `$SHELL`, or `/bin/sh` when that is unset or empty |
 | Today's date | The current UTC date, as `YYYY-MM-DD` |
+| Scratch directory | The directory this session has to itself, on the sessions that have one |
 
-:::caution[These six lines are sent to the model with every request]
-The working directory is an absolute path, so on most machines it contains your username. The kernel
-release string names your OS build. Both are part of every request this session sends, including the
-first one, and there is no setting that withholds them.
+:::caution[These lines are sent to the model with every request]
+The working directory is an absolute path, so on most machines it contains your username, and the
+scratch path may too. The OS version names your build. All of it is part of every request this
+session sends, including the first one, and there is no setting that withholds any of it.
 
 Nothing else about your machine is added. No environment variables beyond `$SHELL`, no hostname, no
 username on its own, no file contents, no directory listing.
@@ -120,6 +130,25 @@ prompt.
 
 This block is composed afresh every turn like the sources are, so [`/cd`](../reference/commands.md)
 is followed and the next turn states where the session went.
+
+### The scratch directory
+
+The last line names a directory this session has to itself, created as the session opens in the
+system temporary directory rather than anywhere in your project. It is where a file the work needs on
+disk but nobody is asking to keep belongs: output to grep through, an archive to look inside. Written
+into the project instead, that file is one a build, a test run, a `git add -A` and a reviewer each
+have to deal with, and one somebody has to remember to delete.
+
+It is removed when the session ends, with everything written in it, and a session that carries on
+from another is given its own. A program started by [`run`](../reference/tools.md#run) reads the same
+path from `BRAVEBOT_SCRATCH_DIR`. A session that could not be given a directory says so and runs
+without one, and the line is then absent rather than naming somewhere that is not there.
+
+It is stated because no `run` could discover it: nothing names that directory but this program, and a
+planner never told of it puts an intermediate file in the project instead. Reaching it grants nothing.
+A file there is read and written by its absolute path, but it prompts exactly when a file in the
+workspace would, and neither `/add-dir` nor `/cd` will take it. See
+[Trusted directories](../security/trust.md).
 
 ## Trust
 
@@ -147,8 +176,8 @@ had written it.
 The notice is said when it is learned, before the first request goes out, rather than when the turn
 ends. A turn that fails or is cancelled has already told you what it was working without.
 
-The six [environment lines](#where-you-are-working) do not go through this gate, and cannot be
-refused by it. There is no file behind any of them: the working directory is where you pointed the
-session, and the rest comes from the kernel and this process's own environment, which is the same
-provenance a command you typed rests on. Nothing read out of the workspace may join that block, which
+The [environment lines](#where-you-are-working) do not go through this gate, and cannot be refused by
+it. There is no file behind any of them: the working directory is where you pointed the session, the
+scratch directory is one this program created empty, and the rest comes from the kernel and this
+process's own environment, which is the same provenance a command you typed rests on. Nothing read out of the workspace may join that block, which
 is the whole reason it can skip the gate.

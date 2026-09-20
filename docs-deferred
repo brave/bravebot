@@ -7,3 +7,4 @@
 # `docs-ref.py resolve <sha>` once its behaviour is documented.
 
 bd84f979124de860f4c1874291ca8d86ea3ead75 MCP tool failures carry the server's detail, but no settings key wires up a server yet
+035a6112c4d7118e1aa8135e8d4154d5313e88d9 credential-protection.md is status: proposed with every clause verified-by: none, so documenting it would describe behaviour not in force; fold it in when the spec goes normative and its clauses are pinned

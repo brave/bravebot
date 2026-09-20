@@ -83,7 +83,12 @@ through `osascript`; on Linux it needs `wl-paste` or `xclip`.
   for a screenshot. What this turn sends is untouched: the picture still travels with the prompt that
   named it, and the transcript still shows the line as it was on your screen.
 - A picture is refused in shell mode rather than written into the command.
-- Anything over 10 MB is refused, and says so with its size.
+- Anything over 10 MB is refused, and says so with its size. It is refused rather than quietly
+  swapped for the text sitting beside it in the clipboard.
+- **Ctrl-V reads the clipboard while a turn is running too**, so a picture can be staged into the next
+  prompt without waiting for the turn to finish.
+- An empty clipboard reads as nothing rather than as empty text, and a missing `wl-paste` or `xclip`
+  reads the same way rather than as a successful copy of nothing.
 - A pasted picture is kept with the session record and comes back on resume, because it is part of
   your own message.
 
