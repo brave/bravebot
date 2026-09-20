@@ -28,7 +28,9 @@ act on without reproducing it first.
 import argparse
 import importlib.util
 import json
+import os
 import re
+import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 from pathlib import Path
 
@@ -88,6 +90,7 @@ SITE = re.compile(r"([\w./\\-]+\.\w+):(\d+)\s*(.*)")
 
 
 _LOADED = []
+_TRACKED = {}
 
 
 def _specs():
@@ -117,17 +120,57 @@ def evidence_items(value):
     return [part.strip() for part in str(value).split("; ") if part.strip()]
 
 
+def tracked(root):
+    """Every path git tracks under `root`, as written rather than as followed.
+
+    Read once per run and held, since a run drafts dozens of findings against the one tree. A tree
+    git cannot answer for yields nothing, so a drafter run outside a checkout quotes no code rather
+    than quoting whatever it was pointed at.
+
+    Names, not destinations: resolving here would put the target of every tracked symlink into the
+    set, and a link committed as `crates/demo/src/linked.rs` would then admit the file it points at
+    under its own name too.
+    """
+    if root not in _TRACKED:
+        listed = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        names = listed.stdout.split("\0") if listed.returncode == 0 else []
+        _TRACKED[root] = frozenset(root / name for name in names if name)
+    return _TRACKED[root]
+
+
 def first_site(items):
-    """The first evidence item naming a source file and line that exist.
+    """The first evidence item naming a line of a file that is already public.
 
     A finding about a clause's coverage points at the clause, and quoting the spec back as the code
     it happens in is both wrong and already above.
+
+    A place is written by a model reading a tree somebody else wrote, so it is bytes an attacker may
+    have chosen, and the caller inlines whatever this returns into a body that gets posted to a
+    public tracker. What may be published is therefore what is published already, which is what the
+    tree tracks and not what happens to sit in it: an absolute
+    `/Users/somebody/.config/gh/hosts.yml:2` and a `../`-climbing path both satisfy the pattern as
+    readily as a source file does, and so do the credentials
+    [credential-protection.md](../../../docs/specs/credential-protection.md) says a checkout holds,
+    `./.envrc:1` and `.bravebot/settings.local.json:1`, which git ignores and a body must not carry.
+
+    The name has to be tracked and so has what it points at, because either alone still opens an
+    ignored file: a tracked symlink names a path the tree publishes and reads one it does not.
     """
+    root = Path.cwd().resolve()
+    public = tracked(root)
     for item in items:
         match = SITE.match(item)
         if not match:
             continue
         path, line = Path(match.group(1)), int(match.group(2))
+        named = Path(os.path.normpath(root / path))
+        if named not in public or (root / path).resolve() not in public:
+            continue
         if path.is_file() and path.suffix != ".md":
             return path, line
     return None, None
