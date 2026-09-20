@@ -21,9 +21,9 @@
 //!
 //! [`persist`]: ../persist.rs
 
-use bravebot_tui::history::Entry;
-use bravebot_tui::sessions::{Handle, Standing};
-use bravebot_tui::store;
+use bravebot_session::sessions::{Handle, Standing};
+use bravebot_session::store;
+use bravebot_session::store::Entry;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -156,7 +156,7 @@ fn a_choice_applies_to_the_session_and_is_not_recorded() {
     store::save_model("some-other-model");
     store::save_theme("brave");
     store::save_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
-    store::save_editing(bravebot_tui::vim::Editing::Vi);
+    store::save_editing(bravebot_tui::vim::Editing::Vi.as_str());
 
     assert_eq!(
         store::load_model().as_deref(),
@@ -189,7 +189,7 @@ fn a_choice_applies_to_the_session_and_is_not_recorded() {
 fn no_session_record_is_written() {
     let scratch = Scratch::incognito("sessions");
 
-    let mut handle = Handle::begin(&scratch.project);
+    let mut handle = Handle::begin(&scratch.project, bravebot_tui::BUILD);
     let conversation = {
         let mut conversation = bravebot_agent::Conversation::new();
         conversation.push(bravebot_aichat::protocol::Message::user(
@@ -239,7 +239,7 @@ fn no_session_record_is_written() {
 fn naming_a_session_records_nothing() {
     let scratch = Scratch::incognito("titles");
 
-    let mut handle = Handle::begin(&scratch.project);
+    let mut handle = Handle::begin(&scratch.project, bravebot_tui::BUILD);
     handle.rename("a title worth keeping");
 
     assert!(
@@ -256,10 +256,10 @@ fn naming_a_session_records_nothing() {
 fn no_audit_trail_is_written() {
     let scratch = Scratch::incognito("audit");
 
-    let handle = Handle::begin(&scratch.project);
+    let handle = Handle::begin(&scratch.project, bravebot_tui::BUILD);
     handle.append_audit(
         1,
-        &[bravebot_tui::audit::Stamped {
+        &[bravebot_session::audit::Stamped {
             at: 1_700_000_000,
             from: None,
             event: bravebot_core::event::Event::GatePassed {

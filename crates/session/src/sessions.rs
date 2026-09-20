@@ -52,6 +52,86 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// A question asked beside the work, and the answer it came back with.
+///
+/// Never in the conversation. The question forked the exchange, was answered over the copy, and
+/// the copy went: the planner picking the work up has read neither half, which is what makes an
+/// aside a question rather than a turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Aside {
+    /// What the person asked, in their own words.
+    pub question: String,
+    /// The answer, as the person may read it.
+    ///
+    /// `None` for one brought back from a record that could not hold it, where the view says so
+    /// rather than drawing an answer that is not there. Absence rather than emptiness, because a
+    /// model that answered with nothing at all is a different thing from an answer that did not
+    /// come back, and the interface must not have to tell the two apart by reading the words.
+    pub answer: Option<String>,
+    /// Whether the record keeps the answer, so that a resume brings it back.
+    ///
+    /// `false` where the exchange had met something untrusted when the question was asked: the
+    /// planner's own words are quarantined then, like anything else, and a record is read back.
+    pub kept: bool,
+}
+
+/// A checkpoint of session state captured before a turn begins, for `/undo`.
+#[derive(Debug, Clone)]
+pub struct TurnSnapshot {
+    /// The conversation state (messages, references, context).
+    pub conversation: bravebot_agent::conversation::Snapshot,
+    /// Completed turns count before this turn.
+    pub turns: usize,
+    /// Cumulative tokens before this turn.
+    pub tokens: u64,
+    /// Spend by turn before this turn.
+    pub spend: std::collections::BTreeMap<usize, u64>,
+    /// Timing by turn before this turn.
+    pub timing: std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
+    /// What the turn before this one read out of the cache, or `None` if it was the first.
+    ///
+    /// Kept with the spend it belongs beside: undoing a turn that is no longer in the token count
+    /// must not leave the panel reporting the cache that turn hit.
+    pub cached: Option<bravebot_aichat::protocol::Cached>,
+    /// Trust map rules before this turn.
+    pub trust: bravebot_core::trust::TrustStore,
+    /// Trusted programs before this turn.
+    pub programs: bravebot_core::programs::TrustedPrograms,
+    /// Length of transcript entries before this turn.
+    pub transcript_len: usize,
+    /// Stored session title before this turn.
+    pub title: String,
+    /// Whether the session had already been written to disk before this turn.
+    pub was_wrote: bool,
+}
+
+/// How many turns back a rewind may reach.
+///
+/// A point holds a copy of the conversation as well as the bytes the turn wrote over, and every
+/// one of them is written into the record after every turn, so depth is paid for continuously by
+/// sessions that never rewind at all. Five is set at the case a rewind exists for, which is a
+/// mistake noticed a few prompts after it was made rather than one noticed an hour later: past
+/// that the conversation has usually moved somewhere a wholesale rewind would not be wanted.
+pub const MAX_REWIND_POINTS: usize = 5;
+
+/// One point a session can be put back to, and what it would take to get there.
+///
+/// The snapshot is taken before the turn begins and the backups arrive when it ends, so a point
+/// exists for the whole of the turn it describes and is only complete afterwards.
+#[derive(Debug, Clone)]
+pub struct RewindPoint {
+    /// What the session held before the turn.
+    pub snapshot: TurnSnapshot,
+    /// What the files that turn wrote to held before it wrote to them.
+    pub backups: Vec<bravebot_agent::workspace::Backup>,
+    /// The prompt the turn began with.
+    ///
+    /// Kept here rather than read back out of the transcript, because the list is offered after
+    /// the transcript has been rewound past other points and a turn is named by what was asked
+    /// of it.
+    pub prompt: String,
+}
+
 /// Where sessions live inside the state directory.
 const SESSIONS: &str = "sessions";
 
@@ -154,7 +234,7 @@ pub struct Record {
     #[serde(default)]
     pub directories: Vec<String>,
     /// Which build wrote this record: the version, the commit, and whether the tree was
-    /// modified. See [`crate::BUILD`].
+    /// modified, as the front end that wrote it stamps itself.
     ///
     /// A transcript is read after the fact, usually because something in it went wrong, and the
     /// first question is whether the code that produced it is the code in front of you. Without
@@ -323,7 +403,7 @@ pub struct StoredAside {
 
 impl StoredRewind {
     /// Write one down, with the paths inside the project kept relative to it.
-    fn of(point: &crate::state::RewindPoint, project: &Path) -> Self {
+    fn of(point: &RewindPoint, project: &Path) -> Self {
         use base64::Engine;
         use bravebot_agent::workspace::Before;
 
@@ -378,9 +458,9 @@ impl StoredRewind {
     ///
     /// The place in the transcript is not read from here and is left at nothing. It is an index
     /// into the list one process drew, and the session reading this draws another; the turn
-    /// number is the fact that survives, and [`crate::state::Session::restore_rewind_points`]
-    /// finds the index again from it.
-    fn into_point(self, root: &Path) -> crate::state::RewindPoint {
+    /// number is the fact that survives, and the session restoring these points finds the index
+    /// again from it.
+    fn into_point(self, root: &Path) -> RewindPoint {
         use base64::Engine;
         use bravebot_agent::workspace::{Backup, Before};
 
@@ -396,8 +476,8 @@ impl StoredRewind {
             }
         }
 
-        crate::state::RewindPoint {
-            snapshot: crate::state::TurnSnapshot {
+        RewindPoint {
+            snapshot: TurnSnapshot {
                 conversation: self.conversation,
                 turns: self.turns,
                 tokens: self.tokens,
@@ -521,7 +601,7 @@ fn restored_programs(programs: &[StoredCommand], root: &Path) -> TrustedPrograms
 
 impl StoredAside {
     /// Write one down, keeping the answer only where the record may hold it.
-    fn of(aside: &crate::state::Aside) -> Self {
+    fn of(aside: &Aside) -> Self {
         Self {
             question: aside.question.clone(),
             answer: aside.kept.then(|| aside.answer.clone()).flatten(),
@@ -529,8 +609,8 @@ impl StoredAside {
     }
 
     /// Read one back, for the view rather than for any conversation.
-    fn into_aside(self) -> crate::state::Aside {
-        crate::state::Aside {
+    fn into_aside(self) -> Aside {
+        Aside {
             kept: self.answer.is_some(),
             answer: self.answer,
             question: self.question,
@@ -611,6 +691,7 @@ pub fn record_manifest_run(
     project: &Path,
     prompt: &str,
     outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
+    build: &str,
 ) -> Option<String> {
     let (stored, trust) = match outcome {
         Ok(finished) => (
@@ -642,7 +723,7 @@ pub fn record_manifest_run(
     // matters most: a run nobody is watching that spent its afternoon blocked on an approval
     // nobody was there to give leaves this as the only trace of it.
     let timing = BTreeMap::from([(1, outcome.as_ref().map(|o| o.timing).unwrap_or_default())]);
-    let mut handle = Handle::begin(project);
+    let mut handle = Handle::begin(project, build);
     handle.save(
         prompt,
         Standing {
@@ -837,10 +918,7 @@ impl Record {
     /// `root` is the directory the resumed session works in, and the paths inside the project
     /// come back under it, as the trust map's rules do: a rewind is about the files this
     /// checkout has, not the ones the machine that wrote the record had.
-    pub fn rewind_points(
-        &self,
-        root: impl AsRef<std::path::Path>,
-    ) -> Vec<crate::state::RewindPoint> {
+    pub fn rewind_points(&self, root: impl AsRef<std::path::Path>) -> Vec<RewindPoint> {
         self.rewind
             .iter()
             .cloned()
@@ -901,7 +979,7 @@ pub struct Standing<'a> {
     pub model: Option<&'a str>,
     pub todos: &'a BTreeMap<usize, Vec<Row>>,
     /// Questions asked beside the work, oldest first.
-    pub asides: &'a [crate::state::Aside],
+    pub asides: &'a [Aside],
     pub trust: &'a TrustStore,
     pub programs: &'a TrustedPrograms,
     pub directories: &'a [PathBuf],
@@ -909,7 +987,7 @@ pub struct Standing<'a> {
     /// interactive interface writes.
     pub manifest: Option<&'a StoredManifest>,
     /// The turns a rewind can go back to, oldest first.
-    pub rewind: &'a [crate::state::RewindPoint],
+    pub rewind: &'a [RewindPoint],
 }
 
 /// A session worth picking up again, and where to pick it up.
@@ -938,14 +1016,22 @@ pub struct Handle {
     /// nothing to pick up again, and offering to resume one is offering something that does not
     /// work.
     wrote: bool,
+    /// What the program writing these records is: the version, the commit, and whether the tree had
+    /// uncommitted changes.
+    ///
+    /// Stated once when the session opens rather than at each save, because a session is written
+    /// down after every turn and the program running it does not change between two of them.
+    /// Supplied rather than read here because this crate cannot see the one that knows: the front
+    /// ends depend on it, not the other way round.
+    build: String,
 }
 
 impl Handle {
-    /// Begin a session for work in `project`.
+    /// Begin a session for work in `project`, written down as recorded by `build`.
     ///
     /// Nothing is written yet: a session that is opened and abandoned should not leave a record,
     /// or the list fills with launches nobody meant.
-    pub fn begin(project: &Path) -> Self {
+    pub fn begin(project: &Path, build: &str) -> Self {
         Self {
             id: new_id(),
             project: project.to_path_buf(),
@@ -953,11 +1039,16 @@ impl Handle {
             branch: branch_of(project),
             title: String::new(),
             wrote: false,
+            build: build.to_string(),
         }
     }
 
     /// Continue the session a record came from, writing back to the same files.
-    pub fn resuming(project: &Path, record: &Record) -> Self {
+    ///
+    /// Stamped with the build now running rather than the one in the record: what the rest of this
+    /// session writes is written by this program, and what wrote the turns before it is the caveat
+    /// the record it came from already carries.
+    pub fn resuming(project: &Path, record: &Record, build: &str) -> Self {
         Self {
             id: record.id.clone(),
             project: project.to_path_buf(),
@@ -966,6 +1057,7 @@ impl Handle {
             title: record.title.clone(),
             // The record it came from is the one being written back to.
             wrote: true,
+            build: build.to_string(),
         }
     }
 
@@ -1110,7 +1202,7 @@ impl Handle {
                 .iter()
                 .map(|d| d.display().to_string())
                 .collect(),
-            build: Some(crate::BUILD.to_string()),
+            build: Some(self.build.clone()),
             conversation: standing.conversation.clone(),
             history: standing.history.map(<[StoredTurn]>::to_vec),
             asides: standing.asides.iter().map(StoredAside::of).collect(),
@@ -1291,7 +1383,7 @@ pub struct Recalled {
     pub trails: BTreeMap<usize, Vec<crate::audit::TrailLine>>,
     pub todos: BTreeMap<usize, Vec<Row>>,
     /// Questions asked beside the work, oldest first, for the view rather than the transcript.
-    pub asides: Vec<crate::state::Aside>,
+    pub asides: Vec<Aside>,
 }
 
 /// Everything a resumed transcript needs beyond the conversation itself.
@@ -2298,16 +2390,44 @@ mod tests {
         }
     }
 
-    /// A transcript is read after the fact, and the first question about a strange one is
-    /// whether the code that produced it is the code in front of you. Inferring that from the
-    /// transcript's own symptoms is guesswork at the moment guesswork is worth least.
+    /// A transcript is read after the fact, and the first question about a strange one is whether
+    /// the code that produced it is the code in front of you. Inferring that from the transcript's
+    /// own symptoms is guesswork at the moment guesswork is worth least.
+    ///
+    /// The stamp is the caller's, since this crate cannot see the program that knows what it was
+    /// built from. That makes losing it a possibility rather than an impossibility, so the record is
+    /// read back here rather than the stamp being trusted to arrive.
+    ///
+    /// A resumed session is written by the program resuming it, whatever wrote the turns already in
+    /// the record. Carrying the recorded stamp forward instead is the tempting thing, because
+    /// everything else about a resumed handle does come from the record, and it would leave the
+    /// caveat below permanently unable to fire.
     #[test]
     fn a_record_says_which_build_wrote_it() {
-        assert!(
-            crate::BUILD.starts_with(env!("CARGO_PKG_VERSION")),
-            "the build stamp does not name the version: {}",
-            crate::BUILD
+        const LATER: &str = "0.0.0-test+1111111";
+
+        let root = an_empty_project("bravebot-session-build-stamp");
+
+        let mut handle = Handle::begin(&root, A_BUILD);
+        save_a_turn_session(&mut handle);
+
+        let record = load(&root, handle.id()).expect("the record was not written");
+        assert_eq!(
+            record.build.as_deref(),
+            Some(A_BUILD),
+            "the record does not say which build wrote it"
         );
+
+        let mut resumed = Handle::resuming(&root, &record, LATER);
+        save_a_turn_session(&mut resumed);
+        let again = load(&root, resumed.id()).expect("the record was not written back");
+        assert_eq!(
+            again.build.as_deref(),
+            Some(LATER),
+            "the record names the build that wrote the turns before the resume"
+        );
+
+        forget_the_project(&root);
     }
 
     /// Resuming on different code is a caveat on the transcript above it, exactly as resuming on
@@ -2573,6 +2693,9 @@ mod tests {
         root
     }
 
+    /// A stamp shaped like the one a front end passes in: a version and the commit behind it.
+    const A_BUILD: &str = "0.0.0-test+0000000";
+
     /// Remove a test project and every record written about it.
     fn forget_the_project(root: &Path) {
         let _ = std::fs::remove_dir_all(root);
@@ -2633,10 +2756,10 @@ mod tests {
     fn a_manifest_run_is_recorded_apart_from_the_session() {
         let root = an_empty_project("bravebot-session-manifest-run");
 
-        let mut session = Handle::begin(&root);
+        let mut session = Handle::begin(&root, A_BUILD);
         save_a_turn_session(&mut session);
 
-        let run = record_manifest_run(&root, "summarise the specs", &a_failed_run())
+        let run = record_manifest_run(&root, "summarise the specs", &a_failed_run(), A_BUILD)
             .expect("the run was not written down");
 
         assert_ne!(run, session.id(), "the run took the session's own record");
@@ -2668,9 +2791,10 @@ mod tests {
     fn a_session_that_started_a_run_can_still_be_resumed() {
         let root = an_empty_project("bravebot-session-manifest-resumable");
 
-        let mut session = Handle::begin(&root);
+        let mut session = Handle::begin(&root, A_BUILD);
         save_a_turn_session(&mut session);
-        record_manifest_run(&root, "summarise the specs", &a_failed_run()).expect("written");
+        record_manifest_run(&root, "summarise the specs", &a_failed_run(), A_BUILD)
+            .expect("written");
 
         let record = load(&root, session.id()).expect("the session does not load");
         assert!(
@@ -2697,7 +2821,7 @@ mod tests {
         let root = an_empty_project("bravebot-session-manifest-cancelled");
 
         let cancelled = Err(bravebot_agent::TurnError::Cancelled { attempts: None });
-        assert!(record_manifest_run(&root, "summarise the specs", &cancelled).is_none());
+        assert!(record_manifest_run(&root, "summarise the specs", &cancelled, A_BUILD).is_none());
         assert!(list(&root).is_empty(), "a stopped run was written down");
 
         forget_the_project(&root);
@@ -2741,7 +2865,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create");
 
-        let handle = Handle::begin(&root);
+        let handle = Handle::begin(&root, A_BUILD);
         let stamped = crate::audit::Stamped {
             at: 1,
             from: None,
@@ -2775,7 +2899,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create");
 
-        let mut handle = Handle::begin(&root);
+        let mut handle = Handle::begin(&root, A_BUILD);
         let empty = bravebot_agent::Conversation::new().snapshot();
         handle.save(
             "delete the tests",
@@ -2830,7 +2954,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create");
 
-        let mut handle = Handle::begin(&root);
+        let mut handle = Handle::begin(&root, A_BUILD);
         assert!(handle.rename("release audit"), "the name was refused");
 
         handle.discard_unwritten("release audit");

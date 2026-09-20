@@ -794,7 +794,7 @@ routing, which is a working request that quietly is not what this agent asked fo
 deliberately is not something the picker offers, that entry not being on this product's roster.
 
 `verified-by: bravebot_config::lib::the_legacy_automatic_name_becomes_the_brave_bot_default`
-`verified-by: bravebot_tui::store::the_legacy_automatic_name_is_rewritten_on_read`
+`verified-by: bravebot_session::store::the_legacy_automatic_name_is_rewritten_on_read`
 `verified-by: bravebot_aichat::models::automatic_is_offered_once_even_if_the_server_lists_it_too`
 `verified-by: bravebot_agent::turn::without_a_choice_the_configured_default_is_requested`
 

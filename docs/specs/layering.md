@@ -26,8 +26,9 @@ this spec.
 | `bravebot-net` | The network egress path for everything carrying labelled content | `core` | All agent traffic passes the policy gate here. See the known cost below |
 | `bravebot-aichat` | Client for the OpenAI-compatible aichat backend | `core`, `config`, `net`, `signing` | Speaks the wire protocol only, and reaches the network through `net` |
 | `bravebot-bedrock` | Client for models on AWS Bedrock | `core`, `aichat`, `config`, `net`, `signing` | Speaks the wire protocol only, and reaches the network through `net`. Runs the AWS CLI to resolve a credential, which is the one subprocess it starts |
-| `bravebot-tui` | The interactive terminal interface | `core`, `agent`, `aichat`, `config`, `i18n`, `net`, `sandbox` | Presentation. May display released content, always inside a margin it draws itself. Owns the clipboard and shell mode, both of which are gestures a person made. Owns the terminal itself, so it may read the tty directly to ask the terminal about itself; what comes back describes the terminal and never enters a turn. Holds the on-disk session record and the audit serialiser, which is a known cost below |
-| `bravebot-cli` | Command-line entry point | `core`, `agent`, `config`, `i18n`, `net`, `sandbox`, `skus`, `tui` | Presentation. Where nobody can be asked, effects are refused rather than applied unseen |
+| `bravebot-session` | What a session leaves on disk: the record, the state directory, and the audit serialiser | `core`, `agent`, `aichat`, `config`, `i18n` | Not presentation: draws nothing and links no terminal library, so a record can be read back without linking a front end. Serialises what a session held, the rules it recorded included, and decides none of it. Which build wrote a record is supplied when a session opens, since the stamp is computed where the front ends can see it and they depend on this crate rather than the other way round |
+| `bravebot-tui` | The interactive terminal interface | `core`, `agent`, `aichat`, `config`, `i18n`, `net`, `sandbox`, `session` | Presentation. May display released content, always inside a margin it draws itself. Owns the clipboard and shell mode, both of which are gestures a person made. Owns the terminal itself, so it may read the tty directly to ask the terminal about itself; what comes back describes the terminal and never enters a turn |
+| `bravebot-cli` | Command-line entry point | `core`, `agent`, `config`, `i18n`, `net`, `sandbox`, `session`, `skus`, `tui` | Presentation. Where nobody can be asked, effects are refused rather than applied unseen |
 | `bravebot-mcp` | Model Context Protocol client: the extension boundary for tools | `core`, `net`, `sandbox` | An opaque call erases the routing/content split, so primitives stay native rather than moving behind it |
 | `bravebot-lsp` | Language server client: a read-only question about a symbol | `core` | Speaks the protocol only. Asks a closed set of read-only methods and never a name a caller supplies, so a server's own method list cannot widen what this does. Separates a location from the text at it: the type carrying a location holds no text, which is what [tools/lsp.md](tools/lsp.md) rests on |
 | `bravebot-sandbox` | OS-level confinement for subprocesses | none | Confines processes running code we did not write. A processor's caller is our own code, so it is not what this confines |
@@ -112,10 +113,15 @@ does not compile.
   compatibility promise the pin does not, and keeps the two release cadences apart. Both answer the
   clause and they differ in everything else, and what decides between them is who maintains what
   rather than anything here.
-- **Whether a crate of its own for the session record is worth the move.** The alternative is
-  leaving the record where it is and letting the table say so, which is what it says today. The
-  cost of that is in the known cost below; the cost of moving it is two crates re-pointed and a row
-  added, paid once.
+- **Whether the record should hold the types the front end holds in memory.** `bravebot-session`
+  declares its own structs for what it writes, which is what lets a struct on disk outlive the shape
+  of a struct in memory, and several of them are the interface's own live state as well: the
+  questions asked beside a session, the turns a rewind can go back to and the snapshot each of those
+  carries, the turns a resume replays, and a prompt in the recalled history. Those are the record's
+  types being used as the interface's, which is the coupling a second front end would find rather
+  than the serialiser being asked to hold the terminal's idea of a turn. Splitting them puts a second
+  definition of each under the front end with a conversion between the two; leaving them is a shape
+  the next front end inherits.
 
 ## Known costs
 
@@ -147,9 +153,11 @@ does not compile.
   can draw its own container and can leave the machine, so a margin is the first of three questions
   rather than the whole of one.
 
-- **The on-disk session record lives in a presentation crate.** `bravebot-tui`'s row opens with
-  presentation, and the session record, the state directory and the audit serialiser are its public
-  modules, which [sessions.md](sessions.md) and [state-directory.md](state-directory.md) govern
-  where they sit. So reading a session back means linking the terminal interface, and the terminal
-  library with it, whether or not anything draws. The record is not presentation and the crate
-  holding it is, which is a row that cannot describe both at once.
+- **Reading a session record still links the agent.** `bravebot-session` links no terminal library,
+  which is what a second front end wanted from the move, and it is not a leaf: a record holds what a
+  turn produced, so the conversation, the backups a rewind can restore and the timing are
+  `bravebot-agent`'s types, and `bravebot-agent` reaches `bravebot-net` and `bravebot-sandbox`. A
+  program that only wants to list what sessions exist therefore links the turn loop. Declaring the
+  record's own version of each of those types would cut the edge and put a second definition of
+  every one of them under this crate, which is a copy to keep in step for a caller nothing has yet
+  asked for.

@@ -4,10 +4,11 @@
 //! display; it does **not** hold a policy. Each turn constructs its own, which is what
 //! stops routing from one turn leaking into the next as untrusted content accumulates.
 
-use crate::audit::TrailLine;
 use bravebot_agent::report::{Activity, Landing, Phase, Printed, Reported, Shown};
 use bravebot_aichat::protocol::Effort;
 use bravebot_i18n::t;
+use bravebot_session::audit::TrailLine;
+use bravebot_session::sessions::{Aside, MAX_REWIND_POINTS, RewindPoint, TurnSnapshot};
 use std::time::{Duration, Instant};
 
 /// How many newlines a paste carries before it is folded behind a marker.
@@ -114,29 +115,6 @@ pub struct Output {
     pub outcome: bravebot_agent::report::Outcome,
 }
 
-/// A question asked beside the work, and the answer it came back with.
-///
-/// Never in the conversation. The question forked the exchange, was answered over the copy, and
-/// the copy went: the planner picking the work up has read neither half, which is what makes an
-/// aside a question rather than a turn.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Aside {
-    /// What the person asked, in their own words.
-    pub question: String,
-    /// The answer, as the person may read it.
-    ///
-    /// `None` for one brought back from a record that could not hold it, where the view says so
-    /// rather than drawing an answer that is not there. Absence rather than emptiness, because a
-    /// model that answered with nothing at all is a different thing from an answer that did not
-    /// come back, and the interface must not have to tell the two apart by reading the words.
-    pub answer: Option<String>,
-    /// Whether the record keeps the answer, so that a resume brings it back.
-    ///
-    /// `false` where the exchange had met something untrusted when the question was asked: the
-    /// planner's own words are quarantined then, like anything else, and a record is read back.
-    pub kept: bool,
-}
-
 /// Something the delegate view can open.
 ///
 /// One list rather than two, because a person pressing the key is asking to see work that is not
@@ -208,7 +186,7 @@ pub struct Entry {
     ///
     /// Already in the words it is drawn in, because an entry replayed from a stored session has
     /// no events behind it: what the audit file holds is a record of what a gate decided, not the
-    /// decision. See [`crate::audit::TrailLine`].
+    /// decision. See [`bravebot_session::audit::TrailLine`].
     pub trail: Vec<TrailLine>,
     /// The task list as it stood when this entry was made, if the turn kept one.
     ///
@@ -744,63 +722,6 @@ pub struct TurnStart {
     pub transcript_len: usize,
 }
 
-/// A checkpoint of session state captured before a turn begins, for `/undo`.
-#[derive(Debug, Clone)]
-pub struct TurnSnapshot {
-    /// The conversation state (messages, references, context).
-    pub conversation: bravebot_agent::conversation::Snapshot,
-    /// Completed turns count before this turn.
-    pub turns: usize,
-    /// Cumulative tokens before this turn.
-    pub tokens: u64,
-    /// Spend by turn before this turn.
-    pub spend: std::collections::BTreeMap<usize, u64>,
-    /// Timing by turn before this turn.
-    pub timing: std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
-    /// What the turn before this one read out of the cache, or `None` if it was the first.
-    ///
-    /// Kept with the spend it belongs beside: undoing a turn that is no longer in the token count
-    /// must not leave the panel reporting the cache that turn hit.
-    pub cached: Option<bravebot_aichat::protocol::Cached>,
-    /// Trust map rules before this turn.
-    pub trust: bravebot_core::trust::TrustStore,
-    /// Trusted programs before this turn.
-    pub programs: bravebot_core::programs::TrustedPrograms,
-    /// Length of transcript entries before this turn.
-    pub transcript_len: usize,
-    /// Stored session title before this turn.
-    pub title: String,
-    /// Whether the session had already been written to disk before this turn.
-    pub was_wrote: bool,
-}
-
-/// How many turns back a rewind may reach.
-///
-/// A point holds a copy of the conversation as well as the bytes the turn wrote over, and every
-/// one of them is written into the record after every turn, so depth is paid for continuously by
-/// sessions that never rewind at all. Five is set at the case a rewind exists for, which is a
-/// mistake noticed a few prompts after it was made rather than one noticed an hour later: past
-/// that the conversation has usually moved somewhere a wholesale rewind would not be wanted.
-pub const MAX_REWIND_POINTS: usize = 5;
-
-/// One point a session can be put back to, and what it would take to get there.
-///
-/// The snapshot is taken before the turn begins and the backups arrive when it ends, so a point
-/// exists for the whole of the turn it describes and is only complete afterwards.
-#[derive(Debug, Clone)]
-pub struct RewindPoint {
-    /// What the session held before the turn.
-    pub snapshot: TurnSnapshot,
-    /// What the files that turn wrote to held before it wrote to them.
-    pub backups: Vec<bravebot_agent::workspace::Backup>,
-    /// The prompt the turn began with.
-    ///
-    /// Kept here rather than read back out of the transcript, because the list is offered after
-    /// the transcript has been rewound past other points and a turn is named by what was asked
-    /// of it.
-    pub prompt: String,
-}
-
 /// What the rewind points are holding in memory, which is what the budget is spent on.
 fn held_bytes(points: &[RewindPoint]) -> usize {
     points
@@ -964,7 +885,7 @@ pub struct Session {
     pub tier: String,
     /// How many turns have been submitted, which picks the indicator's word.
     pub turns: usize,
-    turn_history: Vec<crate::sessions::StoredTurn>,
+    turn_history: Vec<bravebot_session::sessions::StoredTurn>,
     prompt_at: Option<usize>,
     recall: Option<crate::history::Ticket>,
     turn_places: std::collections::BTreeMap<usize, usize>,
@@ -1110,7 +1031,7 @@ pub struct Session {
     /// disagree, and the disagreement a caller would reach for first is arming a tick while one
     /// is still running.
     ///
-    /// Not in [`crate::sessions::Standing`], so nothing about it is written down. A schedule that
+    /// Not in [`bravebot_session::sessions::Standing`], so nothing about it is written down. A schedule that
     /// outlived the session that set it would start sending prompts at somebody who resumed a
     /// conversation to read it.
     looping: Option<crate::loops::Running>,
@@ -1120,7 +1041,7 @@ pub struct Session {
     /// move together, and a field anybody could set would let a goal send the work back without
     /// having counted the round it spent doing so.
     ///
-    /// Not in [`crate::sessions::Standing`] either. A goal that outlived its session would take a
+    /// Not in [`bravebot_session::sessions::Standing`] either. A goal that outlived its session would take a
     /// conversation somebody resumed to read and keep working it, with nothing in the transcript
     /// to say why.
     goal: Option<crate::goals::Running>,
@@ -1130,7 +1051,7 @@ pub struct Session {
     /// gap to its next fire measured from the end of the turn the last one started, and a field
     /// anybody could set would let those three disagree.
     ///
-    /// Not in [`crate::sessions::Standing`] either, and more strongly than the other two: a watch
+    /// Not in [`bravebot_session::sessions::Standing`] either, and more strongly than the other two: a watch
     /// that outlived its session would start sending prompts at somebody who opened a
     /// conversation to read it, about a file that moved while nobody was here.
     watches: crate::watches::Watches,
@@ -1403,9 +1324,10 @@ impl Session {
     /// input box for the user to read and submit. That keystroke is what makes it trusted, exactly
     /// as typing it would have been.
     pub fn with_stored_history(mut self) -> Self {
-        self.history = crate::history::History::from_entries(crate::store::load_history());
-        self.model = crate::store::load_model();
-        self.effort = crate::store::load_effort();
+        self.history =
+            crate::history::History::from_entries(bravebot_session::store::load_history());
+        self.model = bravebot_session::store::load_model();
+        self.effort = bravebot_session::store::load_effort();
         self.persist = true;
         self
     }
@@ -1422,7 +1344,7 @@ impl Session {
     pub fn choose_model(&mut self, model: impl Into<String>) {
         let model = model.into();
         if self.persist {
-            crate::store::save_model(&model);
+            bravebot_session::store::save_model(&model);
         }
         self.model = Some(model);
     }
@@ -1463,7 +1385,7 @@ impl Session {
     /// session that persists, the same rule the model follows and for the same reason.
     pub fn choose_effort(&mut self, effort: Option<Effort>) {
         if self.persist {
-            crate::store::save_effort(effort);
+            bravebot_session::store::save_effort(effort);
         }
         self.effort = effort;
     }
@@ -2387,16 +2309,24 @@ impl Session {
     /// asked for. With no choice recorded the file answers, and with neither it is the box everybody
     /// has.
     ///
-    /// A word the file spelled that names no style leaves the ordinary box. Nothing is said about it
-    /// here: a settings file is reported by `doctor`, and a session that refused to start over a
-    /// mistyped editing preference would be worse than one that ignores it.
+    /// A word that names no style is no choice at all, whichever of the two spelled it: both are read
+    /// from a file somebody may have edited by hand, so both are resolved here by the same rule rather
+    /// than each being trusted where it came from. A corrupt recorded word therefore leaves the file
+    /// answering, and a mistyped file leaves the ordinary box. Nothing is said about either: a settings
+    /// file is reported by `doctor`, and a session that refused to start over a mistyped editing
+    /// preference would be worse than one that ignores it.
     ///
     /// The recorded choice is read only for a session that persists, which is the rule every write
     /// here follows: a test must not be handed the developer's own preference, or what the box does
     /// under it would depend on the machine it ran on.
     pub fn adopt_editing(&mut self, configured: Option<&str>) {
-        let chosen = self.persist.then(crate::store::load_editing).flatten();
-        self.editing = chosen
+        let stored = self
+            .persist
+            .then(bravebot_session::store::load_editing)
+            .flatten();
+        self.editing = stored
+            .as_deref()
+            .and_then(crate::vim::Editing::named)
             .or_else(|| configured.and_then(crate::vim::Editing::named))
             .unwrap_or_default();
     }
@@ -2413,7 +2343,10 @@ impl Session {
     /// leave nothing behind, must not pick up a developer's standing answer to whether somebody is
     /// asked before content nobody vouched for reaches the planner.
     pub fn adopt_vetting(&mut self, asked: bool, configured: Option<bool>) {
-        let chosen = self.persist.then(crate::store::load_vetting).flatten();
+        let chosen = self
+            .persist
+            .then(bravebot_session::store::load_vetting)
+            .flatten();
         self.vetting = bravebot_core::vetting::auto(asked, chosen, configured);
     }
 
@@ -2434,7 +2367,7 @@ impl Session {
     /// person answering it.
     pub fn choose_vetting(&mut self, auto: bool) {
         if self.persist {
-            crate::store::save_vetting(auto);
+            bravebot_session::store::save_vetting(auto);
         }
         self.vetting = auto;
     }
@@ -2461,7 +2394,7 @@ impl Session {
     /// direction, NORMAL not being a state the ordinary box has.
     pub fn choose_editing(&mut self, editing: crate::vim::Editing) {
         if self.persist {
-            crate::store::save_editing(editing);
+            bravebot_session::store::save_editing(editing.as_str());
         }
         self.editing = editing;
         self.mode = crate::vim::Mode::Insert;
@@ -3957,7 +3890,7 @@ impl Session {
     /// Record one ended turn without copying model output out of the display.
     /// Conversation offsets refer to the archive plus current messages, so compaction keeps them.
     pub fn record_turn(&mut self, start: usize, conversation: &bravebot_agent::Conversation) {
-        use crate::sessions::{StoredOutcome, StoredTurn};
+        use bravebot_session::sessions::{StoredOutcome, StoredTurn};
         let entries = &self.transcript[self.turn_start.transcript_len.min(self.transcript.len())..];
         let prompt = entries
             .first()
@@ -3991,7 +3924,7 @@ impl Session {
         });
     }
 
-    pub fn turn_history(&self) -> &[crate::sessions::StoredTurn] {
+    pub fn turn_history(&self) -> &[bravebot_session::sessions::StoredTurn] {
         &self.turn_history
     }
 
@@ -4033,13 +3966,13 @@ impl Session {
         &mut self,
         conversation: &bravebot_agent::Conversation,
         title: &str,
-        recalled: &crate::sessions::Recalled,
+        recalled: &bravebot_session::sessions::Recalled,
     ) {
         self.note(t!(session_resumed, title = title));
         self.unplaced_todos = recalled.todos.clone();
 
         if let Some(history) = &recalled.history {
-            use crate::sessions::StoredOutcome;
+            use bravebot_session::sessions::StoredOutcome;
             let said = conversation.recounted();
             let mut cursor = 0;
             let reset = history
@@ -4658,7 +4591,7 @@ impl Session {
         let project = self.project();
         let stored = self.history.push(self.recallable(prompt), project).cloned();
         if let (true, Some(entry)) = (self.persist, stored) {
-            crate::store::append_history(&entry);
+            bravebot_session::store::append_history(&entry);
         }
         self.history.ticket()
     }
@@ -5478,7 +5411,7 @@ impl Session {
     pub fn complete(
         &mut self,
         reply: impl Into<String>,
-        trail: Vec<crate::audit::TrailLine>,
+        trail: Vec<bravebot_session::audit::TrailLine>,
         tokens: u64,
     ) {
         // The list moves onto the entry rather than being dropped, so what the turn set out to do
@@ -5531,7 +5464,7 @@ impl Session {
             return;
         };
         if self.history.withdraw(ticket) && self.persist {
-            crate::store::save_history(self.history.entries());
+            bravebot_session::store::save_history(self.history.entries());
         }
     }
 
@@ -5972,7 +5905,7 @@ impl Session {
     /// The prompts the open search answers with, oldest first.
     ///
     /// Empty when nothing is open, so a caller need not ask twice.
-    pub fn history_matches(&self) -> Vec<&crate::history::Entry> {
+    pub fn history_matches(&self) -> Vec<&bravebot_session::store::Entry> {
         match &self.history_search {
             Some(search) => search.matching(self.history.entries(), self.project().as_deref()),
             None => Vec::new(),
@@ -5980,7 +5913,7 @@ impl Session {
     }
 
     /// The prompt under the cursor in the open search.
-    pub fn history_match(&self) -> Option<&crate::history::Entry> {
+    pub fn history_match(&self) -> Option<&bravebot_session::store::Entry> {
         let matching = self.history_matches();
         let at = self.history_search.as_ref()?.at(matching.len())?;
         matching.get(at).copied()
@@ -9200,7 +9133,7 @@ mod tests {
         s.submit();
         s.complete(
             "reply",
-            vec![crate::audit::as_line(
+            vec![bravebot_session::audit::as_line(
                 &bravebot_core::event::Event::Observed {
                     capability: bravebot_core::capability::Capability::FileRead,
                     label: Label::untrusted_private(),
@@ -9413,7 +9346,7 @@ mod tests {
         s.replay(
             &conversation,
             "a title",
-            &crate::sessions::Recalled {
+            &bravebot_session::sessions::Recalled {
                 history: None,
                 turns: None,
                 trails: Default::default(),
@@ -9468,7 +9401,7 @@ mod tests {
         s.replay(
             &conversation,
             "a title",
-            &crate::sessions::Recalled {
+            &bravebot_session::sessions::Recalled {
                 history: None,
                 turns: None,
                 trails: Default::default(),
@@ -10928,7 +10861,7 @@ mod tests {
         fn resumed(messages: Vec<Message>, trails: &BTreeMap<usize, Vec<TrailLine>>) -> Vec<Entry> {
             replayed(
                 messages,
-                crate::sessions::Recalled {
+                bravebot_session::sessions::Recalled {
                     history: None,
                     turns: None,
                     trails: trails.clone(),
@@ -10938,7 +10871,10 @@ mod tests {
             )
         }
 
-        fn replayed(messages: Vec<Message>, mut recalled: crate::sessions::Recalled) -> Vec<Entry> {
+        fn replayed(
+            messages: Vec<Message>,
+            mut recalled: bravebot_session::sessions::Recalled,
+        ) -> Vec<Entry> {
             let mut conversation = Conversation::new();
             let mut recorded = session();
             let mut start = None;
@@ -11064,7 +11000,7 @@ mod tests {
                     Message::user("second"),
                     Message::assistant("second reply"),
                 ],
-                crate::sessions::Recalled {
+                bravebot_session::sessions::Recalled {
                     history: None,
                     turns: None,
                     trails: BTreeMap::new(),
@@ -11116,7 +11052,7 @@ mod tests {
                     Message::user("b"),
                     Message::assistant("second reply"),
                 ],
-                crate::sessions::Recalled {
+                bravebot_session::sessions::Recalled {
                     history: None,
                     turns: None,
                     trails: BTreeMap::new(),

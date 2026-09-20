@@ -2,8 +2,8 @@
 //!
 //! Uses a temporary HOME so the developer's own history is never read or written.
 
-use bravebot_tui::history::Entry;
-use bravebot_tui::store;
+use bravebot_session::store;
+use bravebot_session::store::Entry;
 use std::sync::Mutex;
 
 /// The prompts of what was read back, which is what these tests are about.
@@ -270,6 +270,45 @@ fn a_chosen_theme_is_read_back_next_session() {
         store::save_theme("nord");
         assert_eq!(store::load_theme().as_deref(), Some("nord"));
     });
+}
+
+/// The editing choice outlives the session that made it, and the word it is stored as is resolved by
+/// the same rule as the word in a settings file. The choice outranks the file, because somebody who
+/// picked a box during a session picked it knowing what their settings said. A record somebody edited
+/// by hand must not be able to hand the next session a box whose letters do things nobody asked for,
+/// and a corrupt one must not stand in the way of the settings file either.
+#[test]
+fn a_recorded_style_of_editing_is_read_back_and_a_word_naming_none_is_not() {
+    with_temp_home("editing", || {
+        store::save_editing("vim");
+        assert_eq!(adopted(None), bravebot_tui::vim::Editing::Vi);
+
+        store::save_editing("emacs");
+        assert_eq!(
+            adopted(Some("vim")),
+            bravebot_tui::vim::Editing::Ordinary,
+            "a settings file outranked the choice somebody made"
+        );
+
+        store::save_editing("modal");
+        assert_eq!(
+            adopted(None),
+            bravebot_tui::vim::Editing::Ordinary,
+            "a recorded word naming no style became a choice"
+        );
+        assert_eq!(
+            adopted(Some("vim")),
+            bravebot_tui::vim::Editing::Vi,
+            "a corrupt record stopped the settings file from answering"
+        );
+    });
+}
+
+/// What a session that persists settles on, given what a settings file said.
+fn adopted(configured: Option<&str>) -> bravebot_tui::vim::Editing {
+    let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+    session.adopt_editing(configured);
+    session.editing()
 }
 
 /// The effort choice outlives the session that made it, the same way the model choice does.

@@ -416,7 +416,7 @@ pub fn sense(out: &mut impl Write) {
 
 /// Load the stored theme name, or `brave` when nothing was chosen or the name is unknown.
 pub fn restore_saved() {
-    let chosen = crate::store::load_theme().unwrap_or_else(|| BRAVE.to_string());
+    let chosen = bravebot_session::store::load_theme().unwrap_or_else(|| BRAVE.to_string());
     if let Some(theme) = find(&chosen) {
         apply(&theme);
     } else {
@@ -800,7 +800,7 @@ fn named(
 
 /// Directory holding user theme JSON files, inside `~/.bravebot`.
 pub fn user_themes_directory() -> Option<PathBuf> {
-    crate::store::directory().map(|dir| dir.join("themes"))
+    bravebot_session::store::directory().map(|dir| dir.join("themes"))
 }
 
 fn load_user_themes() -> Vec<Theme> {

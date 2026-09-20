@@ -1,0 +1,24 @@
+[package]
+name = "bravebot-session"
+description = "The on-disk session record, the state directory, and the audit serialiser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The backup bytes a rewind point holds are arbitrary, and the record is JSON.
+base64 = { workspace = true }
+bravebot-agent = { path = "../agent" }
+# The effort level is stored as the protocol's own word, and a rewind point holds what the
+# turn before it read out of the cache.
+bravebot-aichat = { path = "../aichat" }
+bravebot-config = { path = "../config" }
+bravebot-core = { path = "../core" }
+bravebot-i18n = { path = "../i18n" }
+# Names a session, which has to be opaque and collide with nothing, and OsRng is the source
+# that gives both.
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

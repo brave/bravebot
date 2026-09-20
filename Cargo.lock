@@ -149,6 +149,7 @@ dependencies = [
  "bravebot-i18n",
  "bravebot-net",
  "bravebot-sandbox",
+ "bravebot-session",
  "bravebot-skus",
  "bravebot-tui",
 ]
@@ -205,6 +206,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "bravebot-session"
+version = "0.9.0"
+dependencies = [
+ "base64 0.22.1",
+ "bravebot-agent",
+ "bravebot-aichat",
+ "bravebot-config",
+ "bravebot-core",
+ "bravebot-i18n",
+ "rand",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bravebot-signing"
 version = "0.9.0"
 dependencies = [
@@ -237,7 +253,7 @@ dependencies = [
  "bravebot-i18n",
  "bravebot-net",
  "bravebot-sandbox",
- "rand",
+ "bravebot-session",
  "ratatui",
  "rustix",
  "serde",

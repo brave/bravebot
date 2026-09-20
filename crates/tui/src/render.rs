@@ -19,7 +19,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthChar;
 
-use crate::audit::TrailLine;
 use crate::keybindings::Keybindings;
 use crate::logo;
 use crate::markdown;
@@ -27,6 +26,7 @@ use crate::state::{Delegate, Laid, Output, Session, Speaker, Status, Watched};
 use crate::table;
 use crate::theme;
 use crate::wrap;
+use bravebot_session::audit::TrailLine;
 
 /// Marks a turn boundary in the transcript.
 const TURN_MARKER: &str = "⏺";
@@ -667,7 +667,11 @@ fn draw_watching(frame: &mut Frame, session: &Session) -> Laid {
 /// The question is drawn the way a prompt is drawn in the transcript and the answer the way a
 /// reply is, so somebody arriving here reads it as the exchange it is. That it is an exchange the
 /// conversation never had is what the header says.
-fn draw_aside(frame: &mut Frame, session: &Session, aside: &crate::state::Aside) -> Laid {
+fn draw_aside(
+    frame: &mut Frame,
+    session: &Session,
+    aside: &bravebot_session::sessions::Aside,
+) -> Laid {
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1135,7 +1139,11 @@ const NAME_COLUMN: usize = 14;
 /// The mark is the one a delegate that answered carries, because that is what happened: the
 /// question was asked and came back. What the word beside it says is whether the answer outlives
 /// the session, which is the one thing about an aside a person cannot see by reading it.
-fn aside_row(aside: &crate::state::Aside, highlighted: bool, width: usize) -> Line<'static> {
+fn aside_row(
+    aside: &bravebot_session::sessions::Aside,
+    highlighted: bool,
+    width: usize,
+) -> Line<'static> {
     let (standing, standing_colour) = if aside.kept {
         (t!(watching_row_kept_answer), theme::ok())
     } else {
@@ -1982,9 +1990,11 @@ pub fn as_markdown(session: &Session, title: &str) -> String {
                         && let Some(outcome) = &recorded.outcome
                     {
                         let outcome = match outcome {
-                            crate::sessions::StoredOutcome::Completed => "completed",
-                            crate::sessions::StoredOutcome::Failed { .. } => "failed",
-                            crate::sessions::StoredOutcome::Cancelled { .. } => "cancelled",
+                            bravebot_session::sessions::StoredOutcome::Completed => "completed",
+                            bravebot_session::sessions::StoredOutcome::Failed { .. } => "failed",
+                            bravebot_session::sessions::StoredOutcome::Cancelled { .. } => {
+                                "cancelled"
+                            }
                         };
                         out.push_str(&format!("**Outcome:** {outcome}\n\n"));
                     }
@@ -2115,7 +2125,7 @@ fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) -> Laid {
 /// Render one line of the audit trail.
 ///
 /// Refusals are coloured differently from passes: a blocked gate is the most important
-/// thing on the screen when it happens. The wording is settled in [`crate::audit`], so a line
+/// thing on the screen when it happens. The wording is settled in [`bravebot_session::audit`], so a line
 /// that happened in this session and one read back off disk are drawn the same way.
 fn trail_line(recorded: &TrailLine) -> Line<'static> {
     let style = if recorded.blocked {
@@ -3480,7 +3490,7 @@ mod tests {
         }
 
         fn asked(session: &mut Session, question: &str, answer: &str, kept: bool) {
-            session.asked_aside(crate::state::Aside {
+            session.asked_aside(bravebot_session::sessions::Aside {
                 question: question.to_string(),
                 answer: Some(answer.to_string()),
                 kept,
@@ -3549,7 +3559,7 @@ mod tests {
         #[test]
         fn a_resumed_aside_with_no_answer_says_the_record_did_not_keep_it() {
             let mut session = Session::new("kernel-enforced");
-            session.restore_asides(vec![crate::state::Aside {
+            session.restore_asides(vec![bravebot_session::sessions::Aside {
                 question: "why recursive?".to_string(),
                 answer: None,
                 kept: false,
@@ -6467,7 +6477,7 @@ mod tests {
         session.submit();
         session.complete(
             "reply",
-            vec![crate::audit::as_line(
+            vec![bravebot_session::audit::as_line(
                 &Event::Observed {
                     capability: Capability::FileRead,
                     label: Label::untrusted_private(),
@@ -6553,7 +6563,7 @@ mod tests {
 
         session.complete(
             "reply",
-            vec![crate::audit::as_line(
+            vec![bravebot_session::audit::as_line(
                 &Event::Observed {
                     capability: Capability::FileRead,
                     label: Label::untrusted_private(),
@@ -6575,7 +6585,7 @@ mod tests {
         session.submit();
         session.complete(
             "reply",
-            vec![crate::audit::as_line(
+            vec![bravebot_session::audit::as_line(
                 &Event::Observed {
                     capability: Capability::FileRead,
                     label: Label::untrusted_private(),
@@ -6596,7 +6606,7 @@ mod tests {
         session.submit();
         session.complete(
             "refused",
-            vec![crate::audit::as_line(
+            vec![bravebot_session::audit::as_line(
                 &Event::GateBlocked {
                     gate: "action",
                     detail: String::new(),
