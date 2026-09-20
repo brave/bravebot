@@ -9,8 +9,8 @@ use bravebot_core::event::RecordingSink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_mcp::{McpError, StdioServer};
-use bravebot_sandbox::policy::SandboxPolicy;
-use bravebot_sandbox::{Sandbox, Unavailable};
+use bravebot_sandbox::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
+use bravebot_sandbox::{ConfinedChild, Environment, Sandbox, Streams, Unavailable};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -287,6 +287,58 @@ fn a_server_is_not_launched_without_confinement() {
     let _ = std::fs::remove_file(&script);
 }
 
+/// A backend that confines nothing because the program never started.
+///
+/// Written here rather than reached through a real backend, because no real backend
+/// produces this on every platform: macOS wraps the program in `sandbox-exec`, which starts
+/// whether or not the program it was given does.
+struct ProgramWouldNotStart;
+
+impl Sandbox for ProgramWouldNotStart {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            level: ConfinementLevel::Kernel,
+            mechanisms: vec!["none"],
+            network_denial_enforced: true,
+            grants_paths_that_do_not_exist: false,
+        }
+    }
+
+    fn spawn(
+        &self,
+        _program: &str,
+        _args: &[String],
+        _policy: &SandboxPolicy,
+        _streams: Streams,
+        _environment: Environment,
+    ) -> Result<ConfinedChild, bravebot_sandbox::SandboxError> {
+        Err(bravebot_sandbox::SandboxError::SpawnFailed(
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        ))
+    }
+}
+
+/// A server nobody can start is a person's own configuration to correct, and it is reported
+/// as that rather than as confinement that could not be established. Told apart because the
+/// two ask for different things: a confinement failure is a machine that cannot run a server
+/// safely, and this is a path to fix in a settings file.
+#[test]
+fn a_server_that_could_not_be_started_is_not_reported_as_a_confinement_failure() {
+    let error = StdioServer::launch(
+        "fake",
+        "/bravebot-no-such-server/never-installed",
+        &[],
+        &ProgramWouldNotStart,
+        &SandboxPolicy::strict(),
+    )
+    .expect_err("a program that will not start does not launch");
+
+    assert!(
+        matches!(error, McpError::Transport(_)),
+        "a program that would not start was reported as a confinement failure: {error}"
+    );
+}
+
 /// A tool that reports failure of its own is a failure, and what it says about that failure is
 /// content from outside like anything else it sent.
 #[test]
@@ -405,8 +457,8 @@ fn a_server_that_exits_early_is_an_error() {
 /// A server is code from outside, and a variable this process holds is not something a
 /// policy over paths can withhold from it: an API key lives in the environment rather
 /// than on disk, so a server that inherits it has been handed it whatever the profile
-/// names. The environment is emptied here rather than by whichever backend happens to be
-/// in use, so both platforms hand a server the same nothing.
+/// names. The launch asks for an empty environment rather than leaving it to whichever
+/// backend happens to be in use, so both platforms hand a server the same nothing.
 #[test]
 fn a_server_does_not_receive_this_processes_environment() {
     let _spawning = one_at_a_time();

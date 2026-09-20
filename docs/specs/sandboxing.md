@@ -7,6 +7,7 @@ governs:
   - crates/sandbox/src/policy.rs
   - crates/sandbox/src/linux.rs
   - crates/sandbox/src/macos.rs
+  - crates/sandbox/src/process.rs
 documented-by: docs/website/docs/security/security.md
 ---
 
@@ -157,19 +158,22 @@ stopped being atomic.
 <a id="SANDBOX-8"></a>
 ### SANDBOX-8: the environment a confined process receives is the caller's
 
-A confined process starts with the environment the calling process holds. Which of its own
-variables a program is trusted with is the caller's decision, and a caller that means a program to
-see none empties it before the process starts.
+A confined process starts with either the environment the calling process holds or none at all, and
+the caller says which as the process is started. Confinement applies that answer itself, so a
+caller asking for nothing is handed nothing whichever backend confines the process.
 
 **Why.** A variable carries what no grant over paths can withhold or hand over: a credential this
 process authenticates with sits in one, and so does the agent socket a push signs through. A
 backend deciding that for the caller decides it once per platform, so the same policy hands a
 program everything on one and nothing on the other, and which of those a consumer was written
 against is the difference between a credential withheld and a credential handed to code we did not
-write.
+write. Leaving the emptying to each caller costs the same thing one step further out, since a
+caller that forgets is a program handed everything with nothing saying so.
 
 `verified-by: bravebot_sandbox::linux::the_environment_a_confined_process_receives_is_the_callers`
 `verified-by: bravebot_sandbox::macos::the_environment_a_confined_process_receives_is_the_callers`
+`verified-by: bravebot_sandbox::linux::a_confined_process_given_an_empty_environment_receives_none_of_this_processes_variables`
+`verified-by: bravebot_sandbox::macos::a_confined_process_given_an_empty_environment_receives_none_of_this_processes_variables`
 
 <a id="SANDBOX-9"></a>
 ### SANDBOX-9: a path that is not on disk is left out before the policy is built, and named
