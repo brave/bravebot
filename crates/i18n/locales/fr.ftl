@@ -688,6 +688,16 @@ environment-prod = prod
 environment-custom = personnalisé
 
 
+## Ce que /cost rapporte de chaque tour
+
+# Le français sépare le nombre du signe pour cent.
+cost-share = { $percent } %
+cost-turn = Tour { $number }
+cost-before-the-first-turn = Avant le tour 1
+cost-nothing-spent = rien de dépensé pour l'instant
+cost-unattributed = non imputé à un tour
+
+
 ## L'indicateur dessiné pendant qu'un tour tourne
 
 elapsed-seconds = { $seconds } s
@@ -790,6 +800,7 @@ scroller-footer-search = / rechercher
 ## Ce qu'une ligne commençant par une barre oblique peut être
 
 command-status = Décrire cette session, ce qu'elle peut toucher, et ce qu'elle a dépensé
+command-cost = Montrer ce que chaque tour de cette session a dépensé
 command-model = Choisir avec quel modèle réfléchir
 command-theme = Choisir quel thème habille l'interface
 command-effort = Choisir l'effort de réflexion avant de répondre

@@ -5983,7 +5983,11 @@ mod tests {
     fn a_slash_offers_every_command_and_what_it_does() {
         let mut session = Session::new("none");
         session.type_char('/');
-        let output = rendered_at(&session, 120, 24);
+        // Tall enough for the whole list. A screen with no room for it drops rows from the
+        // bottom, so a fixed height would turn this into a test of how many commands fit on a
+        // terminal of that size.
+        let height = crate::app::commands().len() as u16 + 6;
+        let output = rendered_at(&session, 120, height);
 
         for command in crate::app::commands() {
             assert!(output.contains(command.name), "{} missing", command.name);

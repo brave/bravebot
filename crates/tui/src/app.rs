@@ -83,6 +83,14 @@ const CD_COMMAND: &str = "/cd";
 /// The line that reports what this session is and what it may touch.
 const STATUS_COMMAND: &str = "/status";
 
+/// The line that reports what each turn of this session has spent.
+///
+/// A word of its own rather than more rows on the status panel, because the list grows with the
+/// session: a panel that answers "what is this session" in fifteen rows would answer it in fifty
+/// on the fiftieth turn, and the breakdown is asked for when one figure looks wrong rather than
+/// every time somebody checks which directory they are in.
+const COST_COMMAND: &str = "/cost";
+
 /// The line that summarises the conversation so far, in place of sending all of it.
 const COMPACT_COMMAND: &str = "/compact";
 
@@ -147,12 +155,17 @@ pub struct Command {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 19] {
+pub fn commands() -> [Command; 20] {
     [
         Command {
             name: STATUS_COMMAND,
             argument: "",
             description: t!(command_status),
+        },
+        Command {
+            name: COST_COMMAND,
+            argument: "",
+            description: t!(command_cost),
         },
         Command {
             name: MODEL_COMMAND,
@@ -347,6 +360,8 @@ pub enum Action {
     Rename(String),
     /// Report what this session is. Needs the workspace and the trust map, which the loop owns.
     Status,
+    /// Report what each turn has spent. Reads nothing the session does not already hold.
+    Cost,
     /// Run a command the user typed in shell mode. Needs the workspace and the conversation.
     Run(String),
     /// Put the transcript in front of the user in their editor. Needs the terminal, which the
@@ -1065,6 +1080,9 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
     }
     if line.trim() == STATUS_COMMAND {
         return Action::Status;
+    }
+    if line.trim() == COST_COMMAND {
+        return Action::Cost;
     }
     if line.trim() == COMPACT_COMMAND {
         return Action::Compact;
@@ -2594,6 +2612,10 @@ fn event_loop(
                         }),
                 });
                 session.report(report);
+                needs_draw = true;
+            }
+            Action::Cost => {
+                session.report_spend();
                 needs_draw = true;
             }
             Action::Compact => {
@@ -9761,6 +9783,35 @@ mod tests {
         assert!(
             session.transcript.is_empty(),
             "the command was sent as a prompt"
+        );
+    }
+
+    #[test]
+    fn typing_the_cost_command_reports_rather_than_prompting() {
+        let mut session = Session::new("none");
+        for c in COST_COMMAND.chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::Cost);
+        assert!(session.input().is_empty(), "the command stayed on the line");
+        assert!(
+            session.transcript.is_empty(),
+            "the command was sent as a prompt"
+        );
+    }
+
+    /// Asking the planner what a session has cost is a question, not a command.
+    #[test]
+    fn a_prompt_containing_the_cost_command_is_still_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "what does /cost show".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("what does /cost show".to_string())
         );
     }
 
