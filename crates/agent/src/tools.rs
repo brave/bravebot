@@ -1001,14 +1001,15 @@ pub struct Output {
     /// Zero for every tool but the processor. A turn that reported only its own rounds would
     /// understate what it cost by however much its processors wrote.
     pub usage: Usage,
-    /// How long the call spent waiting on the model, where it called one.
+    /// When the call waited on the model, where it called one.
     ///
     /// Travels beside [`Output::usage`] and for the same reason. A processor is a request like any
     /// other, and the turn was waiting on the endpoint for it: left out, the seconds would be
     /// charged to tool execution, and a turn that did most of its work in processors would read as
     /// one that ran a very slow subprocess.
-    pub inference: std::time::Duration,
-    /// The same measured request before rounding, for delegate wait accounting.
+    ///
+    /// The boundary rather than the duration, because a parent clips a delegate's requests to its
+    /// own waits and cannot do that from a length. The duration is [`crate::timing::Interval::duration`].
     pub inference_interval: Option<crate::timing::Interval>,
     /// The command whose output this is and how it ended, where a run produced it.
     ///
@@ -1544,7 +1545,7 @@ impl Produced {
         self
     }
 
-    /// Say how long the tool waited on the model for this.
+    /// Say when the tool waited on the model for this.
     fn waiting(mut self, interval: Option<crate::timing::Interval>) -> Self {
         self.inference_interval = interval;
         self
@@ -1850,10 +1851,6 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 said: produced.said,
                 content: produced.content,
                 usage: produced.usage,
-                inference: produced
-                    .inference_interval
-                    .map(crate::timing::Interval::duration)
-                    .unwrap_or_default(),
                 inference_interval: produced.inference_interval,
                 printed_by: produced.printed_by,
                 covered_by_record: produced.covered_by_record,
@@ -1952,10 +1949,6 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         said: produced.said,
         content: produced.content,
         usage: produced.usage,
-        inference: produced
-            .inference_interval
-            .map(crate::timing::Interval::duration)
-            .unwrap_or_default(),
         inference_interval: produced.inference_interval,
         printed_by: produced.printed_by,
         covered_by_record: produced.covered_by_record,

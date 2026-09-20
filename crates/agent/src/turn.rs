@@ -2819,16 +2819,18 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     spent.stalled += stalled;
                     // What the model waited for inside the call, which is not what the call spent working:
                     // a processor is a request, and its seconds belong with the other requests'.
-                    spent.inference += output.inference;
-                    if let Some(interval) = output.inference_interval {
-                        reporter.inference_interval(interval);
-                    }
+                    let waited = match output.inference_interval {
+                        Some(interval) => {
+                            reporter.inference_interval(interval);
+                            interval.duration()
+                        }
+                        None => std::time::Duration::ZERO,
+                    };
+                    spent.inference += waited;
                     // Both taken off, so the four figures partition the turn rather than double-count the
                     // parts of it that nest. Saturating because they are separate clocks: a measure of the
                     // inside cannot be allowed to make the outside negative.
-                    spent.tools += took
-                        .saturating_sub(stalled)
-                        .saturating_sub(output.inference);
+                    spent.tools += took.saturating_sub(stalled).saturating_sub(waited);
                     // A processor is a model call of its own, so what it spent belongs in the turn's
                     // total. Left out, a turn that did most of its work in processors would report
                     // having cost almost nothing.
