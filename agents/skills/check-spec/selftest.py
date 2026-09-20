@@ -454,6 +454,15 @@ CASES = [
         "front-matter-unknown-key",
     ),
     (
+        # Read by the security-audit skill rather than here. Removing it from the known keys would
+        # fault the spec that carries it, so the key is held by this case rather than by memory.
+        "a front matter key another skill reads",
+        lambda root: edit_spec(
+            root, "guards:\n", "reads_a_step_without_keying:\n  - crates/demo/src/lib.rs::plain\nguards:\n"
+        ),
+        None,
+    ),
+    (
         "one guarded symbol pinning its sites while another does not",
         lambda root: edit_spec(root, "guards:\n", "guards:\n  - symbol: opens_twice\n"),
         "guard-sites-partial",

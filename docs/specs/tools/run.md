@@ -15,6 +15,9 @@ guards:
   - symbol: Policy::read_output
   - symbol: Policy::remember_command
   - symbol: TrustedPrograms::trust
+reads_a_step_without_keying:
+  - crates/core/src/policy.rs::plan_lines
+  - crates/core/src/policy.rs::read_proven
 ---
 
 ## Scope
@@ -262,6 +265,28 @@ question is put before a rule in a settings file is consulted, as
 [permissions.md](../permissions.md) requires: a rule is matched against the program and its arguments
 run together, a rendering an assignment is not in, so no rule anybody could write tells the two lines
 apart.
+
+**A key is built by destructuring the step, never by reading its fields.** The three paragraphs above
+were each written after the same defect: a key holding less than the prompt displayed, so one answer
+covered a line nobody read. The environment was missing, then the tree, then the path's own bytes.
+Each was corrected where it was found, and nothing stopped the next function from being written the
+same way, because reading two fields of a step and stopping there is not something a compiler has any
+reason to report. So every function that builds a key, an entry, or an encoding of a step opens by
+destructuring it, naming a field `_` where it is deliberately left out, and a field added to the step
+stops the build at each one until somebody decides whether the key holds it. The same holds of the
+code that applies a step to a process: a field that changes what runs and is in no key is a line
+running differently from the one that was approved.
+
+A compiler reports the field added to the step, and `make check-security` reports the function newly
+written to read one field at a time, which is the half a compiler cannot see. Neither is a habit
+somebody has to hold, and the second fails the same pull request that introduces the function.
+
+A function may read a step field by field for something that is not a key, and the two that do are
+named under `reads_a_step_without_keying` above rather than left to be recognised. `plan_lines` builds
+the rendering a `deny` rule is matched against, which is the program and its arguments run together
+and deliberately not the whole step. `read_proven` refuses a step carrying an assignment or a route
+before it reads anything else, so the fields it goes on to read are the only ones such a step has. A
+third one is an edit to this list, which is the point: admitting one is something somebody reviews.
 
 **A known cost.** `NO_COLOR=1 cargo test` and `RUST_LOG=debug ./demo` are ordinary work, and they are
 asked about every time, in this session and in the next. The answer is the spelling that puts the

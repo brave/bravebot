@@ -3502,8 +3502,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     fn every_step_vouched(&self, plan: &crate::command::Plan) -> bool {
         self.root.is_some()
             && plan.steps().iter().all(|step| {
-                self.programs
-                    .contains(&step.resolved, &step.args, &plan.directory)
+                // Destructured so that a field added to `Step` stops the build here. This key holds
+                // three of the five deliberately, and the two it leaves out are only safe because
+                // something else refuses them first: an assignment is refused by
+                // `Plan::carries_an_assignment`, which every gate consulting this one has to ask
+                // separately, and a route by the write question. A sixth field would have no such
+                // refusal behind it, and left out of this key silently it would be a line differing
+                // from the one that was answered for.
+                let crate::command::Step {
+                    program: _,
+                    resolved,
+                    args,
+                    environment: _,
+                    routes: _,
+                } = step;
+                self.programs.contains(resolved, args, &plan.directory)
             })
     }
 

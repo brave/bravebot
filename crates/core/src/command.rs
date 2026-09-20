@@ -621,19 +621,34 @@ fn encode(out: &mut String, steps: &Steps) {
     }
 }
 
+/// Destructured rather than read field by field, so that a field added to [`Step`] stops the build
+/// here instead of being left out of the key. A step carries what a person was shown, and an
+/// encoding that silently drops one of those things covers a line nobody read: the environment was
+/// once missing from a key this way ([RUN-8]).
+///
+/// [RUN-8]: ../../../docs/specs/tools/run.md
 fn encode_step(out: &mut String, step: &Step) {
-    length_prefixed_path(out, &step.resolved);
-    out.push_str(&format!("a{}|", step.args.len()));
-    for arg in &step.args {
+    let Step {
+        // The name the line used is for the screen. The file it resolved to is the identity, and
+        // keying on the name as well would give one binary two keys.
+        program: _,
+        resolved,
+        args,
+        environment,
+        routes,
+    } = step;
+    length_prefixed_path(out, resolved);
+    out.push_str(&format!("a{}|", args.len()));
+    for arg in args {
         length_prefixed(out, arg);
     }
-    out.push_str(&format!("e{}|", step.environment.len()));
-    for (name, value) in &step.environment {
+    out.push_str(&format!("e{}|", environment.len()));
+    for (name, value) in environment {
         length_prefixed(out, name);
         length_prefixed(out, value);
     }
-    out.push_str(&format!("r{}|", step.routes.len()));
-    for route in &step.routes {
+    out.push_str(&format!("r{}|", routes.len()));
+    for route in routes {
         let (tag, path) = match route {
             Route::Stdout { path, append } => (if *append { ">>" } else { ">" }, Some(path)),
             Route::Stdin { path } => ("<", Some(path)),

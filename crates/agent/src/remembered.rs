@@ -300,13 +300,26 @@ impl From<&Shape> for WrittenShape {
 }
 
 impl From<&RememberedStep> for WrittenStep {
+    /// Destructured rather than read field by field, so that a field added to the entry stops the
+    /// build here instead of being left out of the file. What is written is what is read back and
+    /// matched on, so a field missing from this conversion is one the record does not hold and an
+    /// entry restored from it covers a line that differs in exactly that field ([RUN-8]).
+    ///
+    /// [RUN-8]: ../../../docs/specs/tools/run.md
     fn from(step: &RememberedStep) -> Self {
+        let RememberedStep {
+            program,
+            resolved,
+            args,
+            environment,
+            routes,
+        } = step;
         Self {
-            program: step.program.clone(),
-            resolved: WrittenPath::of(&step.resolved),
-            args: step.args.clone(),
-            environment: step.environment.clone(),
-            routes: step.routes.iter().map(WrittenRoute::from).collect(),
+            program: program.clone(),
+            resolved: WrittenPath::of(resolved),
+            args: args.clone(),
+            environment: environment.clone(),
+            routes: routes.iter().map(WrittenRoute::from).collect(),
         }
     }
 }
