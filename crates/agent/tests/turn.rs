@@ -15357,6 +15357,55 @@ fn a_fetched_page_never_reaches_the_planner() {
     );
 }
 
+/// The same property for the road a 200 takes. A reference's origin is the driver's own words
+/// about where content came from: it is formatted into the planner's context, the trace and the
+/// transcript verbatim, and a redirect puts the request on a URL a server wrote into a `Location`
+/// header. So the origin names the URL that was asked for, not the one the body arrived from:
+/// otherwise a header is a sentence the planner reads as though the driver wrote it, on the one
+/// road where the body itself is quarantined and nothing else of the server's gets through.
+#[test]
+fn a_fetched_page_names_the_url_that_was_asked_for_and_not_where_a_redirect_went() {
+    let scratch = Scratch::new("fetch-redirect-origin");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // A same-host redirect, which is the ordinary approved case, onto a path of the server's
+    // choosing; the fetch then succeeds there, so this is the success road and not a failure.
+    let (site, _requests) = serve_pages(vec![
+        moved_to("/SENTINEL-REDIRECT-ORIGIN"),
+        page("the docs"),
+    ]);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/start"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the start page"),
+        &mut bravebot_agent::confirm::ApproveFetches,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    assert!(outcome.clean, "no gate should have refused");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("SENTINEL-REDIRECT-ORIGIN"),
+        "the redirect the server chose reached the planner's context: {second}"
+    );
+    assert!(
+        second.contains(&format!("what {site}/start returned")),
+        "the reference did not name the URL that was asked for: {second}"
+    );
+}
+
 /// The same property for the road a 200 does not take. A failed fetch is reported to the planner
 /// as the driver's own words, which are trusted and arrive verbatim, and a redirect puts the
 /// request on a URL a server wrote into a `Location` header. So the failure names the URL that was

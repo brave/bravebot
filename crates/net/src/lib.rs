@@ -213,6 +213,10 @@ impl From<Denial> for EgressError {
 
 /// A fetched response. The body is labelled, so a caller receives untrusted bytes it
 /// cannot inspect without going through the policy.
+///
+/// Nothing here names where a redirect chain ended. Past the first hop the URL a request is on is
+/// a string a server wrote into a `Location` header, and a caller able to read it could put it in
+/// a result the planner is sent as the driver's own words, so that detail stops in this crate.
 #[derive(Debug)]
 pub struct Response {
     pub status: u16,
@@ -220,8 +224,6 @@ pub struct Response {
     pub body: Labelled<Vec<u8>>,
     /// Whether the body hit [`MAX_RESPONSE_BYTES`].
     pub truncated: bool,
-    /// The URL the body actually came from, after any redirects.
-    pub final_url: String,
 }
 
 /// A response whose body is read in pieces as it arrives.
@@ -232,8 +234,8 @@ pub struct Response {
 pub struct Streamed<'r> {
     pub status: u16,
     pub content_type: Option<String>,
-    pub final_url: String,
-    /// The URL the caller asked for, which is what a failure part-way through the body names.
+    /// The URL the caller asked for, which is the only URL this hands back: it is what a failure
+    /// part-way through the body names, and where a redirect chain ended stays in this crate.
     requested: String,
     label: Label,
     /// `Send`, so a caller can read the body on a thread it is able to walk away from.
@@ -302,7 +304,7 @@ impl fmt::Debug for Streamed<'_> {
         // No body: it has not all arrived, and printing what has would expose labelled bytes.
         f.debug_struct("Streamed")
             .field("status", &self.status)
-            .field("final_url", &self.final_url)
+            .field("url", &self.requested)
             .field("label", &self.label)
             .finish_non_exhaustive()
     }
@@ -448,7 +450,7 @@ impl Egress {
         label: Label,
         cancel: Option<&Cancel>,
     ) -> Result<Response, EgressError> {
-        let (status, content_type, url, reader) = self.fetch_checked(policy, &request, cancel)?;
+        let (status, content_type, reader) = self.fetch_checked(policy, &request, cancel)?;
         // The URL the caller asked for, not the one the body is arriving from: a redirect chain
         // ends somewhere a server chose, and this failure is reported to whoever asked.
         let (body, truncated) = read_capped(reader).map_err(|e| EgressError::Transport {
@@ -462,7 +464,6 @@ impl Egress {
             content_type,
             body: Labelled::new(body, label),
             truncated,
-            final_url: url,
         })
     }
 
@@ -480,12 +481,11 @@ impl Egress {
         label: Label,
         cancel: Option<&Cancel>,
     ) -> Result<Streamed<'static>, EgressError> {
-        let (status, content_type, url, reader) = self.fetch_checked(policy, &request, cancel)?;
+        let (status, content_type, reader) = self.fetch_checked(policy, &request, cancel)?;
 
         Ok(Streamed {
             status,
             content_type,
-            final_url: url,
             requested: request.url.clone(),
             label,
             reader,
@@ -510,7 +510,7 @@ impl Egress {
         policy: &mut Policy<'_, S>,
         request: &Request,
         cancel: Option<&Cancel>,
-    ) -> Result<(u16, Option<String>, String, Box<dyn std::io::Read + Send>), EgressError> {
+    ) -> Result<(u16, Option<String>, Box<dyn std::io::Read + Send>), EgressError> {
         let mut redirected = false;
         match self.follow(policy, request, cancel, &mut redirected) {
             Err(error) if redirected => Err(error.into_a_failure_of(&request.url)),
@@ -526,7 +526,7 @@ impl Egress {
         request: &Request,
         cancel: Option<&Cancel>,
         redirected: &mut bool,
-    ) -> Result<(u16, Option<String>, String, Box<dyn std::io::Read + Send>), EgressError> {
+    ) -> Result<(u16, Option<String>, Box<dyn std::io::Read + Send>), EgressError> {
         let mut url = request.url.clone();
         let mut hops = 0;
 
@@ -561,7 +561,7 @@ impl Egress {
                 return Err(EgressError::Status { url, status });
             }
 
-            return Ok((status, response.2, url, response.3));
+            return Ok((status, response.2, response.3));
         }
     }
 
@@ -1027,7 +1027,6 @@ mod tests {
         Streamed {
             status: 200,
             content_type: None,
-            final_url: "https://example.com".into(),
             requested: "https://example.com".into(),
             label: Label::untrusted_public(),
             reader: Box::new(std::io::Cursor::new(body)),

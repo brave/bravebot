@@ -4176,9 +4176,10 @@ fn fetch_url<S: Sink, C: Confirmer>(
                 tally(text.lines().count(), "line", "lines")
             );
 
-            // The URL as it was requested, not `final_url`. A redirect chain ends somewhere the
-            // person approving never saw, and naming that in the transcript would present a host
-            // nobody agreed to as though they had.
+            // The URL as it was requested. A redirect chain ends somewhere the person approving
+            // never saw, and naming that here would present a host nobody agreed to as though they
+            // had, in the planner's context, the trace and the transcript alike. Nothing here can
+            // name it in any case: where a chain went does not leave the crate that followed it.
             let mut produced = Produced::new(
                 Labelled::new(text, body_label),
                 format!("what {url} returned"),
