@@ -302,8 +302,16 @@ mod tests {
     #[test]
     fn this_agents_credentials_are_withheld_without_being_configured() {
         let names = names(&Settings::default());
-        assert!(names.iter().any(|name| name == "SERVICES_KEY_AICHAT"));
-        assert!(names.iter().any(|name| name == "BRAVE_SERVICES_KEY_ID"));
+        for withheld in [
+            "SERVICES_KEY_AICHAT",
+            "BRAVE_SERVICES_KEY_ID",
+            "BRAVE_AI_CHAT_API_KEY",
+        ] {
+            assert!(
+                names.iter().any(|name| name == withheld),
+                "{withheld} reached a program the agent started"
+            );
+        }
     }
 
     /// What the planner is told is the fixed set and nothing a configuration adds. An entry in a
