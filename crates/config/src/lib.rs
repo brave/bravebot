@@ -146,7 +146,27 @@ const _: () = assert!(DEFAULT_CONTEXT_BUDGET < SMALLEST_USEFUL_WINDOW);
 /// `Debug` and `Display` are deliberately redacting, and the inner value is only
 /// reachable through [`Secret::expose`], a name chosen so that reading a credential
 /// is visible at the call site during review.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// Intentionally missing: equality, `Deref`, `AsRef`, `Borrow`, `Serialize` and `From`.
+/// An operator that answers a question about the bytes recovers them a guess at a time, and
+/// the derived answer takes time proportional to the shared prefix, so a credential that has
+/// to be compared is compared in constant time by the component that owns it.
+///
+/// Constructing one and asking whether it is empty is ordinary, which is what makes the
+/// refusal below a refusal of equality rather than of the name:
+///
+/// ```
+/// use bravebot_config::Secret;
+/// assert!(!Secret::new("a").is_empty());
+/// ```
+///
+/// Comparing two of them does not compile:
+///
+/// ```compile_fail
+/// use bravebot_config::Secret;
+/// let _ = Secret::new("a") == Secret::new("a");
+/// ```
+#[derive(Clone)]
 pub struct Secret(String);
 
 impl Secret {
