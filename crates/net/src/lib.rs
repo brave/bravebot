@@ -98,6 +98,8 @@ pub enum EgressError {
     MissingLocation { url: String },
     /// The URL could not be parsed, or was not http(s).
     InvalidUrl { url: String, detail: String },
+    /// A redirect would have continued an https chain over cleartext http.
+    InsecureRedirect { url: String },
     /// Transport failure.
     Transport {
         url: String,
@@ -125,6 +127,9 @@ impl fmt::Display for EgressError {
                 write!(f, "{url} returned a redirect with no location")
             }
             Self::InvalidUrl { url, detail } => write!(f, "invalid url {url}: {detail}"),
+            Self::InsecureRedirect { url } => {
+                write!(f, "{url} was redirected out of https to cleartext http")
+            }
             Self::Transport { url, detail, .. } => {
                 write!(f, "request to {url} failed: {detail}")
             }
@@ -148,6 +153,8 @@ impl EgressError {
             | Self::TooManyRedirects { .. }
             | Self::MissingLocation { .. }
             | Self::InvalidUrl { .. }
+            // The same chain answers the same way, so another attempt is the same downgrade.
+            | Self::InsecureRedirect { .. }
             // The one error that says the reply is not wanted. Sending it again would be
             // answering a request somebody withdrew.
             | Self::Stopped { .. } => false,
@@ -174,6 +181,7 @@ impl EgressError {
             Self::Status { status, .. } => Self::Status { url, status },
             // The detail here is this crate's own sentence about a shape, so it survives.
             Self::InvalidUrl { detail, .. } => Self::InvalidUrl { url, detail },
+            Self::InsecureRedirect { .. } => Self::InsecureRedirect { url },
             // The detail here is the transport's, and a transport reports a URL it could not use
             // by quoting it: `ureq::Error::BadUri` is "bad uri: <the whole string>". Keeping the
             // ones that do not quote it would mean reading the detail to decide, which is a
@@ -719,11 +727,32 @@ fn require_http_scheme(url: &str) -> Result<(), EgressError> {
     })
 }
 
-/// Resolve a `Location` value against the URL it came from.
+/// Resolve a `Location` value against the URL it came from, refusing one that leaves TLS.
+///
+/// The one way a hop is computed, so a chain cannot advance without being held to the transport the
+/// hop before it used. `send` re-sends the whole request on every hop, headers and body alike, so a
+/// hop out of https would put what the one before it carried on the wire in the clear.
+///
+/// The refusal reads the URL that was produced rather than the `Location` that produced it, because
+/// each of the four forms below yields a scheme by a different route and only one of them states one
+/// at all. Checking the result holds every form, including any added later.
+fn resolve(base: &str, location: &str) -> Result<String, EgressError> {
+    let next = join(base, location)?;
+    if base.starts_with("https://") && !next.starts_with("https://") {
+        return Err(EgressError::InsecureRedirect {
+            // The URL the request is on, never the one a server named: past the first hop that
+            // string would be a server's own bytes.
+            url: base.to_string(),
+        });
+    }
+    Ok(next)
+}
+
+/// A `Location` value as the absolute URL it resolves to.
 ///
 /// Handles absolute, scheme-relative, path-absolute, and relative forms, because a
 /// server can use any of them and each must be checked as the absolute URL it becomes.
-fn resolve(base: &str, location: &str) -> Result<String, EgressError> {
+fn join(base: &str, location: &str) -> Result<String, EgressError> {
     if location.starts_with("http://") || location.starts_with("https://") {
         return Ok(location.to_string());
     }
@@ -824,6 +853,14 @@ mod tests {
             }
             .is_transient()
         );
+
+        // The same chain redirects the same way, so a second attempt is refused a second time.
+        assert!(
+            !EgressError::InsecureRedirect {
+                url: "https://example.com".into(),
+            }
+            .is_transient()
+        );
     }
 
     /// A server saying "not now" is temporary; a server saying "no" is not.
@@ -852,6 +889,55 @@ mod tests {
         assert!(require_http_scheme("file:///etc/passwd").is_err());
         assert!(require_http_scheme("ftp://example.com").is_err());
         assert!(require_http_scheme("gopher://example.com").is_err());
+    }
+
+    /// Every hop re-sends the original request, so a chain that dropped TLS would put what the
+    /// first hop carried on the wire in the clear: on this program's own connection the
+    /// `authorization` header and the conversation, and on a `fetch_url` call a page a person
+    /// approved after reading `https` on the prompt. Checking a hop's host without its transport
+    /// leaves an endpoint able to turn its own traffic into plaintext, which hands third parties
+    /// what only it had.
+    #[test]
+    fn a_redirect_may_not_take_an_https_chain_into_cleartext() {
+        let refused = resolve("https://a.example/x", "http://a.example/y")
+            .expect_err("a hop out of https is refused");
+        assert!(
+            matches!(&refused, EgressError::InsecureRedirect { url } if url == "https://a.example/x"),
+            "refused, but naming somewhere else: {refused:?}"
+        );
+
+        // A chain with no TLS to lose continues, and one that gains it keeps it: what is refused
+        // is leaving https, not a hop that changes scheme.
+        assert_eq!(
+            resolve("http://a.example/x", "http://b.example/y").unwrap(),
+            "http://b.example/y"
+        );
+        assert_eq!(
+            resolve("http://a.example/x", "https://a.example/y").unwrap(),
+            "https://a.example/y"
+        );
+
+        // Each hop is held to the one before it rather than to where the chain started, so a
+        // chain that picked TLS up part way through cannot put it down again.
+        assert!(resolve("https://b.example/y", "http://c.example/z").is_err());
+    }
+
+    /// Past the first hop the URL a refusal was raised on is a string a server wrote into a
+    /// `Location` header, and a failure's text is formatted into a sentence the planner reads. A
+    /// refusal that named it would be handing the planner a server's own bytes with the driver's
+    /// attribution on them, which is the channel quarantining a body otherwise closes.
+    #[test]
+    fn a_refused_downgrade_names_the_url_that_was_asked_for() {
+        let refused = EgressError::InsecureRedirect {
+            url: "https://a-server-chose-this.example/y".into(),
+        }
+        .into_a_failure_of("https://the-caller-asked-for-this.example/x");
+
+        assert!(
+            matches!(&refused, EgressError::InsecureRedirect { url }
+                if url == "https://the-caller-asked-for-this.example/x"),
+            "a hop's own URL left the crate that followed it: {refused:?}"
+        );
     }
 
     #[test]
