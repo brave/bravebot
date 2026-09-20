@@ -19,7 +19,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [permissions.md](permissions.md) | `PERM` | 13 | rules written in advance about what to ask about and what to refuse |
 | [processors.md](processors.md) | `PROC` | 12 | the one component that reads untrusted content, and what it may do with it |
 | [vetting.md](vetting.md) | `CHECK` | 12 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
-| [delegation.md](delegation.md) | `DELEGATE` | 17 | a second planner, narrower than the first, and what crosses back from one |
+| [delegation.md](delegation.md) | `DELEGATE` | 18 | a second planner, narrower than the first, and what crosses back from one |
 | [turns.md](turns.md) | `TURN` | 5 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing or checks nothing |
 | [prompting.md](prompting.md) | `PROMPT` | 10 | every moment the system stops and puts something to a human, and what an answer grants |
 | [permission-modes.md](permission-modes.md) | `MODE` | 10 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |
@@ -38,7 +38,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [scroller.md](scroller.md) | `SCROLL` | 9 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [credential-protection.md](credential-protection.md) | `CRED` | 25 | where credentials come from, which of them may be held at all, and what each tier owes |
 | [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | importing a Leo Premium subscription and spending its credentials |
-| [sandboxing.md](sandboxing.md) | `SANDBOX` | 8 | operating-system confinement for processes running code we did not write |
+| [sandboxing.md](sandboxing.md) | `SANDBOX` | 9 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 9 | tools that come from outside this repository, and what they are allowed to do |
 | [hooks.md](hooks.md) | `HOOK` | 7 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 8 | every request that leaves this process, and what comes back |

@@ -46,6 +46,17 @@ not in `check-all` yet, and the findings are what the
 [security-audit skill](../../agents/skills/security-audit/SKILL.md) files. Run it before a commit
 that touches a label, `.github/workflows`, or the trust specs.
 
+`make check-locales` holds every message catalog to
+[../../untranslated-messages.txt](../../untranslated-messages.txt), the record of what each
+translation is missing. A translation is allowed to lag the reference, since what it lacks is shown
+in English; what is not allowed is lagging it silently, so the check fails on a gap the file does
+not list and on a line for a gap that is no longer there. `make write-untranslated` writes the file;
+commit what it writes. CI runs this too, so adding a message to `en-US.ftl` and no other catalog
+fails a pull request rather than printing a build warning into a job that passed, which is how
+eleven messages came to ship untranslated. `make locales` is the same count as a report, which no
+gap makes fail, and is the one to read while translating. Run the check before a commit that touches
+`crates/i18n/locales`.
+
 `make check-npm` installs from the lockfile and lints it, as CI does. `make check-deps` decides
 `deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
 build compiles at two versions without a recorded reason, and a dependency from anywhere but
