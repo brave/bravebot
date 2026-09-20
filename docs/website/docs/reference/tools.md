@@ -184,7 +184,15 @@ and every answer from one says it may be short. The choice is a server with your
 working tool.
 
 What does not turn on your answer is the label on what comes back, and that is the half that
-matters. A server that can read the disk is not a server that can put words in the planner's context.
+matters. Hover text is quarantined, and nothing a server reads out of a file reaches the planner as
+something bravebot said.
+
+**A filename is the exception, and it is bounded rather than denied.** A location is a path and a
+position, and a path is the answer to the question you asked, so it is reported whatever the trust
+map says about the file. A file can be named to read like an instruction, so the name is shown with
+its control characters replaced by pictures (`␊` for a newline), one location is always one line,
+and an answer stops at two hundred locations and says that it did. What that leaves is a name out of
+your tree, read as a name.
 
 A server is started by the first question that needs it, so a session that asks nothing about a
 language starts nothing.
