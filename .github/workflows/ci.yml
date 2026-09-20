@@ -137,6 +137,26 @@ jobs:
         run: |
           npm ci --ignore-scripts
           npm run lint:lockfile
+          npm run lint:lockfile:website
+
+  # The documentation website under docs/website. Docusaurus throws on broken links or
+  # broken anchors, so this job validates documentation correctness across the tree.
+  docs:
+    name: Documentation website
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: docs/website/package-lock.json
+
+      - name: Build documentation website
+        run: |
+          npm --prefix docs/website ci
+          npm --prefix docs/website run build
 
   # The mechanical half of docs/specs, which decides nothing a person has to read a diff for:
   # clause numbering, the tests a clause names, the paths it governs, and the call sites a

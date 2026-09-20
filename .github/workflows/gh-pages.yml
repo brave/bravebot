@@ -1,0 +1,67 @@
+name: Build and Deploy Docs
+
+# main is the only branch this site is ever built from: the deploy job publishes
+# the artifact it produced when the ref is main or a release tag. Nothing is committed
+# to a gh-pages branch, so the served site is always whatever main built.
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Queue deploys rather than cancelling them, so an in-flight publish is never left half
+# applied.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: docs/website/package-lock.json
+
+      - name: Install dependencies
+        run: npm --prefix docs/website ci
+
+      # docusaurus.config.js throws on a broken link or anchor, so this step is the whole
+      # of the site's correctness check as well as its build.
+      - name: Build website
+        run: npm --prefix docs/website run build
+
+      # include-hidden-files is off by default from v4 on, and static/.nojekyll is a
+      # dotfile: without this the artifact ships without it and Pages goes back to hiding
+      # every path beginning with an underscore.
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: docs/website/build
+          include-hidden-files: true
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
