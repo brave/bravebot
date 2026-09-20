@@ -20,6 +20,7 @@
     "README.md",
     "docs/*.md",
     "docs/best-practices",
+    "docs/design",
     "docs/development",
     "docs/specs",
     "LICENSE"
