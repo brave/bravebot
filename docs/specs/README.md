@@ -19,7 +19,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [permissions.md](permissions.md) | `PERM` | 13 | rules written in advance about what to ask about and what to refuse |
 | [processors.md](processors.md) | `PROC` | 12 | the one component that reads untrusted content, and what it may do with it |
 | [vetting.md](vetting.md) | `CHECK` | 12 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
-| [delegation.md](delegation.md) | `DELEGATE` | 17 | a second planner, narrower than the first, and what crosses back from one |
+| [delegation.md](delegation.md) | `DELEGATE` | 18 | a second planner, narrower than the first, and what crosses back from one |
 | [turns.md](turns.md) | `TURN` | 5 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing or checks nothing |
 | [prompting.md](prompting.md) | `PROMPT` | 10 | every moment the system stops and puts something to a human, and what an answer grants |
 | [permission-modes.md](permission-modes.md) | `MODE` | 10 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |

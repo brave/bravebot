@@ -1001,13 +1001,16 @@ pub struct Output {
     /// Zero for every tool but the processor. A turn that reported only its own rounds would
     /// understate what it cost by however much its processors wrote.
     pub usage: Usage,
-    /// How long the call spent waiting on the model, where it called one.
+    /// When the call waited on the model, where it called one.
     ///
     /// Travels beside [`Output::usage`] and for the same reason. A processor is a request like any
     /// other, and the turn was waiting on the endpoint for it: left out, the seconds would be
     /// charged to tool execution, and a turn that did most of its work in processors would read as
     /// one that ran a very slow subprocess.
-    pub inference: std::time::Duration,
+    ///
+    /// The boundary rather than the duration, because a parent clips a delegate's requests to its
+    /// own waits and cannot do that from a length. The duration is [`crate::timing::Interval::duration`].
+    pub inference_interval: Option<crate::timing::Interval>,
     /// The command whose output this is and how it ended, where a run produced it.
     ///
     /// Recorded on the slot by the turn loop, since only a slot minted from a command may be
@@ -1384,8 +1387,8 @@ struct Produced {
     content: bool,
     /// What the tool spent at the model. Only a processor spends anything.
     usage: Usage,
-    /// How long the tool waited on the model. Only a processor waits.
-    inference: std::time::Duration,
+    /// Retained so a parent can clip delegate requests to its own waits.
+    inference_interval: Option<crate::timing::Interval>,
     /// The command whose output this is and how it ended, where a run produced it.
     ///
     /// Recorded on the slot by the turn loop, because only a slot minted from a command may be
@@ -1436,7 +1439,7 @@ impl Produced {
             said: None,
             content: false,
             usage: Usage::default(),
-            inference: std::time::Duration::ZERO,
+            inference_interval: None,
             printed_by: None,
             covered_by_record: false,
             picture: None,
@@ -1542,9 +1545,9 @@ impl Produced {
         self
     }
 
-    /// Say how long the tool waited on the model for this.
-    fn waiting(mut self, inference: std::time::Duration) -> Self {
-        self.inference = inference;
+    /// Say when the tool waited on the model for this.
+    fn waiting(mut self, interval: Option<crate::timing::Interval>) -> Self {
+        self.inference_interval = interval;
         self
     }
 
@@ -1848,7 +1851,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 said: produced.said,
                 content: produced.content,
                 usage: produced.usage,
-                inference: produced.inference,
+                inference_interval: produced.inference_interval,
                 printed_by: produced.printed_by,
                 covered_by_record: produced.covered_by_record,
                 picture: produced.picture,
@@ -1946,7 +1949,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         said: produced.said,
         content: produced.content,
         usage: produced.usage,
-        inference: produced.inference,
+        inference_interval: produced.inference_interval,
         printed_by: produced.printed_by,
         covered_by_record: produced.covered_by_record,
         picture: produced.picture,
@@ -1981,7 +1984,7 @@ fn problem(text: impl Into<String>) -> Produced {
         watch: None,
         content: false,
         usage: Usage::default(),
-        inference: std::time::Duration::ZERO,
+        inference_interval: None,
         printed_by: None,
         covered_by_record: false,
         picture: None,
@@ -2165,7 +2168,7 @@ fn read_file<S: Sink, C: Confirmer>(
     // put on whatever this call ends up handing back: a check is a model request, and the turn's
     // figure has to cover the requests the driver made on its own behalf as well as the planner's.
     let mut spent = Usage::default();
-    let mut waited = std::time::Duration::ZERO;
+    let mut waited = None;
 
     if policy.read_is_quarantined(&keyed)
         && media.is_none()
@@ -2199,7 +2202,7 @@ fn read_file<S: Sink, C: Confirmer>(
             let asked_at = std::time::Instant::now();
             (
                 crate::vet::run(policy, &mut tools.chat, &spec),
-                asked_at.elapsed(),
+                Some(crate::timing::Interval::since(asked_at)),
             )
         });
         let (verdict, reason) = match checked {
@@ -3467,7 +3470,7 @@ fn read_output<S: Sink, C: Confirmer>(
     // showing anybody anything, so a check there is a model call whose word nobody reads. A verdict
     // is still filled in, and it is the one that claims nothing.
     let mut spent = Usage::default();
-    let mut waited = std::time::Duration::ZERO;
+    let mut waited = None;
     let spec = match tools.permission_mode == crate::PermissionMode::Bypass {
         true => None,
         false => match policy.before_vetting(&slot, None, tools.slots) {
@@ -3481,7 +3484,7 @@ fn read_output<S: Sink, C: Confirmer>(
             let asked_at = std::time::Instant::now();
             let checked = crate::vet::run(policy, &mut tools.chat, spec);
             spent = checked.usage;
-            waited = asked_at.elapsed();
+            waited = Some(crate::timing::Interval::since(asked_at));
             let reason = checked.reason.map(|reason| {
                 let proof = policy.authorise_display_release("what a check said about content");
                 reason.declassify(&proof)
@@ -3626,7 +3629,7 @@ fn vet_content<S: Sink, C: Confirmer>(
 
     let asked_at = std::time::Instant::now();
     let checked = crate::vet::run(policy, &mut tools.chat, &spec);
-    let waited = asked_at.elapsed();
+    let waited = Some(crate::timing::Interval::since(asked_at));
 
     // The one branch on a verdict that decides more than which sentence a person reads first, and
     // it is reachable only where somebody turned auto-vetting on. `Safe` is the only word that
@@ -4439,7 +4442,7 @@ fn spawn_processor<S: Sink>(
     let answer = processor::run(policy, &mut tools.chat, tools.slots, &spec);
     // Taken around the call rather than inside it, so a processor that failed still reports the
     // time it spent failing: a request that errored kept the turn waiting just as long.
-    let waited = asked_at.elapsed();
+    let waited = Some(crate::timing::Interval::since(asked_at));
     match answer {
         Ok(done) => {
             // Nothing to write, and nothing minted for it. An answer that never said which part
