@@ -142,3 +142,28 @@ shown the text.
 `verified-by: bravebot_agent::turn::a_fetched_body_that_is_not_text_is_carried_anyway`
 `verified-by: bravebot_net::lib::bodies_are_capped`
 `verified-by: bravebot_net::lib::small_bodies_are_not_reported_as_truncated`
+
+<a id="FETCH-6"></a>
+### FETCH-6: a failure names the URL that was asked for
+
+What a failed fetch reports is the URL the caller gave and the kind of failure. A redirect target,
+the host at the end of a chain, and the transport's own words about a URL it could not use are not
+in it. A refusal at the egress gate names the host that was approved and not the one a hop went to.
+
+**Why.** A failure's text is trusted: `fetch_url` formats it into a sentence the planner is sent
+verbatim, and a person reads the same line in the transcript. Past the first hop the URL a request
+is on is a string a server wrote into a `Location` header, and [FETCH-4](#FETCH-4) makes a
+same-host redirect the ordinary case, so a failure that named where it happened would be handing
+the planner a server's bytes with the driver's attribution on them. That is the one channel
+[FETCH-1](#FETCH-1) otherwise closes: a body that arrives is quarantined whole, and a body that
+does not must not arrive as an error message instead.
+
+The caller asked about one URL and is told what became of that request, which is what it can act
+on. Where the chain went is a detail of following it, and the crate that followed it is where that
+detail stops.
+
+`verified-by: bravebot_net::egress::a_redirect_that_leads_nowhere_names_the_url_that_was_asked_for`
+`verified-by: bravebot_net::egress::a_status_after_a_redirect_names_the_url_that_was_asked_for`
+`verified-by: bravebot_core::policy::a_refused_redirect_names_the_approved_host_and_not_the_one_a_server_chose`
+`verified-by: bravebot_agent::turn::a_failed_fetch_names_the_url_that_was_asked_for_and_not_where_a_redirect_went`
+`verified-by: bravebot_agent::turn::a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose`

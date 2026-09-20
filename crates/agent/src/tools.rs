@@ -1088,6 +1088,13 @@ pub struct Tools<'a> {
     /// find only what the workspace holds, and a user whose conventions live in their home
     /// directory would have them apply to the turn and not to the work it handed on.
     pub home: Option<&'a std::path::Path>,
+    /// The user's profile directory, which is what a leading `~` in a command line stands for.
+    ///
+    /// The directory `home` sits inside, and carried separately because everything else here
+    /// wants the state directory: a `~` names a file of the user's own, so resolving one against
+    /// `home` would put every home-relative path the planner writes inside `~/.bravebot`
+    /// (CMDLINE-4).
+    pub profile: Option<&'a std::path::Path>,
     /// Whether this turn is itself a delegate's, and so may not spawn one, ask a person, write
     /// the task list on their screen, or reach a host.
     ///
@@ -3794,7 +3801,7 @@ fn run<S: Sink, C: Confirmer>(
         }
         None => tools.run_directory.clone(),
     };
-    let plan = match crate::cmdline::compile(&line, &directory, tools.home) {
+    let plan = match crate::cmdline::compile(&line, &directory, tools.profile) {
         Ok(plan) => plan,
         // The refusal names the span that caused it, so the planner can rewrite that part rather
         // than guessing at the whole line. There is no degraded mode to fall back to.
@@ -4177,7 +4184,9 @@ fn fetch_url<S: Sink, C: Confirmer>(
             produced
         }
         // The URL is safe to repeat: a person approved it, so it is not something an attacker
-        // chose. Nothing of the response is, and none of it is read to build this.
+        // chose. Nothing of the response is, and none of it is read to build this: a failure
+        // names the URL that was asked for and never the hop a redirect took the request to,
+        // which is the one thing of a server's that could otherwise reach this sentence.
         Err(error) => problem(format!("error: fetching {url} failed: {error}")),
     }
 }
