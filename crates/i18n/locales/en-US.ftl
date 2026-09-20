@@ -1033,6 +1033,7 @@ failure-transport = the request did not get through
 failure-incomplete = the reply stopped before it was finished
 failure-undecodable = the reply could not be read
 failure-too-long = the model reached its output limit
+failure-too-long-at = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises
 failure-unconfigured = nothing here was configured to send the request
 failure-blocked = a gate here would not let the request out
 failure-workspace = the workspace could not be used

@@ -1090,7 +1090,7 @@ sent.
 `verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
 
 <a id="BACKEND-33"></a>
-### BACKEND-33: an `env` block names these twelve variables
+### BACKEND-33: an `env` block names these thirteen variables
 
 The `env` block of a settings file sets variables under their own names, and these are the names
 something reads:
@@ -1103,6 +1103,7 @@ something reads:
 | `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host an imported subscription is spent against |
 | `BRAVE_AI_CHAT_DEFAULT_MODEL` | which model answers before anybody has chosen one |
 | `BRAVEBOT_CONTEXT_BUDGET` | how many prompt tokens a conversation may reach before it is shortened |
+| `BRAVEBOT_OUTPUT_BUDGET` | how many tokens one reply may run to before the service cuts it off |
 | `BRAVEBOT_USE_BEDROCK` | `1` to reach models through somebody's own AWS account |
 | `AWS_REGION` | which region that account is reached in |
 | `AWS_PROFILE` | which profile in the AWS configuration names the credentials to sign with |
@@ -1118,12 +1119,12 @@ choice rather than a variable, and BACKEND-11 is what ranks it.
 reading the source. Anything written *about* this system (the site somebody installs it from, a
 message telling a person what to set) is written from what is stated here, so a backend whose
 variables are named nowhere is a backend that reaches people undocumented however completely its
-behaviour is specified. Naming them is also what makes the set reviewable: a thirteenth variable is
+behaviour is specified. Naming them is also what makes the set reviewable: a fourteenth variable is
 a change to this table, which a person reads, rather than a constant added to a file nobody is
 asked to look at.
 
-The AWS names keep the spelling another tool already gave them, and the switch and the budget carry
-this program's own prefix, for the reason BACKEND-24 gives about the file as a whole: a block
+The AWS names keep the spelling another tool already gave them, and the switch and the two budgets
+carry this program's own prefix, for the reason BACKEND-24 gives about the file as a whole: a block
 copied from elsewhere should work unedited, while a name that decides what *this* program does
 belongs to this program and must not collide with whatever else a shared shell profile wanted.
 
@@ -1235,10 +1236,16 @@ Known Bedrock stream exceptions map to fixed categories: validation to refused, 
 rate-limited, and service-unavailable or internal-server errors to unavailable. Other exception
 names map to incomplete. Retry eligibility is unchanged.
 
+A reply stopped at its output ceiling reports that ceiling alongside the category. It is this
+program's own configured figure rather than anything a service said, so it is not a detail taken
+from a reply, and without it the report names a limit and no way to change it.
+
 `verified-by: bravebot_agent::backend::each_status_a_service_answers_with_is_reported_as_what_it_means`
 `verified-by: bravebot_agent::backend::a_gateway_with_nothing_holding_a_token_is_reported_as_unconfigured`
 `verified-by: bravebot_agent::backend::aws_refusing_the_credentials_it_was_signed_with_is_reported_as_unauthorized`
 `verified-by: bravebot_agent::backend::what_is_kept_about_a_failure_carries_nothing_the_service_or_the_setting_said`
+`verified-by: bravebot_agent::backend::a_reply_stopped_at_the_ceiling_reports_which_ceiling`
+`verified-by: bravebot_tui::state::a_reply_stopped_at_a_ceiling_says_which_ceiling`
 `verified-by: bravebot_agent::turn::a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_made`
 `verified-by: bravebot_agent::turn::a_reply_that_stopped_early_is_reported_as_unfinished_with_no_status`
 `verified-by: bravebot_agent::turn::a_refusal_counts_the_cache_probe_as_a_second_request`
@@ -1461,6 +1468,61 @@ would understate the cost; charging an unfinished reply would claim a cost not y
 `verified-by: bravebot_bedrock::lib::cancellation_before_eof_keeps_only_protocol_completed_usage`
 `verified-by: bravebot_agent::turn::completed_stream_keeps_usage_when_cancelled_before_socket_closes`
 
+<a id="BACKEND-41"></a>
+### BACKEND-41: how long a reply may run belongs to the model, and an exported figure outranks it
+
+A Bedrock request states a ceiling on the reply. A configured model may state its own, out of the
+same `limit` block its context window comes from and under the same rule, and where it states none
+the figure assumed is one deliberately below what the model is likely to allow. One exported
+variable states a ceiling for every model this build reaches and outranks whatever any of them
+stated. Nothing is asked over the network to find out, and nobody is required to supply it.
+
+The aichat backend states no ceiling at all, so nothing here applies to it: its requests carry no
+such field and whatever bounds a reply there belongs to the service.
+
+**Why.** This is BACKEND-14's question with its asymmetry reversed, so the defaulting is the same
+and the reason is not. A ceiling below what the model allows costs the tail of a long answer; one
+above what it allows is a request the service refuses outright and refuses every time, so a guess
+upward does not cost a reply its ending, it costs the model the ability to answer at all. Bedrock
+fronts models from several providers whose ceilings differ by an order of magnitude, an
+inference-profile ARN does not say which model is behind it, and no endpoint there reports the
+figure, so there is nothing to resolve a guess against and the assumed number has to hold for the
+unrecognised case.
+
+Which makes the assumed number low enough to be felt, and stating a better one is the answer to
+that rather than guessing a better one. The variable exists because the three tier names have no
+block to state anything in, and they are how most people reach this backend: without it the only
+models whose ceiling could be raised would be the ones a `provider` block already named.
+
+`verified-by: bravebot_config::provider::a_stated_reply_ceiling_is_read_per_model`
+`verified-by: bravebot_config::provider::a_limit_missing_either_half_states_no_window`
+`verified-by: bravebot_config::lib::an_exported_reply_ceiling_outranks_every_stated_one`
+`verified-by: bravebot_config::lib::a_reply_ceiling_that_is_not_a_figure_leaves_the_stated_one_standing`
+`verified-by: bravebot_bedrock::lib::a_request_carries_the_ceiling_its_own_model_states`
+
+<a id="BACKEND-42"></a>
+### BACKEND-42: a reply the ceiling stopped is kept for what it said and never for what it asked
+
+A reply that reaches its ceiling having written something is returned as a reply, marked as having
+stopped short, with its reported usage. Its tool calls are not returned: a reply cut off carries
+none, whatever the service sent, so the round it ends is the last one. A reply that reaches the
+ceiling having written nothing is a failure, and the failure names the ceiling.
+
+**Why.** Everything the model wrote before the cutoff is the turn's work, and reporting only that
+it was too long destroys it to say so. The same argument settled the same question for a capped
+`run`, whose output is collected after the kill rather than thrown away with the error. The usage
+half of this is BACKEND-40 and was settled first; the text is worth more than the bill.
+
+The calls are the exception because a cutoff lands wherever the model happened to be. Arguments
+that stopped mid-string are not arguments, and a streamed call whose arguments had not begun
+arrives as a call with none at all: `write_file` with an empty object, which is a call nobody
+asked for being handed to a turn loop that would run it. Nothing distinguishes that from a
+finished call except the stop reason, and the stop reason says not to trust any of them.
+
+`verified-by: bravebot_bedrock::lib::a_reply_the_ceiling_stopped_keeps_its_text_and_asks_for_no_tools`
+`verified-by: bravebot_bedrock::lib::output_limit_keeps_completed_usage`
+`verified-by: bravebot_bedrock::lib::reaching_the_token_ceiling_is_not_retried`
+
 ## Known costs
 
 - **The refusal is made at startup, and a model chosen mid-session is not checked again.**
@@ -1632,3 +1694,14 @@ would understate the cost; charging an unfinished reply would claim a cost not y
   inference-profile ARN does not say which model it resolves to, so one figure stands in for every
   tier: the one an unresolvable profile actually gets. It is deliberately low, because being wrong
   upward removes shortening rather than delaying it.
+
+- **The assumed reply ceiling is low, and a tier that does not raise it keeps hitting it.** For the
+  reason BACKEND-41 gives, the figure has to hold for a model nothing here can identify, so a
+  session on a model that would have written sixty thousand tokens still stops at the assumed one
+  until somebody exports a better figure. What that costs is now the tail of an answer rather than
+  the answer, since BACKEND-42 keeps what was written, but it is still an answer that stops short
+  for a reason belonging to this program rather than to the model.
+
+- **A reply that stopped short reads like one that finished.** BACKEND-42 keeps the text, and text
+  is all it is: the sentence ends wherever the ceiling fell. What says otherwise is a line beside
+  it, which somebody reading only the answer does not have to notice.

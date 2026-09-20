@@ -442,19 +442,24 @@ impl Finished {
 /// Compose a localized failure reason from safe fields, without raw backend error text.
 pub fn failure_reason(diagnosis: bravebot_agent::Diagnosis) -> String {
     use bravebot_agent::Category;
-    let what = match diagnosis.category {
-        Category::Unauthorized => t!(failure_unauthorized),
-        Category::RateLimited => t!(failure_rate_limited),
-        Category::Unavailable => t!(failure_unavailable),
-        Category::Refused => t!(failure_refused),
-        Category::Transport => t!(failure_transport),
-        Category::Incomplete => t!(failure_incomplete),
-        Category::Undecodable => t!(failure_undecodable),
-        Category::TooLong => t!(failure_too_long),
-        Category::Unconfigured => t!(failure_unconfigured),
-        Category::Blocked => t!(failure_blocked),
-        Category::Workspace => t!(failure_workspace),
-        Category::Internal => t!(failure_internal),
+    let what: std::borrow::Cow<'_, str> = match diagnosis.category {
+        Category::Unauthorized => t!(failure_unauthorized).into(),
+        Category::RateLimited => t!(failure_rate_limited).into(),
+        Category::Unavailable => t!(failure_unavailable).into(),
+        Category::Refused => t!(failure_refused).into(),
+        Category::Transport => t!(failure_transport).into(),
+        Category::Incomplete => t!(failure_incomplete).into(),
+        Category::Undecodable => t!(failure_undecodable).into(),
+        // The one category that says a number. It is this program's own configured ceiling, not
+        // anything the service reported, and without it the sentence names no remedy.
+        Category::TooLong => match diagnosis.ceiling {
+            Some(tokens) => t!(failure_too_long_at, tokens = tokens).into(),
+            None => t!(failure_too_long).into(),
+        },
+        Category::Unconfigured => t!(failure_unconfigured).into(),
+        Category::Blocked => t!(failure_blocked).into(),
+        Category::Workspace => t!(failure_workspace).into(),
+        Category::Internal => t!(failure_internal).into(),
     };
     let mut said = what.to_string();
     if let Some(status) = diagnosis.status {
@@ -9148,6 +9153,33 @@ mod tests {
         assert_eq!(s.status, Status::Idle);
         assert_eq!(s.transcript.len(), 2);
         assert_eq!(s.transcript[1].speaker, Speaker::Assistant);
+    }
+
+    /// "the model reached its output limit" leaves somebody guessing a budget nothing shows them.
+    /// The figure is what names the setting to raise, and it is this program's own configured
+    /// number rather than anything the service said, so repeating it gives nothing away.
+    #[test]
+    fn a_reply_stopped_at_a_ceiling_says_which_ceiling() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        let vague = failure_reason(Diagnosis::of(Category::TooLong));
+        assert!(
+            !vague.contains("8192") && !vague.contains("8,192"),
+            "a ceiling nobody measured was named anyway: {vague}"
+        );
+
+        // Two different ceilings, because a sentence that hard-coded one would pass with either.
+        for ceiling in [8_192_u64, 64_000] {
+            let said = failure_reason(Diagnosis::of(Category::TooLong).at_ceiling(ceiling));
+            assert!(
+                said.contains(&ceiling.to_string()),
+                "the ceiling that stopped the reply is not in {said}"
+            );
+            assert!(
+                said.contains(bravebot_config::env_var::OUTPUT_BUDGET),
+                "the setting that raises it is not in {said}"
+            );
+        }
     }
 
     #[test]

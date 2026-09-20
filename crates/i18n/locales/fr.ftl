@@ -909,6 +909,7 @@ failure-transport = la requête n'est pas passée
 failure-incomplete = la réponse s'est arrêtée avant la fin
 failure-undecodable = la réponse n'a pas pu être lue
 failure-too-long = le modèle a atteint sa limite de sortie
+failure-too-long-at = le modèle a atteint sa limite de sortie de { $tokens } jetons, que BRAVEBOT_OUTPUT_BUDGET relève
 failure-unconfigured = rien ici n'était configuré pour envoyer la requête
 failure-blocked = un contrôle local a refusé de laisser sortir la requête
 failure-workspace = l'espace de travail n'a pas pu être utilisé

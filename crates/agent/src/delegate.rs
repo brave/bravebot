@@ -216,6 +216,9 @@ pub fn run(
     egress: &bravebot_net::Egress,
     workspace: &crate::workspace::Workspace,
     home: Option<&std::path::Path>,
+    // The spawning turn's too, so a `~` in a line a delegate sends names the file a `~` in the
+    // parent's would have.
+    profile: Option<&std::path::Path>,
     model: Option<&str>,
     // The spawning turn's, since a delegate is that turn's work done elsewhere.
     permission_mode: crate::PermissionMode,
@@ -230,6 +233,7 @@ pub fn run(
     // what tells the delegate's planner why a write would be refused.
     let task = Task::delegated(seeded.spec.clone())
         .with_home(home.map(std::path::Path::to_path_buf))
+        .with_profile(profile.map(std::path::Path::to_path_buf))
         .remembering(seeded.remembering.clone())
         .with_model(model.map(str::to_string))
         .with_permissions(seeded.permissions.clone())
