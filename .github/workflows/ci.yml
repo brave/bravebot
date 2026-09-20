@@ -154,7 +154,8 @@ jobs:
 
   # The mechanical half of the security audit: whether two documents agree on how many exceptions
   # to the label rule are admitted, whether anything reaches into a Labelled, whether a spec pins
-  # the constructors, and whether every workflow step is on a commit rather than a movable tag.
+  # the constructors, whether every workflow step is on a commit rather than a movable tag, and
+  # whether a job holding a credential installs or runs a dependency beside it.
   # Standard library Python like the specs job. It was held out of CI while `Labelled::trusted`
   # had no `guards` entry and the check therefore failed; it has one as of this change.
   security:

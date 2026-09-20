@@ -132,9 +132,11 @@ check-spec:
 
 # The deterministic half of the security audit. It answers the questions check-spec cannot: whether
 # two documents agree about how many exceptions to the rule are admitted, whether anything reaches
-# into a Labelled, whether a spec pins the constructors as well as the releases, and whether every
-# workflow step is on a commit rather than a tag somebody else can move. No model takes part, so it
-# belongs in CI. The lanes that read code are the skill, and a person runs those.
+# into a Labelled, whether a spec pins the constructors as well as the releases, whether every
+# workflow step is on a commit rather than a tag somebody else can move, and whether a job holding
+# `id-token: write` or a secret installs or runs an npm dependency, which every step in that job
+# could read the credential from. No model takes part, so it belongs in CI. The lanes that read
+# code are the skill, and a person runs those.
 #
 # It passes on this tree now that `Labelled::trusted` has a `guards` entry beside `Labelled::new`,
 # so ci.yml runs it and check-all has it below. It was held out of both while it failed, because a
