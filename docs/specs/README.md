@@ -102,9 +102,13 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
   used, as a `sites:` list of `path: count` items, and the check fails when the tree and the list
   disagree in either direction. The count is how many times the symbol occurs in that file's code:
   two uses on one line are two, one call rustfmt wrapped across three lines is one, and a comment
-  naming the symbol is not a use of it at all. A count rather than a line number, so moving a call
-  inside a file changes nothing, while adding or removing one is an edit to this spec that a
-  reviewer sees. `make check-spec` prints the number it found, which is the number to record.
+  naming the symbol is not a use of it at all. The line defining the symbol counts as one of those
+  occurrences. A method is counted where it is called on a receiver too, since `gate.open()` is how
+  most call sites read; an associated function has no receiver, so `Labelled::new` counts its
+  definition and every place the qualified name is written, and nothing besides. A count rather than
+  a line number, so moving a call inside a file changes nothing, while adding or removing one is an
+  edit to this spec that a reviewer sees. `make check-spec` prints the number it found, which is the
+  number to record.
   Within one spec, either every entry pins its sites or none does: an unpinned entry beside pinned
   ones reads as though it were checked too.
 - **`verified-by:`** lines name the tests that pin a clause, as `crate::module::test_name`. The
