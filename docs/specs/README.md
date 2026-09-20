@@ -76,7 +76,7 @@ the routing-versus-content split they share.
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
 | [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 3 | `read_output` |
 | [tools/vet-content.md](tools/vet-content.md) | `VET` | 3 | `vet_content` |
-| [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 5 | `fetch_url` |
+| [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 6 | `fetch_url` |
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 3 | `load_skill` |
 | [tools/todo-write.md](tools/todo-write.md) | `TODO` | 2 | `todo_write` |
 | [tools/schedule-next.md](tools/schedule-next.md) | `SCHED` | 5 | `schedule_next` |
