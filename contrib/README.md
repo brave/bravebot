@@ -26,6 +26,37 @@ passes. It compiles nothing. `--warn` prints the same thing and exits zero, and
 `make check-linux` is the way to run CI's fmt, clippy and tests on current stable regardless of
 what the host has.
 
+## check-locales.py
+
+Holds every message catalog to the record of what it is missing.
+
+A translation with fewer messages than `en-US.ftl` builds, and what it lacks is shown in English.
+That is deliberate, and [the spec](../docs/specs/localization.md) gives the reason: a catalog nobody
+could use until it was finished would never be started. The cost is that a message can ship
+untranslated with nothing saying so, and eleven did. The build script counts the gap, but it prints
+a warning, and a warning is silent on a cached build and does not fail a job that passed.
+
+So the gap is not what this gates on. An unrecorded gap is.
+[untranslated-messages.txt](../untranslated-messages.txt) lists what each catalog is knowingly
+missing, and the check fails while the file and the catalogs disagree in either direction: a gap
+nobody wrote down, and a line for a gap that is no longer there. The second matters as much as the
+first, or the file becomes a graveyard that permits the next one. The same shape as
+`unverified-clauses.txt` and `make check-spec`.
+
+```sh
+make check-locales        # or contrib/check-locales.py
+make locales              # the same count as a report, which no gap it finds makes fail
+make write-untranslated   # rewrite the record after translating something
+```
+
+`make check-all` runs it and CI has a job for it. It compiles nothing and needs no toolchain.
+
+A line at column zero that is neither blank, a comment, nor a message is an error rather than
+something skipped: the parser is hand written against the subset of Fluent in
+[locales/README.md](../crates/i18n/locales/README.md), and one that quietly matches nothing would
+report every catalog complete forever. `--selftest` checks the parse and the verdict against inputs
+whose answer is known, and reads no catalog; `make check-locales` runs it first, for the same reason.
+
 ## measure-flakes.py
 
 Names every test that does not agree with itself, and how often.
