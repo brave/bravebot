@@ -115,19 +115,23 @@ per spend would rewrite the file several times a turn to change one boolean.
 `verified-by: bravebot_skus::store::a_detached_batch_has_nowhere_to_write`
 
 <a id="PREM-7"></a>
-### PREM-7: credentials live in one mode-0600 file under `~/.bravebot`
+### PREM-7: credentials live in one file under `~/.bravebot` that no other account can read
 
 One file, not one per channel: a person has one subscription however many Brave builds they have
 installed, so importing from Nightly replaces what was imported from Stable rather than sitting
 beside it. The channel names where to read the order id from, which is a fact about the machine's
 browsers rather than about the agent. `--forget` therefore takes no channel.
 
-The file is created 0600 before anything is written to it, and is still 0600 after a re-import over
-an existing file. A platform with no way to restrict a file to one account has the import refused
-rather than written unrestricted, since what is kept here is a bearer token. The files beside it are
-written either way, which [state-directory.md](state-directory.md) records as the cost it is. With no
-profile directory named there is nowhere a secret belongs, and that is reported rather than guessed
-at. `--forget` removes the file and is not an error when there is nothing to remove.
+The file is created reachable by the account that runs the import and by no other, before anything is
+written to it, and it still is after a re-import over an existing file. On Unix that is mode 0600. On
+Windows, which has no mode, it is an access-control list granting that one account, protected so that
+an inheritable entry on the directory above is not added to it: a profile directory on a shared or a
+roaming volume can carry one for `Users`, and taking it would hand the token to every account on the
+machine. A platform with neither has the import refused rather than written unrestricted, since what
+is kept here is a bearer token. The files beside it are written either way, which
+[state-directory.md](state-directory.md) records as the cost it is. With no profile directory named
+there is nowhere a secret belongs, and that is reported rather than guessed at. `--forget` removes the
+file and is not an error when there is nothing to remove.
 
 A malformed or empty file is reported as such rather than treated as absent credentials, and a
 credential without a token is rejected on load.
@@ -146,6 +150,7 @@ no desktop session had no store to open and every such user was silently spendin
 `verified-by: bravebot_skus::store::importing_again_replaces_the_previous_batch`
 `verified-by: bravebot_skus::store::a_batch_written_to_the_file_is_read_back`
 `verified-by: bravebot_skus::store::the_file_is_not_readable_by_anyone_else`
+`verified-by: bravebot_skus::store::the_windows_list_grants_one_account_and_inherits_nothing`
 `verified-by: bravebot_skus::store::the_file_lives_in_the_users_own_directory`
 `verified-by: bravebot_skus::store::no_home_directory_is_reported_rather_than_guessed`
 `verified-by: bravebot_skus::store::forgetting_removes_the_file_and_is_repeatable`
@@ -232,8 +237,15 @@ is most likely to notice first.
 ## Requirements and limits
 
 - **macOS and Linux**, including a machine with no desktop session, since nothing here needs one.
-  Windows is not supported: the store is a Unix-mode file (PREM-7) and no browser profile is located
-  for it.
+  Importing on Windows is not supported, because no browser profile is located there and so there is
+  no order to read. The store itself is written and read on Windows, restricted to the account that
+  writes it (PREM-7), so a batch imported on another machine and copied in is spendable and has its
+  spends recorded. The list is asked for on the file and not on the directory holding it, so an
+  account that can write `~/.bravebot` there can still delete or replace what it cannot read, which
+  is the cost [state-directory.md](state-directory.md) records for a platform with no mode to set.
+  What a test running here pins of the Windows half is the list itself; the calls that apply it are
+  compiled and linted by the Windows lint job rather than run, since the suite runs on the platforms
+  named above.
 - The build must know the premium host. Without it premium is unavailable (PREM-2).
 - A credential only works against the deployment that issued it, so import from the Brave channel
   matching the environment the binary is configured for. A mismatch is refused before a request is

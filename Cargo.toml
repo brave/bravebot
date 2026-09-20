@@ -39,6 +39,22 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 unicode-width = "0.2"
+# The Win32 calls that keep the imported subscription file readable by one account, which is what
+# stands in for a mode on Windows. Microsoft's own generated bindings, one crate deep
+# (windows-link), and both are already entries in Cargo.lock at this version, since rustix, mio and
+# errno each declare them for their own Windows builds: the lock gains the one line that says this
+# crate uses them. The Windows binary does compile them for the first time, which hand-written
+# `extern "system"` declarations would avoid at the price of spelling the layout of a security
+# descriptor, SECURITY_ATTRIBUTES and TOKEN_USER by hand, in a crate that denies unsafe code and
+# where a field of the wrong width silently widens the list. The features are the modules the calls
+# live in.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+] }
 
 # Rust's built-in strip can corrupt some targets under cargo-zigbuild, so
 # release builds leave symbols in place and strip during packaging instead.
