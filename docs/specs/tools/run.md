@@ -81,10 +81,32 @@ The planner names a quarantined reference and the policy layer supplies the byte
 work on a file nobody vouched for without the planner or the driver ever reading it. A stage that
 reads stdin and was given none receives nothing, never the terminal.
 
+`stdin_ref` is the field, and it names a reference rather than a path: the planner may not have the
+filename, and the name it does have is one the driver minted. The reference is resolved before
+anybody is asked, because its label is what decides whether there is a prompt at all, and the bytes
+stay wrapped until the endorsement is consumed. They go to the step at the head of the line and no
+other: fed once, so `cat && cat` is the second `cat` reading what the line gives it.
+
+**One source per descriptor.** A call may name `stdin_ref` or write a `<` redirection and not both;
+the two are the routes [RUN-4](#RUN-4) names to one place, and whichever lost would have been
+dropped into a run that looked like it had worked. The refusal is made twice, where the call is read
+and again where the bytes would be written. `background: true` is refused with it for the same
+reason: nothing is waited for there and nothing is fed either.
+
 **Why.** This is the point of the split: both trusted and untrusted data reach real tools, and
 only the routing part has to be trustworthy.
 
 `verified-by: bravebot_agent::exec::a_stage_that_reads_stdin_is_given_nothing_rather_than_the_terminal`
+`verified-by: bravebot_agent::exec::bytes_supplied_for_standard_input_reach_the_first_stage`
+`verified-by: bravebot_agent::exec::bytes_supplied_for_standard_input_reach_one_stage_and_no_other`
+`verified-by: bravebot_agent::exec::more_bytes_than_a_pipe_holds_are_fed_without_deadlocking`
+`verified-by: bravebot_agent::exec::a_program_that_reads_none_of_what_it_was_fed_is_not_a_failed_run`
+`verified-by: bravebot_agent::exec::a_line_naming_a_file_for_standard_input_cannot_also_be_fed_bytes`
+`verified-by: bravebot_agent::turn::a_quarantined_reference_is_fed_to_a_program_the_planner_may_not_read`
+`verified-by: bravebot_agent::turn::a_private_reference_fed_to_a_vouched_line_is_still_put_to_a_person`
+`verified-by: bravebot_agent::turn::a_background_line_cannot_be_fed_a_reference`
+`verified-by: bravebot_agent::turn::a_line_naming_a_file_for_standard_input_cannot_also_name_a_reference`
+`verified-by: bravebot_tui::confirm::a_run_prompt_names_the_reference_it_would_be_fed`
 
 <a id="RUN-4"></a>
 ### RUN-4: output is untrusted and private by default, and nothing inferred changes that
@@ -109,12 +131,25 @@ may supply the bytes of a quarantined reference, which arrive with that referenc
 `<` redirection names a file the run opens itself. A file's bytes are the user's own data whatever
 the trust map says about the path, so the second route is always private and always meets the gate.
 
+**Both roads to a trusted label are met with what was fed in.** A program prints what it was
+given, so a vouched-for `sed` over a fetched page prints the page: neither an assertion about a
+program nor a proof about its option surface reaches `(T,priv)` for a line whose standard input
+came from a reference nobody vouched for. Reading it the other way would make a vouch for one
+filter a way of laundering any quarantined document into the planner's context, which is the
+guarantee this repository exists for. The endorsement is bound to it too, so an answer given for a
+line fed one thing is not redeemable for the same steps fed another.
+
 `verified-by: bravebot_core::command::a_file_redirected_into_a_program_is_private_input`
 `verified-by: bravebot_core::command::a_redirection_on_a_later_step_is_private_input`
 `verified-by: bravebot_core::command::a_plan_that_feeds_a_program_nothing_releases_nothing`
 `verified-by: bravebot_core::policy::output_of_a_line_nobody_vouched_for_is_untrusted_and_private`
 `verified-by: bravebot_core::policy::output_of_a_line_whose_every_step_was_vouched_for_is_trusted_and_still_private`
 `verified-by: bravebot_core::policy::one_unvouched_step_makes_the_whole_lines_output_untrusted`
+`verified-by: bravebot_core::policy::a_vouched_line_fed_content_nobody_vouched_for_prints_untrusted_output`
+`verified-by: bravebot_core::policy::a_vouched_line_fed_content_the_user_vouched_for_still_prints_trusted_output`
+`verified-by: bravebot_core::policy::a_private_reference_fed_to_a_vouched_line_is_put_to_a_person`
+`verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_the_same_plan_fed_something_else`
+`verified-by: bravebot_core::command::a_plan_fed_a_reference_encodes_apart_from_the_same_plan_fed_nothing`
 
 <a id="RUN-5"></a>
 ### RUN-5: every run asks, unless every stage was vouched for, remembered, ruled on, or proven

@@ -38,6 +38,11 @@
 //! would otherwise block forever on input nobody is typing, and the turn would hang with no
 //! indication of why.
 //!
+//! Where a caller supplies bytes for it, they are the ones the policy layer resolved out of a
+//! quarantined reference and nothing else ([`run_plan`]'s `stdin`). This module writes them to the
+//! first step's descriptor on a thread of its own and never looks at them: they are carried into a
+//! process exactly as an argument vector is, and no branch here reads a byte of them.
+//!
 //! # This agent's own credentials are not handed on
 //!
 //! The environment is inherited, less the names in [`scrub`]. A person approving a run reads the
@@ -53,7 +58,7 @@ use bravebot_core::Pipeline;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::command::{Joiner, Plan, Route, Step, Steps};
 use std::fmt;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -277,8 +282,11 @@ pub fn run_within(
             routes: Vec::new(),
         })
         .collect();
-    // A pipeline carries no redirections, so there is nothing for it to report having opened.
-    Running::new(directory, cancel, limit, scratch).finish(&Steps::Pipeline(steps), &mut Vec::new())
+    // A pipeline carries no redirections, so there is nothing for it to report having opened, and
+    // nothing to feed in: a [`Pipeline`] carries the label of what would be fed to its first stage
+    // and never the bytes, so there are none here to hand over.
+    Running::new(directory, cancel, limit, scratch, None)
+        .finish(&Steps::Pipeline(steps), &mut Vec::new())
 }
 
 /// Run a compiled command line and collect what it printed.
@@ -291,14 +299,24 @@ pub fn run_within(
 /// records about a file bytes landed in, and the plan's write set cannot answer that: it names
 /// every branch, and a branch that is not taken opens nothing.
 /// `scratch` is the session's own directory, told to every part of the line as in [`run`].
+///
+/// `stdin` is the bytes the policy layer resolved out of a quarantined reference, for the first
+/// step of the line and no other, and [`Plan::stdin`] is the label they carry. They are written to
+/// that step's descriptor and nothing here reads them, which is the whole of RUN-3's first
+/// sentence: the planner named the reference, the policy layer produced the bytes, and the driver
+/// only carries them. `None` where the call named no reference, and then the first step is given
+/// an empty stdin exactly as it was before.
+///
+/// [RUN-3]: ../../../docs/specs/tools/run.md
 pub fn run_plan(
     plan: &Plan,
     cancel: &Cancel,
     limit: Duration,
     opened: &mut Vec<std::path::PathBuf>,
     scratch: Option<&std::path::Path>,
+    stdin: Option<&str>,
 ) -> Result<Ran, ExecError> {
-    Running::new(&plan.directory, cancel, limit, scratch).finish(&plan.steps, opened)
+    Running::new(&plan.directory, cancel, limit, scratch, stdin).finish(&plan.steps, opened)
 }
 
 /// Where one of a step's streams goes.
@@ -330,6 +348,13 @@ struct Running<'a> {
     wrote: Vec<std::path::PathBuf>,
     /// The directory this session was given, where it has one.
     scratch: Option<&'a std::path::Path>,
+    /// The bytes the policy layer supplied for standard input, until a step has been given them.
+    ///
+    /// Taken by the first step of the line and left `None` afterwards, so a line of several parts
+    /// feeds them once rather than handing every part its own copy: `sed … && wc -l` is `sed`
+    /// reading the reference and `wc` reading what `sed` printed, which is what a reader of the
+    /// line expects and the only reading under which the bytes are released once.
+    stdin: Option<&'a str>,
 }
 
 impl<'a> Running<'a> {
@@ -338,6 +363,7 @@ impl<'a> Running<'a> {
         cancel: &'a Cancel,
         limit: Duration,
         scratch: Option<&'a std::path::Path>,
+        stdin: Option<&'a str>,
     ) -> Self {
         Self {
             directory,
@@ -350,6 +376,7 @@ impl<'a> Running<'a> {
             stopped: None,
             wrote: Vec::new(),
             scratch,
+            stdin,
         }
     }
 
@@ -407,8 +434,29 @@ impl<'a> Running<'a> {
 
         let mut children: Vec<Child> = Vec::with_capacity(steps.len());
         // Nothing is typed at a program bravebot started, so a step with nothing upstream reads an
-        // empty stdin rather than the terminal's.
-        let mut upstream = Stdio::null();
+        // empty stdin rather than the terminal's. Unless the policy layer supplied bytes for it,
+        // which are taken here and given to the first step below: taken rather than borrowed, so
+        // the second part of a joined line is back to the empty stdin.
+        let supplied = self.stdin.take();
+        // The two routes to one descriptor cannot both be honoured, and whichever lost would have
+        // been dropped without anybody being told. Refused here as well as where the call is read,
+        // because a caller reaching this with both is a caller whose bytes would otherwise vanish
+        // into a run that looked like it had worked.
+        if supplied.is_some()
+            && steps[0]
+                .routes
+                .iter()
+                .any(|route| matches!(route, Route::Stdin { .. }))
+        {
+            return Err(ExecError::Io(
+                "a line cannot both be fed a reference and name a file for standard input"
+                    .to_string(),
+            ));
+        }
+        let mut upstream = match supplied {
+            Some(bytes) => feed(bytes)?,
+            None => Stdio::null(),
+        };
         let mut tail: Option<Drain> = None;
         let mut draining: Vec<Drain> = Vec::new();
         let last = steps.len() - 1;
@@ -637,6 +685,29 @@ fn for_writing(path: &std::path::Path, append: bool) -> Result<std::fs::File, Ex
             path: path.display().to_string(),
             detail: e.to_string(),
         })
+}
+
+/// A pipe holding `bytes`, for a child to read as its standard input.
+///
+/// Written from a thread of its own, because a program reading less than it was given would
+/// otherwise deadlock the turn: more than a pipe holds cannot be written before the reader starts,
+/// and the reader is a child this same function is about to spawn.
+///
+/// The bytes came out of a quarantined reference and nothing here reads them. There is no branch on
+/// them, no comparison, and no length test that decides anything: they are written and the writer
+/// is dropped, which is what tells the child its input has ended.
+///
+/// A write that fails is dropped, and the usual reason is a program that read none of what it was
+/// given: `head -1` of a long document closes its end, and the write comes back `EPIPE`. That is
+/// the program doing what it was asked to do rather than a failure of the run, and a run that
+/// reported it would report one for every line that filters.
+fn feed(bytes: &str) -> Result<Stdio, ExecError> {
+    let (reader, mut writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
+    let bytes = bytes.as_bytes().to_vec();
+    std::thread::spawn(move || {
+        let _ = writer.write_all(&bytes);
+    });
+    Ok(Stdio::from(reader))
 }
 
 /// A redirection's source, opened to be read.

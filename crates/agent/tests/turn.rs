@@ -10667,6 +10667,227 @@ fn an_edit_shows_the_lines_it_changed() {
     );
 }
 
+/// RUN-3 end to end, which is what the clause promises: the planner names a reference it may not
+/// read, `sed` filters those bytes, and the answer lands in a file, without the planner or the
+/// driver having seen a byte of the page.
+///
+/// The first line is what quarantines the page, so the reference the second call names is one this
+/// session really minted. The filter is what makes the assertion mean something: a run given no
+/// standard input writes an empty file, a run given the whole of it writes three lines, and only
+/// one implementation writes the second line on its own.
+///
+/// The destination is a file rather than the result, because a run's output is quarantined too:
+/// asserting on what came back would be asserting on a reference, and the file is where the bytes
+/// can be read without asking anybody for anything.
+#[test]
+fn a_quarantined_reference_is_fed_to_a_program_the_planner_may_not_read() {
+    let scratch = Scratch::new("run-fed-a-reference");
+    std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\ngamma\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request(
+            "run",
+            r#"{"command":"sed -n 2p > filtered.txt","stdin_ref":"ref:1"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("give me the second line"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("filtered.txt")).expect("the filter wrote"),
+        "beta\n",
+        "the reference's bytes did not reach the program that was to filter them"
+    );
+
+    // The prompt names what is going in, not only that something is: a person endorsing a release
+    // has to be able to read which reference it is.
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        2,
+        "one of the two lines was not put to anybody"
+    );
+    assert_eq!(asked[0].stdin, None, "the first line was fed something");
+    assert_eq!(
+        asked[1].stdin.as_deref(),
+        Some("ref:1"),
+        "the prompt for a fed line did not say what it was fed"
+    );
+}
+
+/// The label of what is fed in has to reach the plan, or the gate that asks about it never fires.
+/// The second line here is vouched for, writes nothing and runs at the root, so the one thing left
+/// that could put it to a person is the reference it is fed, and that reference holds an earlier
+/// run's output, which is the user's own data. A driver that carried the bytes without recording
+/// their label would hand those bytes to a program with nobody asked, and the run would look from
+/// the outside exactly like this one.
+#[test]
+fn a_private_reference_fed_to_a_vouched_line_is_still_put_to_a_person() {
+    let scratch = Scratch::new("run-fed-private");
+    std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\ngamma\n").unwrap();
+    let sed = bravebot_agent::programs::resolve("sed", &scratch.path).expect("sed is installed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n 2p","stdin_ref":"ref:1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("give me the second line"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
+            &sed,
+            &["-n", "2p"],
+            &scratch.path,
+        )]),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        2,
+        "the user's own data was handed to a vouched-for program with nobody asked"
+    );
+    assert!(
+        asked[1].releases_private(),
+        "the prompt did not say the line releases private data, so the label never reached the plan"
+    );
+}
+
+/// Nothing waits for a background job and nothing writes to one either, so a call asking for both
+/// is told which of the two it cannot have rather than having the reference dropped and being
+/// handed a job name for a program reading an empty stdin.
+#[test]
+fn a_background_line_cannot_be_fed_a_reference() {
+    let scratch = Scratch::new("run-fed-background");
+    std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request(
+            "run",
+            r#"{"command":"sed -n 2p","stdin_ref":"ref:1","background":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("filter it in the background"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let _first = received.recv().expect("the first round");
+    let _second = received.recv().expect("the second round");
+    let third = received.recv().expect("the third round");
+    assert!(
+        third.contains("cannot be fed a reference"),
+        "a background call naming a reference was not told it cannot have both: {third}"
+    );
+    assert!(
+        !third.contains("started in the background"),
+        "a job was started for a line whose reference had nowhere to go: {third}"
+    );
+}
+
+/// The two routes RUN-4 names reach one standard input, and honouring both is not something a run
+/// can do. Told rather than resolved: whichever route lost would have been dropped, and a line that
+/// filtered the file while its reference went nowhere would look exactly like one that had worked.
+#[test]
+fn a_line_naming_a_file_for_standard_input_cannot_also_name_a_reference() {
+    let scratch = Scratch::new("run-fed-and-redirected");
+    std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\n").unwrap();
+    std::fs::write(scratch.path.join("other.txt"), "one\ntwo\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request(
+            "run",
+            r#"{"command":"sed -n 2p < other.txt","stdin_ref":"ref:1"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("filter it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let _first = received.recv().expect("the first round");
+    let _second = received.recv().expect("the second round");
+    let third = received.recv().expect("the third round");
+    // The wording the tool itself refuses with, and not merely "not both", which the schemas of
+    // the other reference-taking tools put in every request this test would read.
+    assert!(
+        third.contains("give 'stdin_ref' or a '<' redirection"),
+        "a line with two sources for one descriptor was not refused before it ran: {third}"
+    );
+}
+
 /// A quarantined run says how to see it, and how to stop being asked.
 ///
 /// The label is about who answered for the command, not about programs being unreadable, and a

@@ -8,6 +8,7 @@ use bravebot_agent::exec::{self, ExecError};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::{Pipeline, Stage};
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// A scratch directory that removes itself, so tests do not leave state behind.
 struct Scratch {
@@ -687,6 +688,35 @@ fn line(text: &str, at: &std::path::Path) -> exec::Ran {
     ran_and_opened(text, at).0
 }
 
+/// The same, with bytes the policy layer supplied for the first step's standard input.
+///
+/// `within` bounds the wait rather than leaving it at the five minutes a real run gets: a step
+/// deadlocked against a pipe nobody is draining would otherwise hold the suite open for the whole
+/// of it instead of failing.
+fn line_fed(text: &str, at: &std::path::Path, stdin: &str, within: Duration) -> exec::Ran {
+    let plan = fed_plan(text, at);
+    exec::run_plan(
+        &plan,
+        &Cancel::new(),
+        within,
+        &mut Vec::new(),
+        None,
+        Some(stdin),
+    )
+    .unwrap_or_else(|e| panic!("`{text}` should run: {e}"))
+}
+
+/// A compiled line whose standard input the policy layer supplies, labelled as a fetched page is.
+///
+/// The label is what the plan carries and the bytes are what exec is given, which is the split the
+/// route rests on: the plan a person endorses says where the input came from and never what it is.
+fn fed_plan(text: &str, at: &std::path::Path) -> bravebot_core::command::Plan {
+    let mut plan = bravebot_agent::cmdline::compile(text, at, None)
+        .unwrap_or_else(|e| panic!("`{text}` should compile: {e}"));
+    plan.stdin = Some(bravebot_core::label::Label::untrusted_public());
+    plan
+}
+
 /// The same, for a session that has a directory of its own.
 fn line_given(text: &str, at: &std::path::Path, given: &std::path::Path) -> exec::Ran {
     let plan = bravebot_agent::cmdline::compile(text, at, None)
@@ -697,6 +727,7 @@ fn line_given(text: &str, at: &std::path::Path, given: &std::path::Path) -> exec
         exec::LIMIT,
         &mut Vec::new(),
         Some(given),
+        None,
     )
     .unwrap_or_else(|e| panic!("`{text}` should run: {e}"))
 }
@@ -725,7 +756,7 @@ fn ran_and_opened(text: &str, at: &std::path::Path) -> (exec::Ran, Vec<std::path
     let plan = bravebot_agent::cmdline::compile(text, at, None)
         .unwrap_or_else(|e| panic!("`{text}` should compile: {e}"));
     let mut opened = Vec::new();
-    let ran = exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, &mut opened, None)
+    let ran = exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, &mut opened, None, None)
         .unwrap_or_else(|e| panic!("`{text}` should run: {e}"));
     (ran, opened)
 }
@@ -826,10 +857,126 @@ fn a_destination_that_cannot_be_opened_is_not_reported() {
     let plan = bravebot_agent::cmdline::compile("echo x > a-directory", &scratch.path, None)
         .expect("a literal target compiles");
     let mut opened = Vec::new();
-    let outcome = exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, &mut opened, None);
+    let outcome = exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, &mut opened, None, None);
 
     assert!(outcome.is_err(), "a directory was opened for writing");
     assert!(opened.is_empty(), "a target that never opened was reported");
+}
+
+/// RUN-3's first sentence, at the layer that carries it: the planner named a reference, the policy
+/// layer resolved it into bytes, and the program reads them as if they had been typed at it. This
+/// is what makes `sed` over a page nobody vouched for something that can be asked for at all.
+///
+/// The filter is what makes the assertion mean something: an implementation that fed the whole
+/// input and one that fed nothing both come back with output, and only one of them comes back with
+/// the second line.
+#[test]
+fn bytes_supplied_for_standard_input_reach_the_first_stage() {
+    let scratch = Scratch::new("fed-stdin");
+    let ran = line_fed(
+        "sed -n 2p",
+        &scratch.path,
+        "alpha\nbeta\ngamma\n",
+        Duration::from_secs(30),
+    );
+    assert_eq!(
+        ran.stdout, "beta\n",
+        "the supplied bytes did not reach the program that was to filter them"
+    );
+    assert!(ran.succeeded());
+}
+
+/// Fed once, to the step at the head of the line, and never again. The bytes are a release that
+/// happens once, so a joined line handing every part its own copy would be releasing them as many
+/// times as the line has parts, and a reader of `cat && cat` expects the second `cat` to be reading
+/// what it is given by the line rather than the reference over again.
+#[test]
+fn bytes_supplied_for_standard_input_reach_one_stage_and_no_other() {
+    let scratch = Scratch::new("fed-stdin-once");
+    let ran = line_fed(
+        "cat && cat",
+        &scratch.path,
+        "once\n",
+        Duration::from_secs(30),
+    );
+    assert_eq!(
+        ran.stdout, "once\n",
+        "the second part of the line was fed the reference as well as the first"
+    );
+    assert!(ran.succeeded());
+}
+
+/// More than a pipe holds, which is the case a synchronous write cannot serve: the reader is a
+/// child this same loop has not spawned yet, so writing before the spawn fills the pipe and blocks
+/// forever with nothing on the other end.
+///
+/// Bounded by this test rather than by the run's own deadline, because the deadline is on the
+/// children and the block is in front of the first spawn: a run that never starts a process is
+/// never in the loop that watches the clock. So the wait is taken here, where a deadlock is a
+/// failed assertion instead of a suite that does not finish. The thread is left where it is if it
+/// comes to that; nothing in the process is waiting on it.
+#[test]
+fn more_bytes_than_a_pipe_holds_are_fed_without_deadlocking() {
+    // Well past the 64 KiB a pipe buffers on Linux, and past macOS's smaller one.
+    let large = "x".repeat(1024 * 1024);
+    let (finished, done) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let scratch = Scratch::new("fed-stdin-large");
+        let ran = line_fed("wc -c", &scratch.path, &large, Duration::from_secs(30));
+        let _ = finished.send((ran.stdout.trim().to_string(), ran.succeeded()));
+    });
+
+    // Generous against a loaded machine and far short of a deadlock, which does not end.
+    let (counted, ended_well) = done
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run did not finish: more than a pipe holds was written before it was read");
+    assert_eq!(
+        counted, "1048576",
+        "the program did not receive the whole of what was supplied"
+    );
+    assert!(ended_well);
+}
+
+/// A program that reads less than it was given is doing what it was asked to do. `head -c 2` closes
+/// its end after two bytes and the write comes back `EPIPE`, which is not a failure of the run: a
+/// run that reported it would report one for every line that filters.
+#[test]
+fn a_program_that_reads_none_of_what_it_was_fed_is_not_a_failed_run() {
+    let scratch = Scratch::new("fed-stdin-epipe");
+    let large = "x".repeat(1024 * 1024);
+    let ran = line_fed("head -c 2", &scratch.path, &large, Duration::from_secs(30));
+    assert_eq!(ran.stdout, "xx");
+    assert!(
+        ran.succeeded(),
+        "a program that stopped reading was reported as a failed run"
+    );
+    assert_eq!(
+        ran.stderr, "",
+        "the write's own error was reported as output"
+    );
+}
+
+/// The two routes RUN-4 names reach one descriptor, and honouring both is not something a run can
+/// do. Refused rather than resolved, because whichever route lost would have been dropped without
+/// anybody being told: a line that filtered a file while its reference went nowhere would look
+/// exactly like one that had worked.
+#[test]
+fn a_line_naming_a_file_for_standard_input_cannot_also_be_fed_bytes() {
+    let scratch = Scratch::new("fed-stdin-and-file");
+    std::fs::write(scratch.path.join("from.txt"), "from the file\n").expect("write");
+    let plan = fed_plan("cat < from.txt", &scratch.path);
+    let outcome = exec::run_plan(
+        &plan,
+        &Cancel::new(),
+        Duration::from_secs(30),
+        &mut Vec::new(),
+        None,
+        Some("from the reference\n"),
+    );
+    assert!(
+        outcome.is_err(),
+        "a line was run with two sources for one descriptor: {outcome:?}"
+    );
 }
 
 #[test]

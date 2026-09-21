@@ -18,7 +18,7 @@ that is merely carried.
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
 | [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | **yes, every time** |
-| [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
+| [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref` | none | **yes** |
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
 | [`job_output`](#job_output) | `job`, `kill`, `wait_seconds` | none | no |
@@ -358,6 +358,7 @@ Runs a command line. **You approve the compiled plan before anything runs.**
 | `directory` | where to run, inside the workspace or a directory you added ([below](#the-directory-carries-over-and-nothing-else-does)) |
 | `deadline_seconds` | how long to wait, defaulting to 300 ([below](#a-line-has-a-deadline)) |
 | `background` | start the line and hand back a job name instead of waiting ([below](#leaving-a-pipeline-running)) |
+| `stdin_ref` | a reference whose contents are fed to the first program ([below](#filtering-something-the-agent-may-not-read)) |
 
 ```
 git log --oneline -50 | head -20
@@ -593,7 +594,7 @@ step that reads it gets nothing rather than the terminal.
 | the plan (programs, arguments, and the files it writes) | `(T,pub)`, because a person approves the compiled plan |
 | standard input | may be untrusted; a person approves when it is private |
 | standard output and error | `(U,priv)`, quarantined |
-| …for a line every step of which a person vouched for | `(T,priv)` |
+| …for a line every step of which a person vouched for, fed nothing untrusted | `(T,priv)` |
 | …for a line that [proves what it read](#a-line-that-only-reads-what-you-vouched-for-does-not-ask) | the trust map's answer about what it read, private |
 
 **Output nobody vouched for is not shown to the planner.** It comes back as a reference, like a file
@@ -618,6 +619,30 @@ Output the planner **may** read comes back as text, capped at 16 KiB. Past the c
 tail are kept and the middle dropped, with a line in between saying how much went. The cap is on what
 enters the conversation rather than on what the command printed, and the whole of it stays available
 as a reference.
+
+### Filtering something the agent may not read
+
+`stdin_ref` names a reference, and its contents are fed to the first program's standard input. That
+is how `sed`, `awk`, `grep` or `jq` are run over a fetched page or a quarantined result: the agent
+names the reference it was given, the bytes go into the program, and nothing along that path reads
+them. The answer comes back quarantined the same way any other run's output does, so it can be
+written to a file, handed to a processor, or shown to you with
+[`read_output`](#read_output).
+
+The run prompt names the reference beside the plan, because what a program is fed is as much a part
+of what you are approving as what it runs. Where those bytes are **yours** (the output of an
+earlier command, a file out of your workspace) feeding them to a program releases them somewhere
+this policy stops governing, so the prompt says so and asks every time, whatever is on the vouched
+list ([`a` is withheld](#a-is-withheld-where-an-entry-would-cover-a-line-you-did-not-read)).
+
+**Vouching for a filter does not make a page trustworthy.** A program prints what it was given, so
+a line fed content nobody vouched for comes back quarantined even where every step of it is a
+command you vouched for. Otherwise a single `a` at a `sed` prompt would be a way to read any
+quarantined document as trusted text, which is the thing the split exists to prevent.
+
+`stdin_ref` and a `<` redirection are two ways to fill one standard input, so a line may have one
+or the other and not both, and a background line may have neither: nothing is waited for there and
+nothing is fed either.
 
 ### What a program is handed
 
