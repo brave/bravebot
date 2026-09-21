@@ -1769,6 +1769,78 @@ fn what_a_file_nobody_vouched_for_held_is_not_written_down() {
     );
 }
 
+/// A cache figure measures one request a process sent, so a record that kept one would have a
+/// session resumed in another process report it: `/undo` before any turn has run would draw
+/// "Prompt cache, last turn" beside a cost this session has not paid, for a request it did not
+/// send. BACKEND-31 keeps nothing about a cache in a record for that reason, which is a property
+/// of the bytes on disk as much as of what a point comes back holding.
+#[test]
+fn a_rewind_point_keeps_no_cache_figure_in_the_record() {
+    use bravebot_agent::workspace::{Backup, Before};
+
+    let scratch = Scratch::new("rewind-cache");
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(&scratch.project, bravebot_stamp::BUILD);
+
+    let mut snapshot = a_point_before_turn_two(&conversation);
+    snapshot.cached = Some(bravebot_aichat::protocol::Cached {
+        read_tokens: 800,
+        written_tokens: 100,
+    });
+    let point = bravebot_session::sessions::RewindPoint {
+        snapshot,
+        backups: vec![Backup {
+            path: scratch.project.join("notes.md"),
+            was: Before::Bytes(b"the first line\n".to_vec()),
+        }],
+        prompt: "add a second line to notes.md".to_string(),
+    };
+
+    handle.save(
+        "add a second line to notes.md",
+        Standing {
+            history: None,
+            conversation: &conversation.snapshot(),
+            turns: 2,
+            tokens: 1_200,
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &a_trust_map(),
+            programs: &a_program_list(),
+            directories: &[],
+            manifest: None,
+            rewind: &[point],
+        },
+    );
+
+    let path = sessions::project_directory(&scratch.project)
+        .expect("a project directory")
+        .join(format!("{}.json", handle.id()));
+    let body = std::fs::read_to_string(&path).expect("the record reads");
+    assert!(
+        !body.contains("read_tokens") && !body.contains("written_tokens"),
+        "a cache figure was written into the session record: {body}"
+    );
+
+    // And the point comes back with nothing rather than with a figure of zero, which the panel
+    // would draw nothing for while still being a cache figure a resume had brought back.
+    let record = sessions::load(&scratch.project, handle.id()).expect("the record");
+    let back = record.rewind_points(&scratch.project);
+    assert_eq!(back.len(), 1, "the point was not written down");
+    assert_eq!(
+        back[0].snapshot.cached, None,
+        "a resumed point came back with a cache figure, so rewinding to it reports a cache this \
+         session never used"
+    );
+    assert_eq!(
+        back[0].snapshot.tokens, 600,
+        "the counts the point does keep were lost with the cache figure"
+    );
+}
+
 /// The state before the second turn of a session, for a record to carry.
 fn a_point_before_turn_two(
     conversation: &Conversation,

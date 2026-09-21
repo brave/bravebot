@@ -12081,6 +12081,162 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A cache figure measures one request a process sent, so a session resumed in another
+    /// reports none until a turn has run in it: a figure a rewind point carried across the resume
+    /// would arrive on the panel at the first `/undo`, beside a cost this session has not paid.
+    /// A rewind inside the process that measured the figure still puts it back, which is the half
+    /// of BACKEND-31 that keeping none in the record must not cost.
+    #[test]
+    fn a_resumed_rewind_reports_no_cache_figure_while_a_live_one_puts_it_back() {
+        use bravebot_aichat::protocol::{Cached, Message};
+        use bravebot_session::sessions::{self, Standing};
+
+        fn save(
+            stored: &mut sessions::Handle,
+            session: &Session,
+            conversation: &Conversation,
+            root: &std::path::Path,
+        ) {
+            stored.save(
+                "cache",
+                Standing {
+                    conversation: &conversation.snapshot(),
+                    history: Some(session.turn_history()),
+                    turns: session.turns,
+                    tokens: session.tokens,
+                    spend: session.spend_by_turn(),
+                    timing: session.timing_by_turn(),
+                    model: None,
+                    todos: &session.todos_by_turn(),
+                    asides: &[],
+                    trust: &TrustStore::new(root),
+                    programs: &TrustedPrograms::new(),
+                    directories: &[],
+                    manifest: None,
+                    rewind: session.rewind_points(),
+                },
+            );
+        }
+
+        let root = crate::testutil::scratch_dir("bravebot-app-rewind-cache");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let mut trust = TrustStore::new(&root);
+        let mut programs = TrustedPrograms::new();
+        let mut stored = sessions::Handle::begin(&root, bravebot_stamp::BUILD);
+        let mut session = Session::new("none");
+        let mut conversation = Conversation::new();
+
+        // Two turns whose cache figures differ, so a figure put back can be told from the one it
+        // replaced as well as from nothing at all.
+        let figures = [
+            Cached {
+                read_tokens: 400,
+                written_tokens: 50,
+            },
+            Cached {
+                read_tokens: 900,
+                written_tokens: 100,
+            },
+        ];
+        for (index, cached) in figures.into_iter().enumerate() {
+            let prompt = format!("say {index}");
+            let start = conversation.recounted().len();
+            type_line(&mut session, &prompt);
+            session.submit().expect("the prompt is sent");
+            let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
+            session.open_rewind_point(point, prompt.clone());
+            session.prompt_recorded(conversation.recounted().len());
+            conversation.push(Message::user(&prompt));
+            conversation.push(Message::assistant("said"));
+            session.complete("said", vec![], 10);
+            // What [`fold_outcome`] does on the path a finished turn takes.
+            session.served_from_cache(cached);
+            session.record_turn(start, &conversation);
+            save(&mut stored, &session, &conversation, &root);
+        }
+
+        assert_eq!(
+            session.cached(),
+            Some(figures[1]),
+            "the panel is not reporting the last turn's figure"
+        );
+        assert_eq!(
+            session
+                .rewind_points()
+                .last()
+                .map(|point| point.snapshot.cached),
+            Some(Some(figures[0])),
+            "a live point does not hold what the turn before its own read, so a rewind in this \
+             process has nothing to put back"
+        );
+
+        // Read before the live rewind, which rewrites it: the resumed half below wants the record
+        // as the two turns left it.
+        let record = sessions::load(&root, stored.id()).expect("the record");
+
+        // A rewind to a point this process made puts the figure back, the panel reporting what the
+        // turn that is now the last one read.
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            1,
+        );
+        assert_eq!(
+            session.turns, 1,
+            "the live rewind did not go back, so the figure it reports says nothing"
+        );
+        assert_eq!(
+            session.cached(),
+            Some(figures[0]),
+            "a rewind in the process that measured the figures left the rewound turn's on the panel"
+        );
+
+        // A resume brings the points back without the figures, since the record keeps none.
+        let conversation = Conversation::restored(record.conversation.clone());
+        let mut resumed = Session::new("none");
+        resumed.replay(
+            &conversation,
+            &record.title,
+            &sessions::recall(&root, &record),
+        );
+        resumed.restore_spend(record.tokens, record.spend.clone());
+        resumed.restore_rewind_points(record.rewind_points(&root), &conversation);
+        let mut conversation = conversation;
+        assert_eq!(
+            resumed.cached(),
+            None,
+            "the resumed session reported a cache before any turn had run in it"
+        );
+
+        rewind(
+            &mut resumed,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            1,
+        );
+
+        assert_eq!(
+            resumed.turns, 1,
+            "the rewind did not go back, so the figure it reports says nothing"
+        );
+        assert_eq!(
+            resumed.cached(),
+            None,
+            "a rewind in a resumed session put back a cache figure the previous process measured"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// The bare word is the list, which is the surface the command exists for: seeing what a
     /// rewind would put back before running it.
     #[test]
