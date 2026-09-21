@@ -160,7 +160,12 @@ stopped being atomic.
 
 A confined process starts with either the environment the calling process holds or none at all, and
 the caller says which as the process is started. Confinement applies that answer itself, so a
-caller asking for nothing is handed nothing whichever backend confines the process.
+caller asking for nothing is handed nothing whichever backend confines the process, and a caller
+asking for its own is handed all of it. A backend that reaches the program through a second program
+answers for what that one loses on the way, and where it cannot restore what was lost it refuses
+rather than starting the process with less than was asked for. What it restores is what would
+otherwise be lost and no more: a command line is readable by every user of the machine and another
+user's environment is not, so a variable carried on one is a variable disclosed to carry it.
 
 **Why.** A variable carries what no grant over paths can withhold or hand over: a credential this
 process authenticates with sits in one, and so does the agent socket a push signs through. A
@@ -174,6 +179,11 @@ caller that forgets is a program handed everything with nothing saying so.
 `verified-by: bravebot_sandbox::macos::the_environment_a_confined_process_receives_is_the_callers`
 `verified-by: bravebot_sandbox::linux::a_confined_process_given_an_empty_environment_receives_none_of_this_processes_variables`
 `verified-by: bravebot_sandbox::macos::a_confined_process_given_an_empty_environment_receives_none_of_this_processes_variables`
+`verified-by: bravebot_sandbox::macos::a_variable_stripped_from_the_wrapper_still_reaches_the_confined_process`
+`verified-by: bravebot_sandbox::macos::a_variable_the_platform_strips_from_the_wrapper_is_carried_to_the_program_as_an_argument`
+`verified-by: bravebot_sandbox::macos::a_caller_holding_nothing_the_platform_strips_reaches_its_program_directly`
+`verified-by: bravebot_sandbox::macos::a_confined_process_asked_to_receive_no_variables_is_handed_none_as_an_argument`
+`verified-by: bravebot_sandbox::macos::a_program_path_the_wrapper_would_read_as_a_variable_is_refused`
 
 <a id="SANDBOX-9"></a>
 ### SANDBOX-9: a path that is not on disk is left out before the policy is built, and named
