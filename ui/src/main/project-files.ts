@@ -4,9 +4,12 @@ import { join } from 'node:path'
 
 /** Main-process-only transport to the UI's descriptor-relative file helper. */
 function request(root: string, path: string, fields: Record<string, unknown>): Record<string, unknown> {
+  // Unpackaged, the app path is `ui/` and the cargo target directory belongs to the
+  // workspace above it, so this reaches one level up. Packaged, the binary ships beside the
+  // app and there is no workspace to look into.
   const binary = app.isPackaged
     ? join(process.resourcesPath, 'bravebot-ui-files')
-    : join(app.getAppPath(), 'target', 'debug', 'bravebot-ui-files')
+    : join(app.getAppPath(), '..', 'target', 'debug', 'bravebot-ui-files')
   const result = spawnSync(binary, [], {
     // macOS's immutable system aliases are the only links normalized here. Resolving an
     // entire project path first would let a swapped project directory redefine the boundary.

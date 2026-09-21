@@ -41,7 +41,7 @@ try {
     { on: 'turn-finished', run: [process.execPath, hookScript, hookLog, 'finished'] },
   ] }))
   writeFileSync(join(project, 'watched.txt'), 'Original private bytes')
-  child = spawn(resolve('target/debug/bravebot-rpc'), ['--settings', override], {
+  child = spawn(resolve('../target/debug/bravebot-rpc'), ['--settings', override], {
     cwd: project, env: { PATH: process.env.PATH, HOME: home, NO_PROXY: '127.0.0.1,localhost', BRAVEBOT_DEFAULT_MODEL: 'local/test' }, stdio: ['pipe', 'pipe', 'pipe'],
   })
   let stderr = ''

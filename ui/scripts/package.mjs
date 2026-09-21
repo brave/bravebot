@@ -26,8 +26,8 @@ if (!['darwin', 'linux'].includes(process.platform)) {
   throw new Error(`Packaging is not supported on ${process.platform}`)
 }
 
-const AGENT = 'target/debug/bravebot-rpc'
-const FILES = 'target/debug/bravebot-ui-files'
+const AGENT = '../target/debug/bravebot-rpc'
+const FILES = '../target/debug/bravebot-ui-files'
 if (!existsSync(FILES)) throw new Error('Secure file helper missing — run npm run bridge first')
 if (!existsSync(AGENT)) {
   console.error(`no agent binary at ${AGENT} — run \`npm run bridge\` first`)

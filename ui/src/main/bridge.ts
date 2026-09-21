@@ -49,7 +49,8 @@ export class Bridge {
   private binaryPath(): string {
     const packaged = join(process.resourcesPath ?? '', 'bravebot-rpc')
     if (app.isPackaged && existsSync(packaged)) return packaged
-    return join(app.getAppPath(), 'target', 'debug', 'bravebot-rpc')
+    // The app path is `ui/`; the cargo target directory belongs to the workspace above it.
+    return join(app.getAppPath(), '..', 'target', 'debug', 'bravebot-rpc')
   }
 
   private ensure(): ChildProcessWithoutNullStreams {

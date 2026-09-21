@@ -138,6 +138,7 @@ jobs:
           npm ci --ignore-scripts
           npm run lint:lockfile
           npm run lint:lockfile:website
+          npm run lint:lockfile:ui
 
   # The documentation website under docs/website. Docusaurus throws on broken links or
   # broken anchors, so this job validates documentation correctness across the tree.
@@ -291,3 +292,48 @@ jobs:
 
       - name: Verify the artifact is the expected format
         run: file "dist/bravebot-${{ matrix.name }}${{ matrix.ext }}"
+
+  # The front end under ui/: its TypeScript, its Node tests, and one real Electron
+  # walkthrough under Xvfb. Its Rust crates are not here, because the `check` job above
+  # already builds and tests every member of the workspace on every pull request; filtering
+  # those away by directory would rebuild the submodule problem inside one repository, which
+  # is the whole thing folding the front end in was meant to fix. Only the Electron half is
+  # filtered, because it installs a browser runtime to draw a window.
+  ui:
+    name: Front end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install desktop test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64
+
+      # The Electron package is needed to typecheck src/main and src/preload against it. The
+      # runtime binary is needed as well, for the walkthrough below, so this install does not
+      # set ELECTRON_SKIP_BINARY_DOWNLOAD.
+      - name: Install
+        working-directory: ui
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: ui
+        run: npm run typecheck
+
+      - name: Build and run the Node tests
+        working-directory: ui
+        run: |
+          npm run build
+          node --test scripts/*.test.mjs
+
+      - name: Walkthrough regression
+        working-directory: ui
+        timeout-minutes: 5
+        run: xvfb-run -a node scripts/drive-manual-walkthrough.mjs
