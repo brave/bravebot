@@ -346,6 +346,7 @@ a gateway has.
 `verified-by: bravebot_tui::model_prompt::every_service_heads_its_own_section`
 `verified-by: bravebot_tui::model_prompt::a_service_that_appears_twice_in_the_roster_is_still_one_section`
 `verified-by: bravebot_tui::model_prompt::a_heading_stays_above_the_rows_when_the_list_is_scrolled`
+`verified-by: bravebot_tui::model_prompt::a_heading_is_held_where_the_list_has_room_for_two_rows`
 `verified-by: bravebot_tui::model_prompt::a_service_is_never_given_two_headings_at_once`
 `verified-by: bravebot_tui::model_prompt::the_model_in_use_is_marked`
 `verified-by: bravebot_tui::model_prompt::a_premium_model_says_so`
