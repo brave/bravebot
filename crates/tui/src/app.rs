@@ -1157,12 +1157,12 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
     // what is here is the reading and the ending: the two halves of a standing watch that a
     // transcript cannot show.
     if let Some(argument) = argument_to(line, WATCH_COMMAND) {
-        match crate::watches::parse(argument) {
-            crate::watches::Asked::List => session.report_watches(),
-            crate::watches::Asked::Stop(number) => {
+        match crate::watch_command::parse(argument) {
+            crate::watch_command::Asked::List => session.report_watches(),
+            crate::watch_command::Asked::Stop(number) => {
                 session.stop_watch(number);
             }
-            crate::watches::Asked::Unreadable => session.note(t!(watch_command_takes)),
+            crate::watch_command::Asked::Unreadable => session.note(t!(watch_command_takes)),
         }
         return Action::Redraw;
     }
@@ -1458,6 +1458,13 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // prompt history and the search, neither of which sends anything, so a running turn refuses
     // nothing here.
     let key = spelled_by_vi(session, key).unwrap_or(key);
+
+    // Where the idle path clears it, and for the reason that path clears it: the hint offering the
+    // way out lives for one press, and this is it. A turn a loop tick or a watch began started
+    // from the main loop with no key press, so an offer put up while the session was idle is still
+    // up when this path takes over, and a press that did not take it down would leave it standing
+    // frame after frame saying the next Ctrl-C leaves, which mid-turn stops the turn instead.
+    session.cleared_by_interrupt = false;
 
     // Before the modifier guard, since the readline bindings are how the caret moves on a terminal
     // that sends nothing for the named keys, and a line that can be typed mid-turn has to be
@@ -10021,6 +10028,29 @@ mod tests {
         );
     }
 
+    /// One press is its life whatever is running. A turn can begin without anybody pressing
+    /// anything, so an offer put up while the session was idle outlives the moment it answered,
+    /// and it says the next Ctrl-C leaves when mid-turn that key stops the turn.
+    #[test]
+    fn the_way_out_stops_being_offered_at_the_next_press_while_a_turn_runs() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "half a thought");
+        handle_key(&mut session, ctrl('c'));
+        assert!(session.cleared_by_interrupt);
+
+        // A tick submits from the main loop rather than from a key, which is how the offer
+        // reaches a running turn at all.
+        session.start_loop(crate::loops::parse("30s check the deploy").expect("a request"));
+        assert_eq!(session.status, Status::Working);
+        assert!(session.cleared_by_interrupt, "the tick took the offer down");
+
+        handle_key_while_working(&mut session, key(KeyCode::Char('x')));
+        assert!(
+            !session.cleared_by_interrupt,
+            "the hint outstayed its press"
+        );
+    }
+
     /// The whole ladder, nearest first: the turn, then the line the stop put back, then the
     /// session. Each press has something of its own to answer, so none of them is a press that
     /// silently did another one's job.
@@ -10697,7 +10727,8 @@ mod tests {
         fn answered(session: &Session, action: Action) -> String {
             format!(
                 "{action:?} input={:?} caret={} scroll={} shell={} shortcuts={} trail={} \
-                 stashed={:?} scrolling={} queued={} browsing={} searching={} vi={:?}",
+                 stashed={:?} scrolling={} queued={} browsing={} searching={} vi={:?} \
+                 interrupted={}",
                 session.input(),
                 session.caret(),
                 session.scroll,
@@ -10710,6 +10741,7 @@ mod tests {
                 session.history.is_browsing(),
                 session.searching_history(),
                 session.vi_mode(),
+                session.cleared_by_interrupt,
             )
         }
 
@@ -10732,6 +10764,11 @@ mod tests {
                     handle_key_while_working(&mut session, key(KeyCode::Char(c)));
                 }
             }
+            // The offer to leave, standing over both sessions as it stands over a turn a tick
+            // began: put up by a Ctrl-C that took a line while nothing was running, and carried
+            // into the turn by a submission no key press made. It lives for one press, so the
+            // press under test takes it down whichever path answers that press.
+            session.cleared_by_interrupt = true;
             session
         };
 

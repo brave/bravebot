@@ -7435,6 +7435,236 @@ fn a_turn_that_wrote_and_ran_is_not_asked_about_it() {
     );
 }
 
+/// A write the person refused leaves nothing to build, so neither party is told a change went out
+/// unbuilt.
+///
+/// Both of TURN-4's lines used to fire on the call the planner asked for rather than on what
+/// dispatch did, so a turn whose one write was declined ended by telling the person that files
+/// had changed and none of it was tested, with the workspace exactly as they left it.
+///
+/// The nudge of TURN-3 is the other way round and stays that way: a write that was asked for and
+/// refused is a planner that tried to deliver, so it is not told it has written nothing. The turn
+/// runs one round past ROUNDS_BEFORE_WRITING so that line would be said if it had been.
+#[test]
+fn a_write_the_person_refused_is_not_reported_as_a_change_that_was_never_built() {
+    let scratch = Scratch::new("write-refused-never-ran");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut replies = vec![tool_request(
+        "write_file",
+        r#"{"path":"notes.txt","contents":"first slice"}"#,
+    )];
+    // As many rounds as the turn that wrote for real takes to be asked, so the only difference
+    // between this test and that one is whether the write landed.
+    replies.extend(
+        (0..ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 1)
+            .map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    replies.push(reply_with("done"));
+
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut confirmer = RecordingConfirmer::rejecting();
+
+    // The rule is what raises the prompt in a workspace somebody vouched for, so the refusal is a
+    // person declining the diff rather than a path nobody had endorsed.
+    let task = Task::new("add a toggle").with_permissions(rules(&[], &["Edit(notes.txt)"], &[]));
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    assert!(
+        !confirmer.seen.is_empty(),
+        "the write never reached the approval prompt, so nothing was refused"
+    );
+    assert!(
+        !scratch.path.join("notes.txt").exists(),
+        "a refused write landed, so this test proves nothing about a turn that changed nothing"
+    );
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing has been run")),
+        "the planner was asked to build a change that was never made: {bodies:?}"
+    );
+    assert!(
+        !reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was told files changed when none did: {:?}",
+        reporter.narration
+    );
+    let last = bodies.last().expect("a last request");
+    assert!(
+        !last.contains("nothing written yet"),
+        "a planner that asked for a write and was refused was told it had written nothing: {last}"
+    );
+}
+
+/// A write plan mode refused changed nothing either, so neither party is told a change went out
+/// unbuilt.
+///
+/// The other way a write is refused, and the one that reaches no prompt at all: the mode refuses
+/// before the tool runs, so a turn driven by the call the planner asked for reports a diff in a
+/// mode whose whole point is that it makes none.
+#[test]
+fn a_write_plan_mode_refused_is_not_reported_as_a_change_that_was_never_built() {
+    let scratch = Scratch::new("plan-mode-never-ran");
+    std::fs::write(scratch.path.join("notes.txt"), "original").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut replies = vec![tool_request(
+        "write_file",
+        r#"{"path":"notes.txt","contents":"first slice"}"#,
+    )];
+    replies.extend(
+        (0..ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 1)
+            .map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    replies.push(reply_with("done"));
+
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    // Approves every write, so what stops this one is the mode rather than an answer.
+    let mut approving = bravebot_agent::confirm::ApproveWrites;
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut approving, bravebot_agent::PermissionMode::Plan);
+    let task = Task::new("add a toggle").with_permission_mode(bravebot_agent::PermissionMode::Plan);
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.txt")).unwrap(),
+        "original",
+        "plan mode wrote to the workspace, so this test says nothing about a turn that changed \
+         nothing"
+    );
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing has been run")),
+        "the planner was asked to build a change plan mode refused to make: {bodies:?}"
+    );
+    assert!(
+        !reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was told files changed in a mode that changes none: {:?}",
+        reporter.narration
+    );
+}
+
+/// A run the person refused builds nothing, so the turn that wrote is still asked and the person
+/// is still told.
+///
+/// The mirror of the same mistake: the run flag was set from the call the planner asked for, so
+/// declining the one command in a turn left a real diff going out with neither party told that
+/// nothing had compiled it.
+#[test]
+fn a_run_the_person_refused_leaves_the_change_reported_as_never_built() {
+    let scratch = Scratch::new("run-refused-after-write");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut replies = vec![
+        tool_request(
+            "write_file",
+            r#"{"path":"notes.txt","contents":"first slice"}"#,
+        ),
+        tool_request("run", r#"{"command":"echo built"}"#),
+    ];
+    replies.extend(
+        (0..ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 1)
+            .map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    replies.push(reply_with("done"));
+
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut confirmer =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::reject()).approving_writes();
+    let asked_about_runs = confirmer.seen.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    assert!(
+        !asked_about_runs.lock().unwrap().is_empty(),
+        "the run never reached the approval prompt, so nothing was refused"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.txt")).unwrap(),
+        "first slice",
+        "the write did not land, so this test says nothing about a turn that changed a file"
+    );
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let asked = bodies
+        .iter()
+        .position(|body| body.contains("nothing has been run"))
+        .expect("a turn whose only run was refused was treated as one that had built its change");
+    assert_eq!(
+        asked,
+        ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 1,
+        "the question came on the wrong round, so it is not counted from the write that landed"
+    );
+    assert!(
+        reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was not told the change was never built: {:?}",
+        reporter.narration
+    );
+}
+
 /// A turn that has read for a long time and written nothing is told so, once.
 ///
 /// The failure this is for produced nothing at all: fourteen minutes of reading, a plan the
@@ -10434,6 +10664,227 @@ fn an_edit_shows_the_lines_it_changed() {
     assert!(
         result.find("CHARLIE").unwrap() < result.find("1 replacement(s)").unwrap(),
         "the excerpt must be shown before the replacement count: {result}"
+    );
+}
+
+/// RUN-3 end to end, which is what the clause promises: the planner names a reference it may not
+/// read, `sed` filters those bytes, and the answer lands in a file, without the planner or the
+/// driver having seen a byte of the page.
+///
+/// The first line is what quarantines the page, so the reference the second call names is one this
+/// session really minted. The filter is what makes the assertion mean something: a run given no
+/// standard input writes an empty file, a run given the whole of it writes three lines, and only
+/// one implementation writes the second line on its own.
+///
+/// The destination is a file rather than the result, because a run's output is quarantined too:
+/// asserting on what came back would be asserting on a reference, and the file is where the bytes
+/// can be read without asking anybody for anything.
+#[test]
+fn a_quarantined_reference_is_fed_to_a_program_the_planner_may_not_read() {
+    let scratch = Scratch::new("run-fed-a-reference");
+    std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\ngamma\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request(
+            "run",
+            r#"{"command":"sed -n 2p > filtered.txt","stdin_ref":"ref:1"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("give me the second line"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("filtered.txt")).expect("the filter wrote"),
+        "beta\n",
+        "the reference's bytes did not reach the program that was to filter them"
+    );
+
+    // The prompt names what is going in, not only that something is: a person endorsing a release
+    // has to be able to read which reference it is.
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        2,
+        "one of the two lines was not put to anybody"
+    );
+    assert_eq!(asked[0].stdin, None, "the first line was fed something");
+    assert_eq!(
+        asked[1].stdin.as_deref(),
+        Some("ref:1"),
+        "the prompt for a fed line did not say what it was fed"
+    );
+}
+
+/// The label of what is fed in has to reach the plan, or the gate that asks about it never fires.
+/// The second line here is vouched for, writes nothing and runs at the root, so the one thing left
+/// that could put it to a person is the reference it is fed, and that reference holds an earlier
+/// run's output, which is the user's own data. A driver that carried the bytes without recording
+/// their label would hand those bytes to a program with nobody asked, and the run would look from
+/// the outside exactly like this one.
+#[test]
+fn a_private_reference_fed_to_a_vouched_line_is_still_put_to_a_person() {
+    let scratch = Scratch::new("run-fed-private");
+    std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\ngamma\n").unwrap();
+    let sed = bravebot_agent::programs::resolve("sed", &scratch.path).expect("sed is installed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n 2p","stdin_ref":"ref:1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("give me the second line"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
+            &sed,
+            &["-n", "2p"],
+            &scratch.path,
+        )]),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        2,
+        "the user's own data was handed to a vouched-for program with nobody asked"
+    );
+    assert!(
+        asked[1].releases_private(),
+        "the prompt did not say the line releases private data, so the label never reached the plan"
+    );
+}
+
+/// Nothing waits for a background job and nothing writes to one either, so a call asking for both
+/// is told which of the two it cannot have rather than having the reference dropped and being
+/// handed a job name for a program reading an empty stdin.
+#[test]
+fn a_background_line_cannot_be_fed_a_reference() {
+    let scratch = Scratch::new("run-fed-background");
+    std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request(
+            "run",
+            r#"{"command":"sed -n 2p","stdin_ref":"ref:1","background":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("filter it in the background"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let _first = received.recv().expect("the first round");
+    let _second = received.recv().expect("the second round");
+    let third = received.recv().expect("the third round");
+    assert!(
+        third.contains("cannot be fed a reference"),
+        "a background call naming a reference was not told it cannot have both: {third}"
+    );
+    assert!(
+        !third.contains("started in the background"),
+        "a job was started for a line whose reference had nowhere to go: {third}"
+    );
+}
+
+/// The two routes RUN-4 names reach one standard input, and honouring both is not something a run
+/// can do. Told rather than resolved: whichever route lost would have been dropped, and a line that
+/// filtered the file while its reference went nowhere would look exactly like one that had worked.
+#[test]
+fn a_line_naming_a_file_for_standard_input_cannot_also_name_a_reference() {
+    let scratch = Scratch::new("run-fed-and-redirected");
+    std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\n").unwrap();
+    std::fs::write(scratch.path.join("other.txt"), "one\ntwo\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request(
+            "run",
+            r#"{"command":"sed -n 2p < other.txt","stdin_ref":"ref:1"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("filter it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let _first = received.recv().expect("the first round");
+    let _second = received.recv().expect("the second round");
+    let third = received.recv().expect("the third round");
+    // The wording the tool itself refuses with, and not merely "not both", which the schemas of
+    // the other reference-taking tools put in every request this test would read.
+    assert!(
+        third.contains("give 'stdin_ref' or a '<' redirection"),
+        "a line with two sources for one descriptor was not refused before it ran: {third}"
     );
 }
 

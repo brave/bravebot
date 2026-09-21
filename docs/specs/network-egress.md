@@ -117,7 +117,8 @@ A build ships a set of certificate authorities, and the environment may name oth
 shipped set rather than adding to it. The two paths are read independently, so one that yields no
 certificate does not discard what the other held; where neither held anything, nothing is trusted
 rather than the shipped set coming back. Which roots are in force, and any named path that yielded
-nothing, are reported by `doctor` ([CLI-7](cli.md#CLI-7)).
+nothing, are reported by `doctor` ([CLI-7](cli.md#CLI-7)), each such path rather than the first of
+them.
 
 **Why.** A network that inspects TLS presents a certificate from an authority whoever set the
 machine up has already installed, and every other client on it honours these two variables. A
@@ -133,7 +134,10 @@ states.
 Reading the two paths independently is the other side of the same bargain. A machine that names both
 commonly has only one of them, and discarding the certificates it does have because a second path
 was missing would cost every connection this process makes to save a line in a report. The line is
-still owed, because the set in force is then not the set that was asked for.
+still owed, because the set in force is then not the set that was asked for. Two paths that yield
+nothing are two lines, since the two variables are two decisions: a report naming one of them has
+whoever fixes that path run `doctor` again to be told about the other, and the roots line says only
+that nothing is trusted.
 
 `verified-by: bravebot_net::transport::an_environment_that_names_no_certificates_leaves_the_built_in_roots_in_force`
 `verified-by: bravebot_net::transport::a_certificate_file_the_environment_names_is_what_is_trusted`
@@ -145,6 +149,8 @@ still owed, because the set in force is then not the set that was asked for.
 `verified-by: bravebot_net::transport::a_certificate_directory_holding_none_is_refused`
 `verified-by: bravebot_net::transport::a_directory_entry_that_is_not_a_certificate_is_skipped`
 `verified-by: bravebot_net::transport::a_path_that_yields_nothing_does_not_discard_one_that_does`
+`verified-by: bravebot_net::transport::every_named_path_that_yields_nothing_is_reported_rather_than_the_first`
+`verified-by: bravebot_cli::main::the_network_section_names_every_path_that_yielded_nothing`
 `verified-by: bravebot_net::transport::a_client_gets_the_built_in_roots_when_nothing_names_others`
 `verified-by: bravebot_net::lib::the_one_way_out_is_built_against_the_stated_transport_rather_than_a_default_client`
 

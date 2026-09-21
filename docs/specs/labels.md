@@ -29,11 +29,11 @@ guards:
       - crates/agent/src/aside.rs: 2
       - crates/agent/src/manifest.rs: 4
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 27
+      - crates/agent/src/tools.rs: 28
       - crates/agent/src/turn.rs: 4
       - crates/agent/src/vet.rs: 1
       - crates/agent/src/workspace.rs: 2
-      - crates/agent/tests/workspace.rs: 39
+      - crates/agent/tests/workspace.rs: 41
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 1
       - crates/core/src/policy.rs: 48
@@ -47,7 +47,7 @@ guards:
       - crates/agent/src/skills.rs: 3
       - crates/agent/src/tools.rs: 13
       - crates/agent/src/turn.rs: 3
-      - crates/agent/tests/workspace.rs: 147
+      - crates/agent/tests/workspace.rs: 149
       - crates/core/src/policy.rs: 22
       - crates/core/src/value.rs: 3
   - symbol: Labelled::relabel
@@ -57,7 +57,7 @@ guards:
       - crates/core/src/value.rs: 4
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 45
+      - crates/core/src/policy.rs: 46
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -269,9 +269,15 @@ settled.
 ### LABEL-6: minting a witness is not permission to inspect
 
 A witness records that bytes moved somewhere they were already allowed to go: a filesystem write,
-an HTTP body, or a human's screen. Each of those three destinations has a gate of its own, one for
+an HTTP body, a human's screen, or the standard input of a program a person endorsed
+([run.md](tools/run.md#RUN-3)). Each of those destinations has a gate of its own, one for
 putting content in front of the planner, one for reshaping it for display, and one for reading
 trusted content. A declassification anywhere else is almost certainly a violation.
+
+A program's standard input is on that list for the reason the other three are, and not because a
+subprocess is trusted: the bytes are carried to a descriptor and read by something that is neither
+the driver nor the planner, and which argv reads them is routing a person approved. What happens to
+them past that point is [sandboxing.md](sandboxing.md)'s question, not this one.
 
 The witness a gate mints says the bytes may go to that destination. It does not say they may be
 examined on the way, so a caller holding released bytes may not then search them, count them or

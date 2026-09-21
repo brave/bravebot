@@ -555,11 +555,20 @@ impl Plan {
     /// two files whose names differ only in bytes that are not valid UTF-8 render alike, and a
     /// grant is redeemed by whatever encodes to the value it holds.
     ///
+    /// What is fed to the first step is in it, because that is routing the planner chose as much
+    /// as a destination is: two lines differing only in whether a quarantined reference goes into
+    /// the first program are two different propositions, and an endorsement given for one must not
+    /// be redeemable by the other. The label rather than the bytes, which is what the plan holds.
+    ///
     /// Not for a person to read. [`Plan::display`] is that, and the two exist separately because a
     /// rendering has to be legible while this has to be injective.
     pub fn canonical(&self) -> String {
         let mut out = String::new();
         length_prefixed_path(&mut out, &self.directory);
+        match self.stdin {
+            Some(label) => length_prefixed(&mut out, &format!("<{label}")),
+            None => length_prefixed(&mut out, ""),
+        }
         encode(&mut out, &self.steps);
         out
     }
@@ -818,7 +827,8 @@ mod tests {
         );
         assert_eq!(
             resolving_to(0xff).canonical(),
-            format!("t5:/workP1|{UNSHOWABLE_FF}a0|e0|r0|"),
+            // `0:` is the empty standard input, which every plan encodes whether it has one.
+            format!("t5:/work0:P1|{UNSHOWABLE_FF}a0|e0|r0|"),
             "the endorsement is bound to the path's own bytes"
         );
     }
@@ -1179,5 +1189,35 @@ mod tests {
     #[test]
     fn a_pipeline_with_no_input_releases_nothing() {
         assert!(!plain().releases_private());
+    }
+
+    /// What goes into the first program is part of what an endorsement covers, so the three cases
+    /// encode apart: nothing fed in, a reference nobody vouched for, and the user's own data. Two
+    /// of them sharing an encoding would make an answer given for one redeemable for another, which
+    /// is what a single-use grant exists to prevent.
+    #[test]
+    fn a_plan_fed_a_reference_encodes_apart_from_the_same_plan_fed_nothing() {
+        let fed = |label: Option<Label>| {
+            let mut out = plan(Steps::Pipeline(vec![Step {
+                program: "sed".to_string(),
+                resolved: PathBuf::from("/usr/bin/sed"),
+                args: vec!["-n".into(), "2p".into()],
+                environment: Vec::new(),
+                routes: Vec::new(),
+            }]));
+            out.stdin = label;
+            out
+        };
+
+        let bare = fed(None).canonical();
+        let page = fed(Some(Label::untrusted_public())).canonical();
+        let theirs = fed(Some(Label::trusted_private())).canonical();
+
+        assert_ne!(bare, page, "a line fed a page encoded like one fed nothing");
+        assert_ne!(
+            page, theirs,
+            "a line fed a page encoded like one fed the user's own data"
+        );
+        assert_ne!(bare, theirs);
     }
 }

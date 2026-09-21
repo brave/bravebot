@@ -16,7 +16,13 @@
 
 #[cfg(target_os = "linux")]
 pub mod linux;
-#[cfg(target_os = "macos")]
+// Compiled under test on any Unix as well as on the platform it confines, so what this
+// backend decides before a process starts, the argument vector that carries the caller's
+// environment past `sandbox-exec`, is pinned by every job that runs the suite rather
+// than by the one job that has Seatbelt. The tests that start a confined process are
+// gated to macOS inside the module. Unix rather than every platform, because the spawn
+// this backend reaches is itself a Unix one.
+#[cfg(any(target_os = "macos", all(test, unix)))]
 pub mod macos;
 pub mod policy;
 pub mod process;

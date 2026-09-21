@@ -167,8 +167,10 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
                     "pattern": {
                         "type": "string",
                         "description": "Optional glob, e.g. \"*.rs\" for Rust files at any \
-                                        depth, or \"src/**/*.rs\" to anchor it. Supports \
-                                        *, ? and **; brace groups are not supported."
+                                        depth, \"src/**/*.rs\" to anchor it, or \
+                                        \"**/*.{rs,toml}\" for either extension. Supports *, ?, \
+                                        ** and brace groups. Character classes and extended \
+                                        globs are not supported."
                     },
                     "depth": {
                         "type": "integer",
@@ -601,6 +603,18 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
                                         newline is not accepted, since this is one line and not \
                                         a script."
                     },
+                    "stdin_ref": {
+                        "type": "string",
+                        "description": "A reference whose contents are fed to the first \
+                                        program's standard input, e.g. \"ref:1\". This is how \
+                                        sed, awk, grep or jq are run over a document you may \
+                                        not read: you name the reference and the contents go \
+                                        into the program without passing through you. The \
+                                        program reads them as if they had been typed at it, so \
+                                        do not also add a '<' redirection to the line, and do \
+                                        not use it with background: true. What comes back is \
+                                        quarantined the same way any other run's output is."
+                    },
                     "directory": {
                         "type": "string",
                         "description": "Directory to run the command in, relative to the \
@@ -996,6 +1010,17 @@ pub struct Output {
     pub said: Option<Labelled<String>>,
     /// Whether the text is workspace content rather than the driver's own words about the call.
     pub content: bool,
+    /// Whether this call left a file on disk different from how it found it.
+    ///
+    /// Read by the turn loop, which says at the end whether what changed was ever built. The
+    /// outcome rather than the request: a write the person declined changed nothing, so a turn
+    /// driven by the call the planner asked for would report a diff that does not exist.
+    pub changed_a_file: bool,
+    /// Whether this call ran a program.
+    ///
+    /// Read beside `changed_a_file` and the outcome for the same reason: a run the person
+    /// declined leaves the change as unbuilt as it was before.
+    pub ran_a_program: bool,
     /// What the call spent at the model, where it called one.
     ///
     /// Zero for every tool but the processor. A turn that reported only its own rounds would
@@ -1370,6 +1395,18 @@ struct Produced {
     changes: Vec<crate::diff::Change>,
     /// Whether those lines are content nobody vouched for.
     untrusted: bool,
+    /// Whether this call left a file on disk different from how it found it.
+    ///
+    /// The outcome, not the request. A write the person declined and a write plan mode refused
+    /// both answer the planner and change nothing, and a turn that counted either as a change
+    /// would tell the person their untouched workspace had been edited.
+    changed_a_file: bool,
+    /// Whether this call ran a program.
+    ///
+    /// The outcome, for the reason above: a run the person declined is a command that did not
+    /// happen, and a turn that counted it would say a change had been built when nothing had
+    /// compiled it.
+    ran_a_program: bool,
     /// Which document a processor's answer is about, where it produced one.
     ///
     /// `Some(None)` is a processor that was given several documents and told which of them it
@@ -1437,6 +1474,8 @@ impl Produced {
             whole: None,
             changes: Vec::new(),
             untrusted: false,
+            changed_a_file: false,
+            ran_a_program: false,
             answers_for: None,
             said: None,
             content: false,
@@ -1464,6 +1503,24 @@ impl Produced {
     /// Say that what this produced is workspace content, not the driver's words about it.
     fn of_content(mut self) -> Self {
         self.content = true;
+        self
+    }
+
+    /// Say that a file on disk is now different from how this call found it.
+    ///
+    /// Only where the write landed. Every refusal above the write leaves the file as it was, and
+    /// the turn says at the end whether what changed was built.
+    fn having_changed_a_file(mut self) -> Self {
+        self.changed_a_file = true;
+        self
+    }
+
+    /// Say that this call ran a program.
+    ///
+    /// Only where it started. A line the person declined and one that failed to launch have both
+    /// built nothing.
+    fn having_run_a_program(mut self) -> Self {
+        self.ran_a_program = true;
         self
     }
 
@@ -1852,6 +1909,8 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 answers_for: produced.answers_for,
                 said: produced.said,
                 content: produced.content,
+                changed_a_file: produced.changed_a_file,
+                ran_a_program: produced.ran_a_program,
                 usage: produced.usage,
                 inference_interval: produced.inference_interval,
                 printed_by: produced.printed_by,
@@ -1950,6 +2009,8 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         answers_for: produced.answers_for,
         said: produced.said,
         content: produced.content,
+        changed_a_file: produced.changed_a_file,
+        ran_a_program: produced.ran_a_program,
         usage: produced.usage,
         inference_interval: produced.inference_interval,
         printed_by: produced.printed_by,
@@ -1980,6 +2041,8 @@ fn problem(text: impl Into<String>) -> Produced {
         whole: None,
         changes: Vec::new(),
         untrusted: false,
+        changed_a_file: false,
+        ran_a_program: false,
         answers_for: None,
         said: None,
         wakeup: None,
@@ -2974,6 +3037,7 @@ fn write_file<S: Sink, C: Confirmer>(
             confirmed(done, note)
                 .with_changes(changes)
                 .marked_untrusted(!body_label.is_trusted())
+                .having_changed_a_file()
         }
         Err(e) => problem(format!("error: {e}")),
     }
@@ -3127,10 +3191,12 @@ fn edit_file<S: Sink, C: Confirmer>(
                 Produced::new(told, "", note)
                     .with_changes(changes)
                     .marked_untrusted(false)
+                    .having_changed_a_file()
             } else {
                 confirmed(headline, note)
                     .with_changes(changes)
                     .marked_untrusted(true)
+                    .having_changed_a_file()
             }
         }
         Err(e) => problem(format!("error: {e}")),
@@ -3763,6 +3829,37 @@ fn run<S: Sink, C: Confirmer>(
         Err(diagnostic) => return problem(diagnostic),
     };
 
+    // Absent or non-boolean means the foreground, which is the reading that waits for the program
+    // and hands back what it printed.
+    let in_the_background = arguments
+        .get("background")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    // The reference whose contents go to the first program's standard input, where the call named
+    // one. Present but not a string is refused rather than dropped, for the reason a directory is:
+    // a field the driver quietly ignored would run a line over nothing, and a planner that asked
+    // for a document to be filtered would be handed the filter's answer about an empty one.
+    let named_stdin = match arguments.get("stdin_ref") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(_)) => argument(arguments, "stdin_ref"),
+        Some(_) => {
+            return problem(
+                "error: 'stdin_ref' must be a string naming a reference, e.g. \"ref:1\"",
+            );
+        }
+    };
+
+    // Nothing waits for a background job, and nothing writes to one either: `start_steps` gives
+    // its first step an empty stdin and has nowhere to put anything else. Refused rather than
+    // ignored, so a call asking for both is told which of the two it cannot have.
+    if named_stdin.is_some() && in_the_background {
+        return problem(
+            "error: a background command cannot be fed a reference. Run it in the foreground, \
+             which waits for the program and hands back what it printed.",
+        );
+    }
+
     // Assembled from the planner's own words, which are untrusted. Released through one witness,
     // so the trail records that a command line was released rather than leaving it to happen
     // implicitly. A person reading it is the legitimate destination: their reading it is what an
@@ -3809,7 +3906,7 @@ fn run<S: Sink, C: Confirmer>(
         }
         None => tools.run_directory.clone(),
     };
-    let plan = match crate::cmdline::compile(&line, &directory, tools.profile) {
+    let mut plan = match crate::cmdline::compile(&line, &directory, tools.profile) {
         Ok(plan) => plan,
         // The refusal names the span that caused it, so the planner can rewrite that part rather
         // than guessing at the whole line. There is no degraded mode to fall back to.
@@ -3832,6 +3929,60 @@ fn run<S: Sink, C: Confirmer>(
              do the same thing: say in your reply what you needed it for."
         ));
     }
+
+    // What the planner named for standard input, turned into bytes and a label before anybody is
+    // asked. Three gates, as a write's `contents_ref` has: the name is accepted as a reference
+    // rather than read as content, the file behind it is opened if the slot was still deferring
+    // it, and the kernel produces the bytes. They stay wrapped until the endorsement is consumed,
+    // and nothing here looks at them.
+    //
+    // Resolved before the prompt because the *label* is what decides whether there is a prompt at
+    // all: it goes on the plan below, [`Plan::releases_private`] reads it, and a private one is
+    // put to a person every time (RUN-6). After the rules, though: a rule refusing the line is a
+    // statement that it does not run, and a file opened for a run nobody is going to make is a
+    // read of somebody's workspace that bought nothing. Read after the file is opened rather than
+    // before, since a slot still holding only a path takes its label from the trust map as it
+    // stands when it is read, and a plan built from the earlier label would be endorsed under a
+    // label that no longer holds.
+    let fed = match &named_stdin {
+        None => None,
+        Some(named) => {
+            // The two routes RUN-4 names reach one descriptor, and one of them would lose
+            // silently. Refused here, where the call is read, and again in exec, where the bytes
+            // would otherwise be dropped into a run that looked like it had worked.
+            if plan
+                .steps()
+                .iter()
+                .flat_map(|step| &step.routes)
+                .any(|route| matches!(route, bravebot_core::command::Route::Stdin { .. }))
+            {
+                return problem(
+                    "error: give 'stdin_ref' or a '<' redirection, not both. They are two ways \
+                     to fill the same standard input, and only one of them can be honoured.",
+                );
+            }
+            let slot = match policy.accept_reference("run", "stdin_ref", named) {
+                Ok(slot) => slot,
+                Err(denial) => return problem(format!("refused: {denial}")),
+            };
+            let opened = match materialise(
+                policy,
+                tools.workspace,
+                tools.slots,
+                "run",
+                std::slice::from_ref(&slot),
+            ) {
+                Ok(opened) => opened,
+                Err(refusal) => return problem(refusal),
+            };
+            let content = match policy.resolve("run", &slot, tools.slots) {
+                Ok(content) => content,
+                Err(denial) => return problem(format!("refused: {denial}")),
+            };
+            plan.stdin = Some(content.label());
+            Some((slot, content, opened))
+        }
+    };
 
     // The record of lines somebody asked to be remembered past the session, where this session has
     // somewhere to keep one and somebody to have pressed the key. Read here rather than once at the
@@ -3881,6 +4032,9 @@ fn run<S: Sink, C: Confirmer>(
                 .home
                 .filter(|_| varied && policy.a_rule_could_answer(&plan))
                 .map(bravebot_config::user_settings_file),
+            // The reference, so the person reads what is going in as well as that something is.
+            // The driver's own name for a slot, never a byte of what the slot holds.
+            stdin: fed.as_ref().map(|(slot, _, _)| slot.to_string()),
         };
         let answer = confirmer.confirm_run(&request);
         if !answer.approved() {
@@ -3948,13 +4102,6 @@ fn run<S: Sink, C: Confirmer>(
         ),
     };
 
-    // Absent or non-boolean means the foreground, which is the reading that waits for the program
-    // and hands back what it printed.
-    let in_the_background = arguments
-        .get("background")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
     if in_the_background {
         // One pipeline, because that is the whole of what a long-lived program is. A line with
         // joins waits on its own parts to decide where to go next, and nothing waits here; a
@@ -3992,6 +4139,7 @@ fn run<S: Sink, C: Confirmer>(
                     format!("started as {name}"),
                 )
                 .started_in_the_background(name)
+                .having_run_a_program()
             }
             Err(error) => problem(format!("error: `{displayed}` did not start: {error}")),
         };
@@ -4007,12 +4155,21 @@ fn run<S: Sink, C: Confirmer>(
     // spelled, because a name is reduced to the open directory it lands in before the map sees it
     // and a rule written under an unreduced name decides nothing.
     let mut opened: Vec<std::path::PathBuf> = Vec::new();
+    // Unwrapped here and nowhere earlier: the endorsement has been consumed, so the line about to
+    // read these bytes is one a person approved. The witness is what licenses the unwrapping, and
+    // what it licenses is carrying them to a descriptor: no branch below reads them, and exec
+    // writes them to a pipe without looking either.
+    let supplied = fed.map(|(slot, content, read)| {
+        let proof = policy.authorise_program_input("run", &slot, content.label());
+        (content.declassify(&proof), read)
+    });
     let ran = crate::exec::run_plan(
         &plan,
         tools.cancel,
         limit,
         &mut opened,
         tools.workspace.scratch(),
+        supplied.as_ref().map(|(bytes, _)| bytes.as_str()),
     );
     let written: Vec<String> = opened
         .iter()
@@ -4066,7 +4223,13 @@ fn run<S: Sink, C: Confirmer>(
                 crate::report::Outcome::Failed(failed.join(", "))
             };
             let lines = text.lines().count();
-            let note = format!("{}, {}", outcome.summary(), tally(lines, "line", "lines"));
+            let mut note = format!("{}, {}", outcome.summary(), tally(lines, "line", "lines"));
+            // A read the planner's own call did not make and nothing else on the screen would show:
+            // the reference was standing in for a file the slot had not opened yet, and filling
+            // standard input is what opened it.
+            if let Some((_, read)) = supplied.as_ref().filter(|(_, read)| !read.is_empty()) {
+                note.push_str(&format!(", fed by reading {}", read.join(", ")));
+            }
 
             let mut produced = Produced::new(
                 Labelled::new(text, label),
@@ -4087,6 +4250,7 @@ fn run<S: Sink, C: Confirmer>(
                 outcome,
             });
             produced.covered_by_record = covered_by_record;
+            produced.ran_a_program = true;
             produced
         }
         // A run that produced nothing still says what happened. The plan is safe to repeat back:
@@ -5396,6 +5560,51 @@ mod tests {
         }
     }
 
+    /// A tool schema is the whole of what the planner is told about the matcher, so syntax
+    /// denied there is syntax nothing ever sends: the brace expansion the matcher performs
+    /// before the walk is reachable only by a planner willing to try what it was told does not
+    /// work. `list_files` and `search` run one matcher between them, so one account of it is
+    /// what they owe the planner, and a second account that disagrees is how a group the matcher
+    /// expands came to be advertised as missing on one of them.
+    #[test]
+    fn both_glob_arguments_describe_the_matcher_the_same_way() {
+        let offered = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 });
+        // The part of a description that is about the matcher rather than about the argument.
+        let syntax = |tool: &str, property: &str| -> String {
+            let described = offered
+                .iter()
+                .find(|t| t.function.name == tool)
+                .unwrap_or_else(|| panic!("{tool} is offered"))
+                .function
+                .parameters["properties"][property]["description"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{tool}.{property} is described"))
+                .to_string();
+            let at = described.find("Supports").unwrap_or_else(|| {
+                panic!("{tool}.{property} does not say what it supports: {described}")
+            });
+            described[at..].to_string()
+        };
+
+        let mut expanded = crate::glob::expand("**/*.{rs,toml}");
+        expanded.sort();
+        assert_eq!(
+            expanded,
+            ["**/*.rs", "**/*.toml"],
+            "the matcher no longer expands a brace group, so neither schema may offer one"
+        );
+        let listing = syntax("list_files", "pattern");
+        assert!(
+            listing.contains("** and brace groups"),
+            "list_files withholds the brace groups the matcher expands: {listing}"
+        );
+        assert_eq!(
+            listing,
+            syntax("search", "include"),
+            "two arguments over one matcher advertise different syntax"
+        );
+    }
+
     /// A model that namespaces a tool by the group it was offered in means the tool. Answering
     /// "no such tool" to that spends a round on a difference in spelling.
     #[test]
@@ -5653,7 +5862,11 @@ mod tests {
     /// `run` has exactly one field saying what to run. The line is compiled here rather than handed
     /// anywhere, so a second way to say what to run would be a second thing to keep honest.
     /// `background` says what to do with the line rather than what it is, `deadline_seconds` says
-    /// how long to wait for it, and `directory` names where to run it.
+    /// how long to wait for it, `directory` names where to run it, and `stdin_ref` names a
+    /// reference to feed it ([RUN-3]), which is a source rather than a second way to say what
+    /// runs.
+    ///
+    /// [RUN-3]: ../../../docs/specs/tools/run.md
     #[test]
     fn run_takes_one_command_line_and_nothing_else() {
         let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
@@ -5665,14 +5878,21 @@ mod tests {
             .expect("run has parameters");
         assert_eq!(
             properties.keys().collect::<Vec<_>>(),
-            vec!["background", "command", "deadline_seconds", "directory"],
-            "run gained a field beside the command line, whether to wait for it, how long, and \
-             where"
+            vec![
+                "background",
+                "command",
+                "deadline_seconds",
+                "directory",
+                "stdin_ref"
+            ],
+            "run gained a field beside the command line, whether to wait for it, how long, \
+             where, and what to feed it"
         );
         assert_eq!(properties["command"]["type"], "string");
         assert_eq!(properties["background"]["type"], "boolean");
         assert_eq!(properties["deadline_seconds"]["type"], "integer");
         assert_eq!(properties["directory"]["type"], "string");
+        assert_eq!(properties["stdin_ref"]["type"], "string");
         assert_eq!(
             tool.function.parameters["required"]
                 .as_array()

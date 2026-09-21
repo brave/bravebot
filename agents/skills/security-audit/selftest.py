@@ -375,6 +375,111 @@ def test_pinned_actions():
     )
 
 
+# A dispatch that names the ref it publishes, in the two shapes a version tag can be written in: the
+# bare name, which a branch of that name answers to as readily as the tag does, and the tag itself.
+DISPATCH_BY_NAME = """\
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+"""
+
+DISPATCH_BY_TAG = DISPATCH_BY_NAME.replace("ref: ${{", "ref: refs/tags/${{")
+
+
+def test_checkout_ref_is_qualified():
+    by_name = in_tree({".github/workflows/publish-npm.yml": DISPATCH_BY_NAME})
+    found = with_cwd(by_name, lambda: list(audit.check_checkout_ref_is_qualified()))
+    check(
+        "a checkout of a bare name is an error",
+        kinds(found) == ["unqualified-checkout-ref"] and found[0]["impact"] == "high",
+        str(kinds(found)),
+    )
+    check(
+        "it says which line and which ref",
+        bool(found) and found[0]["evidence"] == [".github/workflows/publish-npm.yml:13 "
+                                                 "ref: ${{ inputs.tag }}"],
+        str(found[0]["evidence"]) if found else "(nothing)",
+    )
+
+    by_tag = in_tree({".github/workflows/publish-npm.yml": DISPATCH_BY_TAG})
+    check(
+        "a checkout of refs/tags/ is clean",
+        with_cwd(by_tag, lambda: list(audit.check_checkout_ref_is_qualified())) == [],
+    )
+
+    # The triggering commit, which is a commit rather than a name, so there is nothing to resolve.
+    plain = in_tree(
+        {".github/workflows/ci.yml": "    steps:\n      - uses: actions/checkout@" + "a" * 40 + "\n"}
+    )
+    check(
+        "a checkout with no ref is clean",
+        with_cwd(plain, lambda: list(audit.check_checkout_ref_is_qualified())) == [],
+    )
+
+    sha = in_tree(
+        {".github/workflows/ci.yml": DISPATCH_BY_NAME.replace("inputs.tag", "github.sha")}
+    )
+    check(
+        "an expression naming a commit is clean",
+        with_cwd(sha, lambda: list(audit.check_checkout_ref_is_qualified())) == [],
+    )
+
+    # A step's keys are a mapping, so `with:` above `uses:` is the same step. Read downwards from
+    # the `uses:` line this would be a bare name nothing reported.
+    reordered = in_tree(
+        {
+            ".github/workflows/publish-npm.yml": """\
+jobs:
+  publish:
+    steps:
+      - with:
+          ref: ${{ inputs.tag }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+"""
+        }
+    )
+    check(
+        "the ref is found above its own uses:",
+        kinds(with_cwd(reordered, lambda: list(audit.check_checkout_ref_is_qualified())))
+        == ["unqualified-checkout-ref"],
+    )
+
+    # `ref:` is an input of other actions too, and what they do with one is their own business.
+    # This check is about the tree a step puts on the runner.
+    elsewhere = in_tree(
+        {
+            ".github/workflows/gh-pages.yml": """\
+jobs:
+  deploy:
+    steps:
+      - uses: actions/deploy-pages@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          ref: ${{ inputs.tag }}
+"""
+        }
+    )
+    check(
+        "a ref handed to something other than a checkout is not read",
+        with_cwd(elsewhere, lambda: list(audit.check_checkout_ref_is_qualified())) == [],
+    )
+
+    # Both checkouts in the publish workflow name the tag, and this is what keeps them there.
+    check(
+        "the tree's own checkouts name a kind of ref",
+        with_cwd(ROOT, lambda: list(audit.check_checkout_ref_is_qualified())) == [],
+    )
+
+
 # The publish workflow in the two shapes that matter. In the first the grant is declared once for a
 # whole workflow whose single job also installs the lockfile and runs what it installed; in the second
 # those two commands are a job of their own and the grant is on the job that publishes. The second is
@@ -1583,6 +1688,7 @@ def main():
         test_pinned_actions,
         test_pinned_images,
         test_privileged_job_runs_only_its_own_code,
+        test_checkout_ref_is_qualified,
         test_construction_pinned,
         test_key_sites_exhaustive,
         test_guarantee_specs_are_read,

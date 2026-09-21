@@ -2285,16 +2285,22 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     };
 
     let mut steps = 0;
-    // Whether anything has been written this turn, and whether the driver has already said it
-    // has not. A requested write counts rather than a completed one: a write the user refused is
-    // a planner that tried to deliver, and telling it to start delivering would be answering
+    // Whether a write has been asked for this turn, and whether the driver has already said none
+    // has. A requested write counts rather than a completed one: a write the user refused is a
+    // planner that tried to deliver, and telling it to start delivering would be answering
     // something nobody asked.
-    let mut wrote = false;
+    let mut asked_to_write = false;
     let mut said_nothing_written = false;
-    // The round the first write was asked for, which is where the question of whether any of it
-    // runs starts to make sense, and whether a program has been run since the turn began.
-    let mut wrote_at: Option<usize> = None;
-    let mut ran = false;
+    // The round a file on disk first became different from how this turn found it, where one
+    // did, and whether a program has been run since the turn began.
+    //
+    // Both from what dispatch did rather than from what the planner asked for, which is the
+    // opposite of the flag above and for the opposite reason. These say what the workspace holds:
+    // a write the person declined and a write plan mode refused leave nothing to build, and a run
+    // the person declined builds nothing, so a turn counting either would tell the planner and
+    // then the person about a diff that was never made or a check that never happened.
+    let mut changed_at: Option<usize> = None;
+    let mut ran_a_program = false;
     let mut said_nothing_run = false;
     // Whether a write is possible at all here, which a run offered no write tool cannot be
     // nudged into. Read once: the offer does not change while the turn runs.
@@ -2700,11 +2706,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     .iter()
                     .map(|c| c.function.name.clone())
                     .collect();
-                if !wrote && requested.iter().any(|name| tools::writes_a_file(name)) {
-                    wrote = true;
-                    wrote_at = Some(steps);
-                }
-                ran = ran || requested.iter().any(|name| tools::runs_a_program(name));
+                asked_to_write =
+                    asked_to_write || requested.iter().any(|name| tools::writes_a_file(name));
 
                 let spoken = policy
                     .adopt_model_output("chat", completion.content.clone())
@@ -2790,6 +2793,15 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     );
                     let took = ran_at.elapsed();
                     let cancellation = output.cancelled;
+
+                    // What the call did, taken from the call rather than from the name the planner
+                    // gave it. Read at the end of the turn to say whether a change went out
+                    // unbuilt, and the round is the one the first change landed on, since before
+                    // that there was nothing to run.
+                    if output.changed_a_file {
+                        changed_at.get_or_insert(steps);
+                    }
+                    ran_a_program = ran_a_program || output.ran_a_program;
 
                     // The call is over, whatever came of it. Fired here rather than on a successful
                     // one because "the call finished" is what a person can point at: a write that was
@@ -3304,7 +3316,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 // that asks for a change from one that asks a question, and it must not try: what it
                 // knows is that rounds have gone by and nothing was written, and the planner is the
                 // one that knows whether that is wrong.
-                if may_write && !wrote && !said_nothing_written && steps >= ROUNDS_BEFORE_WRITING {
+                if may_write
+                    && !asked_to_write
+                    && !said_nothing_written
+                    && steps >= ROUNDS_BEFORE_WRITING
+                {
                     said_nothing_written = true;
                     conversation.push(Message::user(format!(
                     "{TOOL_BUDGET_SPENT} That is {steps} rounds of tools and nothing written yet. \
@@ -3324,10 +3340,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 // exists for: a build log is long, what is wanted from it is one sentence, and a
                 // checker reads the one and reports the other.
                 if may_run
-                    && wrote
-                    && !ran
+                    && !ran_a_program
                     && !said_nothing_run
-                    && wrote_at.is_some_and(|at| steps >= at + ROUNDS_AFTER_WRITING_BEFORE_RUNNING)
+                    && changed_at
+                        .is_some_and(|at| steps >= at + ROUNDS_AFTER_WRITING_BEFORE_RUNNING)
                 {
                     said_nothing_run = true;
                     conversation.push(Message::user(format!(
@@ -3418,7 +3434,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // to act on a diff, and nothing else in the summary distinguishes a change that was compiled
     // from one that was never tried. Not a reproach: plenty of turns have nothing to build, and
     // this says what happened rather than what should have.
-    if wrote && !ran {
+    if changed_at.is_some() && !ran_a_program {
         reporter.narration(
             "files changed this turn and no command was run, so none of it has been \
              built or tested"

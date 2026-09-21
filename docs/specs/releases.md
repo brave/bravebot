@@ -165,8 +165,9 @@ Linux.
 
 A branch push, a pull request, and a tag push do not publish to the registry. Someone dispatches
 `publish-npm.yml` with the version tag after Jenkins has created the GitHub release of that name.
-A dispatch whose tag is not `v` plus the version in the tree, or whose GitHub release is missing
-any platform asset or checksum, is refused rather than publishing a wrapper whose installer has
+What is published is the tree that tag names, and a branch of the same name does not supply it. A
+dispatch whose tag is not `v` plus the version in the tree, or whose GitHub release is missing any
+platform asset or checksum, is refused rather than publishing a wrapper whose installer has
 nothing to fetch.
 
 **Why.** The installer derives the download from the version it was published with. Publishing
@@ -175,7 +176,7 @@ broken. Jenkins is started by hand, days later if need be, so npm publish is the
 step: it happens when somebody chooses, not when the tag lands. Publishing from a branch puts
 an unreviewed version on the registry.
 
-`verified-by: by-construction (publish-npm.yml runs only on workflow_dispatch, checks out the given tag, refuses unless that tag is v plus the version in both files, and refuses unless each named asset and its checksum are on the GitHub release)`
+`verified-by: by-construction (publish-npm.yml runs only on workflow_dispatch, checks out refs/tags/ the given tag so a branch of that name cannot supply the tree and a tag that does not exist fails the run, refuses unless that tag is v plus the version in both files, and refuses unless each named asset and its checksum are on the GitHub release; make check-security faults a checkout of a bare name)`
 
 <a id="RELEASE-11"></a>
 ### RELEASE-11: the registry authenticates the workflow, not a stored token
@@ -215,7 +216,10 @@ the pipeline that publishes.
 - **Nothing here is pinned by a test.** Every clause is by-construction, which means a refusal can
   be removed and only a reader will notice. The tagging path is shell in a makefile, publication
   is a Jenkins job in another repository, and a test that shelled out to a real tag push would
-  have to publish something to prove anything.
+  have to publish something to prove anything. What `make check-security` holds is the shape of the
+  publish workflow rather than any of these refusals: that no job beside the credential installs a
+  dependency, and that the checkout names a kind of ref. Both are read off the file, so a refusal
+  deleted from a `run:` block passes them.
 
 - **Publication lives outside this repository.** `bravebot-build` in devops is what signs and
   attaches assets. A change there can break RELEASE-6 through RELEASE-8 without this tree
