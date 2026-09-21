@@ -937,8 +937,7 @@ impl Workspace {
         let mut long_lines = 0usize;
         for line in contents.lines().skip(start).take(limit) {
             let mut text = line.to_string();
-            if text.len() > MAX_LINE {
-                truncate_on_char_boundary(&mut text, MAX_LINE);
+            if truncate_to_chars(&mut text, MAX_LINE) {
                 text.push_str(" … (line truncated)");
                 long_lines += 1;
             }
@@ -1337,6 +1336,12 @@ const MAX_SEARCH_TIME: Duration = Duration::from_secs(10);
 /// A turn re-sends the whole message history each round, so the cost of one oversized read
 /// is paid repeatedly. These bound a page rather than the file: the rest stays reachable by
 /// asking for a later offset.
+///
+/// The line cap counts characters, not bytes, for the reason READ-2 gives: a cap in bytes is
+/// a different cap for every script, since 2000 bytes is 2000 characters of English and 666
+/// of Japanese, so a line the clause allows in full comes back cut to a third and reported as
+/// shortened. The price is that a page of four-byte characters costs up to four times the
+/// bytes a page of ASCII does.
 const MAX_PAGE_LINES: usize = 500;
 const MAX_LINE: usize = 2_000;
 
@@ -1423,6 +1428,21 @@ fn truncate_on_char_boundary(text: &mut String, limit: usize) {
     text.truncate(end);
 }
 
+/// Shorten a string to at most `limit` characters, reporting whether anything was dropped.
+///
+/// The caller needs both answers and the walk gives them together, so asking `chars().count()`
+/// first would traverse the line twice and traverse all of it: `nth` stops at the limit, which
+/// is the point on a line long enough to need shortening.
+fn truncate_to_chars(text: &mut String, limit: usize) -> bool {
+    match text.char_indices().nth(limit) {
+        Some((end, _)) => {
+            text.truncate(end);
+            true
+        }
+        None => false,
+    }
+}
+
 /// Whether a byte run looks like binary rather than text.
 ///
 /// A null byte is decisive, since no text file contains one. Beyond that, a high proportion of
@@ -1494,7 +1514,7 @@ fn change_token(metadata: &std::fs::Metadata) -> String {
 /// A bounded window of a file's lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
-    /// The lines in this window, each capped at [`MAX_LINE`].
+    /// The lines in this window, each capped at [`MAX_LINE`] characters.
     pub lines: Vec<String>,
     /// Whether the file ends with a newline.
     ///

@@ -1008,6 +1008,17 @@ pub struct Output {
     pub said: Option<Labelled<String>>,
     /// Whether the text is workspace content rather than the driver's own words about the call.
     pub content: bool,
+    /// Whether this call left a file on disk different from how it found it.
+    ///
+    /// Read by the turn loop, which says at the end whether what changed was ever built. The
+    /// outcome rather than the request: a write the person declined changed nothing, so a turn
+    /// driven by the call the planner asked for would report a diff that does not exist.
+    pub changed_a_file: bool,
+    /// Whether this call ran a program.
+    ///
+    /// Read beside `changed_a_file` and the outcome for the same reason: a run the person
+    /// declined leaves the change as unbuilt as it was before.
+    pub ran_a_program: bool,
     /// What the call spent at the model, where it called one.
     ///
     /// Zero for every tool but the processor. A turn that reported only its own rounds would
@@ -1382,6 +1393,18 @@ struct Produced {
     changes: Vec<crate::diff::Change>,
     /// Whether those lines are content nobody vouched for.
     untrusted: bool,
+    /// Whether this call left a file on disk different from how it found it.
+    ///
+    /// The outcome, not the request. A write the person declined and a write plan mode refused
+    /// both answer the planner and change nothing, and a turn that counted either as a change
+    /// would tell the person their untouched workspace had been edited.
+    changed_a_file: bool,
+    /// Whether this call ran a program.
+    ///
+    /// The outcome, for the reason above: a run the person declined is a command that did not
+    /// happen, and a turn that counted it would say a change had been built when nothing had
+    /// compiled it.
+    ran_a_program: bool,
     /// Which document a processor's answer is about, where it produced one.
     ///
     /// `Some(None)` is a processor that was given several documents and told which of them it
@@ -1449,6 +1472,8 @@ impl Produced {
             whole: None,
             changes: Vec::new(),
             untrusted: false,
+            changed_a_file: false,
+            ran_a_program: false,
             answers_for: None,
             said: None,
             content: false,
@@ -1476,6 +1501,24 @@ impl Produced {
     /// Say that what this produced is workspace content, not the driver's words about it.
     fn of_content(mut self) -> Self {
         self.content = true;
+        self
+    }
+
+    /// Say that a file on disk is now different from how this call found it.
+    ///
+    /// Only where the write landed. Every refusal above the write leaves the file as it was, and
+    /// the turn says at the end whether what changed was built.
+    fn having_changed_a_file(mut self) -> Self {
+        self.changed_a_file = true;
+        self
+    }
+
+    /// Say that this call ran a program.
+    ///
+    /// Only where it started. A line the person declined and one that failed to launch have both
+    /// built nothing.
+    fn having_run_a_program(mut self) -> Self {
+        self.ran_a_program = true;
         self
     }
 
@@ -1864,6 +1907,8 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 answers_for: produced.answers_for,
                 said: produced.said,
                 content: produced.content,
+                changed_a_file: produced.changed_a_file,
+                ran_a_program: produced.ran_a_program,
                 usage: produced.usage,
                 inference_interval: produced.inference_interval,
                 printed_by: produced.printed_by,
@@ -1962,6 +2007,8 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         answers_for: produced.answers_for,
         said: produced.said,
         content: produced.content,
+        changed_a_file: produced.changed_a_file,
+        ran_a_program: produced.ran_a_program,
         usage: produced.usage,
         inference_interval: produced.inference_interval,
         printed_by: produced.printed_by,
@@ -1992,6 +2039,8 @@ fn problem(text: impl Into<String>) -> Produced {
         whole: None,
         changes: Vec::new(),
         untrusted: false,
+        changed_a_file: false,
+        ran_a_program: false,
         answers_for: None,
         said: None,
         wakeup: None,
@@ -2986,6 +3035,7 @@ fn write_file<S: Sink, C: Confirmer>(
             confirmed(done, note)
                 .with_changes(changes)
                 .marked_untrusted(!body_label.is_trusted())
+                .having_changed_a_file()
         }
         Err(e) => problem(format!("error: {e}")),
     }
@@ -3139,10 +3189,12 @@ fn edit_file<S: Sink, C: Confirmer>(
                 Produced::new(told, "", note)
                     .with_changes(changes)
                     .marked_untrusted(false)
+                    .having_changed_a_file()
             } else {
                 confirmed(headline, note)
                     .with_changes(changes)
                     .marked_untrusted(true)
+                    .having_changed_a_file()
             }
         }
         Err(e) => problem(format!("error: {e}")),
@@ -4085,6 +4137,7 @@ fn run<S: Sink, C: Confirmer>(
                     format!("started as {name}"),
                 )
                 .started_in_the_background(name)
+                .having_run_a_program()
             }
             Err(error) => problem(format!("error: `{displayed}` did not start: {error}")),
         };
@@ -4195,6 +4248,7 @@ fn run<S: Sink, C: Confirmer>(
                 outcome,
             });
             produced.covered_by_record = covered_by_record;
+            produced.ran_a_program = true;
             produced
         }
         // A run that produced nothing still says what happened. The plan is safe to repeat back:

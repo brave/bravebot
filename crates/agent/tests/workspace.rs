@@ -31,6 +31,12 @@ impl Drop for Scratch {
     }
 }
 
+/// The part of a shortened line that came from the file, without the notice appended to it.
+fn kept(line: &str) -> &str {
+    line.strip_suffix(" … (line truncated)")
+        .expect("a shortened line carries the notice")
+}
+
 fn routing() -> Routing {
     let mut r = Routing::new();
     r.insert_trusted("task", "edit a file");
@@ -1741,8 +1747,87 @@ fn an_over_long_line_is_shortened_and_counted() {
 
     assert_eq!(page.long_lines, 1);
     assert_eq!(page.lines[0], "short", "a short line was altered");
-    assert!(page.lines[1].len() < 5_000, "the line cap was not applied");
     assert!(page.lines[1].contains("truncated"), "no notice on the line");
+    assert_eq!(
+        kept(&page.lines[1]).chars().count(),
+        2_000,
+        "the cap kept something other than 2000 characters"
+    );
+}
+
+/// A cap counted in bytes is a different cap for every script, so a line the clause allows in
+/// full would come back cut to a third of itself and reported as too wide to show. Japanese is
+/// three bytes a character, which is where the two caps come apart.
+#[test]
+fn a_multi_byte_line_inside_the_cap_is_returned_whole() {
+    let scratch = Scratch::new("read-wide-multibyte-under");
+    let line: String = "あ".repeat(1_200);
+    std::fs::write(scratch.path.join("a.txt"), format!("{line}\n")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let page = workspace
+        .read_page(
+            &mut policy,
+            &Labelled::trusted("a.txt".to_string()),
+            1,
+            usize::MAX,
+        )
+        .expect("read succeeds");
+    let proof = policy.authorise_content_release("test", "contents");
+    let page = page.declassify(&proof);
+
+    assert_eq!(page.lines[0], line, "a line inside the cap was altered");
+    assert_eq!(
+        page.long_lines, 0,
+        "a line inside the cap was reported as shortened"
+    );
+}
+
+/// The cap is 2000 characters whatever they weigh, so the same count survives it whether the
+/// line is ASCII or not. A cap in bytes keeps 666 of these instead.
+#[test]
+fn the_cap_keeps_two_thousand_characters_of_a_multi_byte_line() {
+    let scratch = Scratch::new("read-wide-multibyte-over");
+    let line: String = "あ".repeat(3_000);
+    std::fs::write(scratch.path.join("a.txt"), format!("{line}\n")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let page = workspace
+        .read_page(
+            &mut policy,
+            &Labelled::trusted("a.txt".to_string()),
+            1,
+            usize::MAX,
+        )
+        .expect("read succeeds");
+    let proof = policy.authorise_content_release("test", "contents");
+    let page = page.declassify(&proof);
+
+    assert_eq!(page.long_lines, 1);
+    assert!(page.lines[0].contains("truncated"), "no notice on the line");
+    assert_eq!(
+        kept(&page.lines[0]).chars().count(),
+        2_000,
+        "the cap kept something other than 2000 characters"
+    );
 }
 
 /// Reading past the end is not an error, but it must not look like an empty file.
