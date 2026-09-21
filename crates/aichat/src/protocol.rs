@@ -569,9 +569,11 @@ pub struct Usage {
 ///
 /// Both zero means a service that said nothing about a cache as much as it means a round that
 /// missed, and nothing here distinguishes the two.
-/// Serialised because a session record carries the figure the status panel is showing, so that a
-/// rewind puts back what the turn before the rewound one read rather than what the rewound one did.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Never written back: a session record keeps no cache figure, so that a resumed session reports
+/// nothing until a turn has run in it rather than a figure the process that measured it took
+/// with it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 pub struct Cached {
     /// Served out of the cache instead of read.
     pub read_tokens: u64,

@@ -88,10 +88,11 @@ pub struct TurnSnapshot {
     pub spend: std::collections::BTreeMap<usize, u64>,
     /// Timing by turn before this turn.
     pub timing: std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
-    /// What the turn before this one read out of the cache, or `None` if it was the first.
+    /// What the turn before this one read out of the cache, where this process measured it.
     ///
     /// Kept with the spend it belongs beside: undoing a turn that is no longer in the token count
-    /// must not leave the panel reporting the cache that turn hit.
+    /// must not leave the panel reporting the cache that turn hit. `None` for the first turn of a
+    /// session, and for every point a resume brought back, [`StoredRewind`] keeping no figure.
     pub cached: Option<bravebot_aichat::protocol::Cached>,
     /// Trust map rules before this turn.
     pub trust: bravebot_core::trust::TrustStore,
@@ -320,6 +321,11 @@ pub enum StoredOutcome {
 /// Its own type rather than the interface's, for the reason [`StoredAside`] is: a record on disk
 /// outlives the shape of a struct in memory. The conversation is the same [`Snapshot`] the record
 /// keeps for the session itself, since it is the same thing a turn earlier.
+///
+/// It holds the counts the point goes back to but not the cache figure [`TurnSnapshot`] carries
+/// beside them, which BACKEND-31 keeps out of a record: a figure measured by the process that
+/// wrote it says nothing about what this one would pay, so a rewind after a resume reports
+/// nothing rather than what a session that is no longer running read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredRewind {
     /// The exchange as it stood before the turn.
@@ -332,9 +338,6 @@ pub struct StoredRewind {
     pub spend: BTreeMap<usize, u64>,
     #[serde(default)]
     pub timing: BTreeMap<usize, bravebot_agent::timing::Timing>,
-    /// What the turn before this one read out of the cache, where there was one.
-    #[serde(default)]
-    pub cached: Option<bravebot_aichat::protocol::Cached>,
     /// The trust map before the turn, written the way [`Record::trust`] is.
     ///
     /// `None` reads as a map with nothing in it rather than as a question, unlike the record's
@@ -414,7 +417,6 @@ impl StoredRewind {
             tokens: snapshot.tokens,
             spend: snapshot.spend.clone(),
             timing: snapshot.timing.clone(),
-            cached: snapshot.cached,
             trust: Some(stored_rules(&snapshot.trust)),
             programs: stored_programs(&snapshot.programs, project),
             title: snapshot.title.clone(),
@@ -460,6 +462,10 @@ impl StoredRewind {
     /// into the list one process drew, and the session reading this draws another; the turn
     /// number is the fact that survives, and the session restoring these points finds the index
     /// again from it.
+    ///
+    /// The cache figure is left at nothing for a reason of its own: a record keeps none, so
+    /// rewinding to a point a resume brought back reports nothing about a cache, where rewinding
+    /// to one this process made puts back the figure it is still holding in memory.
     fn into_point(self, root: &Path) -> RewindPoint {
         use base64::Engine;
         use bravebot_agent::workspace::{Backup, Before};
@@ -483,7 +489,7 @@ impl StoredRewind {
                 tokens: self.tokens,
                 spend: self.spend,
                 timing: self.timing,
-                cached: self.cached,
+                cached: None,
                 trust,
                 programs: restored_programs(&self.programs, root),
                 transcript_len: 0,
@@ -2495,7 +2501,6 @@ mod tests {
             tokens: 0,
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
-            cached: None,
             trust: None,
             programs: Vec::new(),
             title: "a session".to_string(),
