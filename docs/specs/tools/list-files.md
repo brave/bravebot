@@ -64,6 +64,7 @@ once per path, so a group costs a multiple of the work and never a power of it.
 `verified-by: bravebot_agent::glob::a_pathological_pattern_does_not_blow_up`
 `verified-by: bravebot_agent::workspace::the_original_noise_directories_are_still_skipped`
 `verified-by: bravebot_agent::workspace::noise_directories_from_other_ecosystems_are_skipped`
+`verified-by: bravebot_agent::tools::both_glob_arguments_describe_the_matcher_the_same_way`
 
 <a id="LIST-4"></a>
 ### LIST-4: a truncated listing says it was truncated

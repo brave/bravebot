@@ -104,7 +104,7 @@ Lists files under a directory.
 | Parameter | |
 |---|---|
 | `directory` | workspace-relative; `.` for the root |
-| `pattern` | optional glob: `*`, `?` and `**` are supported, brace groups are not |
+| `pattern` | optional glob: `*`, `?`, `**` and brace groups like `**/*.{rs,toml}` |
 | `depth` | optional; how many directory levels below `directory` to walk, `1` being that directory and no further |
 
 Set a `depth`. Without one the walk reaches every file underneath, which in a real repository is
