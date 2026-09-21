@@ -14310,6 +14310,70 @@ fn a_delegate_that_could_not_finish_is_reported_as_a_failure() {
     );
 }
 
+/// DELEGATE-11 over the whole path, for a delegate that stopped rather than reported: a person
+/// who answered "always" inside one has said the build may run, and the list they said it about
+/// belongs to the session. A delegate that fails a round later is the ordinary case rather than
+/// the exotic one, so a record that only came home from a run that reported would leave the next
+/// thing wanting that command asking the same person again.
+#[test]
+fn a_delegate_that_stopped_after_a_person_vouched_still_brings_the_answer_home() {
+    let scratch = Scratch::new("delegate-vouch-then-fail");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // The worker runs one command and is then left with nothing to answer its next request, so
+    // its run ends in a failure with the answer already given inside it.
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "SEND-A-WORKER",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"worker","task":"RUN-THE-BUILD"}"#),
+                reply_with("waiting on the worker"),
+                reply_with("the worker stopped"),
+            ],
+        ),
+        (
+            "RUN-THE-BUILD",
+            vec![tool_request("run", r#"{"command":"touch vouched.txt"}"#)],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SEND-A-WORKER"),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn survives a delegate that did not");
+
+    // The delegate really did stop rather than report, or the assertion below would be about the
+    // success path that already worked.
+    assert!(
+        reporter
+            .position("delegate d1 finished failed=true")
+            .is_some(),
+        "the delegate reported instead of failing, so this proves nothing: {:?}",
+        reporter.lines()
+    );
+    assert!(
+        outcome
+            .programs
+            .iter()
+            .any(|c| c.program.ends_with("touch") && c.args == ["vouched.txt"]),
+        "the command a person let the delegate run went to the grave with it: {:?}",
+        outcome.programs.iter().collect::<Vec<_>>()
+    );
+}
+
 /// A turn does not end while something it started is still working. The person is told the turn
 /// is over, and a delegate still running is still reading their files and still able to ask them
 /// to approve a write, which is a turn that ended in name only.

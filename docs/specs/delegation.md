@@ -210,11 +210,22 @@ nothing takes nothing away.
 one back whole makes the last delegate collected the author of the entire record, which erases
 whatever was settled after it was seeded, and puts back the rules those answers replaced.
 
+**Whether or not it finished.** A delegate that stopped on a failed model call has no report and
+no round count for the parent to take, and it hands the record back anyway. A person answered
+inside it, and an answer is a standing decision about their own machine rather than a part of the
+work that failed. A record coming back only from a run that reported would leave the next one
+asking about the build this one was already told it could run. A run that stopped before it
+settled anything hands back the copy it was seeded with, which takes nothing away. A delegate
+whose thread died holds no record to hand back, and that is the one case an answer does not
+survive it.
+
 Nothing else about a delegate's policy survives it.
 
 `verified-by: bravebot_core::policy::what_a_person_vouched_for_inside_a_delegate_is_kept`
+`verified-by: bravebot_core::policy::what_a_person_vouched_for_running_inside_a_delegate_is_kept`
 `verified-by: bravebot_core::policy::what_each_of_two_delegates_vouched_for_survives_the_other`
 `verified-by: bravebot_core::policy::a_delegate_that_answered_nothing_takes_nothing_away`
+`verified-by: bravebot_agent::turn::a_delegate_that_stopped_after_a_person_vouched_still_brings_the_answer_home`
 
 <a id="DELEGATE-12"></a>
 ### DELEGATE-12: a delegate puts no question of its own to a person

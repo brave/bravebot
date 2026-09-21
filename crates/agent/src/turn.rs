@@ -1097,6 +1097,9 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         programs,
         servers,
         cancel,
+        // The session owns the policy's record here: it is handed back in the [`Outcome`], and a
+        // caller of `resume` keeps it across turns.
+        None,
     )
 }
 
@@ -1135,6 +1138,7 @@ pub fn run_cancellable<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         // it belonged to. The turn owns the servers it starts and stops them on the way out.
         None,
         cancel,
+        None,
     )
 }
 
@@ -1159,6 +1163,7 @@ pub(crate) fn delegated(
     trust: TrustStore,
     programs: TrustedPrograms,
     cancel: &Cancel,
+    vouched: &mut bravebot_core::policy::Vouched,
 ) -> Result<Outcome, TurnError> {
     if task.delegate.is_none() {
         return Err(TurnError::Precommit(
@@ -1181,6 +1186,7 @@ pub(crate) fn delegated(
         // at once.
         None,
         cancel,
+        Some(vouched),
     )
 }
 
@@ -1212,6 +1218,7 @@ pub fn run_with_trust<S: Sink + Send, C: Confirmer + Send>(
         // One turn is the whole session here, so the set the turn owns is the session's.
         None,
         &Cancel::new(),
+        None,
     )
 }
 
@@ -1472,7 +1479,7 @@ struct Working<'scope> {
     handle: std::thread::ScopedJoinHandle<
         'scope,
         (
-            Result<crate::delegate::Finished, TurnError>,
+            crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
         ),
@@ -1587,10 +1594,21 @@ fn collect_delegates<S: Sink, R: Reporter>(
             // A closed receiver means the test observer has already exited.
             let _ = started.send(());
         }
-        // A thread that panicked is a delegate that stopped, which is all anybody can be told
-        // about it: what it was doing died with it, and the turn is still running.
-        let (finished, partial, requests) = match working.handle.join() {
-            Ok(finished) => finished,
+        let (delegated, partial, requests) = match working.handle.join() {
+            Ok((ended, partial, requests)) => {
+                // Before anything else, and on both of the ways a run can end. A person who
+                // vouched for the build inside this delegate is not asked again by a delegate
+                // spawned after it, and one whose run failed had the same person answer the same
+                // question (DELEGATE-11): taking the record back only from a delegate that
+                // reported would leave the next run asking.
+                policy.adopt_from_delegate(&working.seeded, &ended.vouched);
+                (ended.delegated, partial, requests)
+            }
+            // A thread that panicked is a delegate that stopped, which is all anybody can be
+            // told about it: what it was doing died with it, and the turn is still running.
+            // Nothing came back, not even a record, so there is no adoption either: "nothing
+            // moved" and "nothing is known" are different things, and the trail should not
+            // record the second as the first.
             Err(_) => (
                 Err(TurnError::Precommit(
                     "the delegate stopped without finishing".to_string(),
@@ -1602,19 +1620,16 @@ fn collect_delegates<S: Sink, R: Reporter>(
 
         spent.inference += waits.collected(crate::timing::Interval::since(joined_at), requests);
 
-        let (note, body, failed, reported) = match finished {
-            Ok(finished) => {
-                // Before anything else, so a person who vouched for the build inside this one is
-                // not asked again by a delegate spawned after it.
-                policy.adopt_from_delegate(&working.seeded, &finished.vouched);
-                *tokens += finished.delegated.usage.total();
-                *output_tokens += finished.delegated.usage.completion_tokens;
-                cached.add(finished.delegated.usage.cached);
+        let (note, body, failed, reported) = match delegated {
+            Ok(delegated) => {
+                *tokens += delegated.usage.total();
+                *output_tokens += delegated.usage.completion_tokens;
+                cached.add(delegated.usage.cached);
 
-                let kind = finished.delegated.kind;
+                let kind = delegated.kind;
                 let note = format!(
                     "a {kind} delegate answered after {}",
-                    tools::tally(finished.delegated.rounds, "round", "rounds")
+                    tools::tally(delegated.rounds, "round", "rounds")
                 );
                 let slot = conversation.next_reference();
                 let presented = policy
@@ -1622,7 +1637,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         "delegate",
                         slot,
                         &format!("a {kind} delegate"),
-                        &finished.delegated.report,
+                        &delegated.report,
                         conversation.quarantine(),
                     )
                     .map_err(|d| TurnError::Precommit(d.to_string()))?;
@@ -1641,7 +1656,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         crate::report::Reported::Said(text.clone()),
                     ),
                     Presentation::Quarantined(reference) => {
-                        let shown = preview_for(policy, "delegate", &finished.delegated.report);
+                        let shown = preview_for(policy, "delegate", &delegated.report);
                         (
                             format!(
                                 "{TOOL_BUDGET_SPENT} The {kind} delegate {id} has finished. {}",
@@ -1889,6 +1904,13 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     programs: TrustedPrograms,
     servers: Option<&mut crate::lsp::LanguageServers>,
     cancel: &Cancel,
+    // Where the standing decisions got to once the rounds are over, written whether or not those
+    // rounds produced an outcome. Only a delegate's caller passes one: a turn the person is
+    // watching keeps its policy's record in the session that owns it, and a delegate's dies with
+    // the thread unless it is handed back (DELEGATE-11). A turn that fails before its first
+    // round leaves it alone, which is right: the caller seeds it with the copy the run started
+    // from, and nothing that vouches for a path or a command has run yet.
+    vouched: Option<&mut bravebot_core::policy::Vouched>,
 ) -> Result<Outcome, TurnError> {
     // Read once, here, rather than at each moment. What the file says is a property of the machine
     // and not of a round, and a turn whose hooks changed halfway through would be the harder thing
@@ -1924,6 +1946,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         servers,
         cancel,
         &hooks,
+        vouched,
     );
 
     let ended = match own {
@@ -1964,6 +1987,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     servers: Option<&mut crate::lsp::LanguageServers>,
     cancel: &Cancel,
     hooks: &bravebot_config::hooks::Hooks,
+    vouched: Option<&mut bravebot_core::policy::Vouched>,
 ) -> Result<Outcome, TurnError> {
     // First thing in the turn, so the wall figure covers the work that happens before the first
     // request goes out. Skill discovery and the preamble read files, and a turn in a large tree can
@@ -2791,7 +2815,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             let mut confirmer = confirming.delegate(id);
                             let mut reporter = reporting.delegate(id);
                             let mut sink = recording.delegate(id);
-                            let result = crate::delegate::run(
+                            let ended = crate::delegate::run(
                                 &seeded,
                                 config,
                                 egress,
@@ -2805,7 +2829,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 &mut reporter,
                                 &mut sink,
                             );
-                            (result, reporter.last_spent(), reporter.take_inference())
+                            (ended, reporter.last_spent(), reporter.take_inference())
                         });
                         delegates.push(Working {
                             #[cfg(test)]
@@ -3342,6 +3366,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         cached,
         timing: spent.finish(),
     });
+
+    // Before the rounds' result is unwrapped, because a turn that ends in an error has still had
+    // a person answer inside it: an 'always' at a run prompt is a standing decision about their
+    // own machine, and a delegate whose model call failed a round later would otherwise take it
+    // to the grave (DELEGATE-11). Here rather than beside the reads below, because everything
+    // that can vouch for a path or a command has happened by now, and the presentation between
+    // the two points touches neither record.
+    if let Some(vouched) = vouched {
+        *vouched = policy.vouched();
+    }
     let completion = completion?;
 
     // Released while the policy is open, so the audit trail records that the reply was
@@ -3459,6 +3493,9 @@ mod tests {
         .unwrap();
         let mut spent = Elapsed::default();
         let mut waits = crate::timing::DelegateWait::default();
+        // A cancelled delegate settled nothing, so what it hands back is the copy it began with.
+        let seeded = policy.vouched();
+        let seeded_for_worker = seeded.clone();
         std::thread::scope(|scope| {
             let child_cancel = cancel.clone();
             let worker = scope.spawn(move || {
@@ -3469,7 +3506,10 @@ mod tests {
                     .expect("join released the worker");
                 assert!(child_cancel.is_cancelled());
                 (
-                    Err(TurnError::Cancelled { attempts: None }),
+                    crate::delegate::Ended {
+                        delegated: Err(TurnError::Cancelled { attempts: None }),
+                        vouched: seeded_for_worker,
+                    },
                     crate::outcome::Spent {
                         tokens: 17,
                         ..Default::default()
@@ -3490,7 +3530,7 @@ mod tests {
             let mut delegates = vec![Working {
                 join_started: Some(joining_tx),
                 id: DelegateId::nth(1),
-                seeded: policy.vouched(),
+                seeded,
                 handle: worker,
             }];
             let mut tokens = 0;
