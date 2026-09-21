@@ -2,7 +2,7 @@
 name: update-docs
 description:
   'Bring the documentation site under docs/website/ up to date with bravebot.
-  Picks up from the commit recorded in docs-updated-to-sha, or reviews an
+  Picks up from the commit recorded in docs/docs-updated-to-sha, or reviews an
   explicit span of commits, folds the user-facing behaviour into the pages it
   belongs on, records how far it got, and builds the site cleanly. Triggers on:
   update docs, /update-docs, sync docs with specs, docs drift.'
@@ -14,7 +14,7 @@ allowed-tools: Bash(make -C docs/website *), Bash(python3 agents/skills/update-d
 
 This skill documents user-facing behaviour changes across a span of commits or spec clauses, folding them into the appropriate pages under `docs/website/docs/`.
 
-* **Baseline run** (`/update-docs`, no argument): starts from the commit recorded in `docs-updated-to-sha` and works forward. This is the normal mode.
+* **Baseline run** (`/update-docs`, no argument): starts from the commit recorded in `docs/docs-updated-to-sha` and works forward. This is the normal mode.
 * **Range run** (`/update-docs <rev-range>`): inspects commits in `<rev-range>` (e.g., `HEAD~20..HEAD` or `<tag>..HEAD`), determines what user-facing behaviour or configuration changed, and updates the relevant pages. Use this to walk a large backlog in slices.
 * **Unmapped check**: runs `make check-spec` to find normative clauses lacking a page reference or unverified against pages.
 * `dry-run`: reports what would change and writes nothing.
@@ -23,7 +23,7 @@ This skill documents user-facing behaviour changes across a span of commits or s
 
 ## Where to Start Reading, and Recording Where You Stopped
 
-`docs-updated-to-sha` at the repository root holds the commit the site has been brought up to, so a run reads forward from there instead of re-reading the whole history. `docs-ref.py` is the deterministic half of this skill: no model is involved, so it is cheap and its output is reproducible.
+`docs/docs-updated-to-sha` holds the commit the site has been brought up to, so a run reads forward from there instead of re-reading the whole history. `docs-ref.py` is the deterministic half of this skill: no model is involved, so it is cheap and its output is reproducible.
 
 ```sh
 python3 agents/skills/update-docs/docs-ref.py changes --full

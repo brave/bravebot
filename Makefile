@@ -43,12 +43,12 @@ help:
 	@echo "  make check                 Format check, clippy, tests, and toolchain age"
 	@echo "  make check-spec            Check docs/specs against the implementation"
 	@echo "  make check-security        The security audit's deterministic half"
-	@echo "  make check-locales         Hold the catalogs to untranslated-messages.txt"
+	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
 	@echo "  make check-docs            Build the documentation website under docs/website"
 	@echo "  make docs-changes          What has landed in the specs since the site was updated"
 	@echo "  make docs-updated-to-sha   The commit the documentation site is current as of"
-	@echo "  make write-unverified      Write unverified-clauses.txt, which check-spec holds it to"
-	@echo "  make write-untranslated    Write untranslated-messages.txt, which check-locales holds it to"
+	@echo "  make write-unverified      Write agents/unverified-clauses.txt, which check-spec holds it to"
+	@echo "  make write-untranslated    Write contrib/untranslated-messages.txt, which check-locales holds it to"
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
 	@echo "  make check-npm             Install from the lockfile and lint it, as CI does"
@@ -167,14 +167,14 @@ check-security:
 	python3 agents/skills/security-audit/selftest.py
 	python3 agents/skills/security-audit/security-audit.py --mechanical-only
 
-# unverified-clauses.txt, written from the specs. It is the list of clauses nothing pins, and
+# agents/unverified-clauses.txt, written from the specs. It is the list of clauses nothing pins, and
 # check-spec fails while it and the specs disagree, so this is what to run after giving a clause
 # a test, or setting one to none.
 .PHONY: write-unverified
 write-unverified:
 	python3 agents/skills/check-spec/check-spec.py --write-unverified
 
-# untranslated-messages.txt, written from the catalogs. It is the list of messages each translation
+# contrib/untranslated-messages.txt, written from the catalogs. It is the list of messages each translation
 # is missing, and check-locales fails while it and the catalogs disagree, so this is what to run
 # after translating a message, or after adding one to the reference that no catalog has yet.
 .PHONY: write-untranslated
@@ -270,7 +270,7 @@ check-docs:
 	npm --prefix docs/website ci --ignore-scripts
 	npm --prefix docs/website run build
 
-# How far the site has fallen behind the specs it describes. docs-updated-to-sha records how
+# How far the site has fallen behind the specs it describes. docs/docs-updated-to-sha records how
 # far reading got; these two report against it. Neither is a gate and no CI job runs them:
 # the site going stale is not something a diff can decide, so what they are for is answering
 # the question without spending a model run. The update-docs skill calls the same script to
@@ -298,7 +298,7 @@ check-all: check check-spec check-security check-locales check-docs check-npm ch
 locales:
 	@python3 contrib/check-locales.py --report
 
-# Whether every catalog matches untranslated-messages.txt, which records the messages each
+# Whether every catalog matches contrib/untranslated-messages.txt, which records the messages each
 # translation is knowingly missing. A gap is allowed and silence about one is not: falling back to
 # English is deliberate, so what this gates on is a gap nobody wrote down, and a recorded gap that
 # is no longer there. No toolchain and no build, so CI answers in seconds.

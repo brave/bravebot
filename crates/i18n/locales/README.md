@@ -12,7 +12,7 @@ Nothing else changes. The messages a translation leaves out are shown in English
 says how many those are, so a catalog is useful from its first line rather than from its last.
 
 One thing does have to be kept up. What a catalog is still missing is listed in
-[untranslated-messages.txt](../../../untranslated-messages.txt) at the root of the repository, and
+[untranslated-messages.txt](../../../contrib/untranslated-messages.txt), and
 `make check-locales` fails while that file and the catalogs disagree. You do not write it by hand:
 translate some messages, run `make write-untranslated`, and commit the shorter file along with them.
 A new language starts by listing everything and shrinking the file as it goes, which is the point.

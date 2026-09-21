@@ -9,7 +9,7 @@ are all facts, and a fact does not need a review.
     check-spec.py --mechanical-only          the whole first pass, human readable
     check-spec.py --mechanical-only labels   one spec, by name or by id
     check-spec.py --changed                  only specs governing what this branch touched
-    check-spec.py --write-unverified         write unverified-clauses.txt from the spec tree
+    check-spec.py --write-unverified         write agents/unverified-clauses.txt from the spec tree
 
 Run with neither --mechanical-only nor --list it also prepares the second pass: a work
 directory holding one prompt file per group of clauses, for the conformance review the
@@ -50,7 +50,7 @@ FRONT_MATTER_KEYS = {
     "reads_a_step_without_keying",
 }
 
-UNVERIFIED_FILE = Path("unverified-clauses.txt")
+UNVERIFIED_FILE = Path("agents/unverified-clauses.txt")
 
 UNVERIFIED_HEADER = """\
 # Spec clauses whose verified-by value is none.
@@ -346,7 +346,7 @@ def check_unverified_file(specs, index, crates):
 def partial_selection(selectors, changed_base):
     """Whether a run was asked for part of the spec tree.
 
-    `unverified-clauses.txt` is a statement about every spec, so a run given a filter is refused
+    `agents/unverified-clauses.txt` is a statement about every spec, so a run given a filter is refused
     rather than served: writing what the filter saw drops every spec it did not name, and writing
     the whole tree anyway makes the file the answer to a question nobody asked."""
     return bool(selectors) or changed_base is not None

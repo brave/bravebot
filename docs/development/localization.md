@@ -20,7 +20,7 @@ message in the reference and a name no catalog defines does not compile. The oth
 follow later; what they lack is shown in English.
 
 Later, not never. A gap has to be recorded in
-[untranslated-messages.txt](../../untranslated-messages.txt), and `make check-locales` fails while
+[untranslated-messages.txt](../../contrib/untranslated-messages.txt), and `make check-locales` fails while
 that file and the catalogs disagree, in either direction: a message a catalog is missing that the
 file does not list, and a line for a gap that is no longer there. So translate it in the same
 commit, or run `make write-untranslated` and commit what it writes. The reason it is a file rather

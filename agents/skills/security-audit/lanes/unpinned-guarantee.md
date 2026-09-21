@@ -6,7 +6,7 @@ stops holding the first time somebody changes that code for a good reason, with 
 Three kinds of gap, and all of them are yours.
 
 **Clauses at `verified-by: none`.** The mechanical pass has already listed them for the guarantee
-specs and `unverified-clauses.txt` holds the whole set. Do not report that they are unpinned, since
+specs and `agents/unverified-clauses.txt` holds the whole set. Do not report that they are unpinned, since
 that is counted already. For each one, answer the question the count cannot: **what would a change
 that broke this look like, and would anything else catch it?** Say whether a test is possible and
 what it would assert. Where a clause cannot be pinned by a test, say what does hold it: a type that
