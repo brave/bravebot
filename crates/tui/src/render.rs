@@ -3533,6 +3533,32 @@ mod tests {
             assert!(screen.contains("because the grammar nests"), "{screen}");
         }
 
+        /// The answer lands out of a loop that answers keys, so the person may have opened the
+        /// scroller while they waited. The scroller is drawn in front of this view, so an answer
+        /// that leaves it standing is on no screen at all, behind a key nobody was told about.
+        #[test]
+        fn an_answer_takes_the_screen_from_a_scroller_opened_while_it_was_awaited() {
+            let mut session = Session::new("kernel-enforced");
+            session.open_scroller();
+
+            asked(
+                &mut session,
+                "why is the parser recursive?",
+                "because the grammar nests",
+                true,
+            );
+
+            let screen = rendered(&session);
+            assert!(
+                screen.contains("because the grammar nests"),
+                "the answer was drawn on no screen: {screen}"
+            );
+            assert!(
+                !session.scrolling(),
+                "the scroller was left standing over the answer"
+            );
+        }
+
         /// An answer the record cannot hold is on the screen and nowhere else, so it is said while
         /// the words are still there to copy rather than discovered by resuming and finding them
         /// gone.

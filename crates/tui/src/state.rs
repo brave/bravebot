@@ -1930,10 +1930,24 @@ impl Session {
     /// Opened rather than left behind a key, because the person asked a question and an answer
     /// they are not shown is not an answer. Nothing moves under a reader doing it: the press that
     /// asked came from the input box, which this mode does not draw.
+    ///
+    /// The answer arrives out of a wait loop that answers keys, so a mode a person opened while
+    /// they waited is standing over the session when it lands. Each is put away rather than
+    /// opened around: the scroller is drawn in front of this view, so an answer under one is on
+    /// no screen at all, and a search left open below would take the letters that walk this list.
+    ///
+    /// The turn's own view is remembered only where this view was not already open, the way
+    /// [`Session::back_to_the_tail`] guards on the same question: while it is open `scroll` is an
+    /// offset into a watched row's lines, and the offset the transcript comes back on is the one
+    /// already held.
     pub fn asked_aside(&mut self, aside: Aside) {
         self.asides.push(aside);
         let at = self.asides.len() - 1;
-        self.held_view = Some(self.scroll);
+        self.close_scroller();
+        self.close_history_search();
+        if self.watching.is_none() {
+            self.held_view = Some(self.scroll);
+        }
         self.scroll = 0;
         self.watching = Some(Watching {
             at,
@@ -6851,6 +6865,58 @@ mod tests {
 
             session.stop_watching();
             assert_eq!(session.scroll, 7, "coming out lost the turn's own view");
+        }
+
+        /// The turn's own view is the transcript's offset, and while the view is open that field
+        /// holds an offset into a watched row's lines instead. Reading it as the transcript's
+        /// brings the conversation back somewhere the person never left it, and the number it
+        /// comes back on was measured against another row's lines.
+        #[test]
+        fn answering_a_question_while_the_view_is_open_keeps_the_turns_own_view() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.scroll = 7;
+            assert!(session.watch(), "the view did not open on the delegate");
+            session.scroll_up(5);
+            assert_eq!(session.scroll, 5, "the row's own lines did not move");
+
+            asked(&mut session, "why recursive?", "because of nesting", true);
+            assert_eq!(
+                session.watched_aside().and_then(|a| a.answer.as_deref()),
+                Some("because of nesting"),
+                "the view did not move onto the answer"
+            );
+
+            session.stop_watching();
+            assert_eq!(
+                session.scroll, 7,
+                "the transcript came back on an offset into a watched row's lines"
+            );
+        }
+
+        /// The answer lands out of a loop that answers keys, so a person waiting on it may have
+        /// gone looking for the prompt that asked for it. A search left open below the view is
+        /// what they are dropped into when they close the view, having asked for neither.
+        #[test]
+        fn answering_a_question_closes_a_history_search_opened_during_the_wait() {
+            let mut session = Session::new("none");
+            session.history =
+                crate::history::History::from_entries(vec![bravebot_session::store::Entry {
+                    prompt: "why is the parser recursive?".to_string(),
+                    at: None,
+                    project: None,
+                }]);
+            assert!(
+                session.open_history_search(),
+                "the search did not open on a stored prompt"
+            );
+
+            asked(&mut session, "why recursive?", "because of nesting", true);
+
+            assert!(
+                !session.searching_history(),
+                "the search was left standing under the answer"
+            );
         }
 
         /// Asides come first because they are the only rows that outlive the session that made
