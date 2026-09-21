@@ -233,6 +233,10 @@ is most likely to notice first.
 `verified-by: bravebot_tui::status::a_substituted_model_is_reported_beside_the_one_asked_for`
 `verified-by: bravebot_tui::status::automatic_being_resolved_to_a_real_model_is_not_a_substitution`
 `verified-by: bravebot_tui::state::picking_automatic_and_being_answered_by_a_model_is_not_a_substitution`
+`verified-by: bravebot_tui::status::the_opening_screen_draws_the_tier_the_configuration_settles`
+`verified-by: bravebot_tui::app::a_model_the_configuration_named_is_reported_as_substituted_too`
+`verified-by: bravebot_tui::app::a_substitution_that_carries_on_is_said_once`
+`verified-by: bravebot_tui::app::the_configured_automatic_entry_resolving_to_a_model_says_nothing`
 
 ## Requirements and limits
 

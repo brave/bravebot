@@ -1257,6 +1257,40 @@ mod tests {
         assert!(shown.contains(configured_tier(&free)), "{shown}");
     }
 
+    /// The words the opening screen draws are the configuration's, and nothing between the two may
+    /// compose its own.
+    ///
+    /// The screen used to be handed the tier as a string, so the line the panel above is held to
+    /// agree with was itself held to nothing: a caller could pass any wording at all and every
+    /// test named by this clause would still pass. It takes the configuration now, and this is
+    /// what pins the two ends of that to one another.
+    #[test]
+    fn the_opening_screen_draws_the_tier_the_configuration_settles() {
+        let premium = config_for(
+            "https://ai-chat.bsg.brave.com",
+            Some("https://ai-chat-premium.bsg.brave.com"),
+        );
+        let free = config_for("https://ai-chat.bsg.brave.com", None);
+        assert_ne!(
+            configured_tier(&premium),
+            configured_tier(&free),
+            "both configurations say the same thing, so nothing here distinguishes them"
+        );
+
+        for config in [&premium, &free] {
+            let session = crate::state::Session::new("kernel-enforced").on_tier(config);
+            let opening = crate::logo::lines(&session.confinement, &session.tier, 90, 24)
+                .iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                opening.contains(configured_tier(config)),
+                "the opening screen says something the configuration does not: {opening}"
+            );
+        }
+    }
+
     /// Before the first turn nothing has been observed, so the panel says premium is available
     /// rather than claiming it is or is not in use. Claiming either would be the same guess the
     /// configuration line used to make.

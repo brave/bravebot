@@ -2221,7 +2221,7 @@ fn event_loop(
     let mut session = Session::new(confinement)
         .with_stored_history()
         .in_workspace(workspace.root())
-        .on_tier(crate::status::configured_tier(config));
+        .on_tier(config);
     // The flag both opens the session in bypass and puts that rung on the ladder the key walks.
     if skip_permissions {
         session = session.allowing_bypass();
@@ -5278,6 +5278,39 @@ struct Asked {
     comparable: bool,
 }
 
+/// Record what the turn asked for against what answered, and say so once where they differ.
+///
+/// The endpoint substitutes rather than refusing: a premium model requested without a credential
+/// comes back answered by a weaker model, with a 200 and a perfectly ordinary reply. So the only
+/// trace is this field, and a session that never compares them cannot tell a model it chose from
+/// one chosen for it.
+///
+/// The name is recorded whatever put it in force. A model named by the settings file is one
+/// somebody expects to be answered by exactly as much as one picked from `/model` is, and passing
+/// the asked-for half only for the second left a configured default substituted in silence for a
+/// whole session while `/status` reported the substitution for the same turn. What keeps the
+/// automatic entry from reading as a substitution is the roster comparison in
+/// [`Session::substituted_model`], not the absence of a choice.
+///
+/// Said only when they differ, and only when the difference is new, since it would otherwise be a
+/// line on every turn for the rest of the session.
+fn record_the_model_that_answered(
+    session: &mut Session,
+    asked: Asked,
+    served: &str,
+    premium: bool,
+) {
+    let already = session.substituted_model().is_some();
+    session.served(asked.name, served, premium, asked.comparable);
+    if !already && let Some(requested) = session.substituted_model() {
+        session.note(t!(
+            session_model_substituted,
+            asked = requested,
+            served = served
+        ));
+    }
+}
+
 /// What a finished turn is measured against, and what to fall back on where it reported nothing.
 ///
 /// One value rather than three arguments because none of them says anything alone: a figure without
@@ -5362,28 +5395,7 @@ fn fold_outcome(
             // full the context is now.
             session.measured(outcome.context_tokens, occupied.budget, occupied.guessed);
 
-            // What was asked for against what answered. The endpoint substitutes rather than
-            // refusing: a premium model requested without a credential comes back answered by a
-            // weaker model, with a 200 and a perfectly ordinary reply. So the only trace is
-            // this field, and a session that never compares them cannot tell a model it chose from
-            // one chosen for it.
-            //
-            // Said only when they differ, and only when the difference is new, since it would
-            // otherwise be a line on every turn for the rest of the session.
-            let already = session.substituted_model().is_some();
-            session.served(
-                session.model().map(|_| asked.name),
-                outcome.model.clone(),
-                outcome.premium,
-                asked.comparable,
-            );
-            if !already && let Some(asked) = session.substituted_model() {
-                session.note(t!(
-                    session_model_substituted,
-                    asked = asked,
-                    served = &outcome.model
-                ));
-            }
+            record_the_model_that_answered(session, asked, &outcome.model, outcome.premium);
             // Where the turn was a tick, this is what arms the next one: an interval from the
             // driver's own clock, or the wait the turn asked for. Measured from here rather than
             // from when the tick went out, so the gap is between runs and a turn that outlasts
@@ -12592,6 +12604,95 @@ mod tests {
             }
         );
         assert_eq!(session.fullness(), Some(45));
+    }
+
+    /// A model named by the settings file is one somebody expects to be answered by, exactly as
+    /// much as a model picked from `/model` is. Recording the asked-for half only where `/model`
+    /// had run left a session on its configured default substituted in silence for its whole life,
+    /// while `/status` reported the substitution for the same turn.
+    #[test]
+    fn a_model_the_configuration_named_is_reported_as_substituted_too() {
+        let mut session = Session::new("none");
+        assert!(
+            session.model().is_none(),
+            "the fixture picked a model, so it cannot tell the configured default apart"
+        );
+
+        record_the_model_that_answered(
+            &mut session,
+            Asked {
+                name: "claude-3-opus".to_string(),
+                comparable: true,
+            },
+            "claude-3-sonnet",
+            true,
+        );
+
+        assert_eq!(session.substituted_model(), Some("claude-3-opus"));
+        let said = said_in_the_transcript(&session).join("\n");
+        assert!(
+            said.contains("claude-3-opus") && said.contains("claude-3-sonnet"),
+            "the substitution was never said out loud: {said:?}"
+        );
+    }
+
+    /// Said once when it starts happening rather than on every turn, which a session answered by
+    /// the same substitute all afternoon would otherwise be.
+    #[test]
+    fn a_substitution_that_carries_on_is_said_once() {
+        let mut session = Session::new("none");
+        for _ in 0..3 {
+            record_the_model_that_answered(
+                &mut session,
+                Asked {
+                    name: "claude-3-opus".to_string(),
+                    comparable: true,
+                },
+                "claude-3-sonnet",
+                true,
+            );
+        }
+
+        let said = said_in_the_transcript(&session);
+        assert_eq!(
+            said.iter()
+                .filter(|line| line.contains("claude-3-sonnet"))
+                .count(),
+            1,
+            "said again on a later turn: {said:?}"
+        );
+    }
+
+    /// The automatic entry asks the server to choose per request, so a concrete name coming back
+    /// is that entry working. It is the shipped default, so a session that never touched `/model`
+    /// is the ordinary way to reach this, and a warning here would be one on almost every session.
+    #[test]
+    fn the_configured_automatic_entry_resolving_to_a_model_says_nothing() {
+        let mut session = Session::new("none");
+        record_the_model_that_answered(
+            &mut session,
+            Asked {
+                name: bravebot_config::DEFAULT_MODEL.to_string(),
+                comparable: true,
+            },
+            "claude-3-haiku",
+            true,
+        );
+
+        assert_eq!(session.substituted_model(), None);
+        assert!(
+            said_in_the_transcript(&session).is_empty(),
+            "the automatic entry doing its job was reported as a substitution"
+        );
+    }
+
+    /// What the session put in front of the person, one entry per line.
+    fn said_in_the_transcript(session: &Session) -> Vec<String> {
+        session
+            .viewed()
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect()
     }
 
     /// A loop repeats a line somebody endorsed. The sentence this program writes to carry a goal
