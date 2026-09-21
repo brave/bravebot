@@ -1754,6 +1754,18 @@ fn doctor() -> ExitCode {
                 report_gateway(provider);
             }
 
+            // What would end each credential this build holds for itself. Reported beside the
+            // backends rather than kept for a leak, because it can only be written down while the
+            // arrangement is still understood, and the person reading it after a key appears
+            // somewhere public needs the surface that revokes it rather than the expiry, which is
+            // all anything here kept before.
+            for held in config.held() {
+                fact(t!(doctor_ends), what_would_end(held));
+                if let Some(survives) = what_outlives_revoking(held) {
+                    fact(t!(doctor_outlives), survives);
+                }
+            }
+
             // What a run would actually request, since a choice made with `/model` overrides the
             // configured default and reporting only the default would explain the wrong thing.
             match bravebot_session::store::load_model() {
@@ -2027,6 +2039,37 @@ fn gateway_credential(
         bravebot_config::provider::Credential::Token(_) => t!(doctor_gateway_token),
         bravebot_config::provider::Credential::Absent => t!(doctor_gateway_token_absent),
         bravebot_config::provider::Credential::NotNeeded => t!(doctor_gateway_token_not_needed),
+    }
+}
+
+/// What `doctor` says would end one credential: its issuer, the surface that revokes it, and
+/// anything minted from it that revoking it would not reach, which is what CRED-25 asks be
+/// recorded.
+///
+/// Separate from the printing so each credential's account is testable, and a `match` over the
+/// record rather than a field on it because `bravebot-config` holds no words a person reads: a
+/// credential added there does not compile until it has one here.
+fn what_would_end(held: bravebot_config::Held) -> &'static str {
+    match held {
+        bravebot_config::Held::SigningKey => t!(doctor_ends_signing_key),
+        bravebot_config::Held::AwsAccessKey => t!(doctor_ends_aws_access_key),
+        bravebot_config::Held::AwsSession => t!(doctor_ends_aws_session),
+    }
+}
+
+/// What `doctor` says survives revoking a credential, where anything does.
+///
+/// `None` rather than a sentence saying "nothing", because a line that reads the same for two of
+/// the three is the line people learn to skip, and this is the fact worth reading: the disposition
+/// somebody reaches for after a leak is the one that leaves something behind.
+///
+/// Which credentials those are is [`bravebot_config::Held::outlives_revocation`], not this match.
+/// The record is the fact and this is the words for it, so a credential whose record says
+/// something survives and whose report says nothing is a disagreement a test can see.
+fn what_outlives_revoking(held: bravebot_config::Held) -> Option<&'static str> {
+    match held {
+        bravebot_config::Held::AwsAccessKey => Some(t!(doctor_outlives_aws_access_key)),
+        bravebot_config::Held::SigningKey | bravebot_config::Held::AwsSession => None,
     }
 }
 
@@ -2808,6 +2851,46 @@ mod tests {
             assert!(
                 line.contains("HOME or USERPROFILE"),
                 "a line of the report names fewer than the two variables looked at: {line}"
+            );
+        }
+    }
+
+    /// CRED-25: each credential this build holds gets its own account of what would end it. One
+    /// arm copied to the next is the failure this catches, and it is the failure the report
+    /// already had before this existed: the sentences a person was shown named `aws sso login`
+    /// and `aws configure sso`, which are how to obtain a credential and say nothing about ending
+    /// one, so the three arrangements were answered identically and none of them was answered.
+    #[test]
+    fn every_held_credential_has_its_own_account_of_what_would_end_it() {
+        let accounts: Vec<&str> = bravebot_config::Held::ALL
+            .iter()
+            .map(|held| what_would_end(*held))
+            .collect();
+
+        for (held, account) in bravebot_config::Held::ALL.iter().zip(&accounts) {
+            assert!(!account.is_empty(), "{held:?} is reported with nothing");
+        }
+        for (at, account) in accounts.iter().enumerate() {
+            assert!(
+                !accounts[at + 1..].contains(account),
+                "two credentials share one account of what would end them: {account}"
+            );
+        }
+    }
+
+    /// CRED-25: the third thing a held credential records is what revoking it would not reach, and
+    /// which credentials have one is the record's answer rather than this report's. Kept apart so
+    /// they can disagree, and pinned together so they cannot: a credential given a line here that
+    /// the record says nothing survives for tells somebody to chase a session that does not exist,
+    /// and one the record says something survives for and that is reported without it leaves the
+    /// live credential behind after the leak has been dealt with.
+    #[test]
+    fn what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one() {
+        for held in bravebot_config::Held::ALL {
+            assert_eq!(
+                what_outlives_revoking(held).is_some(),
+                held.outlives_revocation(),
+                "{held:?} is reported and recorded differently"
             );
         }
     }

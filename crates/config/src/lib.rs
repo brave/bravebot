@@ -196,6 +196,57 @@ impl fmt::Display for Secret {
     }
 }
 
+/// A credential this program holds itself, and so owes an account of what would end it.
+///
+/// CRED-25 asks three things about every credential at Held or Held briefly: who issued it, the
+/// surface that revokes it, and anything minted from it that revocation would not reach. All three
+/// are facts about the arrangement a credential arrived under rather than about its bytes, so what
+/// is recorded beside the value is which arrangement it is, and the three answers follow from that.
+/// The words a person reads are in the message catalog, since this crate holds none of its own.
+///
+/// The obligation is detection followed by something a person can act on. An expiry, which is all
+/// that was kept before, says when a credential stops working and nothing about how to stop it
+/// working sooner; removing the file it came from ends this run's custody and leaves it live at its
+/// issuer. What is enumerated here is what this program holds for itself. A credential a gateway
+/// block names or carries is not in this list, and a block that wrote one into a settings file is
+/// genuinely one this configuration holds: `provider.rs` is outside the paths CRED governs, and
+/// what would end such a credential is the gateway's answer rather than one this build has, since
+/// a block names a host and a variable and never an issuer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Held {
+    /// The HMAC signing key baked into this build, which signs every request to the Brave backend.
+    ///
+    /// Held. It carries no expiry, and one build's key is every install's, so nothing on this
+    /// machine ends it: the surface is the backend that derives its copy from a master seed and
+    /// [`Config::key_id`], and revoking means retiring that id there and shipping another build.
+    SigningKey,
+    /// A long-lived AWS access key, as the AWS CLI resolved it for a profile.
+    ///
+    /// Held. `aws iam delete-access-key` ends it at IAM, and does not reach a session credential
+    /// already minted from it.
+    AwsAccessKey,
+    /// An AWS session credential: an SSO session or an assumed role, as the AWS CLI resolved it.
+    ///
+    /// Held briefly. It states an expiry and stops working at it; ending it before that is done at
+    /// its issuer, because `aws sso logout` clears this machine's copy rather than the session.
+    AwsSession,
+}
+
+impl Held {
+    /// Every credential this program can hold, so something reporting them cannot omit one.
+    pub const ALL: [Self; 3] = [Self::SigningKey, Self::AwsAccessKey, Self::AwsSession];
+
+    /// Whether revoking this credential at its issuer leaves something minted from it working.
+    ///
+    /// The one of the three facts that is a claim about what happens rather than an address, and
+    /// the one somebody acting on a leak gets wrong: deleting an access key is the obvious move,
+    /// and it does not reach the session credentials STS has already handed out under it, each of
+    /// which runs to its own expiry.
+    pub fn outlives_revocation(self) -> bool {
+        matches!(self, Self::AwsAccessKey)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConfigError {
     Missing(&'static str),
@@ -582,6 +633,28 @@ impl Config {
             && !self.signing_key.expose().is_empty()
     }
 
+    /// The credentials this build holds itself, each owing an account of what would end it.
+    ///
+    /// Both AWS arrangements wherever an account is configured, because which one a profile
+    /// resolves to is the AWS CLI's answer and asking it means running it, which a report about
+    /// configuration does not do. A resolved credential says which it is for itself.
+    ///
+    /// A build that cannot reach the Brave backend holds no signing key to account for, which is
+    /// the build-from-source case [`Config::serves_aichat`] describes: the field is blank there,
+    /// and listing a credential this install does not have would send somebody to retire a key id
+    /// on the strength of a leak that cannot have come from here.
+    pub fn held(&self) -> Vec<Held> {
+        let mut held = Vec::new();
+        if self.serves_aichat() {
+            held.push(Held::SigningKey);
+        }
+        if self.bedrock.is_some() || self.bedrock_providers().next().is_some() {
+            held.push(Held::AwsAccessKey);
+            held.push(Held::AwsSession);
+        }
+        held
+    }
+
     /// The model a name asks for, resolved the way the configured model is.
     ///
     /// For every other route to a model: a flag, a remembered choice, anything a person types. The
@@ -824,6 +897,57 @@ mod tests {
         .expect("bedrock alone is a working configuration");
         let bedrock = config.bedrock.expect("bedrock configured");
         assert_eq!(bedrock.default_model(), Some("opus-arn"));
+    }
+
+    /// CRED-25: what is reported as held is what this build actually holds. The signing key field
+    /// exists on every configuration and is blank on a build from source pointed elsewhere, so a
+    /// rule reading the field rather than whether it is usable would hand somebody the account of
+    /// a credential this install has none of, and send them to retire a key id over a leak that
+    /// cannot have come from here.
+    #[test]
+    fn a_build_that_cannot_sign_for_itself_holds_no_signing_key_to_account_for() {
+        let bedrock_only = Config::from_lookup(|k| match k {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            _ => None,
+        })
+        .expect("bedrock alone is a working configuration");
+        assert!(!bedrock_only.serves_aichat());
+        assert_eq!(
+            bedrock_only.held(),
+            [Held::AwsAccessKey, Held::AwsSession],
+            "a build with a blank signing key holds no signing key"
+        );
+
+        let brave_only = Config::from_lookup(complete_env).expect("configured");
+        assert_eq!(
+            brave_only.held(),
+            [Held::SigningKey],
+            "a build with no AWS account has no AWS credential to account for"
+        );
+    }
+
+    /// CRED-25: both AWS arrangements, because which one a profile resolves to is the AWS CLI's
+    /// answer and this is configuration rather than a resolved credential. They differ in what
+    /// would end them, so reporting one of the two would be wrong for half the machines that read
+    /// it, and a resolved credential says which it is for itself.
+    #[test]
+    fn an_aws_account_holds_both_arrangements_and_they_end_differently() {
+        let config = Config::from_lookup(|k| match k {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            other => complete_env(other),
+        })
+        .expect("configured");
+        assert_eq!(
+            config.held(),
+            [Held::SigningKey, Held::AwsAccessKey, Held::AwsSession]
+        );
+
+        // The one disposition somebody reaches for after a leak that leaves something behind.
+        assert!(Held::AwsAccessKey.outlives_revocation());
+        assert!(!Held::AwsSession.outlives_revocation());
+        assert!(!Held::SigningKey.outlives_revocation());
     }
 
     /// Without Bedrock the aichat credentials are still required. Relaxing them for everyone would
