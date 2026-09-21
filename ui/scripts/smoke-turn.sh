@@ -6,21 +6,22 @@
 # take a few seconds.
 #
 # Usage, from anywhere:
-#     ~/repos/bravebot-ui/scripts/smoke-turn.sh [working-directory]
+#     ~/repos/bravebot/ui/scripts/smoke-turn.sh [working-directory]
 #
-# The working directory defaults to bravebot itself, so the agent has something
-# real to read. Nothing is written: the prompt only asks a question, and this session
-# declines to trust the directory anyway, so any write would be shown rather than applied.
+# The working directory defaults to this repository, so the agent has something real to
+# read. Nothing is written: the prompt only asks a question, and this session declines to
+# trust the directory anyway, so any write would be shown rather than applied.
 
 set -uo pipefail
 
 UI="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-WORKDIR="${1:-$UI/vendor/bravebot}"
-RPC="$UI/target/debug/bravebot-rpc"
+REPO="$(cd "$UI/.." && pwd -P)"
+WORKDIR="${1:-$REPO}"
+RPC="$REPO/target/debug/bravebot-rpc"
 
 if [ ! -x "$RPC" ]; then
   echo "building bravebot-rpc..." >&2
-  ( cd "$UI" && cargo build -p bravebot-bridge ) || exit 1
+  "$UI/scripts/build-bridge.sh" || exit 1
 fi
 
 # Settings can supply provider credentials even when no Brave service key is exported.

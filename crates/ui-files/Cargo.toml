@@ -1,6 +1,6 @@
 [package]
 name = "bravebot-ui-files"
-description = "Reads a file the graphical front end was asked to show"
+description = "Reads and writes files for the graphical front end, under a pinned directory"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

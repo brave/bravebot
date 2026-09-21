@@ -2,7 +2,7 @@
 
 Project text previews, attachment validation, and bot-memory reads and edits use
 `bravebot-ui-files`, a helper built and packaged by this repository. It is independent of
-the brave-bot submodule. Only Electron's main process supplies its project root and path;
+the agent crates. Only Electron's main process supplies its project root and path;
 the renderer cannot choose a helper executable or send a shell command.
 
 The helper opens each directory component with `openat`, `O_DIRECTORY`, and `O_NOFOLLOW`,

@@ -1,7 +1,7 @@
 /**
  * The wire format, as TypeScript.
  *
- * Mirrors `docs/phase-0-rpc-protocol.md` §6 and the Rust in `crates/bravebot-bridge/src/wire.rs`.
+ * Mirrors `docs/phase-0-rpc-protocol.md` §6 and the Rust in `crates/ui-bridge/src/wire.rs`.
  * Nothing here is generated, so the two can drift; the tags are the contract and they are
  * pinned by tests on the Rust side.
  *

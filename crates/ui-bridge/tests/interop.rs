@@ -16,10 +16,22 @@ use std::collections::BTreeMap;
 
 /// A directory nothing else is using, inside the real session store.
 ///
-/// Sessions are keyed by the working directory they ran in, so an unused temporary path
-/// gets its own directory under `~/.bravebot/sessions` and cannot disturb a real one.
+/// Sessions are keyed by the working directory they ran in, so an unused path gets its own
+/// directory under `~/.bravebot/sessions` and cannot disturb a real one.
+///
+/// Under the workspace `target/` rather than the system temporary directory, which is what
+/// every other crate here does: a fixed name under a directory shared between users and
+/// between processes at different privileges collides whenever two checkouts run the tests
+/// at once, and it is the insecure-temporary-file pattern the security scan flags.
+/// `target/` is per-checkout and already ignored by git.
 fn scratch(name: &str) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!("bravebot-bridge-interop-{name}"));
+    // CARGO_MANIFEST_DIR is `<workspace>/crates/ui-bridge`, so two pops reach the root.
+    let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.pop();
+    path.pop();
+    path.push("target");
+    path.push("test-scratch");
+    path.push(format!("bravebot-ui-bridge-interop-{name}"));
     std::fs::create_dir_all(&path).expect("a scratch directory");
     path
 }

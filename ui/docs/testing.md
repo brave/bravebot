@@ -4,7 +4,8 @@ The gates a change has to pass, and the drivers that prove the window works. Set
 
 ## Backend v0.9.0 compatibility
 
-The submodule pins `5d56df1d`, upstream `main` after the `v0.9.0` release.
+The bridge crates are members of this workspace, so the agent they compile against is
+whatever the tree is at.
 Session storage and audit types come from `bravebot-session`; watches come from
 `bravebot-agent`. Command approvals show any reference routed to standard input,
 and network diagnostics include every certificate trust problem reported upstream.
@@ -44,8 +45,8 @@ advice, and write approvals show the processor's remark beside the diff.
   edit conflicts, history deletion and bot recreation, without model calls. To verify packaging,
   build with `node scripts/package.mjs`, then set `SECURE_FILES_APP` to the packaged executable
   when running the same driver. Both `bravebot-rpc` and `bravebot-ui-files` must ship in Resources.
-- For a submodule update, also run
-  `cargo test --manifest-path vendor/bravebot/Cargo.toml --target-dir target --all --locked`.
+- For a change to the agent crates the bridge links, `cargo test --all --locked` from the
+  repository root covers both sides in one run.
   On Apple Silicon with an Intel Rust toolchain, add `--target aarch64-apple-darwin`
   and `--config 'target.aarch64-apple-darwin.runner=["/usr/bin/arch","-arm64"]'`
   (install the target with `rustup target add aarch64-apple-darwin`). The upstream confinement tests
@@ -162,9 +163,9 @@ table above. Two jobs:
 - **Typecheck** — `npm ci` with `ELECTRON_SKIP_BINARY_DOWNLOAD=1` (the Electron *package* is
   needed for types; the 100 MB binary is not, since nothing here launches a window) and then
   `npm run typecheck`.
-- **Lint and test the bridge** — one checkout with submodules, so it compiles the same agent
-  revision the gitlink pins, then `cargo clippy --all-targets --all-features -- -D warnings`
-  and `cargo test --all`, followed by the desktop build, Node regression tests, and
+- **Lint and test the bridge** is the repository's own `check` job, which runs
+  `cargo clippy --all-targets --all-features -- -D warnings` and `cargo test --all --locked`
+  over every workspace member. The `Front end` job adds the desktop build, Node regression tests, and
   the real manual walkthrough under Xvfb with a local model fixture.
 
 The workflow does not run the other Electron drivers, packaged-app checks, or the

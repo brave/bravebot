@@ -36,7 +36,7 @@ main UI are visible and the Rust bridge responds, then saves a screenshot under
 
 `scripts/build-bridge.sh` builds the Rust bridge and secure-file helper. TypeScript
 then checks the code and electron-vite bundles the main process, preload and React
-renderer into `out/`. Development executables are in `target/debug/`.
+renderer into `out/`. Development executables are in the workspace `../target/debug/`.
 
 The bridge talks to the pinned agent library over a child-process protocol; it does
 not drive a terminal. See the [protocol design](phase-0-rpc-protocol.md) and
@@ -58,7 +58,7 @@ The platform and architecture follow the Node process. Rust uses its configured 
 bundle, use matching Node and Rust architectures.
 
 Both `bravebot-rpc` and `bravebot-ui-files` are copied into the app's Resources.
-Packaged builds use those copies; development builds use `target/debug/`.
+Packaged builds use those copies; development builds use the workspace `../target/debug/`.
 The script currently packages debug Rust executables, and performs no app signing
 or notarisation. The resulting bundle is for local testing, not a completed
 release-distribution pipeline. Git commit signatures are separate from macOS app signing.

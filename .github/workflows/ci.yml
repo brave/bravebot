@@ -294,16 +294,29 @@ jobs:
         run: file "dist/bravebot-${{ matrix.name }}${{ matrix.ext }}"
 
   # The front end under ui/: its TypeScript, its Node tests, and one real Electron
-  # walkthrough under Xvfb. Its Rust crates are not here, because the `check` job above
-  # already builds and tests every member of the workspace on every pull request; filtering
-  # those away by directory would rebuild the submodule problem inside one repository, which
-  # is the whole thing folding the front end in was meant to fix. Only the Electron half is
-  # filtered, because it installs a browser runtime to draw a window.
+  # walkthrough under Xvfb.
+  #
+  # The `check` job above is what lints and tests the two bridge crates, as members of the
+  # workspace like any other: path-filtering them away by directory would rebuild the
+  # submodule problem inside one repository, which is the whole thing folding the front end
+  # in was meant to fix. This job compiles them anyway, because `npm run build` runs
+  # `scripts/build-bridge.sh` to produce the two binaries the app spawns, so it needs the
+  # toolchain and the cache the sibling Rust jobs have.
   ui:
     name: Front end
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        # Pinned to a full commit SHA; see the note in the `check` job above.
+        # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:

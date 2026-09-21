@@ -31,7 +31,17 @@ if [ -d "$AGENT" ]; then
   AGENT="$(cd "$AGENT" && pwd -P)"
 fi
 
-build() { cargo build -p bravebot-ui-bridge -p bravebot-ui-files "$@"; }
+# The unconfigured build is opted into here, for these two packages, rather than in a
+# `.cargo/config.toml`. Cargo reads that file from the invocation directory upwards, and
+# since the front end became a subdirectory of the workspace one under `ui/` applied to
+# every member: `cd ui && cargo build -p bravebot-cli` produced the shipping binary with no
+# credentials baked in and nothing said so, which is the failure the config build script
+# exists to refuse. A packaged release must NOT rely on this; it is built the way the
+# agent's own releases are, with the credentials present.
+build() {
+  BRAVEBOT_ALLOW_UNCONFIGURED_BUILD="${BRAVEBOT_ALLOW_UNCONFIGURED_BUILD:-1}" \
+    cargo build -p bravebot-ui-bridge -p bravebot-ui-files "$@"
+}
 
 if [ ! -d "$AGENT" ]; then
   echo "warning: no credential checkout at $AGENT (set BRAVEBOT_DIR)." >&2
