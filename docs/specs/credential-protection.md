@@ -426,14 +426,18 @@ type CRED-1 governs, so a debug print of one is a debug print of live credential
 is reached through Bedrock, what this agent authenticates with is the machine's own cloud
 credentials, and those are the ones the paragraph above deliberately leaves in place: the clause
 holds for the signing key and does not hold for that configuration. Withholding there is a question
-about the profile this agent resolved for itself, which it knows, rather than about a name.
+about the profile this agent resolved for itself, which it knows, rather than about a name. The CLI
+that resolves them is a program this agent started all the same, so it is handed what the person's
+own environment holds and none of what this agent authenticates with.
 
 **The record is closed elsewhere.** No field of the trail can hold a credential, because
 [TRACE-2](trace.md#TRACE-2) admits only a gate name, a capability, a label, a path or a slot id.
 That is a stronger answer than a redaction rule and it is why this clause does not restate one; what
 is owed there is the test, which scans the trail for every secret the process holds.
 
-`verified-by: none`
+`verified-by: bravebot_bedrock::credentials::this_agents_own_credentials_reach_none_of_the_aws_cli_this_crate_starts`
+`verified-by: bravebot_bedrock::credentials::the_machines_own_aws_configuration_still_reaches_the_cli`
+`verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_not_one_of_this_agents_own`
 
 <a id="CRED-15"></a>
 ### CRED-15: the tree is scanned before it is vouched for
@@ -739,6 +743,12 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   way through. The gate here is about what this system *causes*; disclosure of what was already
   there is CRED-15's business, and CRED-15 is unbuilt. The two together are why reading a `.env` is
   currently unexamined in both directions.
+
+- **Half of CRED-14 is pinned and half is argued.** The tests on it are the environment of a program
+  this agent starts. That what it holds reaches no session record rests on
+  [TRACE-2](trace.md#TRACE-2) admitting no field one could sit in, and that it is shown only as a
+  redaction rests on the type it is held in; neither is pinned by a test that scans a record or a
+  screen for every secret the process holds, which is what the clause says is owed.
 
 - **Most of this is not implemented.** What runs is the scan of what a turn writes, and one
   performer: a credential a vault obtained itself, and a mail send carried out against it so that

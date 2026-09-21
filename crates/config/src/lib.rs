@@ -19,6 +19,7 @@ pub mod env_var {
 pub mod hooks;
 mod managed;
 mod obfuscate;
+pub mod scrub;
 mod settings;
 #[cfg(test)]
 mod testutil;

@@ -90,7 +90,7 @@ impl LanguageServers {
                 state,
                 resolve_program,
                 incognito,
-                crate::scrub::names(&bravebot_config::Settings::load()),
+                bravebot_config::scrub::names(&bravebot_config::Settings::load()),
             ),
             root,
         }

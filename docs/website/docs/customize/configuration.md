@@ -327,7 +327,7 @@ without rebuilding it.
 | `BRAVEBOT_CONTEXT_BUDGET` | the token budget before a conversation is compacted |
 | `BRAVEBOT_OUTPUT_BUDGET` | how far one reply may run before the service cuts it off ([below](#how-long-a-reply-may-run)) |
 | `BRAVEBOT_LOCALE` | the language the interface is read in |
-| `BRAVEBOT_SUBPROCESS_ENV_SCRUB` | `0` hands a program the agent runs bravebot's own credentials ([`run.scrubEnv`](#runscrubenv)) |
+| `BRAVEBOT_SUBPROCESS_ENV_SCRUB` | `0` hands a program bravebot starts its own credentials ([`run.scrubEnv`](#runscrubenv)) |
 
 Six more name an AWS account rather than this build. See
 [Reaching a model through AWS Bedrock](#reaching-a-model-through-aws-bedrock).
@@ -499,6 +499,15 @@ a checkout, which is why a file in a repository is the weaker claim.
 
 Variables to withhold from a program the agent runs, on top of bravebot's own credentials, which are
 withheld with no configuration at all. See [`run`](../reference/tools.md#what-a-program-is-handed).
+
+A hook and a language server are withheld these names too. A line you typed yourself at the `!`
+prompt is not: it keeps your whole environment, because it is meant to behave as your own terminal
+does.
+
+**Your list is not read for a program bravebot starts for itself.** The `aws` CLI the Bedrock
+backend runs to resolve a credential is withheld bravebot's own credentials and nothing else, since
+a name here answers what the commands *you* ask for may see, and `AWS_PROFILE` in it would stop that
+CLI resolving the credential it is being run for.
 
 **Names only.** A list of names can only ever take something away; a list of values here would put a
 credential in front of every command the agent starts. The list is read when the process starts, so
