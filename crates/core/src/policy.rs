@@ -2494,6 +2494,38 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Declassification::authorise("carried into an isolated processor")
     }
 
+    /// Hand a quarantined reference's bytes to the standard input of a program a person approved.
+    ///
+    /// The counterpart of [`Policy::authorise_processor_input`], and the same kind of act: the
+    /// bytes are carried into something that will read them, and the thing that will read them is
+    /// not the driver and not the planner. A processor is a model with no capabilities; this is a
+    /// program whose argv a person endorsed. Neither reader is in the position the rule is about,
+    /// which is why carrying is all this has to authorise.
+    ///
+    /// **Not a relabel and not a release.** The bytes keep the label the reference carried, and
+    /// whether they may go into a program at all was decided before this: [`Plan::stdin`] holds
+    /// that label, [`crate::command::Plan::releases_private`] reads it, and
+    /// [`Policy::plan_needs_approval`] puts a private one to a person every time. So what is left
+    /// here is the witness that unwraps them for the descriptor they are written to, plus the trail
+    /// line saying which reference went into which run.
+    ///
+    /// Called after the endorsement is consumed, so a line nobody approved never reaches this and
+    /// no reference's bytes are unwrapped for a run that is not going to happen.
+    ///
+    /// [`Plan::stdin`]: crate::command::Plan::stdin
+    pub fn authorise_program_input(
+        &mut self,
+        tool: &str,
+        slot: &SlotId,
+        label: Label,
+    ) -> Declassification {
+        self.allow(
+            "stdin",
+            format!("{tool}: {slot} carried to a program's standard input at {label}"),
+        );
+        Declassification::authorise("carried to the standard input of an approved program")
+    }
+
     /// Label what a processor produced, from what went into it.
     ///
     /// **Not a relabel.** The transport labels a reply pessimistically because it knows nothing
@@ -3937,6 +3969,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// not leave without a declassification, which is right for bytes that may have come out of the
     /// workspace. So vouched output can be read and acted on but is still not routing-safe on its
     /// own.
+    ///
+    /// **Both roads to a trusted answer are met with what was fed in.** [`crate::command::Plan::stdin`]
+    /// is the label of bytes the policy layer supplies to the first step, and a program prints what
+    /// it was given: a vouched-for `sed` over a fetched page prints the page. So neither an
+    /// assertion about a program nor a proof about its option surface reaches `(T,priv)` for a line
+    /// fed content nobody vouched for, and the untrusted road is the only way out of that case.
     pub fn before_plan(&mut self, plan: &crate::command::Plan) -> Gated<Label> {
         self.before_capability(Capability::ShellExec)?;
 
@@ -3969,10 +4007,30 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                  vouched for",
             )
         } else if self.every_step_vouched(plan) && !plan.carries_an_assignment() {
-            (
-                Label::trusted_private(),
-                "every step is a command the user vouched for in this tree, output and all",
-            )
+            // Met with what was fed in, exactly as [`Policy::read_proven_label`] meets it on the
+            // other road. Vouching for a command is an assertion about what that command does, and
+            // it is not and cannot be an assertion about bytes the user has never seen: `sed` over
+            // a fetched page prints what the page said, so a vouch for `sed` that reached `(T,priv)`
+            // here would put a page into the planner's context as trusted content. That is the one
+            // thing this repository exists to prevent, and it is the reason the supplied label is
+            // read here rather than only at the prompt.
+            //
+            // A `<` redirection is not in this and takes nothing away from it: it names a file, and
+            // a file read under a vouched-for line is already what the vouch is an assertion about.
+            match plan
+                .stdin
+                .map_or(Integrity::Trusted, |label| label.integrity)
+            {
+                Integrity::Trusted => (
+                    Label::trusted_private(),
+                    "every step is a command the user vouched for in this tree, output and all",
+                ),
+                Integrity::Untrusted => (
+                    opaque,
+                    "every step was vouched for, but the line is fed content nobody vouched \
+                     for, and a program prints what it was given",
+                ),
+            }
         } else {
             (
                 opaque,
@@ -6316,6 +6374,39 @@ five
         );
     }
 
+    /// A person endorses what goes into the first program as well as what comes out of the last, so
+    /// a plan fed a quarantined reference is a different plan from the same steps fed nothing. The
+    /// answer to the second question is not redeemable for the first: a line the person read as
+    /// `sed -n 2p` over a page they were told about must not run as `sed -n 2p` over their own
+    /// data, nor the other way about.
+    #[test]
+    fn an_endorsement_does_not_authorise_the_same_plan_fed_something_else() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        let fed = |label: Option<Label>| {
+            let mut plan = plan_of(vec![step_named("sed", &["-n", "2p"])]);
+            plan.stdin = label;
+            plan
+        };
+
+        policy.endorse_plan(&fed(None));
+        assert!(
+            policy
+                .before_plan(&fed(Some(Label::untrusted_public())))
+                .is_err(),
+            "an answer given for a line fed nothing ran one fed a reference"
+        );
+
+        policy.endorse_plan(&fed(Some(Label::untrusted_public())));
+        assert!(
+            policy
+                .before_plan(&fed(Some(Label::trusted_private())))
+                .is_err(),
+            "an answer given for a page ran the same line over the user's own data"
+        );
+    }
+
     /// Restricting any one step restricts the whole line, so a denied program cannot be hidden in
     /// the middle of a line whose ends look ordinary.
     #[test]
@@ -6521,6 +6612,80 @@ five
         let label = policy.before_plan(&line).expect("endorsed");
         assert!(label.is_trusted());
         assert!(!label.is_public(), "trusting output is not releasing it");
+    }
+
+    /// RUN-3's route meets RUN-4's first row: a vouched-for filter over a fetched page prints what
+    /// the page said, so the vouch cannot reach `(T,priv)` for it. Vouching for `sed` is an
+    /// assertion about `sed`, and no assertion about a program is an assertion about bytes the
+    /// person never saw. Reading it the other way would put a page into the planner's context as
+    /// trusted content, which is the one thing this repository exists to prevent.
+    ///
+    /// The same line with nothing fed in is asserted first, so what the second half measures is the
+    /// supplied label and not a vouch that was never in force.
+    #[test]
+    fn a_vouched_line_fed_content_nobody_vouched_for_prints_untrusted_output() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched("/usr/bin/sed", &["-n", "2p"]));
+
+        let bare = plan_of(vec![step_named("sed", &["-n", "2p"])]);
+        policy.endorse_plan(&bare);
+        let label = policy.before_plan(&bare).expect("endorsed");
+        assert!(
+            label.is_trusted(),
+            "the vouched entry did not cover the command it was made for"
+        );
+
+        let mut fed = plan_of(vec![step_named("sed", &["-n", "2p"])]);
+        fed.stdin = Some(Label::untrusted_public());
+        policy.endorse_plan(&fed);
+        let label = policy.before_plan(&fed).expect("endorsed");
+        assert!(
+            !label.is_trusted(),
+            "a page nobody vouched for came back trusted because the filter was vouched for"
+        );
+        assert!(!label.is_public(), "output of a run is private either way");
+    }
+
+    /// The other half of the same rule: a vouch does reach `(T,priv)` for a line fed a reference
+    /// whose own bytes the user vouched for, so the meet above is a meet and not a refusal of
+    /// anything with a `stdin`. Private, because vouched-for output is private whatever it read.
+    #[test]
+    fn a_vouched_line_fed_content_the_user_vouched_for_still_prints_trusted_output() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched("/usr/bin/sed", &["-n", "2p"]));
+
+        let mut fed = plan_of(vec![step_named("sed", &["-n", "2p"])]);
+        fed.stdin = Some(Label::trusted_private());
+        policy.endorse_plan(&fed);
+        let label = policy.before_plan(&fed).expect("endorsed");
+        assert!(label.is_trusted());
+        assert!(!label.is_public(), "trusting output is not releasing it");
+    }
+
+    /// The label the policy layer put on the plan is what the private-input question is answered
+    /// from, so the reference route reaches the same gate the `<` route does. A quarantined page is
+    /// public and asks nothing extra; the user's own data asks whatever is vouched for.
+    #[test]
+    fn a_private_reference_fed_to_a_vouched_line_is_put_to_a_person() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched("/usr/bin/sed", &["-n", "2p"]));
+
+        let mut page = plan_of(vec![step_named("sed", &["-n", "2p"])]);
+        page.stdin = Some(Label::untrusted_public());
+        assert!(
+            !policy.plan_needs_approval(&page),
+            "carrying content nobody vouched for is not a release and must not ask"
+        );
+
+        let mut theirs = plan_of(vec![step_named("sed", &["-n", "2p"])]);
+        theirs.stdin = Some(Label::trusted_private());
+        assert!(
+            policy.plan_needs_approval(&theirs),
+            "the user's own data was handed to a program with nobody asked"
+        );
     }
 
     /// Vouching for a command is not vouching for the tree it runs in, so a line the planner has
