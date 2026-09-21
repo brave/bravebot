@@ -144,9 +144,14 @@ fi
 # every local account. Both the directory and the record are created with the mode they keep rather
 # than chmod'ed once they exist, since the other order leaves them open for the moment in between;
 # the chmod is what narrows a directory an earlier install left, and the record is removed and
-# written again rather than written over.
+# written again rather than written over. A link is stepped over rather than followed, as the
+# program steps over one: chmod without -h resolves it on both platforms this supports, so a
+# linked directory would have an install setting the mode of wherever the link leads, which is
+# outside anything this was given.
 if [ -n "${HOME:-}" ] && (umask 077 && mkdir -p "$STATE_DIR") 2>/dev/null; then
-  chmod 700 "$STATE_DIR" 2>/dev/null || true
+  if [ ! -L "$STATE_DIR" ]; then
+    chmod 700 "$STATE_DIR" 2>/dev/null || true
+  fi
   rm -f "$INSTALLED_BY" 2>/dev/null || true
   (umask 077 && printf '%s\n' "$DEST_PATH" > "$INSTALLED_BY") 2>/dev/null || true
 fi

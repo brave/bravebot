@@ -97,8 +97,18 @@ turns have nothing to build, and both lines say what happened rather than what s
 **Counted from the write.** Before a file changes there is nothing to run, so a turn that spends
 twenty rounds reading is not asked about a build it has no reason to have done.
 
+**What happened, not what was asked for.** Both lines are about the workspace, so both count a
+write that landed and a program that started, never the call the planner made. A write the person
+declined and a write plan mode refused leave nothing to build, and a run the person declined
+builds nothing. This is the opposite of [TURN-3](#TURN-3)'s nudge and for the opposite reason:
+that line is about what the planner tried to do, and these two are about what the person is
+about to act on.
+
 `verified-by: bravebot_agent::turn::a_turn_that_writes_without_running_is_asked_about_it`
 `verified-by: bravebot_agent::turn::a_turn_that_wrote_and_ran_is_not_asked_about_it`
+`verified-by: bravebot_agent::turn::a_write_the_person_refused_is_not_reported_as_a_change_that_was_never_built`
+`verified-by: bravebot_agent::turn::a_write_plan_mode_refused_is_not_reported_as_a_change_that_was_never_built`
+`verified-by: bravebot_agent::turn::a_run_the_person_refused_leaves_the_change_reported_as_never_built`
 
 <a id="TURN-5"></a>
 ### TURN-5: completed work remains charged when a turn fails or stops

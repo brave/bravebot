@@ -3,7 +3,7 @@ id: FSWATCH
 title: Being told when a file changes
 status: normative
 governs:
-  - crates/tui/src/watches.rs
+  - crates/tui/src/watch_command.rs
   - crates/tui/src/state.rs
   - crates/tui/src/app.rs
   - crates/tui/src/status.rs
@@ -80,10 +80,10 @@ allowed. A thing that outlives a turn and can only look is answerable to the bou
 that outlives a turn and can act would have to be watched by something, and there is nothing running
 to watch it.
 
-`verified-by: bravebot_tui::watches::a_change_seen_between_two_looks_makes_a_fire_due`
-`verified-by: bravebot_tui::watches::a_look_that_sees_what_the_last_one_saw_fires_nothing`
-`verified-by: bravebot_tui::watches::a_look_is_measured_against_the_one_before_it_rather_than_against_the_first`
-`verified-by: bravebot_tui::watches::the_look_taken_when_a_watch_is_armed_is_what_the_next_one_is_measured_against`
+`verified-by: bravebot_agent::watch::a_change_seen_between_two_looks_makes_a_fire_due`
+`verified-by: bravebot_agent::watch::a_look_that_sees_what_the_last_one_saw_fires_nothing`
+`verified-by: bravebot_agent::watch::a_look_is_measured_against_the_one_before_it_rather_than_against_the_first`
+`verified-by: bravebot_agent::watch::the_look_taken_when_a_watch_is_armed_is_what_the_next_one_is_measured_against`
 `verified-by: bravebot_tui::state::a_change_begins_a_turn_with_no_turn_running_to_notice_it`
 
 <a id="FSWATCH-2"></a>
@@ -132,7 +132,7 @@ two looks moves nothing and so fires nothing, and a filesystem that leaves a mod
 alone hides a change entirely. These are properties of the comparison rather than of this watch,
 and [tools/read-file.md](tools/read-file.md) states them for the read that shares it.
 
-`verified-by: bravebot_tui::watches::a_look_that_sees_what_the_last_one_saw_fires_nothing`
+`verified-by: bravebot_agent::watch::a_look_that_sees_what_the_last_one_saw_fires_nothing`
 `verified-by: bravebot_agent::watch::a_fires_prompt_carries_the_watch_and_the_path_and_nothing_off_the_filesystem`
 
 ## What a firing does
@@ -188,8 +188,8 @@ reports that the path looks written to, which is one fact however many times it 
 queue of held fires would be several turns all reporting the same sentence.
 
 `verified-by: bravebot_tui::state::a_fire_waits_for_the_turn_in_flight_and_for_what_is_queued`
-`verified-by: bravebot_tui::watches::changes_seen_before_a_fire_goes_out_are_one_fire`
-`verified-by: bravebot_tui::watches::a_watch_whose_fire_is_running_is_not_due_again`
+`verified-by: bravebot_agent::watch::changes_seen_before_a_fire_goes_out_are_one_fire`
+`verified-by: bravebot_agent::watch::a_watch_whose_fire_is_running_is_not_due_again`
 `verified-by: bravebot_tui::app::a_fire_whose_turn_failed_stops_being_the_turn_in_flight`
 
 <a id="FSWATCH-6"></a>
@@ -238,7 +238,7 @@ keep a question alive past the moment it was agreed to, and the answers this pro
 expire.
 
 `verified-by: bravebot_agent::tools::a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be`
-`verified-by: bravebot_tui::watches::a_path_the_session_no_longer_reaches_ends_its_watch_and_says_so`
+`verified-by: bravebot_agent::watch::a_path_the_session_no_longer_reaches_ends_its_watch_and_says_so`
 `verified-by: bravebot_tui::state::a_watch_that_ends_itself_says_which_of_the_two_endings_it_was`
 
 ## The bounds
@@ -271,10 +271,10 @@ continuously in a turn.
 happens rather than how fast the filesystem is. Five seconds is short enough that a person who
 saved a file sees the fire as a consequence of saving it.
 
-`verified-by: bravebot_tui::watches::a_watch_older_than_a_week_ends_itself_and_says_so`
-`verified-by: bravebot_tui::watches::a_ninth_watch_is_refused_rather_than_dropping_one`
-`verified-by: bravebot_tui::watches::a_second_fire_waits_for_the_floor_after_the_last_ones_turn`
-`verified-by: bravebot_tui::watches::a_path_is_not_looked_at_again_until_the_interval_is_up`
+`verified-by: bravebot_agent::watch::a_watch_older_than_a_week_ends_itself_and_says_so`
+`verified-by: bravebot_agent::watch::a_ninth_watch_is_refused_rather_than_dropping_one`
+`verified-by: bravebot_agent::watch::a_second_fire_waits_for_the_floor_after_the_last_ones_turn`
+`verified-by: bravebot_agent::watch::a_path_is_not_looked_at_again_until_the_interval_is_up`
 `verified-by: bravebot_tui::state::a_session_holding_as_many_watches_as_it_keeps_reports_itself_full`
 
 <a id="FSWATCH-9"></a>
@@ -336,8 +336,8 @@ they asked for it.
 
 `verified-by: bravebot_tui::status::the_report_lists_every_live_watch_with_the_turn_that_armed_it`
 `verified-by: bravebot_tui::status::a_session_watching_nothing_says_nothing_about_watches`
-`verified-by: bravebot_tui::watches::a_number_is_not_reused_when_the_watch_it_named_ends`
-`verified-by: bravebot_tui::watches::a_live_watch_reports_its_path_the_turn_that_armed_it_and_what_is_left`
+`verified-by: bravebot_agent::watch::a_number_is_not_reused_when_the_watch_it_named_ends`
+`verified-by: bravebot_agent::watch::a_live_watch_reports_its_path_the_turn_that_armed_it_and_what_is_left`
 `verified-by: bravebot_tui::state::a_session_with_no_watch_says_so_when_asked`
 
 <a id="FSWATCH-11"></a>
@@ -379,7 +379,7 @@ different feature: what it compares is presence rather than the two facts
 came and went between two looks. Refusing here leaves room for it rather than half-building it.
 
 `verified-by: bravebot_agent::tools::a_path_that_names_nothing_is_refused`
-`verified-by: bravebot_tui::watches::a_path_that_cannot_be_looked_at_is_refused_rather_than_armed`
+`verified-by: bravebot_agent::watch::a_path_that_cannot_be_looked_at_is_refused_rather_than_armed`
 `verified-by: bravebot_tui::state::a_path_that_cannot_be_looked_at_is_refused_and_said_so`
 
 ## Open questions
