@@ -95,15 +95,19 @@ doing very little, which is what the count answers.
 <a id="WATCH-4"></a>
 ### WATCH-4: what the block has no room for is kept, up to a bound
 
-A delegate holds its work beyond the few its block draws, and drops its oldest once it has made
-several hundred calls.
+A delegate holds its work beyond the few its block draws, and drops its oldest once it is holding
+several hundred lines. The bound is on every line it holds, a call and a preview released beside
+one alike.
 
 **Why.** The block is a glance and the mode is the reading, so keeping only what the block draws
 would leave the mode with three rows to show for an hour's work. The bound is there because a
 delegate runs as long as a turn does, and this is held in memory for a person who may never look.
+It counts lines rather than calls because lines are what the memory holds: bounding only the lines
+added as calls leaves a delegate whose results release a preview each growing without limit.
 
 `verified-by: bravebot_tui::state::a_delegate_keeps_the_work_its_block_has_no_room_for`
 `verified-by: bravebot_tui::state::a_delegate_stops_keeping_its_oldest_work`
+`verified-by: bravebot_tui::state::a_preview_is_held_to_the_same_bound_as_a_call`
 
 <a id="WATCH-5"></a>
 ### WATCH-5: a delegate that has finished collapses to what the turn was told
