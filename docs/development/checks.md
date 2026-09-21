@@ -8,7 +8,7 @@ mistake each changed test must catch, then choose checks from this page and the 
 Passing a large test suite does not show that a test can detect the regression it claims to cover.
 
 Run `make check-spec` before committing changes to spec clauses, their referenced tests, guarded
-symbols or call sites, or `unverified-clauses.txt`. This catches stale verification metadata while
+symbols or call sites, or `agents/unverified-clauses.txt`. This catches stale verification metadata while
 the change is still local. The broader before-push requirements below still apply.
 
 ## Before a commit
@@ -33,7 +33,7 @@ takes a minute and one that takes twenty, and the reviewer is the person waiting
 names, the paths it governs, the call sites a guarded symbol pins, and the table in
 [../specs/README.md](../specs/README.md). CI runs it too, so a new use of a guarded symbol fails a
 pull request rather than waiting for somebody to notice it. It also holds
-[../../unverified-clauses.txt](../../unverified-clauses.txt) to the clauses that are
+[../../agents/unverified-clauses.txt](../../agents/unverified-clauses.txt) to the clauses that are
 `verified-by: none`, so giving a clause a test, or setting one to `none`, is a line in a diff
 rather than a warning nobody has to read. `make write-unverified` writes the file; commit what it
 writes.
@@ -54,7 +54,7 @@ lanes that read code are the other half, and a person runs those. Run it before 
 touches a label, `.github/workflows`, a Dockerfile, the Makefile's containers, or the trust specs.
 
 `make check-locales` holds every message catalog to
-[../../untranslated-messages.txt](../../untranslated-messages.txt), the record of what each
+[../../contrib/untranslated-messages.txt](../../contrib/untranslated-messages.txt), the record of what each
 translation is missing. A translation is allowed to lag the reference, since what it lacks is shown
 in English; what is not allowed is lagging it silently, so the check fails on a gap the file does
 not list and on a line for a gap that is no longer there. `make write-untranslated` writes the file;

@@ -12,7 +12,7 @@ messages each catalog is knowingly missing, and this fails while the file and th
 in either direction: a gap nobody wrote down, and a line that is no longer true. Adding a message
 without translating it is then a line in a diff rather than a warning nobody has to read.
 
-The same shape as unverified-clauses.txt and `make check-spec`, for the same reason.
+The same shape as agents/unverified-clauses.txt and `make check-spec`, for the same reason.
 """
 
 import argparse
@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 LOCALES = Path(__file__).resolve().parent.parent / "crates/i18n/locales"
-RECORD = Path(__file__).resolve().parent.parent / "untranslated-messages.txt"
+RECORD = Path(__file__).resolve().parent / "untranslated-messages.txt"
 REFERENCE = "en-US"
 
 # A message id at column zero. Continuation lines and select variants are indented, which is what

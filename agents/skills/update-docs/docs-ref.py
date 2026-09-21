@@ -2,8 +2,8 @@
 """Track how far the site under docs/website has fallen behind the specs.
 
 Every page on the site describes behaviour specified clause by clause in docs/specs.
-`docs-updated-to-sha` at the repository root records the commit the site has been brought
-up to, so an update knows where to start reading rather than re-reading the whole history.
+`docs/docs-updated-to-sha` records the commit the site has been brought up to, so an update
+knows where to start reading rather than re-reading the whole history.
 
 This script is the deterministic half of the update-docs skill. It reports what has landed
 since the recorded commit and rewrites the record. No model is involved, so its output is
@@ -31,12 +31,12 @@ from pathlib import Path
 
 # .../<repo>/agents/skills/update-docs/docs-ref.py -> parents[3] == <repo>
 _ROOT = Path(__file__).resolve().parents[3]
-_REF_FILE = _ROOT / "docs-updated-to-sha"
+_REF_FILE = _ROOT / "docs" / "docs-updated-to-sha"
 
 # Commits reviewed and consciously left undocumented, one `<sha> <reason>` per line. Kept
 # beside the baseline rather than in it because the two answer different questions: the
 # baseline is how far reading got, this is what reading decided to come back to.
-_DEFERRED_FILE = _ROOT / "docs-deferred"
+_DEFERRED_FILE = _ROOT / "docs" / "docs-deferred"
 
 _SOURCE_URL = "https://github.com/brave/bravebot"
 _SHA = re.compile(r"^[0-9a-f]{40}$")

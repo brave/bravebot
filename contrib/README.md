@@ -37,11 +37,11 @@ untranslated with nothing saying so, and eleven did. The build script counts the
 a warning, and a warning is silent on a cached build and does not fail a job that passed.
 
 So the gap is not what this gates on. An unrecorded gap is.
-[untranslated-messages.txt](../untranslated-messages.txt) lists what each catalog is knowingly
+[untranslated-messages.txt](untranslated-messages.txt) lists what each catalog is knowingly
 missing, and the check fails while the file and the catalogs disagree in either direction: a gap
 nobody wrote down, and a line for a gap that is no longer there. The second matters as much as the
 first, or the file becomes a graveyard that permits the next one. The same shape as
-`unverified-clauses.txt` and `make check-spec`.
+`agents/unverified-clauses.txt` and `make check-spec`.
 
 ```sh
 make check-locales        # or contrib/check-locales.py

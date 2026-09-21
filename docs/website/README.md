@@ -50,7 +50,7 @@ reason in brackets, so `grep -rn "none (gap" ../specs` is what the site still ow
 That check answers which specs are documented, not whether what a page says is still true
 after the behaviour underneath it changed. `make docs-changes` answers the second question:
 it lists what has landed in the specs since the commit recorded in
-[`docs-updated-to-sha`](../../docs-updated-to-sha). To fold those commits into these pages,
+[`docs-updated-to-sha`](../docs-updated-to-sha). To fold those commits into these pages,
 run the [update-docs](../../agents/skills/update-docs/SKILL.md) skill.
 
 ## License
