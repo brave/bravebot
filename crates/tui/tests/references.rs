@@ -146,6 +146,36 @@ fn enter_sends_a_finished_reference_a_directory_shares_a_prefix_with() {
     );
 }
 
+/// And the list being capped for display must not cost it either. The offered entries are cut to
+/// a readable number, directories first, so enough siblings sharing the prefix push the file out
+/// of the list entirely. A name is no less finished for not being shown: deciding from what is
+/// displayed means the number of directories a workspace happens to hold decides whether Enter
+/// sends the file the user named or replaces it with a directory they never chose.
+#[test]
+fn enter_sends_a_finished_reference_the_offered_list_is_too_short_to_show() {
+    let scratch = Scratch::new("prefix-capped");
+    std::fs::write(scratch.path.join("test"), "a").expect("write");
+    // Comfortably past the cap, so the file is cut whatever the exact number is.
+    for n in 0..60 {
+        std::fs::create_dir_all(scratch.path.join(format!("test{n:02}"))).expect("create");
+    }
+    let mut session = session(&scratch);
+    typing(&mut session, "explain @test");
+
+    let offered = match session.offered() {
+        bravebot_tui::state::Offered::Files(entries) => entries,
+        other => panic!("files were not offered: {other:?}"),
+    };
+    assert!(
+        !offered.iter().any(|entry| entry.path == "test"),
+        "the file was still offered, so the cap was never reached"
+    );
+    assert_eq!(
+        handle_key(&mut session, key(KeyCode::Enter)),
+        Action::Submit("explain @test".to_string())
+    );
+}
+
 /// Sharing that prefix must not cost the arrows their meaning: a row the user walked to is a row
 /// they chose, and Enter takes it even though the typed name is a file of its own.
 #[test]
