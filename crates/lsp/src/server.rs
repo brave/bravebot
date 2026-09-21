@@ -1662,14 +1662,30 @@ while IFS= read -r header; do
 done
 "#;
 
-    /// One scratch directory per test rather than one for the fixture: the tests below run at the
-    /// same time, and [`crate::testutil::Scratch`] empties the directory it is given, so a shared
-    /// name has one test deleting the binary the other is about to launch.
+    /// One scratch directory per test rather than one for the fixture, so that neither test's setup
+    /// rests on the other having finished with it: [`crate::testutil::Scratch`] empties the
+    /// directory it is given, so under a shared name the only thing keeping one test from emptying
+    /// the server the other is about to launch would be [`LAUNCHING`].
     #[cfg(unix)]
     const REJECTS_A_POSITION: &str = "bravebot-lsp-rejects-a-position";
 
     #[cfg(unix)]
     const REJECTS_A_QUERY: &str = "bravebot-lsp-rejects-a-query";
+
+    /// Serialises the tests that write a server and then launch it.
+    ///
+    /// Linux refuses to execute a file any process holds open for writing. A child forked while a
+    /// sibling thread is part-way through writing its server inherits every descriptor this process
+    /// had open, the one the server was written through included, and that descriptor is
+    /// close-on-exec rather than already closed: it lives until the child reaches its own exec. For
+    /// that window this process is itself a writer holding the sibling's server open, so the
+    /// sibling's launch fails with `Text file busy` on whichever test lost the race, about nothing
+    /// either test is for.
+    ///
+    /// One at a time closes the window rather than waiting it out, since [`Server::launch`] is the
+    /// only thing in this binary that forks and no write is in flight while one of them happens.
+    #[cfg(unix)]
+    static LAUNCHING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// The scratch name and the resolver have to agree without either seeing the other: `resolve`
     /// is a function pointer, so it cannot close over where the test put its binary, and it
@@ -1685,10 +1701,22 @@ done
     }
 
     /// A workspace of one nine-line Rust file, with the script above beside it as its server.
+    ///
+    /// [`LAUNCHING`] comes back with them rather than being taken by each test, because the test has
+    /// to hold it until its last launch and a fixture that took and dropped it would order the
+    /// writes while leaving the execs racing. Poisoning is ignored: a test that panicked holding it
+    /// left nothing behind that the next one reads.
     #[cfg(unix)]
-    fn a_workspace_a_server_rejects(name: &str) -> (crate::testutil::Scratch, PathBuf) {
+    fn a_workspace_a_server_rejects(
+        name: &str,
+    ) -> (
+        std::sync::MutexGuard<'static, ()>,
+        crate::testutil::Scratch,
+        PathBuf,
+    ) {
         use std::os::unix::fs::PermissionsExt;
 
+        let launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
         let scratch = crate::testutil::Scratch::new(name);
         std::fs::create_dir_all(scratch.join("src")).expect("create the workspace");
         let file = scratch.join("src").join("a.rs");
@@ -1698,7 +1726,7 @@ done
         std::fs::write(&program, REJECTING_SERVER).expect("write the server");
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
 
-        (scratch, file)
+        (launching, scratch, file)
     }
 
     /// Everything a question needs besides the question: the capability, and a yes to starting the
@@ -1737,7 +1765,7 @@ done
     #[cfg(unix)]
     #[test]
     fn a_position_the_server_rejects_is_nothing_found() {
-        let (scratch, file) = a_workspace_a_server_rejects(REJECTS_A_POSITION);
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(REJECTS_A_POSITION);
         let mut servers = Servers::new(
             scratch.to_path_buf(),
             None,
@@ -1808,7 +1836,7 @@ done
     #[cfg(unix)]
     #[test]
     fn a_failure_is_nothing_found_only_where_a_server_rejected_a_position() {
-        let (scratch, file) = a_workspace_a_server_rejects(REJECTS_A_QUERY);
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(REJECTS_A_QUERY);
         let mut servers = Servers::new(
             scratch.to_path_buf(),
             None,
