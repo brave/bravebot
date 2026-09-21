@@ -910,6 +910,14 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     // rather than after, so the Ctrl-C that puts it up survives its own press.
     session.cleared_by_interrupt = false;
 
+    // The offer to leave outlives its own press, because the press that takes it is the next one.
+    // Any other key withdraws it: somebody who went and did something else has moved on, and an
+    // offer still standing then would let one later byte end the session. Both keys that leave keep
+    // it, so the second press of either is the one that goes.
+    if !(ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))) {
+        session.offered_to_leave = false;
+    }
+
     // Before the match, since a key that moves the caret cannot also be one of the keys below:
     // the ones this answers are exactly the ones nothing else claims.
     if !session.bindings().claims(&key) && edit_line(session, key) {
@@ -950,9 +958,24 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             session.stop_watches();
             Action::Redraw
         }
+        // The bottom rung, and the only one that ends the session, so it is the one rung a single
+        // byte must not reach. An interrupt is one byte another program can write into the terminal,
+        // and the editor that activates a virtualenv writes one (#403), so the first press offers
+        // the way out and the second takes it. Every rung above this one stops something a person
+        // asked for and is unchanged: those are recoverable, and this is not.
+        KeyCode::Char('c') if ctrl && !session.offered_to_leave => {
+            session.offered_to_leave = true;
+            Action::Redraw
+        }
         KeyCode::Char('c') if ctrl => {
             session.quit();
             Action::Quit
+        }
+        // Held to the same rule as the interrupt: end-of-transmission is also one byte, and a
+        // session ended by one byte is ended by whatever could write it.
+        KeyCode::Char('d') if ctrl && session.input().is_empty() && !session.offered_to_leave => {
+            session.offered_to_leave = true;
+            Action::Redraw
         }
         KeyCode::Char('d') if ctrl && session.input().is_empty() => {
             session.quit();
@@ -7992,11 +8015,54 @@ mod tests {
         assert_eq!(session.status, Status::Idle);
     }
 
+    /// The second press leaves. The first offers, because ending the session is the one thing on
+    /// the interrupt ladder that cannot be undone and an interrupt is a single byte another program
+    /// can write into the terminal.
     #[test]
-    fn ctrl_c_quits() {
+    fn ctrl_c_quits_on_the_second_press() {
         let mut session = Session::new("none");
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
+        assert!(!session.is_quitting(), "one press ended the session");
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
         assert!(session.is_quitting());
+    }
+
+    /// The reported case. VS Code writes a bare interrupt into the terminal before the virtualenv
+    /// line it types, and that byte fell to the rung that leaves: the session ended on its own, with
+    /// the activation command left for the shell to run once it was gone (#403).
+    #[test]
+    fn one_interrupt_another_program_wrote_does_not_end_the_session() {
+        let mut session = Session::new("none");
+        assert_ne!(handle_key(&mut session, ctrl('c')), Action::Quit);
+        assert!(!session.is_quitting(), "a program's single byte left");
+    }
+
+    /// The offer answers the press just made, so anything else withdraws it. Otherwise a press now
+    /// and a byte written minutes later would be the two halves of one gesture.
+    #[test]
+    fn any_other_key_withdraws_the_offer_to_leave() {
+        let mut session = Session::new("none");
+        handle_key(&mut session, ctrl('c'));
+        handle_key(&mut session, key(KeyCode::Char('x')));
+        handle_key(&mut session, key(KeyCode::Backspace));
+        assert!(session.input().is_empty(), "the line was not cleared");
+        assert_ne!(
+            handle_key(&mut session, ctrl('c')),
+            Action::Quit,
+            "an offer made before other keys was still standing"
+        );
+    }
+
+    /// The rungs above the last one stop something and stay, and none of them is touched: a person
+    /// pressing the key to stop a turn must still stop it on the first press.
+    #[test]
+    fn an_interrupt_still_stops_a_turn_on_the_first_press() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "work");
+        session.submit().unwrap();
+        assert_eq!(session.status, Status::Working);
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Cancel);
+        assert!(!session.is_quitting(), "stopping a turn left as well");
     }
 
     /// Escape on an empty line used to leave, which made every press a question of what was in
@@ -8527,6 +8593,8 @@ mod tests {
             session.input().is_empty(),
             "backspace did not clear the line"
         );
+        // Twice, for the reason the interrupt is twice: end-of-transmission is also one byte.
+        assert_eq!(handle_key(&mut session, ctrl('d')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('d')), Action::Quit);
     }
 
@@ -9901,6 +9969,8 @@ mod tests {
             "the press that stopped it also left"
         );
 
+        // The rung that leaves offers first, so the press that takes it is a second one.
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
     }
 
@@ -9981,6 +10051,8 @@ mod tests {
             "the press that stopped them also left"
         );
 
+        // The rung that leaves offers first, so the press that takes it is a second one.
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
     }
 
@@ -10072,6 +10144,8 @@ mod tests {
         );
         assert!(!session.is_quitting(), "the session left as well");
 
+        // The rung that leaves offers first, so the press that takes it is a second one.
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
     }
 
@@ -10500,15 +10574,21 @@ mod tests {
         );
     }
 
-    /// A press that ends the session is not one to explain, and the hint is the answer to a line
-    /// having just gone. On an empty line nothing went, so there is nothing to answer.
+    /// This flag answers a line having just gone, and on an empty line nothing went. The way out is
+    /// still offered there, by [`Session::offered_to_leave`] and in the same words, because the rung
+    /// that leaves no longer leaves on one press; what this pins is that the two are not the same
+    /// state, so the hint about a lost line is not claimed where no line was lost.
     #[test]
-    fn the_way_out_is_offered_only_where_a_line_was_taken() {
+    fn a_taken_line_is_not_claimed_where_the_box_was_empty() {
         let mut session = Session::new("none");
         handle_key(&mut session, ctrl('c'));
         assert!(
             !session.cleared_by_interrupt,
-            "offered where nothing was cleared"
+            "claimed a line went where none did"
+        );
+        assert!(
+            session.offered_to_leave,
+            "the way out was not offered on an empty box"
         );
     }
 
@@ -10570,6 +10650,8 @@ mod tests {
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert!(!session.is_quitting());
 
+        // The rung that leaves offers first, so the press that takes it is a second one.
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
         assert!(session.is_quitting());
     }

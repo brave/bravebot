@@ -98,7 +98,16 @@ read against what is happening, in this order:
 |---|---|
 | a turn in flight, or a command running | stops it, and the session stays where it was |
 | nothing running, a line in the box | takes the line, and offers the way out |
-| nothing running, an empty box | ends the session |
+| nothing running, an empty box | offers the way out |
+| nothing running, an empty box, the way out already offered | ends the session |
+
+**Nothing on this ladder ends the session on one press.** An interrupt is a single byte, and a
+terminal delivers one byte stream without saying who wrote it, so a program able to write into the
+pty can press this key: the editor that activates a virtualenv writes one before the line it types
+(#403), and on the rung that left, that byte ended the session and handed the rest of the line back
+to the shell. Every rung above the last one stops something a person asked for and still answers on
+the first press, because those are recoverable and leaving is not. Ctrl-D is held to the same rule
+for the same reason, being one byte that leaves an empty box.
 
 Escape only ever stops, and never leaves. A summary is the one exception to the table: it is a
 single request with no round for a stop to land between, so nothing there can stop it and Ctrl-C
@@ -109,8 +118,10 @@ does over a turn, and the press that reaches the request is the one after the mo
 
 Taking the line says so, on the line beneath the box, and says which key ends the session. The
 offer lives for exactly one press, since it answers the press just made and the next press is the
-answer to it. Nothing is said where the box was already empty: that press leaves, and a press that
-leaves is not one to explain.
+answer to it. **An empty box says the same thing**, in the same words and for a stronger reason: a
+press that appeared to do nothing and said nothing reads as an interface that has stopped
+responding. Any key that is not itself one of the two that leave withdraws the offer, so a press now
+and a byte written later are not the two halves of one gesture.
 
 **Stopping shows a cancelled status, and the prompt comes back when the box can take it.**
 The reply stops arriving. When no work followed the prompt, no prompts are queued, and the box is
@@ -158,11 +169,14 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::app::escape_clears_a_typed_line_without_quitting`
 `verified-by: bravebot_tui::app::escape_on_an_empty_line_does_not_quit`
 `verified-by: bravebot_tui::app::escape_twice_clears_and_stays`
-`verified-by: bravebot_tui::app::ctrl_c_quits`
+`verified-by: bravebot_tui::app::ctrl_c_quits_on_the_second_press`
+`verified-by: bravebot_tui::app::one_interrupt_another_program_wrote_does_not_end_the_session`
+`verified-by: bravebot_tui::app::any_other_key_withdraws_the_offer_to_leave`
+`verified-by: bravebot_tui::app::an_interrupt_still_stops_a_turn_on_the_first_press`
 `verified-by: bravebot_tui::app::ctrl_c_stops_a_turn_rather_than_leaving`
 `verified-by: bravebot_tui::app::ctrl_c_clears_the_line_before_it_leaves`
 `verified-by: bravebot_tui::app::ctrl_c_leaves_once_there_is_nothing_left_to_stop`
-`verified-by: bravebot_tui::app::the_way_out_is_offered_only_where_a_line_was_taken`
+`verified-by: bravebot_tui::app::a_taken_line_is_not_claimed_where_the_box_was_empty`
 `verified-by: bravebot_tui::app::the_way_out_stops_being_offered_at_the_next_press`
 `verified-by: bravebot_tui::render::the_way_out_is_offered_where_the_line_went`
 `verified-by: bravebot_tui::app::escape_only_stops_and_ctrl_c_is_read_against_what_is_happening`

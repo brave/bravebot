@@ -1066,6 +1066,17 @@ pub struct Session {
     /// The hint saying which key ends it hangs on this. It lives for exactly one press, because it
     /// answers the press just made and the next press is the answer to it.
     pub cleared_by_interrupt: bool,
+    /// Whether an interrupt on an idle session has already offered the way out.
+    ///
+    /// The bottom rung of the interrupt ladder ends the session, and a bare interrupt is a single
+    /// byte another program can write into the terminal: the editor that activates a virtualenv
+    /// writes one before the line it types (#403). One byte must not end a session, so the first
+    /// press offers and the second leaves.
+    ///
+    /// Unlike [`Self::cleared_by_interrupt`] this outlives the press that set it, since the second
+    /// press is what reads it. Cleared by any key that is not itself an interrupt, so a person who
+    /// went off and did something else is asked again rather than leaving on one press later.
+    pub offered_to_leave: bool,
     /// Whether there was a picture on the clipboard when it was last looked at.
     ///
     /// Only ever a hint on screen, so a stale answer costs a line that is briefly wrong and nothing
@@ -1337,6 +1348,7 @@ impl Session {
             copied: None,
             finished: None,
             cleared_by_interrupt: false,
+            offered_to_leave: false,
             image_on_clipboard: false,
             written: 0,
             progress: Default::default(),
