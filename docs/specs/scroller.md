@@ -228,6 +228,9 @@ that must never be the line that did not fit.
 `verified-by: bravebot_tui::render::the_help_says_that_any_key_puts_it_away`
 `verified-by: bravebot_tui::render::the_help_names_every_key_that_closes_the_scroller`
 `verified-by: bravebot_tui::render::the_help_renders_on_a_tiny_terminal`
+`verified-by: bravebot_tui::render::the_search_footer_names_the_way_out_with_a_turn_running_underneath`
+`verified-by: bravebot_tui::render::a_long_needle_keeps_the_way_out_and_gives_up_what_the_turn_says`
+`verified-by: bravebot_tui::render::a_long_needle_being_typed_keeps_the_way_out_of_the_search`
 
 
 <a id="SCROLL-8"></a>
@@ -246,6 +249,8 @@ bottom by the next line the model writes takes away the only thing they were try
 `verified-by: bravebot_tui::render::a_turn_writing_underneath_does_not_slide_the_view_between_frames`
 `verified-by: bravebot_tui::render::the_scroller_says_more_has_arrived_below`
 `verified-by: bravebot_tui::render::the_scroller_says_a_turn_is_still_running`
+`verified-by: bravebot_tui::render::a_standing_search_says_a_turn_is_running_and_how_much_arrived`
+`verified-by: bravebot_tui::render::a_half_typed_search_says_a_turn_is_running_and_how_much_arrived`
 `verified-by: bravebot_tui::state::the_last_row_reached_from_the_scroller_includes_what_arrived`
 
 <a id="SCROLL-9"></a>
