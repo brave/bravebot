@@ -2853,11 +2853,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             message: format!("{slot}: {e}"),
         })?;
 
-        // The driver's own record of where the bytes came from, never anything read. A command
-        // is said as what it printed, since that is what a person is being asked about rather
-        // than the line itself; everything else is the sentence the driver wrote when it
-        // quarantined the bytes. A slot from neither has only its own name to offer, which is
-        // a poor thing to put in front of somebody and is better than inventing one.
+        // The driver's own record of where the bytes came from, never the bytes. A command is
+        // said as what it printed, since that is what a person is being asked about rather than
+        // the line itself; everything else is the sentence the driver wrote when it quarantined
+        // the bytes, or the path a deferred read was reserved against. A slot from neither has
+        // only its own name to offer, which is a poor thing to put in front of somebody and is
+        // better than inventing one.
+        //
+        // A path is where it came from even where a quarantined listing is what named the file,
+        // which is the same address `Policy::before_vetting_a_path` already says on the vouch
+        // offer for a read through such a reference. It goes on a screen and into the check's
+        // metadata and is decided from nowhere.
         let origin = match (
             slots.command_of(slot),
             slots.origin_of(slot, &PathAuthority::mint()),
@@ -8321,6 +8327,40 @@ five
 
         let spec = a_spec(&mut policy, &slots, &slot);
         assert_eq!(spec.origin(), "what https://example.com/notes returned");
+    }
+
+    /// The same, on the route the planner actually takes to ask about a file. A deferred read
+    /// answers with the path while it is still waiting on the bytes, and reading them is not a
+    /// change in where they came from, so the check the planner asks for over that reference
+    /// says the file rather than the slot it landed in.
+    #[test]
+    fn a_check_over_a_file_reference_says_the_path_and_not_the_reference() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        let slot = SlotId::new("ref:0");
+        policy
+            .defer(
+                "read_file",
+                slot.clone(),
+                "notes.md",
+                &Labelled::trusted("notes.md".to_string()),
+                64,
+                &mut slots,
+            )
+            .expect("a file may be reserved");
+        policy
+            .materialise("vet_content", &slot, &mut slots, |_| {
+                Ok("The sky over the harbour was a dull grey all morning.\n".to_string())
+            })
+            .expect("the file is read when the check needs the bytes");
+
+        let spec = a_spec(&mut policy, &slots, &slot);
+        assert_eq!(
+            spec.origin(),
+            "notes.md",
+            "the person is being asked about a file and was told a reference name instead"
+        );
     }
 
     /// A slot holding command output, as a run leaves one.

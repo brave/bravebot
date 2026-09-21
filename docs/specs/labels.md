@@ -48,7 +48,7 @@ guards:
       - crates/agent/src/tools.rs: 13
       - crates/agent/src/turn.rs: 3
       - crates/agent/tests/workspace.rs: 149
-      - crates/core/src/policy.rs: 22
+      - crates/core/src/policy.rs: 23
       - crates/core/src/value.rs: 3
   - symbol: Labelled::relabel
     sites:

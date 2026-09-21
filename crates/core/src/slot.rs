@@ -182,13 +182,16 @@ enum Entry {
         /// steers: a slot cannot become a picture by containing something that looks like one.
         picture: Option<String>,
         /// Where these bytes came from, as the driver described them when it quarantined them:
-        /// a path, a URL, a command, a processor.
+        /// a path, a URL, a command, a processor. Or the address a deferred read was reserved
+        /// against, which is the same thing said as a path.
         ///
         /// Kept because the reference carrying it is handed to the planner and gone, while a
         /// prompt drawn later still has to be able to say what the person is looking at. `ref:1`
         /// means something to the planner and nothing at all to somebody being asked about it.
         ///
-        /// The driver's own sentence, never anything read.
+        /// Never the content of this slot. The address of a deferred read is untrusted where
+        /// [`Deferred`] says it is, so this is read through [`SlotStore::origin_of`] and under
+        /// the same witness, and what it is for is putting a line in front of a person.
         origin: Option<String>,
         /// What the processor that produced this document said about it, where it said anything.
         ///
@@ -502,16 +505,21 @@ impl SlotStore {
 
         // The path stays with the slot now that the bytes are here. A reference that stopped
         // being an address the moment it was read could not be written back to.
+        //
+        // It stays as the origin too, which is what an unread entry answers with already: being
+        // read is not a change in where the bytes came from, and a slot that forgot leaves
+        // whoever has to say so with nothing but the slot's own name, which means nothing to the
+        // person being asked about it.
         self.slots.insert(
             id.clone(),
             Entry::Read {
                 value: taint(content, label),
                 verbatim: Some(deferred.path.clone()),
+                origin: Some(deferred.path.clone()),
                 path: Some(deferred.path),
                 home: Home::Anywhere,
                 from_command: None,
                 picture: None,
-                origin: None,
                 remark: None,
             },
         );

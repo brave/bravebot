@@ -38,6 +38,7 @@ the planner and nothing at all to the person being asked about it.
 `verified-by: bravebot_agent::turn::content_a_person_reads_after_a_check_reaches_the_planner`
 `verified-by: bravebot_core::policy::a_private_expectation_cannot_direct_a_check`
 `verified-by: bravebot_core::policy::a_check_says_where_the_content_came_from_and_not_which_slot_it_is_in`
+`verified-by: bravebot_core::policy::a_check_over_a_file_reference_says_the_path_and_not_the_reference`
 
 <a id="VET-2"></a>
 ### VET-2: what it refuses
