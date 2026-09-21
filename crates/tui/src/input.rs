@@ -45,7 +45,7 @@ use ratatui::crossterm::event::{
 };
 use std::collections::VecDeque;
 use std::io;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 /// One thing read from the terminal, and whether a person produced it.
@@ -113,9 +113,17 @@ const CONTINUATION: Duration = Duration::from_millis(100);
 /// typing has to be handed out key by key, so the reader buffers. Shared rather than per thread
 /// because the queue must be the same queue whoever reads: the terminal is one stream, and a
 /// second queue would hand out events in an order nothing wrote them in.
-fn pending() -> &'static Mutex<VecDeque<Input>> {
+///
+/// Locked here rather than by each caller, so the one thing to say about a poisoned lock is said
+/// once: a thread that panicked while holding this left a queue of terminal events, which is a
+/// `VecDeque` whose invariants a panic elsewhere cannot have broken. Reading on is right, and the
+/// alternative is an interface that stops accepting keys because something unrelated failed.
+fn pending() -> MutexGuard<'static, VecDeque<Input>> {
     static PENDING: OnceLock<Mutex<VecDeque<Input>>> = OnceLock::new();
-    PENDING.get_or_init(|| Mutex::new(VecDeque::new()))
+    PENDING
+        .get_or_init(|| Mutex::new(VecDeque::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// When words another program typed were last handed out, if the stream has not moved on since.
@@ -123,9 +131,14 @@ fn pending() -> &'static Mutex<VecDeque<Input>> {
 /// What [`CONTINUATION`] is measured from, so a write that arrived in pieces is recognised as one
 /// run rather than as a run and then a keystroke. Cleared as soon as a real keypress is delivered,
 /// because the next thing after that is a person's again.
-fn typed_in_at() -> &'static Mutex<Option<Instant>> {
+///
+/// Poisoning is carried the way [`pending`] carries it, and for a plainer reason: what this holds is
+/// one instant, and no panic can leave an `Option<Instant>` half written.
+fn typed_in_at() -> MutexGuard<'static, Option<Instant>> {
     static AT: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
     AT.get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Whether an event is waiting, here or at the terminal.
@@ -134,7 +147,7 @@ fn typed_in_at() -> &'static Mutex<Option<Instant>> {
 /// asking this to decide whether to redraw or to keep reading would otherwise be told the terminal
 /// is quiet while a gathered run sits unread.
 pub fn poll(timeout: Duration) -> io::Result<bool> {
-    if !pending().lock().expect("input queue").is_empty() {
+    if !pending().is_empty() {
         return Ok(true);
     }
     event::poll(timeout)
@@ -148,7 +161,7 @@ pub fn read() -> io::Result<Input> {
     // A loop because a run can resolve to nothing: a key a program wrote that carries no text is
     // dropped rather than delivered, and the caller is still waiting for something.
     loop {
-        if let Some(event) = pending().lock().expect("input queue").pop_front() {
+        if let Some(event) = pending().pop_front() {
             return Ok(event);
         }
         gather()?;
@@ -165,11 +178,8 @@ fn gather() -> io::Result<()> {
     // person's paste is told from a program's: the terminal marked this one, so it came off the
     // clipboard and goes through as itself.
     let TermEvent::Key(first) = first else {
-        *typed_in_at().lock().expect("typed in at") = None;
-        pending()
-            .lock()
-            .expect("input queue")
-            .push_back(Input::Terminal(first));
+        *typed_in_at() = None;
+        pending().push_back(Input::Terminal(first));
         return Ok(());
     };
 
@@ -181,17 +191,14 @@ fn gather() -> io::Result<()> {
             // a paste and is passed through as itself rather than folded into the run, and the
             // queue is drained before the terminal is read again, so it stays where it was.
             other => {
-                pending()
-                    .lock()
-                    .expect("input queue")
-                    .push_back(Input::Terminal(other));
+                pending().push_back(Input::Terminal(other));
                 break;
             }
         }
     }
 
     // Held across the resolving so the window cannot move between the asking and the recording.
-    let mut mark = typed_in_at().lock().expect("typed in at");
+    let mut mark = typed_in_at();
     let resolved = resolve(run, mark.is_some_and(|at| at.elapsed() < CONTINUATION));
     if resolved.iter().any(|taken| taken.is_typed_in()) {
         // Refreshed rather than left where it was, so a line arriving in many pieces stays one run
@@ -202,7 +209,7 @@ fn gather() -> io::Result<()> {
     }
     drop(mark);
 
-    let mut queue = pending().lock().expect("input queue");
+    let mut queue = pending();
     for event in resolved {
         queue.push_back(event);
     }
