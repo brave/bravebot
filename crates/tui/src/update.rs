@@ -64,13 +64,13 @@ const SCRIPT_COMMAND: &str =
 /// The file the install script writes the installed path into.
 const INSTALLED_BY_FILE: &str = "installed-by";
 
-/// Where the answer to the last ask is kept.
+/// Where the last ask of each registry is recorded.
 const CACHE_FILE: &str = "update-check";
 
 /// Written here and renamed, so an interrupted write cannot leave half a line to be read back.
 const CACHE_TEMPORARY: &str = "update-check.tmp";
 
-/// How long an answer stands before it is worth asking again.
+/// How long an ask stands before it is worth making another.
 ///
 /// Releases happen on the order of days, and the cost of a stale answer is being told about an
 /// update one launch later than it existed. The cost of asking on every launch is a request per
@@ -115,6 +115,14 @@ impl Install {
             Self::Script => "releases",
         }
     }
+
+    /// The other way of installing, whose record shares the file with this one's.
+    fn other(self) -> Self {
+        match self {
+            Self::Npm => Self::Script,
+            Self::Script => Self::Npm,
+        }
+    }
 }
 
 /// A published version, as three numbers.
@@ -131,11 +139,17 @@ impl fmt::Display for Version {
     }
 }
 
-/// An answer as it was stored: what was newest, and when that was true.
+/// One registry as it was last asked: when the ask was made, and what it learned.
+///
+/// `latest` is the version the last ask that learned one named, not the highest ever seen: a
+/// registry that answers with something older has withdrawn a release, and the line says nothing
+/// rather than going on offering it. It is `None` until an ask learns a version at all, since a
+/// registry that refuses, one that cannot be reached, and an answer that is not three numbers all
+/// leave the stamp standing without one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Answer {
+struct Record {
     at: u64,
-    latest: Version,
+    latest: Option<Version>,
 }
 
 /// The line to say at startup, having started the ask that answers the next launch.
@@ -143,9 +157,9 @@ struct Answer {
 /// Nothing waits on that ask. Whatever is said here was already on disk when the process started.
 pub fn at_startup() -> Option<String> {
     let install = installed_how()?;
-    let stored = stored_answer(install);
-    refresh(install, stored.map(|answer| answer.at));
-    line(install, running_version()?, stored?.latest)
+    let stored = stored_record(install);
+    refresh(install, stored);
+    line(install, running_version()?, stored?.latest?)
 }
 
 /// What to say about a version that is out, or nothing when this copy is not behind it.
@@ -215,19 +229,27 @@ fn recorded_install() -> Option<PathBuf> {
     (!recorded.is_empty()).then(|| PathBuf::from(recorded))
 }
 
-/// The answer an earlier launch wrote down, where there is one for this installation.
-fn stored_answer(install: Install) -> Option<Answer> {
+/// What an earlier launch recorded about this installation's registry, where it recorded anything.
+fn stored_record(install: Install) -> Option<Record> {
     let path = bravebot_agent::home::directory()?.join(CACHE_FILE);
-    parse_answer(&std::fs::read_to_string(path).ok()?, install)
+    parse_record(&std::fs::read_to_string(path).ok()?, install)
 }
 
-/// Read a stored answer out of the file's contents.
+/// Read this installation's record out of the file's contents.
+///
+/// A machine where both installations have been used holds a line for each, and each installation
+/// reads only the one naming the registry it would ask.
+fn parse_record(contents: &str, install: Install) -> Option<Record> {
+    contents.lines().find_map(|line| record_on(line, install))
+}
+
+/// One line of that file, where it is this installation's record.
 ///
 /// Separate from the I/O so the rules are testable, and there are three: the line is the shape
-/// this program writes, it came from the registry this installation would ask, and the version on
-/// it is three numbers. Anything else is no answer, which is silence rather than an error.
-fn parse_answer(contents: &str, install: Install) -> Option<Answer> {
-    let mut fields = contents.lines().next()?.splitn(3, '\t');
+/// this program writes, it came from the registry this installation would ask, and its version is
+/// three numbers or is absent. Anything else is no record, which is silence rather than an error.
+fn record_on(line: &str, install: Install) -> Option<Record> {
+    let mut fields = line.splitn(3, '\t');
     let (Some(at), Some(source), Some(latest)) = (fields.next(), fields.next(), fields.next())
     else {
         return None;
@@ -235,15 +257,27 @@ fn parse_answer(contents: &str, install: Install) -> Option<Answer> {
     if source != install.source() {
         return None;
     }
-    Some(Answer {
+    Some(Record {
         at: at.parse().ok()?,
-        latest: parse_version(latest)?,
+        latest: match latest {
+            "" => None,
+            text => Some(parse_version(text)?),
+        },
     })
 }
 
-/// One answer as the line it is stored as, without its newline.
-fn encode_answer(install: Install, answer: Answer) -> String {
-    format!("{}\t{}\t{}", answer.at, install.source(), answer.latest)
+/// One record as the line it is stored as, without its newline.
+///
+/// An ask that learned no version leaves that field empty, which is what tells a stamp with
+/// nothing behind it from a line of some other shape.
+fn encode_record(install: Install, record: Record) -> String {
+    let latest = record.latest.map(|latest| latest.to_string());
+    format!(
+        "{}\t{}\t{}",
+        record.at,
+        install.source(),
+        latest.unwrap_or_default()
+    )
 }
 
 /// A version from `major.minor.patch`, with the single `v` a tag carries allowed in front.
@@ -272,19 +306,43 @@ fn parse_version(text: &str) -> Option<Version> {
     })
 }
 
-/// Ask again, on a thread nothing joins, where the answer on disk is old enough to be worth it.
+/// Ask again, on a thread nothing joins, where the last ask is old enough to be worth it.
 ///
-/// Nothing waits on the thread and nothing reads what it learns: it writes the answer down, and
+/// Nothing waits on the thread and nothing reads what it learns: it writes the record down, and
 /// the next launch is what says anything about it.
-fn refresh(install: Install, asked_at: Option<u64>) {
-    if !worth_asking(bravebot_agent::home::writable().is_some(), now(), asked_at) {
+fn refresh(install: Install, stored: Option<Record>) {
+    if !worth_asking(
+        bravebot_agent::home::writable().is_some(),
+        now(),
+        stored.map(|record| record.at),
+    ) {
         return;
     }
     std::thread::spawn(move || {
+        // The stamp goes down before the request rather than after it, because the thread is not
+        // joined: a session that ends while the ask is still out would otherwise record nothing,
+        // and a registry that accepts the connection and then says nothing holds the thread for
+        // the whole reply timeout, which outlasts most sessions. Recording the ask first bounds
+        // the requests to one a day whatever becomes of this one.
+        store(install, recorded(stored, None, now()));
         if let Some(latest) = ask(install) {
-            store(install, Answer { at: now(), latest });
+            store(install, recorded(stored, Some(latest), now()));
         }
     });
+}
+
+/// What to write down once an ask has been made, given what was written down before it.
+///
+/// The stamp is of the ask, whatever came back. A registry that refuses, that cannot be reached,
+/// or that answers with a version this program will not offer has still been asked, and recording
+/// nothing would send the next launch straight back to it: the registries in trouble would be the
+/// ones asked every single session. The version stands until an ask learns another, since a
+/// registry being unreachable today does not make what it said yesterday untrue.
+fn recorded(previous: Option<Record>, asked: Option<Version>, at: u64) -> Record {
+    Record {
+        at,
+        latest: asked.or(previous.and_then(|record| record.latest)),
+    }
 }
 
 /// Whether to ask the registry again.
@@ -346,22 +404,42 @@ fn version_in(install: Install, bytes: &[u8]) -> Option<Version> {
     parse_version(answer.get(install.field())?.as_str()?)
 }
 
-/// Write the answer down for the next launch.
+/// Write the record down for the next launch.
 ///
 /// Best effort throughout: a machine with no home, a read-only disk and an incognito session all
 /// mean the next launch asks again, which is the same thing that happens on a first run.
-fn store(install: Install, answer: Answer) {
+fn store(install: Install, record: Record) {
     let Some(directory) = bravebot_agent::home::writable() else {
         return;
     };
     if bravebot_agent::home::create_directory(&directory).is_err() {
         return;
     }
+    let path = directory.join(CACHE_FILE);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let temporary = directory.join(CACHE_TEMPORARY);
-    let line = format!("{}\n", encode_answer(install, answer));
-    if bravebot_agent::home::write_file(&temporary, line.as_bytes()).is_ok() {
-        let _ = std::fs::rename(&temporary, directory.join(CACHE_FILE));
+    let contents = merged(&existing, install, record);
+    if bravebot_agent::home::write_file(&temporary, contents.as_bytes()).is_ok() {
+        let _ = std::fs::rename(&temporary, path);
     }
+}
+
+/// This installation's record, with the other installation's kept as it stood.
+///
+/// A machine that has both installations uses them in turn, and a launch of one that threw the
+/// other's stamp away would send the next launch of the other back to its registry, which is the
+/// request per session the day exists to prevent. Nothing else in the file survives: a line of any
+/// other shape is not a record and is not carried forward.
+fn merged(existing: &str, install: Install, record: Record) -> String {
+    let mut contents = format!("{}\n", encode_record(install, record));
+    if let Some(other) = existing
+        .lines()
+        .find(|line| record_on(line, install.other()).is_some())
+    {
+        contents.push_str(other);
+        contents.push('\n');
+    }
+    contents
 }
 
 fn now() -> u64 {
@@ -515,33 +593,134 @@ mod tests {
 
     #[test]
     fn a_stored_answer_is_read_back_as_it_was_written() {
-        let answer = Answer {
+        let record = Record {
             at: 1_700_000_000,
-            latest: version(0, 6, 0),
+            latest: Some(version(0, 6, 0)),
         };
-        let line = encode_answer(Install::Npm, answer);
-        assert_eq!(parse_answer(&line, Install::Npm), Some(answer));
+        let line = encode_record(Install::Npm, record);
+        assert_eq!(parse_record(&line, Install::Npm), Some(record));
     }
 
     /// One machine can have had both installations. An answer from the release listing says
     /// nothing about what npm has published, so it is not read as though it did.
     #[test]
     fn an_answer_from_the_other_registry_is_not_read() {
-        let stored = encode_answer(
+        let stored = encode_record(
             Install::Script,
-            Answer {
+            Record {
                 at: 1_700_000_000,
-                latest: version(9, 9, 9),
+                latest: Some(version(9, 9, 9)),
             },
         );
-        assert_eq!(parse_answer(&stored, Install::Npm), None);
+        assert_eq!(parse_record(&stored, Install::Npm), None);
     }
 
     #[test]
     fn a_file_that_is_not_the_shape_written_here_is_no_answer() {
-        for contents in ["", "nonsense", "1700000000\tnpm", "later\tnpm\t0.6.0"] {
-            assert_eq!(parse_answer(contents, Install::Npm), None, "{contents}");
+        for contents in [
+            "",
+            "nonsense",
+            "1700000000\tnpm",
+            "later\tnpm\t0.6.0",
+            "1700000000\tnpm\t0.6.0-rc.1",
+            "1700000000\tnpm\tlatest",
+        ] {
+            assert_eq!(parse_record(contents, Install::Npm), None, "{contents}");
         }
+    }
+
+    /// A registry that refuses, or that answers with something this program will not offer, is the
+    /// case where asking again on the next launch is a request to somebody else's registry per
+    /// session, and it is the case a registry in trouble is in.
+    #[test]
+    fn an_ask_that_learned_nothing_still_holds_the_next_one_off_for_the_day() {
+        let asked_at = 1_000_000;
+        let written = encode_record(Install::Npm, recorded(None, None, asked_at));
+        let read_back = parse_record(&written, Install::Npm).expect("the record just written");
+
+        assert_eq!(read_back.latest, None, "a version was invented: {written}");
+        assert!(
+            !worth_asking(true, asked_at + GOOD_FOR - 1, Some(read_back.at)),
+            "the registry is asked again within the day: {written}"
+        );
+        assert!(
+            worth_asking(true, asked_at + GOOD_FOR, Some(read_back.at)),
+            "the registry is never asked again: {written}"
+        );
+    }
+
+    /// A registry being unreachable today does not make what it said yesterday untrue, so the
+    /// notice a person has already been shown does not disappear for as long as the outage lasts.
+    /// An ask that does learn a version is what replaces it.
+    #[test]
+    fn a_version_stands_until_an_ask_learns_another() {
+        let previous = Record {
+            at: 1_000_000,
+            latest: Some(version(0, 6, 0)),
+        };
+
+        let after_nothing = recorded(Some(previous), None, 2_000_000);
+        assert_eq!(
+            after_nothing.latest,
+            Some(version(0, 6, 0)),
+            "the version already known was thrown away"
+        );
+        assert_eq!(after_nothing.at, 2_000_000, "the ask was not stamped");
+
+        let after_an_answer = recorded(Some(previous), Some(version(0, 7, 0)), 2_000_000);
+        assert_eq!(
+            after_an_answer.latest,
+            Some(version(0, 7, 0)),
+            "what the ask learned was discarded for what was already recorded"
+        );
+    }
+
+    /// Both installations can have been used on one machine, and a launch of one that threw the
+    /// other's stamp away would send the next launch of the other straight back to its registry,
+    /// which is the per-session request the day exists to prevent.
+    #[test]
+    fn recording_one_registrys_ask_keeps_the_others() {
+        let script = Record {
+            at: 1_000_000,
+            latest: Some(version(0, 6, 0)),
+        };
+        let npm = Record {
+            at: 2_000_000,
+            latest: None,
+        };
+        let existing = format!("{}\n", encode_record(Install::Script, script));
+
+        let file = merged(&existing, Install::Npm, npm);
+
+        assert_eq!(
+            parse_record(&file, Install::Npm),
+            Some(npm),
+            "the launch's own ask was not recorded: {file:?}"
+        );
+        assert_eq!(
+            parse_record(&file, Install::Script),
+            Some(script),
+            "the other registry's record was lost: {file:?}"
+        );
+    }
+
+    /// The file holds one line per registry, so a launch that wrote its own record twice would
+    /// grow it without bound and leave two stamps for one registry to choose between.
+    #[test]
+    fn a_registry_has_one_record_however_often_it_is_asked() {
+        let first = Record {
+            at: 1_000_000,
+            latest: Some(version(0, 6, 0)),
+        };
+        let second = Record {
+            at: 2_000_000,
+            latest: Some(version(0, 7, 0)),
+        };
+
+        let file = merged(&merged("", Install::Npm, first), Install::Npm, second);
+
+        assert_eq!(file.lines().count(), 1, "{file:?}");
+        assert_eq!(parse_record(&file, Install::Npm), Some(second), "{file:?}");
     }
 
     /// Asking on every launch would be a request to somebody else's registry per session, for a
