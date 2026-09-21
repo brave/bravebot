@@ -8,7 +8,7 @@ use bravebot_agent::confirm::{Decision, Intent, WriteRequest};
 use bravebot_agent::conversation::Said;
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
-use bravebot_bridge::wire;
+use bravebot_ui_bridge::wire;
 use bravebot_core::ask::{self, Answer, Asking, Choice, Question, Series};
 use bravebot_core::todo::{Row, Status};
 use serde_json::{Value, json};

@@ -10,7 +10,7 @@
 /// read the same one.
 #[test]
 fn the_agent_build_is_reachable() {
-    let build = bravebot_bridge::agent_build();
+    let build = bravebot_ui_bridge::agent_build();
     assert!(!build.is_empty(), "the agent reported no build string");
     // `crates/tui/build.rs` falls back to "(no git)" for a vendored or tarball build, so
     // the version is the only part that is always there.

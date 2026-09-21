@@ -11,15 +11,15 @@
   selects stable and Clippy; `rustup update stable` updates an existing installation.
   The workspace declares Rust 1.88 as its minimum.
 - **Node 22.12+ and npm**. CI uses Node 24. The app uses Electron 44 and React 19.
-- **Git**, including submodule support.
+- **Git**.
 - **Optional: direnv**, for loading backend credentials. It is unnecessary for
   builds without credentials or when the required variables are already exported.
 
 ## Clone and run
 
 ```bash
-git clone --recurse-submodules https://github.com/brave-experiments/brave-bot-ui.git
-cd brave-bot-ui
+git clone https://github.com/brave/bravebot.git
+cd bravebot/ui
 npm ci
 npm run dev
 ```
@@ -27,12 +27,6 @@ npm run dev
 `npm ci` installs the locked dependency versions and runs Electron runtime setup.
 `npm run dev` builds both Rust executables and starts Electron with hot reload.
 To build and preview without hot reload, see [development](development.md).
-
-For a clone made without submodules:
-
-```bash
-git submodule update --init --recursive
-```
 
 ## Credentials
 
@@ -76,11 +70,11 @@ The agent's configuration build script bakes available Brave backend values into
 file outside Git lets multiple checkouts use it and keeps it through re-clones.
 The file is not automatically discovered: the `.envrc` above is what loads it.
 
-Alternatively, `scripts/build-bridge.sh` loads an allowed `.envrc` from
-`vendor/bravebot` via direnv. `BRAVEBOT_DIR` (or the legacy `BUA_AGENT_DIR`) can point
-to a different credential checkout. These variables affect credential loading only;
-Cargo still compiles `vendor/bravebot`. The script canonicalises the directory for
-direnv's allow list. It first uses an already-exported `SERVICES_KEY_AICHAT` when present.
+Alternatively, `scripts/build-bridge.sh` loads an allowed `.envrc` from the repository root
+via direnv. `BRAVEBOT_DIR` can point to a different credential checkout; it affects
+credential loading only, since Cargo compiles this workspace either way. The script
+canonicalises the directory for direnv's allow list, and first uses an already-exported
+`SERVICES_KEY_AICHAT` when present.
 
 ### Builds without credentials
 
@@ -99,43 +93,19 @@ An app started from a configured shell inherits its environment; Finder does not
 load your shell's `.envrc`. A distributable Brave-backend app needs the required
 configuration baked in. See [packaging](development.md#packaging).
 The agent also supports runtime Bedrock configuration; its variable definitions are
-in [`env_var.rs`](../vendor/bravebot/crates/config/src/env_var.rs). Bedrock/AWS values
+in [`env_var.rs`](../../crates/config/src/env_var.rs). Bedrock/AWS values
 are not baked into the binary by this build script.
 
 ## Updating an existing checkout
 
-After pulling changes, synchronise any changed URL and check out the committed pin:
-
 ```bash
 git pull --ff-only
-git submodule sync --recursive
-git submodule update --init --recursive
 npm ci
 ```
 
-`vendor/bravebot` points to [brave/bravebot](https://github.com/brave/bravebot),
-currently at v0.9.0 (`c23b2ed`). A URL update alone does not change that revision.
-`npm run bridge` warns if the checked-out submodule differs from the pin.
-
-### Intentionally updating the pin
-
-The bridge depends on upstream internals by path. Pinning makes an incompatible
-upstream change arrive in a reviewed update rather than during an unrelated build.
-Choose an explicit revision, then run the [submodule-update checks](testing.md#current-regression-checks)
-and review any lockfile changes before committing:
-
-```bash
-git -C vendor/bravebot fetch origin
-# Replace <revision> with the intended tag or commit.
-git -C vendor/bravebot checkout <revision>
-npm run build
-cargo test --all
-git add vendor/bravebot Cargo.lock
-git commit -S -m "Update the bravebot submodule pin"
-```
-
-CI checks the committed revision. Commits intended for `main` must have verified
-signatures under the repository rules.
+There is no pin to move. The agent crates are members of this workspace, so the revision
+built is whatever the tree is at, and a change to one of them that breaks the bridge breaks
+the pull request that made it rather than the next build here.
 
 ## Electron runtime troubleshooting
 

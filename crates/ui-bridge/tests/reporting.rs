@@ -4,9 +4,9 @@
 //! engine reports progress the way a terminal wants it, and a pipe wants it differently.
 
 use bravebot_agent::report::{Activity, Landing, Phase, Reporter};
-use bravebot_bridge::emit::Emitter;
-use bravebot_bridge::protocol::Event;
-use bravebot_bridge::turn::BridgeReporter;
+use bravebot_ui_bridge::emit::Emitter;
+use bravebot_ui_bridge::protocol::Event;
+use bravebot_ui_bridge::turn::BridgeReporter;
 use std::sync::{Arc, Mutex};
 
 fn harness() -> (BridgeReporter, Arc<Mutex<Vec<Event>>>) {

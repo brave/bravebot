@@ -1,14 +1,14 @@
-# `bravebot-bridge`: the library and its protocol
+# `bravebot-ui-bridge`: the library and its protocol
 
 This document began as the Phase 0 design. The request and event descriptions below
 cover the current bridge; §13–§14 retain historical implementation notes. For exact
-wire shapes, consult [`protocol.rs`](../crates/bravebot-bridge/src/protocol.rs),
-[`wire.rs`](../crates/bravebot-bridge/src/wire.rs),
-[`bridge.rs`](../crates/bravebot-bridge/src/bridge.rs) and
+wire shapes, consult [`protocol.rs`](../../crates/ui-bridge/src/protocol.rs),
+[`wire.rs`](../../crates/ui-bridge/src/wire.rs),
+[`bridge.rs`](../../crates/ui-bridge/src/bridge.rs) and
 [the UI types](../src/shared/protocol.ts). Setup instructions live in [setup.md](setup.md).
 
 The Electron app does not drive a terminal and does not parse one. It talks to a Rust
-**library**, `bravebot-bridge`, which lives in this repository and depends on
+**library**, `bravebot-ui-bridge`, which lives in this repository and depends on
 `bravebot` as an ordinary Cargo dependency.
 
 **`bravebot` is not modified. Zero files, zero new crates, zero refactors.**
@@ -85,7 +85,7 @@ None of this is permanent. §2.2 is what keeps it cheap to revisit.
 Entirely in this repository:
 
 ```
-crates/bravebot-bridge/
+crates/ui-bridge/
   src/lib.rs               crate root and public modules
   src/bridge.rs            dispatch, session lifecycle and turns
   src/turn.rs              Confirmer, Reporter and audit sink
@@ -98,26 +98,22 @@ crates/bravebot-bridge/
 ```
 
 
-`crates/bravebot-bridge/Cargo.toml` depends on the agent as a normal Cargo dependency — a
-path dependency into `vendor/bravebot`, which is a git submodule, so the path says where the
-sources are and the committed gitlink says which revision they are:
+`crates/ui-bridge/Cargo.toml` depends on the agent as a sibling member of one workspace, so
+there is no pin to move and no revision to keep agreeing:
 
 ```toml
 [dependencies]
-bravebot-agent = { path = "../../vendor/bravebot/crates/agent" }
-bravebot-session = { path = "../../vendor/bravebot/crates/session" }
-bravebot-tui   = { path = "../../vendor/bravebot/crates/tui" }
-bravebot-core  = { path = "../../vendor/bravebot/crates/core" }
-bravebot-config = { path = "../../vendor/bravebot/crates/config" }
+bravebot-agent = { path = "../agent" }
+bravebot-session = { path = "../session" }
+bravebot-stamp = { path = "../stamp" }
+bravebot-core  = { path = "../core" }
+bravebot-config = { path = "../config" }
 ```
 
-This works today, unmodified, and it was checked rather than assumed:
-
-- These are ordinary packages with workspace-inherited metadata and no `publish = false`.
-- **Every module the bridge needs is already `pub`**: `bravebot_session::{sessions, store, audit}`,
-  every module of `bravebot_agent`, and `bravebot_core::{event, label, todo, trust}`.
-- `crates/tui/build.rs` shells out to git to stamp `BRAVEBOT_BUILD` and degrades to
-  a version string without a git revision when there is none, so it compiles as a git or vendored dependency.
+Every module the bridge needs is `pub`: `bravebot_session::{sessions, store, audit}`, every
+module of `bravebot_agent`, and `bravebot_core::{event, label, todo, trust}`. A change to any
+of them that breaks this crate now breaks the pull request that made it, which is the whole
+reason the two repositories became one.
 
 ### 2.1 Reuse the upstream session crate
 
@@ -413,7 +409,7 @@ differently: the front-end puts it in the composer and the person edits it.
 - **The cut is a well-formed request by construction.** It lands in front of a prompt, which is
   the same boundary compaction uses, so it cannot come between a call and its result; and
   `Conversation::with_system` answers any call left unanswered anyway. Nothing here re-implements
-  tool-call pairing, and `crates/bravebot-bridge/src/fork.rs` pins both halves of that.
+  tool-call pairing, and `crates/ui-bridge/src/fork.rs` pins both halves of that.
 - A cut inside the archive takes the child's whole history out of it: `archive` empties into
   `messages`, since there is no longer a request for a compaction summary to stand in for. A cut
   after it keeps both, summary included.
@@ -912,8 +908,8 @@ Two things the live run changed, neither of them visible from the design:
   Dropped rather than forwarded, so an interface does not draw a row of blank messages.
 
 
-0. `crates/bravebot-bridge` builds against the `vendor/bravebot` submodule and a test
-   prints `bravebot_tui::BUILD`. This is the step that proves §2's zero-change claim, it takes
+0. `crates/ui-bridge` builds against the agent crates and a test prints
+   `bravebot_stamp::BUILD`. This is the step that proves §2's zero-change claim, it takes
    an hour, and everything else assumes it. Do it first and stop if it fails.
 1. `wire.rs`: the §6 projections and their round-trip tests. Pure functions, no I/O.
 2. `bravebot-rpc` skeleton: envelope, dispatch loop, `agent.info`, `agent.ready`, error codes.
@@ -944,20 +940,20 @@ Settled:
 
 - **Upstream is strictly read-only.** No PRs. `doctor` shells out (§7.3) and upstream
   drift is caught by our own tests (§12).
-- **The library lives here**, as `crates/bravebot-bridge`, with `bravebot-rpc` as a thin transport
+- **The library lives here**, as `crates/ui-bridge`, with `bravebot-rpc` as a thin transport
   over it (§2).
 - **The left-hand column is one flat list across every project**, newest first, with the
   project name as the secondary line — so `session.list` with no `directory` is the call
   the interface actually makes, not a convenience.
 - **Phase 1 is electron-vite + React + TypeScript.**
-- **The agent is pinned, by submodule.** `vendor/bravebot` is a git submodule and the path
-  dependencies point into it, so the revision compiled is the one this repository commits.
-  Path-dependency-against-a-sibling was right while the two were being written together and
-  wrong as soon as anybody else built this: an upstream field addition broke a checkout that
-  had changed nothing. What the bridge depends on carries no compatibility promise, so the
-  pin is load-bearing and moving it is a test pass rather than a version bump — which is
-  exactly what a pin buys, a break that arrives in a pull request instead of in somebody's
-  `npm run dev`.
+- **The agent is a sibling crate, in one repository.** This went through all three
+  arrangements. A path dependency on a sibling checkout was right while the two were written
+  together and wrong as soon as anybody else built this, because an upstream field addition
+  broke a checkout that had changed nothing. A submodule pin fixed that by deferring the
+  break to whoever next moved the pin, which is the one place furthest from the change that
+  caused it. Folding the front end in gets what both were reaching for: what the bridge
+  depends on still carries no compatibility promise, and it no longer needs one, because a
+  change that breaks this crate now fails the pull request that made it.
 
 Still open:
 

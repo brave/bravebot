@@ -1,6 +1,6 @@
 //! Reading requests off the wire, and what happens when they are wrong.
 
-use bravebot_bridge::protocol::{ErrorCode, Event, Failure, Request, Unreadable, response};
+use bravebot_ui_bridge::protocol::{ErrorCode, Event, Failure, Request, Unreadable, response};
 use serde_json::json;
 
 #[test]

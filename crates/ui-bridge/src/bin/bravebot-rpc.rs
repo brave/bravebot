@@ -8,8 +8,10 @@
 //! Elsewhere a stray `println!` would interleave with the protocol and no caller could
 //! stop it, which is the same reason the agent's kernel never prints.
 
-use bravebot_bridge::bridge::Bridge;
-use bravebot_bridge::protocol::{Event, Request, Unreadable, response};
+#![forbid(unsafe_code)]
+
+use bravebot_ui_bridge::bridge::Bridge;
+use bravebot_ui_bridge::protocol::{Event, Request, Unreadable, response};
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 
@@ -24,7 +26,7 @@ fn main() {
                 settings = Some(std::path::PathBuf::from(path));
             }
             "--version" | "-V" => {
-                println!("bravebot-rpc {} (agent {})", env!("CARGO_PKG_VERSION"), bravebot_bridge::agent_build());
+                println!("bravebot-rpc {} (agent {})", env!("CARGO_PKG_VERSION"), bravebot_ui_bridge::agent_build());
                 return;
             }
             other => {

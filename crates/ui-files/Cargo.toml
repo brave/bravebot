@@ -1,13 +1,16 @@
 [package]
 name = "bravebot-ui-files"
+description = "Reads a file the graphical front end was asked to show"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
-rustix = { version = "1.1", features = ["fs"] }
+rustix = { workspace = true, features = ["fs"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }

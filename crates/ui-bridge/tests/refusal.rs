@@ -15,10 +15,10 @@ use bravebot_agent::confirm::{
 // qualified as `ask::Question` rather than shadowing it.
 use bravebot_core::ask::{self, Choice, Series};
 use bravebot_core::command::{Pipeline, Stage};
-use bravebot_bridge::emit::Emitter;
-use bravebot_bridge::protocol::Event;
-use bravebot_bridge::running::Running;
-use bravebot_bridge::turn::{BridgeConfirmer, Kind, Pending, Question, Reply};
+use bravebot_ui_bridge::emit::Emitter;
+use bravebot_ui_bridge::protocol::Event;
+use bravebot_ui_bridge::running::Running;
+use bravebot_ui_bridge::turn::{BridgeConfirmer, Kind, Pending, Question, Reply};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};

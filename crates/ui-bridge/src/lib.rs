@@ -16,6 +16,8 @@
 //!
 //! See `docs/phase-0-rpc-protocol.md` for the protocol these calls project onto.
 
+#![forbid(unsafe_code)]
+
 pub mod bridge;
 pub mod emit;
 pub mod fork;
@@ -34,5 +36,5 @@ pub mod wire;
 /// after the fact, usually because something went wrong, and the first question is which
 /// code produced it.
 pub fn agent_build() -> &'static str {
-    bravebot_tui::BUILD
+    bravebot_stamp::BUILD
 }

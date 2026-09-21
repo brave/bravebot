@@ -424,7 +424,7 @@ ago. The absence is structural: no command id names an approval, and the dispatc
 The parts worth naming, not every file:
 
 ```
-crates/bravebot-bridge/     the Rust library and the bravebot-rpc binary
+crates/ui-bridge/     the Rust library and the bravebot-rpc binary
   src/lib.rs                the crate root, and the layering rules the tests assert
   src/bridge.rs             dispatch and session/turn lifecycle
   src/protocol.rs           the request and event types
@@ -436,7 +436,7 @@ crates/bravebot-bridge/     the Rust library and the bravebot-rpc binary
   src/emit.rs               events delivered through the listener
   src/bin/bravebot-rpc.rs   read stdin, frame stdout, nothing else
   tests/                    the integration suites, including the refusal guarantees
-crates/bravebot-ui-files/  descriptor-based helper for previews and bot memory
+crates/ui-files/  descriptor-based helper for previews and bot memory
 src/main/                   Electron main: one window, one child process, a narrow channel
   index.ts                  the window, and the allow-list of what the renderer may call
   bridge.ts                 the child process, and its lifetime

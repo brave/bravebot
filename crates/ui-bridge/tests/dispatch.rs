@@ -3,8 +3,8 @@
 //! Events are collected into a vector instead of being written anywhere, which is the
 //! point of the callback: the library has no opinion about where they go.
 
-use bravebot_bridge::bridge::Bridge;
-use bravebot_bridge::protocol::{ErrorCode, Event, Request};
+use bravebot_ui_bridge::bridge::Bridge;
+use bravebot_ui_bridge::protocol::{ErrorCode, Event, Request};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
@@ -108,7 +108,7 @@ fn a_new_session_asks_about_trust_and_leaves_no_trace() {
     assert_eq!(asked.session.as_deref(), Some(handle));
 
     // Nothing is written until the first turn, so an abandoned window leaves nothing.
-    let after = bravebot_bridge::store::list_project(&directory);
+    let after = bravebot_ui_bridge::store::list_project(&directory);
     assert!(after.is_empty(), "session.new must not write a record");
 }
 
@@ -442,7 +442,7 @@ fn settings_override_is_validated_and_diagnostics_use_the_linked_agent() {
     assert!(!selected.to_string().contains("NEVER-SHOW-THIS"));
     let doctor = call(&mut bridge, "doctor", json!({})).unwrap();
     assert_eq!(doctor["found"], true);
-    assert!(doctor["text"].as_str().unwrap().contains(bravebot_bridge::agent_build()));
+    assert!(doctor["text"].as_str().unwrap().contains(bravebot_ui_bridge::agent_build()));
     let cleared = call(&mut bridge, "settings.select", json!({"path": null})).unwrap();
     assert!(cleared["selected"].is_null());
 }

@@ -55,7 +55,7 @@ The session-store and confinement tests need filesystem and subprocess access ou
 Codex sandbox. A missing temporary session record under that sandbox is not a passing test;
 rerun with the required access.
 
-The Rust side has eight integration suites under `crates/bravebot-bridge/tests/` — the protocol
+The Rust side has eight integration suites under `crates/ui-bridge/tests/`: the protocol
 projections, dispatch, the layering rules the crate docs describe, and the refusal
 guarantees that the security model rests on.
 

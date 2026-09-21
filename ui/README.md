@@ -14,8 +14,8 @@ Install your platform's development tools, current stable Rust, and Node 22.12+ 
 (Node 24 is used in CI). See [setup](docs/setup.md) for prerequisites and credentials.
 
 ```bash
-git clone --recurse-submodules https://github.com/brave-experiments/brave-bot-ui.git
-cd brave-bot-ui
+git clone https://github.com/brave/bravebot.git
+cd bravebot/ui
 npm ci
 npm run dev
 ```
@@ -26,7 +26,7 @@ terminal installation are not automatically copied into a fresh checkout.
 
 ## Documentation
 
-- [Setup](docs/setup.md): prerequisites, credentials, submodule updates and troubleshooting.
+- [Setup](docs/setup.md): prerequisites, credentials and troubleshooting.
 - [Development and packaging](docs/development.md): commands, builds and macOS bundles.
 - [The interface](docs/interface.md): conversations, approvals, bots, memory, keys and themes.
 - [Testing](docs/testing.md): regression checks, Electron drivers and CI coverage.

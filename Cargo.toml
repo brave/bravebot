@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/agent", "crates/bedrock", "crates/i18n", "crates/session", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/core", "crates/lsp", "crates/mcp", "crates/net", "crates/sandbox", "crates/signing", "crates/skus"]
+members = ["crates/agent", "crates/bedrock", "crates/i18n", "crates/session", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/core", "crates/lsp", "crates/mcp", "crates/net", "crates/sandbox", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files"]
 
 [workspace.package]
 version = "0.9.0"
@@ -38,6 +38,11 @@ ratatui = { version = "0.30", features = [
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# Scratch directories for the imported front end's tests, which is what its crates were
+# written against. A dev-dependency only: nothing that ships compiles it. The crates here
+# use target/test-scratch instead, so this is the one thing the import adds to the
+# dependency surface and the thing to settle before it lands.
+tempfile = "3"
 unicode-width = "0.2"
 # The Win32 calls that keep the imported subscription file readable by one account, which is what
 # stands in for a mode on Windows. Microsoft's own generated bindings, one crate deep

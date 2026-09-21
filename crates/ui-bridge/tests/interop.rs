@@ -48,7 +48,7 @@ fn a_record_written_here_is_read_back_by_the_agents_own_reader() {
         vec![Row { content: "read the parser".into(), marker: "[x]", status: Status::Done }],
     );
 
-    let mut handle = Handle::begin(&project, bravebot_bridge::agent_build());
+    let mut handle = Handle::begin(&project, bravebot_ui_bridge::agent_build());
     handle.save(
         "what does this do?",
         Standing {
@@ -85,7 +85,7 @@ fn a_record_written_here_is_read_back_by_the_agents_own_reader() {
 
     // And as the bridge's own cross-project discovery does, which is the part that is
     // ours rather than upstream's.
-    let found = bravebot_bridge::store::list_all();
+    let found = bravebot_ui_bridge::store::list_all();
     assert!(
         found.iter().any(|entry| entry.summary.id == id && entry.project == project),
         "a session in a new project must be discovered without being told where to look"
@@ -106,7 +106,7 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
     conversation.push(Message::user("second question"));
     conversation.push(Message::assistant("second answer"));
 
-    let mut handle = Handle::begin(&project, bravebot_bridge::agent_build());
+    let mut handle = Handle::begin(&project, bravebot_ui_bridge::agent_build());
     handle.save(
         "first question",
         Standing {
@@ -175,7 +175,7 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
         wall_ms: 120, inference_ms: 80, tools_ms: 20, stalled_ms: 10,
     })]);
 
-    let mut handle = Handle::begin(&project, bravebot_bridge::agent_build());
+    let mut handle = Handle::begin(&project, bravebot_ui_bridge::agent_build());
     handle.save(
         "remember the word haddock",
         Standing {
@@ -211,7 +211,7 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
 
     // What `session.open` does with what it found on disk.
     let record = sessions::load(&project, &original).expect("the record should load");
-    let mut state = bravebot_bridge::running::State::resumed(&project, &record, trust.clone());
+    let mut state = bravebot_ui_bridge::running::State::resumed(&project, &record, trust.clone());
 
     // What the worker does at the end of a turn: the same call, through the same handle.
     state.turns = 2;
@@ -263,24 +263,24 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
 
 /// A bridge whose events land in a vector, as `tests/dispatch.rs` does.
 fn harness() -> (
-    bravebot_bridge::bridge::Bridge,
-    std::sync::Arc<std::sync::Mutex<Vec<bravebot_bridge::protocol::Event>>>,
+    bravebot_ui_bridge::bridge::Bridge,
+    std::sync::Arc<std::sync::Mutex<Vec<bravebot_ui_bridge::protocol::Event>>>,
 ) {
     let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = std::sync::Arc::clone(&events);
-    let bridge = bravebot_bridge::bridge::Bridge::new(Box::new(move |event| {
+    let bridge = bravebot_ui_bridge::bridge::Bridge::new(Box::new(move |event| {
         sink.lock().expect("not poisoned").push(event);
     }));
     (bridge, events)
 }
 
 fn call(
-    bridge: &mut bravebot_bridge::bridge::Bridge,
+    bridge: &mut bravebot_ui_bridge::bridge::Bridge,
     method: &str,
     params: serde_json::Value,
 ) -> serde_json::Value {
     let line = serde_json::json!({ "id": 1, "method": method, "params": params }).to_string();
-    let request = bravebot_bridge::protocol::Request::parse(&line).expect("well formed");
+    let request = bravebot_ui_bridge::protocol::Request::parse(&line).expect("well formed");
     bridge.dispatch(&request).expect("the call should be served")
 }
 
@@ -293,7 +293,7 @@ fn two_prompt_session(project: &std::path::Path, trust: Option<&TrustStore>) -> 
     conversation.push(Message::assistant("forgotten"));
 
     let empty = TrustStore::new(project);
-    let mut handle = Handle::begin(project, bravebot_bridge::agent_build());
+    let mut handle = Handle::begin(project, bravebot_ui_bridge::agent_build());
     handle.save(
         "remember the word haddock",
         Standing {
@@ -433,7 +433,7 @@ fn a_fork_recounts_to_everything_before_the_prompt_it_was_cut_at() {
         },
     })
     .to_string();
-    let request = bravebot_bridge::protocol::Request::parse(&line).expect("well formed");
+    let request = bravebot_ui_bridge::protocol::Request::parse(&line).expect("well formed");
     assert!(
         bridge.dispatch(&request).is_err(),
         "an ordinal the front-end disagrees with is not a place to cut",
@@ -539,8 +539,8 @@ fn a_fork_gets_an_id_of_its_own_rather_than_the_one_it_came_from() {
 
     let mut cut = record.conversation.clone();
     cut.messages.truncate(2);
-    let mut state = bravebot_bridge::running::State::forked(
-        Handle::begin(&project, bravebot_bridge::agent_build()),
+    let mut state = bravebot_ui_bridge::running::State::forked(
+        Handle::begin(&project, bravebot_ui_bridge::agent_build()),
         cut,
         TrustStore::new(&project),
         TrustedPrograms::new(),

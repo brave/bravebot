@@ -1,3 +1,0 @@
-[submodule "vendor/bravebot"]
-	path = vendor/bravebot
-	url = https://github.com/brave/bravebot.git
