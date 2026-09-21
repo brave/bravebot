@@ -926,8 +926,10 @@ pub struct Session {
     ///
     /// Both halves, because the interesting case is when they differ: the endpoint answers a model
     /// name it will not serve by substituting a weaker one rather than by failing, so a session can
-    /// ask for Opus all day and be answered by something else with nothing said.
-    served: Option<(Option<String>, String)>,
+    /// ask for Opus all day and be answered by something else with nothing said. The asked-for half
+    /// is a name rather than an optional one: every turn asks for something, whether a person picked
+    /// it or the settings file did.
+    served: Option<(String, String)>,
     /// Whether the two halves of [`Session::served`] are names from one roster.
     ///
     /// False where the request named an opaque handle standing for a model rather than a model, since
@@ -1287,8 +1289,12 @@ impl Session {
     }
 
     /// Say what the configuration allows, for the opening screen to draw.
-    pub fn on_tier(mut self, tier: impl Into<String>) -> Self {
-        self.tier = tier.into();
+    ///
+    /// Takes the configuration rather than the words, so the line drawn at startup and the line
+    /// `/status` shows an hour later are one decision and not two. Given a string, this is a place
+    /// a caller could hand the opening screen any wording at all and no test would notice.
+    pub fn on_tier(mut self, config: &bravebot_config::Config) -> Self {
+        self.tier = crate::status::configured_tier(config).to_string();
         self
     }
 
@@ -5559,12 +5565,12 @@ impl Session {
     /// between them means anything. The caller knows which backend answered; this cannot tell.
     pub fn served(
         &mut self,
-        requested: Option<String>,
+        requested: impl Into<String>,
         served: impl Into<String>,
         premium: bool,
         comparable: bool,
     ) {
-        self.served = Some((requested, served.into()));
+        self.served = Some((requested.into(), served.into()));
         self.premium = Some(premium);
         self.served_names_are_comparable = comparable;
     }
@@ -5597,8 +5603,11 @@ impl Session {
         self.served.as_ref().map(|(_, served)| served.as_str())
     }
 
-    /// The model the last turn asked for, where it named one and the server answered with something
-    /// else.
+    /// The model the last turn asked for, where the server answered with something else.
+    ///
+    /// A turn always asks for a name: the one picked with `/model` where there is one, and the
+    /// configured default otherwise, which is why the recorded half is not optional. Making it so
+    /// left every session running its configuration's model unable to report a substitution at all.
     ///
     /// `None` where they agree, so a caller has nothing to report on the ordinary path. Compared
     /// exactly, which works because both names come from the same roster: what was asked for is a
@@ -5614,11 +5623,10 @@ impl Session {
     /// served in place of what was asked for.
     pub fn substituted_model(&self) -> Option<&str> {
         let (requested, served) = self.served.as_ref()?;
-        let requested = requested.as_deref()?;
         if !self.served_names_are_comparable || requested == bravebot_config::DEFAULT_MODEL {
             return None;
         }
-        (requested != served).then_some(requested)
+        (requested != served).then_some(requested.as_str())
     }
 
     /// How full the context is, as a percentage, or `None` where nothing has been measured.
@@ -7274,7 +7282,7 @@ mod tests {
     fn a_model_answered_by_a_different_one_is_reported_as_substituted() {
         let mut session = Session::new("none");
         session.choose_model("claude-opus".to_string());
-        session.served(Some("claude-opus".to_string()), "qwen-14b", false, true);
+        session.served("claude-opus", "qwen-14b", false, true);
         assert_eq!(session.substituted_model(), Some("claude-opus"));
     }
 
@@ -7288,7 +7296,7 @@ mod tests {
             "arn:aws:bedrock:us-west-2:1:application-inference-profile/x".to_string(),
         );
         session.served(
-            Some("arn:aws:bedrock:us-west-2:1:application-inference-profile/x".to_string()),
+            "arn:aws:bedrock:us-west-2:1:application-inference-profile/x",
             "claude-sonnet-5",
             false,
             false,
@@ -7305,7 +7313,7 @@ mod tests {
         let mut session = Session::new("none");
         session.choose_model(bravebot_config::DEFAULT_MODEL.to_string());
         session.served(
-            Some(bravebot_config::DEFAULT_MODEL.to_string()),
+            bravebot_config::DEFAULT_MODEL,
             "claude-3-haiku",
             false,
             true,
@@ -7318,7 +7326,7 @@ mod tests {
     fn a_model_answered_by_itself_is_not_a_substitution() {
         let mut session = Session::new("none");
         session.choose_model("claude-opus".to_string());
-        session.served(Some("claude-opus".to_string()), "claude-opus", false, true);
+        session.served("claude-opus", "claude-opus", false, true);
         assert_eq!(session.substituted_model(), None);
     }
 
