@@ -24,7 +24,7 @@
 //! render, and nothing logs it. It is not workspace content, so it carries no label; it never enters
 //! a turn, and the only thing it is ever used for is computing a signature.
 
-use bravebot_config::Secret;
+use bravebot_config::{Held, Secret};
 use std::io::BufRead;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -46,6 +46,22 @@ pub struct Credentials {
     /// Absent for a long-lived access key, which does not expire, and absent when the field is
     /// there but unreadable: both mean "nothing here says when to ask again".
     pub expires_at: Option<u64>,
+}
+
+impl Credentials {
+    /// What would end these, which is what CRED-25 asks a held credential to record.
+    ///
+    /// The session token decides, not the expiry. `expires_at` is absent for a long-lived key and
+    /// absent again where the CLI stated a date this could not read, so a rule written over it
+    /// would report an unreadable session credential as a key in a file and answer a leak of one
+    /// with `aws iam delete-access-key`, for a key that does not exist. A session token is present
+    /// only for a credential STS issued, which is exactly the distinction being drawn.
+    pub fn held(&self) -> Held {
+        match self.session_token {
+            Some(_) => Held::AwsSession,
+            None => Held::AwsAccessKey,
+        }
+    }
 }
 
 /// Redacting rather than derived: two of these three fields are live credentials, and printing a
@@ -634,6 +650,35 @@ mod tests {
         let credentials =
             decode(br#"{"AccessKeyId":"AKIA","SecretAccessKey":"secret"}"#).expect("decoded");
         assert!(credentials.session_token.is_none());
+    }
+
+    /// CRED-25: what would end a resolved credential, which the expiry does not say. The session
+    /// token is what separates the two arrangements, and an expiry cannot stand in for it: the
+    /// field is absent both for a long-lived key and for a session credential whose stated date
+    /// this could not read, so a rule written over the expiry answers a leaked SSO credential with
+    /// `aws iam delete-access-key`, for a key that does not exist, and leaves the live session
+    /// running at its issuer.
+    #[test]
+    fn a_session_token_is_what_says_what_would_end_a_credential() {
+        let session = decode(
+            br#"{"AccessKeyId":"ASIA","SecretAccessKey":"secret","SessionToken":"token","Expiration":"not a date"}"#,
+        )
+        .expect("decoded");
+        assert!(
+            session.expires_at.is_none(),
+            "the fixture needs an expiry the decode could not read"
+        );
+        assert_eq!(session.held(), Held::AwsSession);
+
+        let long_lived =
+            decode(br#"{"AccessKeyId":"AKIA","SecretAccessKey":"secret"}"#).expect("decoded");
+        assert_eq!(long_lived.held(), Held::AwsAccessKey);
+
+        // Deleting the key is the move somebody makes after a leak, and it is the one that leaves
+        // a credential behind: STS has already handed out sessions under it that run to their own
+        // expiry. The session credential has nothing under it in turn.
+        assert!(long_lived.held().outlives_revocation());
+        assert!(!session.held().outlives_revocation());
     }
 
     /// The expiry is what lets a caller answer "is this still good" without running the CLI again,

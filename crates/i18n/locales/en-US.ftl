@@ -165,6 +165,24 @@ doctor-model-chosen = { $model } (chosen with /model)
 doctor-model-default = { $model } (default)
 doctor-key-name = key
 doctor-key = { $key } (never transmitted)
+# What would end each credential this build holds for itself: who issued it, the surface that
+# revokes it, and anything minted from it that revoking it would not reach. Written down here
+# because the moment somebody needs it is the moment it is too late to work out, and because the
+# disposition people reach for, deleting the local copy, ends this machine's custody and nothing
+# else. One line per credential, and both AWS arrangements where an account is configured, since
+# which one a profile resolves to is the AWS CLI's answer and this report does not run it.
+doctor-ends = ends
+doctor-ends-signing-key =
+    the signing key: issued by the Brave backend, which derives its copy from a master seed and this key id; ended only by retiring that id there and shipping another build, since one build's key is every install's
+doctor-ends-aws-access-key =
+    a long-lived access key: issued by AWS IAM to the user the profile names; ended with `aws iam delete-access-key`
+doctor-ends-aws-session =
+    a session credential: issued by AWS STS for the profile and ends at its own expiry; ended sooner only at its issuer, since `aws sso logout` clears this machine's copy rather than the session behind it
+# Shown only for a credential something is minted from that ending it would not reach, because
+# a line reading "nothing" for the other two is the one people learn to skip.
+doctor-outlives = outlives
+doctor-outlives-aws-access-key =
+    a session credential STS already issued under that access key, which runs to its own expiry: deleting the key does not reach it
 # Both are reported when both are reachable, so this names one of the two rather than the backend.
 doctor-backend = offers
 doctor-backend-bedrock = AWS Bedrock

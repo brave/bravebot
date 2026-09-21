@@ -590,7 +590,16 @@ be written down while the arrangement is still understood.
 **What it does not claim.** Recording the surface does not revoke anything, and nothing here reaches
 an issuer on a person's behalf.
 
-`verified-by: none`
+**Where the person is given it.** There is no leak to answer yet: the scan CRED-15 and CRED-16
+describe does not exist, and nor does the place CRED-19 would write a finding. What exists is the
+record and one surface that reads it, `doctor`, which reports what would end each credential this
+build holds. A scan landing later reads that record rather than writing a second one.
+
+`verified-by: bravebot_config::lib::a_build_that_cannot_sign_for_itself_holds_no_signing_key_to_account_for`
+`verified-by: bravebot_config::lib::an_aws_account_holds_both_arrangements_and_they_end_differently`
+`verified-by: bravebot_bedrock::credentials::a_session_token_is_what_says_what_would_end_a_credential`
+`verified-by: bravebot_cli::main::every_held_credential_has_its_own_account_of_what_would_end_it`
+`verified-by: bravebot_cli::main::what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one`
 
 ## Why the gate safehouse builds is not available here
 

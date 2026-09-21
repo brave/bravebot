@@ -165,6 +165,16 @@ doctor-model-chosen = { $model } (choisi avec /model)
 doctor-model-default = { $model } (par défaut)
 doctor-key-name = clé
 doctor-key = { $key } (jamais transmise)
+doctor-ends = fin
+doctor-ends-signing-key =
+    la clé de signature : émise par le service Brave, qui dérive sa copie d'une graine maîtresse et de cet id de clé ; elle ne prend fin qu'en retirant cet id là-bas et en publiant une autre version, car la clé d'une version est celle de toutes les installations
+doctor-ends-aws-access-key =
+    une clé d'accès permanente : émise par AWS IAM à l'utilisateur nommé par le profil ; supprimée avec `aws iam delete-access-key`
+doctor-ends-aws-session =
+    une identification de session : émise par AWS STS pour le profil et prend fin à sa propre expiration ; on ne peut y mettre fin plus tôt qu'auprès de son émetteur, car `aws sso logout` efface la copie de cette machine et non la session elle-même
+doctor-outlives = survit
+doctor-outlives-aws-access-key =
+    une identification de session déjà émise par STS sous cette clé d'accès, qui court jusqu'à sa propre expiration : la suppression de la clé ne l'atteint pas
 doctor-backend = service
 doctor-backend-bedrock = AWS Bedrock
 doctor-backend-aichat = Brave Leo
