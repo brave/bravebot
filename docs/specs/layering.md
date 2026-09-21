@@ -82,8 +82,9 @@ there is one of the crate's own and is named the same way.
 **Why.** Nearly every crate here contains no `unsafe` at all. Undeclared, that is a property
 nothing records: it holds by accident, and the first `unsafe` to arrive arrives silently. Declared,
 the compiler decides it, and what a reviewer reads is the sites that name themselves rather than
-every crate in the workspace. Three crates name sites: `bravebot-sandbox`, whose landlock syscalls
-are its reason for existing, `bravebot-skus`, which asks Windows for the access-control list that
+every crate in the workspace. Three crates name sites: `bravebot-sandbox`, whose landlock
+syscalls and whose Win32 calls creating a process inside a container are its reason for existing,
+`bravebot-skus`, which asks Windows for the access-control list that
 keeps an imported subscription to one account ([PREM-7](premium-credentials.md#PREM-7)) and whose
 tests point `HOME` at a scratch directory, and `bravebot-agent`, which asks Windows for its own
 version ([INSTR-9](instructions.md#INSTR-9)) in the one call a platform states that in. Taking `deny` where `forbid` would do is the way the rule

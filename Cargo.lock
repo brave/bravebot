@@ -204,6 +204,7 @@ version = "0.9.0"
 dependencies = [
  "landlock",
  "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

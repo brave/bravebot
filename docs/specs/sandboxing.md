@@ -7,6 +7,8 @@ governs:
   - crates/sandbox/src/policy.rs
   - crates/sandbox/src/linux.rs
   - crates/sandbox/src/macos.rs
+  - crates/sandbox/src/windows.rs
+  - crates/sandbox/src/windows/appcontainer.rs
   - crates/sandbox/src/process.rs
 documented-by: docs/website/docs/security/security.md
 ---
@@ -29,6 +31,12 @@ is one where confinement is unavailable and a process is refused rather than run
 that cannot be applied in full ([SANDBOX-7](#SANDBOX-7)). What that costs is the kernels between
 5.13 and 5.19, which a long-term distribution release still ships, and on which nothing runs
 confined at all.
+
+On Windows the boundary is an AppContainer: a lowbox token is denied every securable object whose
+access-control list does not name the container, so a grant is an entry written onto the directory
+the policy names, and egress is a capability the token either carries or does not. A grant is
+therefore a change to the filesystem rather than to the process, which is the one thing the other
+two backends do not cost, and what follows from it is below.
 
 ## Clauses
 
@@ -60,6 +68,7 @@ rejected rather than applied. Granting everything is not a confinement decision.
 `verified-by: bravebot_sandbox::policy::network_alone_remains_meaningful`
 `verified-by: bravebot_sandbox::macos::a_fully_permissive_policy_is_refused`
 `verified-by: bravebot_sandbox::linux::a_fully_permissive_policy_is_refused`
+`verified-by: bravebot_sandbox::windows::a_fully_permissive_policy_is_refused`
 
 <a id="SANDBOX-3"></a>
 ### SANDBOX-3: the network is denied unless it was asked for
@@ -77,19 +86,31 @@ into one that is not in force.
 `verified-by: bravebot_sandbox::linux::a_confined_process_can_write_inside_its_grants`
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_write_outside_its_grants`
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_read_outside_its_grants`
+`verified-by: bravebot_sandbox::windows::a_policy_that_did_not_ask_for_the_network_asks_for_no_capability`
+`verified-by: bravebot_sandbox::windows::a_policy_that_asked_for_the_network_asks_for_the_internet_client_capability`
+`verified-by: bravebot_sandbox::windows::a_policy_withholding_the_network_is_applied_rather_than_refused`
+`verified-by: bravebot_sandbox::windows::no_grant_lets_a_confined_process_rewrite_an_access_list`
 
 <a id="SANDBOX-4"></a>
-### SANDBOX-4: a path cannot inject profile syntax
+### SANDBOX-4: content cannot inject into the syntax a backend writes it into
 
-Grants are paths, and a path is content: one containing profile syntax is quoted rather than
-interpreted, and a profile built from a hostile path still applies.
+Grants are paths and arguments are content. A backend writes both into a syntax: a profile the
+kernel parses, or the single command line a platform's process creation takes instead of a vector.
+Either is quoted rather than interpreted, so a confinement built from a hostile path still applies
+and a program is asked for what the caller asked for.
 
 **Why.** A grant list assembled from paths would otherwise be a place where a filename decides what
-the sandbox permits.
+the sandbox permits, and a command line assembled from arguments a place where one decides what the
+confined program is told to do.
 
 `verified-by: bravebot_sandbox::macos::paths_cannot_inject_profile_syntax`
 `verified-by: bravebot_sandbox::macos::a_profile_containing_a_hostile_path_still_applies`
 `verified-by: bravebot_sandbox::macos::granted_paths_appear_as_subpath_rules`
+`verified-by: bravebot_sandbox::windows::a_path_containing_a_space_reaches_the_program_as_one_argument`
+`verified-by: bravebot_sandbox::windows::a_quotation_mark_in_an_argument_does_not_end_it`
+`verified-by: bravebot_sandbox::windows::a_path_ending_in_a_separator_does_not_swallow_the_argument_after_it`
+`verified-by: bravebot_sandbox::windows::quoting_a_path_leaves_the_path_it_names_alone`
+`verified-by: bravebot_sandbox::windows::an_empty_argument_is_still_an_argument`
 
 <a id="SANDBOX-5"></a>
 ### SANDBOX-5: capabilities report what the kernel actually enforces, and never more
@@ -114,6 +135,10 @@ asked for, or names the directory holding it, on the platform where neither was 
 `verified-by: bravebot_cli::main::doctor_names_the_confinement_level_in_force`
 `verified-by: bravebot_cli::main::doctor_says_whether_the_kernel_enforces_network_denial`
 `verified-by: bravebot_cli::main::confinement_that_could_not_be_established_fails_the_run`
+`verified-by: bravebot_sandbox::windows::capabilities_report_what_a_container_enforces`
+`verified-by: bravebot_sandbox::windows::a_policy_requiring_subprocess_denial_is_refused`
+`verified-by: bravebot_sandbox::windows::each_run_confines_through_a_profile_of_its_own`
+`verified-by: bravebot_sandbox::windows::a_profile_name_fits_what_the_platform_accepts`
 
 <a id="SANDBOX-6"></a>
 ### SANDBOX-6: every path a policy names is granted, or the policy is refused
@@ -135,6 +160,12 @@ not.
 `verified-by: bravebot_sandbox::linux::a_path_that_cannot_be_opened_is_refused_rather_than_dropped`
 `verified-by: bravebot_sandbox::linux::a_ruleset_is_not_built_with_a_path_missing_from_it`
 `verified-by: bravebot_sandbox::macos::a_path_that_is_not_there_yet_is_granted_as_named`
+`verified-by: bravebot_sandbox::windows::a_path_that_is_not_on_disk_is_named_rather_than_left_out`
+`verified-by: bravebot_sandbox::windows::a_policy_whose_paths_are_all_there_names_none`
+`verified-by: bravebot_sandbox::windows::each_path_is_granted_what_the_list_it_was_named_in_asks_for`
+`verified-by: bravebot_sandbox::windows::a_path_granted_for_reading_is_not_granted_writing_or_deleting`
+`verified-by: bravebot_sandbox::windows::a_path_named_for_reading_and_for_writing_is_granted_once_for_writing`
+`verified-by: bravebot_sandbox::windows::a_grant_reaches_what_is_under_the_directory_it_is_written_on`
 
 <a id="SANDBOX-7"></a>
 ### SANDBOX-7: a write grant covers moving a file within it
@@ -154,6 +185,7 @@ stopped being atomic.
 `verified-by: bravebot_sandbox::linux::a_confined_process_can_rename_a_file_between_two_granted_directories`
 `verified-by: bravebot_sandbox::linux::a_kernel_that_cannot_govern_a_move_is_refused_rather_than_confining_without_it`
 `verified-by: bravebot_sandbox::macos::a_confined_process_can_rename_a_file_between_two_granted_directories`
+`verified-by: bravebot_sandbox::windows::a_path_granted_for_writing_can_be_written_and_moved_within`
 
 <a id="SANDBOX-8"></a>
 ### SANDBOX-8: the environment a confined process receives is the caller's
@@ -408,6 +440,21 @@ narrows is what a program may read and write, not what it may send: a confined o
 anything inside its grants. The label on what a program prints is untouched, and no grant makes an
 output trusted.
 
+**A grant on Windows is a change to a directory.** Seatbelt reads a profile as the process starts
+and Landlock installs a ruleset on the process itself, so neither leaves anything behind. An
+access-control entry is on the directory when the confined process starts and is still there
+afterwards unless something removes it, so confinement there writes to paths a person owns, and two
+runs holding different scopes over one directory are two sets of entries on one list. The backend
+removes the entries it wrote and deletes the profile it created as it is dropped, and a run ending
+without reaching that leaves them.
+
+What bounds that is a container profile per run rather than per installation. The entry left behind
+names a security identifier no other run holds, so the residue is an entry for a container that no
+longer exists rather than a standing grant to something still running, and the next run's grants are
+its own. Removal is not atomic either way, which is why the cost is written here rather than treated
+as a failure mode that does not arise. [SANDBOX-5](#SANDBOX-5) is where what a backend achieves is
+reported as what it is.
+
 **What has to exist first.**
 
 - A path has to be nameable for a profile without being vouched for, on the route a person takes.
@@ -434,8 +481,15 @@ output trusted.
   the policy is built, which a profile cannot ask for while a row says only a path, and naming the
   directory holding it instead is not open to `known_hosts`, whose directory holds the key no scope
   reaches.
-- Windows has published binaries and no backend, and [SANDBOX-1](#SANDBOX-1) refuses to run a
-  process it cannot confine, so confinement there refuses every program until that platform has one
-  (issue #88). Running unconfined where no backend exists is the degradation that clause forbids.
-  Windows is a platform this project supports, so this is a defect being carried rather than the
-  price of a platform nobody ships to.
+- Subprocess denial has no mechanism on Windows or on Linux. A container bounds what a process
+  reaches rather than whether it creates children, and a child of a confined process is inside the
+  same container rather than outside it, so a policy asking for that denial is refused on both
+  rather than applied without it ([SANDBOX-5](#SANDBOX-5)). What it costs is that the two
+  platforms confine nothing for a caller whose policy wants a program to have no children, where
+  Seatbelt applies one.
+- The suite does not run on Windows. The decisions this backend makes before a process starts are
+  pure and are run by every job that runs the suite: which capability a policy asks for, what each
+  grant permits, which policies are refused, and how an argument is written onto a command line.
+  The Win32 calls that apply them are compiled and linted by the
+  `x86_64-pc-windows-gnu` clippy job and run by nothing, so [SANDBOX-3](#SANDBOX-3)'s guarantee
+  there is argued rather than exercised.

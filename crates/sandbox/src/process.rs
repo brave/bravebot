@@ -15,9 +15,11 @@
 use crate::SandboxError;
 use std::fs::File;
 use std::io::{self, Read, Write};
+#[cfg(not(windows))]
+use std::process::Child;
 #[cfg(unix)]
 use std::process::Command;
-use std::process::{Child, ExitStatus, Stdio};
+use std::process::{ExitStatus, Stdio};
 
 /// What one of a confined process's standard streams is attached to.
 ///
@@ -104,13 +106,29 @@ impl Read for ConfinedStderr {
     }
 }
 
+/// The started process itself.
+///
+/// Two shapes, because confinement decides how the process is created. Where the
+/// mechanism travels with the command, the standard library creates it and hands back a
+/// [`Child`](std::process::Child). Where it is an argument to the call that creates the
+/// process, this crate makes that call itself, and a `Child` cannot be built from what it
+/// returns.
+#[derive(Debug)]
+enum Started {
+    #[cfg(not(windows))]
+    Spawned(Child),
+    #[cfg(windows)]
+    Created(crate::windows::CreatedProcess),
+}
+
 /// A process running under confinement.
 ///
-/// Dropping this leaves the process running, as dropping a [`Child`] does: a caller that
-/// needs it gone calls [`kill`](Self::kill) and then [`wait`](Self::wait).
+/// Dropping this leaves the process running, as dropping a
+/// [`Child`](std::process::Child) does: a caller that needs it gone calls
+/// [`kill`](Self::kill) and then [`wait`](Self::wait).
 #[derive(Debug)]
 pub struct ConfinedChild {
-    child: Child,
+    started: Started,
     stdin: Option<ConfinedStdin>,
     stdout: Option<ConfinedStdout>,
     stderr: Option<ConfinedStderr>,
@@ -119,7 +137,12 @@ pub struct ConfinedChild {
 impl ConfinedChild {
     /// The operating system's identifier for the process.
     pub fn id(&self) -> u32 {
-        self.child.id()
+        match &self.started {
+            #[cfg(not(windows))]
+            Started::Spawned(child) => child.id(),
+            #[cfg(windows)]
+            Started::Created(process) => process.id(),
+        }
     }
 
     /// The pipe to the process's standard input, where one was asked for.
@@ -148,12 +171,42 @@ impl ConfinedChild {
     /// end is open, so waiting without closing it waits forever.
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
         drop(self.stdin.take());
-        self.child.wait()
+        match &mut self.started {
+            #[cfg(not(windows))]
+            Started::Spawned(child) => child.wait(),
+            #[cfg(windows)]
+            Started::Created(process) => process.wait(),
+        }
     }
 
     /// Ask the operating system to end the process.
     pub fn kill(&mut self) -> io::Result<()> {
-        self.child.kill()
+        match &mut self.started {
+            #[cfg(not(windows))]
+            Started::Spawned(child) => child.kill(),
+            #[cfg(windows)]
+            Started::Created(process) => process.kill(),
+        }
+    }
+}
+
+/// Hand back a process a backend created itself, with the pipe ends it kept.
+///
+/// The counterpart of [`start`] for a platform where confinement is an argument to
+/// process creation: the backend has made the call, so what is left is to present the
+/// result the same way.
+#[cfg(windows)]
+pub(crate) fn confined(
+    process: crate::windows::CreatedProcess,
+    stdin: Option<File>,
+    stdout: Option<File>,
+    stderr: Option<File>,
+) -> ConfinedChild {
+    ConfinedChild {
+        started: Started::Created(process),
+        stdin: stdin.map(ConfinedStdin),
+        stdout: stdout.map(ConfinedStdout),
+        stderr: stderr.map(ConfinedStderr),
     }
 }
 
@@ -196,7 +249,7 @@ pub(crate) fn start(
         .map(|pipe| ConfinedStderr(File::from(std::os::fd::OwnedFd::from(pipe))));
 
     Ok(ConfinedChild {
-        child,
+        started: Started::Spawned(child),
         stdin,
         stdout,
         stderr,
