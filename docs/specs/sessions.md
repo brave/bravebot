@@ -645,6 +645,8 @@ file somebody was working on; treating it as one that will not go back leaves th
 names it on the line that reports the rewind.
 
 `verified-by: bravebot_tui::sessions::a_rewind_point_survives_being_written_and_read_back`
+`verified-by: bravebot_tui::sessions::a_rename_takes_the_points_it_gave_up_out_of_the_record`
+`verified-by: bravebot_tui::app::a_resumed_session_whose_record_was_renamed_has_nothing_to_undo`
 `verified-by: bravebot_session::sessions::a_kept_file_this_build_cannot_read_will_not_go_back_rather_than_being_deleted`
 `verified-by: bravebot_tui::state::a_restored_point_finds_its_place_in_the_transcript_it_comes_back_into`
 

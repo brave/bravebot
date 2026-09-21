@@ -12244,6 +12244,114 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// `/rename` gives up every rewind point and then writes the record, so the session it wrote
+    /// has nothing to rewind to and neither has the one resumed from it. Left in the record, the
+    /// point came back to a session whose own `/undo` had just said there was nothing left to undo,
+    /// and taking it put the tree back and the old name with it: the record of a session renamed
+    /// before its first turn was rewound out of existence.
+    #[test]
+    fn a_resumed_session_whose_record_was_renamed_has_nothing_to_undo() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions::{self, Standing};
+
+        let root = crate::testutil::scratch_dir("bravebot-app-rewind-rename");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let mut trust = TrustStore::new(&root);
+        let mut programs = TrustedPrograms::new();
+        let mut stored = sessions::Handle::begin(&root, bravebot_stamp::BUILD);
+        let mut session = Session::new("none");
+        let mut conversation = Conversation::new();
+
+        // One finished turn, which is the point a rewind could reach.
+        let prompt = "write a line saying hello into notes.txt";
+        let start = conversation.recounted().len();
+        type_line(&mut session, prompt);
+        session.submit().expect("the prompt is sent");
+        let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
+        session.open_rewind_point(point, prompt.to_string());
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user(prompt));
+        conversation.push(Message::assistant("written"));
+        session.complete("written", vec![], 10);
+        session.record_turn(start, &conversation);
+        stored.save(
+            prompt,
+            Standing {
+                history: Some(session.turn_history()),
+                conversation: &conversation.snapshot(),
+                turns: session.turns,
+                tokens: session.tokens,
+                spend: session.spend_by_turn(),
+                timing: session.timing_by_turn(),
+                model: None,
+                todos: &session.todos_by_turn(),
+                asides: &[],
+                trust: &trust,
+                programs: &programs,
+                directories: &[],
+                manifest: None,
+                rewind: session.rewind_points(),
+            },
+        );
+        assert_eq!(
+            sessions::load(&root, stored.id())
+                .expect("the record")
+                .rewind_points(&root)
+                .len(),
+            1,
+            "the turn left no point in the record, so the rename below gives up nothing"
+        );
+
+        // What `Action::Rename` does: the window closes in the session, and the name goes into the
+        // record.
+        session.close_rewind_window();
+        assert!(stored.rename("the parser bug"));
+
+        // The resume, as `run` does it.
+        let record = sessions::load(&root, stored.id()).expect("the record survived the rename");
+        let conversation = Conversation::restored(record.conversation.clone());
+        let mut resumed = Session::new("none");
+        resumed.replay(
+            &conversation,
+            &record.title,
+            &sessions::recall(&root, &record),
+        );
+        resumed.restore_spend(record.tokens, record.spend.clone());
+        resumed.restore_rewind_points(record.rewind_points(&root), &conversation);
+        let mut conversation = conversation;
+
+        assert!(
+            resumed.rewind_points().is_empty(),
+            "the resumed session was handed a point the rename gave up"
+        );
+
+        rewind(
+            &mut resumed,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            1,
+        );
+
+        assert_eq!(
+            resumed.turns, 1,
+            "the resumed session rewound a turn it had given up the point for"
+        );
+        let after = sessions::load(&root, stored.id())
+            .expect("the rewind discarded the renamed session's record");
+        assert_eq!(
+            after.title, "the parser bug",
+            "the rewind put back the name the session had before it was renamed"
+        );
+        assert_eq!(after.turns, 1, "the turn left the record with the rewind");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// The bare word is the list, which is the surface the command exists for: seeing what a
     /// rewind would put back before running it.
     #[test]
