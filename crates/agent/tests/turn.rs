@@ -1295,6 +1295,38 @@ fn a_turn_under_a_goal_is_told_the_condition_it_is_working_towards() {
     );
 }
 
+/// The settings key exists so that the answer is in front of the planner at the moment it writes
+/// a commit message, rather than in prose it read twenty rounds earlier. A value resolved and then
+/// left on the task decides nothing: what makes it an answer is that the request carries it.
+#[test]
+fn a_turn_is_told_what_the_settings_say_a_commit_message_may_carry() {
+    let scratch = Scratch::new("attribution-preamble");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("done"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let settings = bravebot_config::Settings::parse(r#"{"attribution": {"commit": ""}}"#);
+    let task = Task::new("go").with_attribution(settings.attribution().clone());
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let request = received.recv().expect("the request");
+    assert!(
+        request.contains("A commit message you write carries nothing of the kind"),
+        "what the settings said a commit may carry did not reach the planner: {request}"
+    );
+}
+
 /// A turn with no goal is an ordinary turn, and telling one about a stopping condition it has
 /// not got would have it working towards a sentence nobody wrote.
 #[test]

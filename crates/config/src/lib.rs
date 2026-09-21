@@ -24,7 +24,7 @@ mod settings;
 mod testutil;
 
 pub use managed::{Managed, managed_file};
-pub use settings::{Settings, name_a_settings_file, user_settings_file};
+pub use settings::{Attribution, Settings, name_a_settings_file, user_settings_file};
 
 pub mod bedrock;
 pub mod provider;

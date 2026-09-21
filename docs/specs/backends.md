@@ -933,6 +933,12 @@ nothing. A name no layer wrote is the settings having said nothing about that de
 a different answer from empty and is reported as unset. Anything that is not a string is read as
 absence, on the footing every other malformed value here is read.
 
+The resolved answer is stated to the planner, in the standing text put in front of every round of
+every turn, rather than left where something writing a commit message would have to go and look it
+up. A destination the block named is stated there, empty included; one it did not name is not
+mentioned at all. A delegate is told what the turn that spawned it was told, a delegate writing in
+the same tree for the same person.
+
 **Why.** A trailer nobody asked for is a small thing on one commit and a permanent thing in a
 history, and asking for none of it in the instructions puts the answer somewhere a model has to be
 reading at the moment it writes one. A key states it once, with nothing to re-read and nothing to
@@ -943,8 +949,19 @@ Absence is kept distinct from empty because they ask for different things. Empty
 nothing is carried; unset leaves the decision with whoever writes the commit, and collapsing the two
 would make a file that mentions the block at all speak for names it never named.
 
+**A stated value is handed over as text to copy rather than as a sentence addressed to the
+planner.** The block resolves over the three layers of [BACKEND-24](#BACKEND-24) and the middle of
+them is a file in the tree being worked on, so the string is whatever that checkout says. It is
+configuration rather than content, on the footing `env` and the permission rules are read on, but
+it is free text where those are structured, so it is quoted and the planner is told in the same
+breath that nothing inside it is addressed to it.
+
 `verified-by: bravebot_config::settings::an_empty_attribution_is_a_choice_of_nothing`
 `verified-by: bravebot_config::settings::an_attribution_name_no_file_wrote_is_unset`
+`verified-by: bravebot_agent::preamble::an_empty_attribution_tells_the_planner_to_carry_nothing_on_a_commit`
+`verified-by: bravebot_agent::preamble::an_attribution_no_file_named_is_not_stated_at_all`
+`verified-by: bravebot_agent::preamble::an_attribution_a_file_named_is_carried_word_for_word`
+`verified-by: bravebot_agent::turn::a_turn_is_told_what_the_settings_say_a_commit_message_may_carry`
 
 <a id="BACKEND-31"></a>
 ### BACKEND-31: a reply reports how much of the prompt the service did not have to read
@@ -1574,11 +1591,24 @@ finished call except the stop reason, and the stop reason says not to trust any 
 - **A layer a checkout carries is trusted as far as the person's own file is.** A `.bravebot`
   directory arrives with whatever produced the checkout, so a `settings.json` in one can name the host
   every request goes to and the credential that signs it, and somebody who has not read it would not
-  know. Nothing here distinguishes the layers, because the resolution being copied does not, and what
-  limits the damage is the same rule that limits it anywhere: a file names a destination and grants no
-  capability, so the worst it does is send a request somewhere useless or somewhere watching. Refusing
-  the fields that name a destination in the project layers is the fix if that trade stops being worth
-  it, and it would cost the main reason to put a value in a checkout at all.
+  know. Nothing here distinguishes the layers, because the resolution being copied does not. For every
+  field but one, what limits the damage is the same rule that limits it anywhere: a file names a
+  destination and grants no capability, so the worst it does is send a request somewhere useless or
+  somewhere watching. Refusing the fields that name a destination in the project layers is the fix if
+  that trade stops being worth it, and it would cost the main reason to put a value in a checkout at
+  all.
+
+  The one field that is not a destination is `attribution`, whose value [BACKEND-30](#BACKEND-30)
+  states to the planner. A checkout can therefore put a string of its own choosing in front of every
+  round, which is a wider thing than naming a host, and it is the one place a settings layer reaches
+  the planner's context at all. What is quoted is fenced and said to be text to copy rather than
+  written in as a sentence addressed to the planner, and the fence is sized to the value so a value
+  holding one cannot close it. That is a presentation, not a guarantee, and it is the whole of the
+  mitigation: the standing instructions the same checkout carries go through a trust gate that can
+  refuse them and this does not, because it is configuration and the resolution being copied reads
+  configuration the same wherever it came from. Stating only the layer in the person's own directory
+  is the fix if that trade stops being worth it, and it would cost a checkout the ability to say what
+  its own history carries.
 
 - **The aichat endpoint Brave runs discards the effort level.** Measured against that endpoint: a
   nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits

@@ -13,6 +13,7 @@ use bravebot_agent::conversation::Conversation;
 use bravebot_agent::lsp::LanguageServers;
 use bravebot_agent::turn::{self, PastedImage, Task};
 use bravebot_agent::{SessionScratch, Workspace};
+use bravebot_config::Attribution;
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::permissions::Permissions;
@@ -2733,6 +2734,7 @@ fn event_loop(
                         &task,
                         &trust,
                         &permissions,
+                        settings.attribution(),
                     )?;
 
                     // Taken off the workspace rather than kept for anything: a run is not a turn of
@@ -2859,6 +2861,7 @@ fn event_loop(
                         servers,
                         asked_about,
                         &permissions,
+                        settings.attribution(),
                         stored.id(),
                     )?;
                     let events = continued.events;
@@ -4187,6 +4190,7 @@ fn manifest_animated(
     task: &str,
     trust: &TrustStore,
     permissions: &Permissions,
+    attribution: &Attribution,
 ) -> io::Result<Vec<Stamped>> {
     // For the reason a turn does it: a sign-in needs the terminal, and this is the thread that has
     // it. Left to the worker, the URL and code the AWS CLI prints would land nowhere anyone reads.
@@ -4215,7 +4219,8 @@ fn manifest_animated(
         .with_model(session.model().map(str::to_string))
         .with_effort(session.effort_in_force())
         .with_permissions(permissions.clone())
-        .with_permission_mode(permission_mode);
+        .with_permission_mode(permission_mode)
+        .with_attribution(attribution.clone());
     // Nothing is said about the standing form of a write answer, so nothing offers it. A plan has
     // no standing answer at all (MANIFEST-10), and a run whose steps were fixed before anything was
     // read is the worst place to record one: the key would be pressed about a step in a plan that
@@ -4715,6 +4720,7 @@ fn run_turn_animated(
     servers: Option<LanguageServers>,
     asked_about: AskedAbout,
     permissions: &Permissions,
+    attribution: &Attribution,
     // This session's own identifier. It travels with the task because a run prompt may be answered
     // with the key whose grant outlives the session, and the record of that says which session
     // pressed it so that `/status` can tell a person which answers they are still carrying.
@@ -4774,6 +4780,7 @@ fn run_turn_animated(
         .with_effort(session.effort_in_force())
         .with_permissions(permissions.clone())
         .with_permission_mode(permission_mode)
+        .with_attribution(attribution.clone())
         // Whether a check that finds nothing answers in the person's place. Read off the session
         // for the reason the mode is: the `a` key can change it, and a turn keeps the answer it
         // began with.
