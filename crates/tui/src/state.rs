@@ -168,13 +168,23 @@ impl Delegate {
         latest
     }
 
-    /// Keep one more of its lines, dropping the oldest where there are already enough.
-    fn keep(&mut self, entry: Entry) {
-        self.calls += 1;
+    /// Hold one more of its lines, dropping the oldest where there are already enough.
+    ///
+    /// The one way a line enters a delegate, so the bound holds however the line arrived. A
+    /// preview released for the person to read is not a call, but it is a line held in the same
+    /// memory, and a delegate releasing one per call passes the bound a preview at a time without
+    /// this.
+    fn hold(&mut self, entry: Entry) {
         self.lines.push(entry);
         if self.lines.len() > DELEGATE_KEPT {
             self.lines.remove(0);
         }
+    }
+
+    /// Hold one more of its lines, and count it against the calls it has made.
+    fn keep(&mut self, entry: Entry) {
+        self.calls += 1;
+        self.hold(entry);
     }
 }
 
@@ -1828,7 +1838,11 @@ impl Session {
     }
 
     /// Where a report lands: under the delegate whose work it is, or in the turn's transcript.
-    fn working_lines(&mut self) -> &mut Vec<Entry> {
+    ///
+    /// A slice rather than the vector, so nothing can add a line here. A delegate's lines are
+    /// bounded, and the bound is enforced where a line enters rather than by every caller
+    /// remembering: [`Session::hold`] is that entrance.
+    fn working_lines(&mut self) -> &mut [Entry] {
         match self.attributed_to.and_then(|id| self.at(id)) {
             Some(at) => {
                 &mut self.transcript[at]
@@ -1838,6 +1852,22 @@ impl Session {
                     .lines
             }
             None => &mut self.transcript,
+        }
+    }
+
+    /// Hold a line that is not a call: under the delegate whose work it is, to the same bound its
+    /// calls are held to, or in the turn's transcript.
+    ///
+    /// Not [`Session::working_lines`] and a push, which reaches the delegate's lines around the
+    /// only thing that bounds them.
+    fn hold(&mut self, entry: Entry) {
+        match self.attributed_to.and_then(|id| self.at(id)) {
+            Some(at) => self.transcript[at]
+                .delegate
+                .as_mut()
+                .expect("a delegate entry holds its delegate")
+                .hold(entry),
+            None => self.transcript.push(entry),
         }
     }
 
@@ -2216,7 +2246,7 @@ impl Session {
             _ => {
                 let mut entry = Entry::system("");
                 entry.shown = Some(shown);
-                self.working_lines().push(entry);
+                self.hold(entry);
             }
         }
     }
@@ -7255,6 +7285,41 @@ mod tests {
             assert_eq!(
                 held[0].lines[0].activity.as_ref().unwrap().target,
                 "step 50",
+                "the newest were dropped rather than the oldest"
+            );
+        }
+
+        /// The bound is on what is held in memory, so it has to hold whatever a line arrived as. A
+        /// delegate whose results release more than one preview each grows past it a preview at a
+        /// time, and starts dropping its oldest work at half the calls the clause names.
+        #[test]
+        fn a_preview_is_held_to_the_same_bound_as_a_call() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "worker", "the long one");
+            let rounds = DELEGATE_KEPT + 50;
+            for round in 0..rounds {
+                let call = Activity::running("Isolated processor", format!("notes{round}.md"));
+                session.start_activity(call.clone());
+                session.finish_activity(call.done("wrote 1 line"));
+                // Two released previews for the one call, as a spawn_processor result reports:
+                // the first attaches to the call's line, the second arrives as a line of its own.
+                session.show(quarantined("what the isolated processor said"));
+                session.show(quarantined(&format!("notes{round}.md")));
+            }
+
+            let held = session.delegates();
+            assert_eq!(held[0].calls, rounds, "a preview was counted as a call");
+            assert_eq!(
+                held[0].lines.len(),
+                DELEGATE_KEPT,
+                "the previews carried the delegate past the bound"
+            );
+            assert!(
+                held[0]
+                    .lines
+                    .last()
+                    .and_then(|entry| entry.shown.as_ref())
+                    .is_some_and(|shown| shown.origin == format!("notes{}.md", rounds - 1)),
                 "the newest were dropped rather than the oldest"
             );
         }
