@@ -38,6 +38,7 @@ fn a_write() -> WriteRequest {
         intent: Intent::Edit,
         untrusted: false,
         remark: None,
+        credentials: Vec::new(),
     }
 }
 

@@ -446,6 +446,10 @@ write-too-large-to-show =
 write-untrusted = untrusted: nobody has read this, and the model never saw it
 write-remark =
     what the isolated processor said about this change, which nothing has checked against it
+write-credentials =
+    this looks like it would put a secret in the tree, going by the name beside the value and how
+    the value reads. Nothing recognised it as a particular provider's key, so it is a guess and
+    yours to settle
 write-unchanged = { $count ->
     [one] … { $count } unchanged line
    *[other] … { $count } unchanged lines

@@ -6,6 +6,7 @@ governs:
   - crates/config/src/lib.rs
   - crates/config/src/env_var.rs
   - crates/bedrock/src/credentials.rs
+  - crates/core/src/credentials.rs
 guards:
   - symbol: Secret::expose
 documented-by:
@@ -463,7 +464,33 @@ why this scan can refuse where the other can only inform. It is not authorship: 
 reformats or moves a file already holding a key produces a diff carrying it without having written
 it, and that case is reported rather than refused.
 
-`verified-by: none`
+**What is refused and what is asked about.** A value that declared itself a credential (a
+provider's prefix over its own alphabet at its own length, or the password field of a URL) is
+refused, and nobody is asked: there is no judgement to put to anybody, and a prompt that can be
+answered "write it anyway" is a prompt a turn eventually gets past. A value inferred from a name
+that sounds like a secret beside one that looks rare is raised on the approval the write already
+needs, and the person decides. That inference catches a generated framework key, and it also
+catches an inline Kubernetes `Secret`, a local development password and a test fixture; refusing on
+all four with no override would stop ordinary work over a guess, and a scan people have to fight is
+a scan they turn off. The prompt names the finding, so the question can be answered.
+
+A finding raised this way goes to the person and never to the planner, which is what CRED-19
+requires of a finding however it is answered.
+
+`verified-by: bravebot_agent::turn::a_credential_a_turn_writes_never_reaches_the_tree`
+`verified-by: bravebot_agent::turn::a_credential_pasted_by_an_edit_leaves_the_file_as_it_was`
+`verified-by: bravebot_agent::turn::a_credential_the_file_already_held_does_not_refuse_the_change_carrying_it`
+`verified-by: bravebot_agent::turn::what_the_scan_found_is_told_to_the_person_and_not_to_the_planner`
+`verified-by: bravebot_agent::turn::a_value_that_only_looks_like_a_secret_is_put_to_the_person`
+`verified-by: bravebot_agent::turn::the_prompt_says_which_value_it_is_asking_about`
+`verified-by: bravebot_core::credentials::a_generated_key_is_recognised_from_its_name_and_its_rarity`
+`verified-by: bravebot_core::credentials::a_provider_key_is_recognised_with_nothing_around_it_saying_so`
+`verified-by: bravebot_core::credentials::a_provider_key_is_recognised_when_it_is_assigned_to_a_name`
+`verified-by: bravebot_core::credentials::a_password_in_a_connection_string_is_a_finding`
+`verified-by: bravebot_core::credentials::each_shape_matches_at_its_minimum_and_not_below_it`
+`verified-by: bravebot_core::credentials::one_key_in_a_json_field_is_one_finding`
+`verified-by: bravebot_core::credentials::an_armoured_private_key_is_one_finding_over_its_whole_body`
+`verified-by: bravebot_core::credentials::nothing_a_finding_says_repeats_the_value`
 
 <a id="CRED-17"></a>
 ### CRED-17: no gate passes because the scan ran
@@ -590,10 +617,13 @@ be written down while the arrangement is still understood.
 **What it does not claim.** Recording the surface does not revoke anything, and nothing here reaches
 an issuer on a person's behalf.
 
-**Where the person is given it.** There is no leak to answer yet: the scan CRED-15 and CRED-16
-describe does not exist, and nor does the place CRED-19 would write a finding. What exists is the
-record and one surface that reads it, `doctor`, which reports what would end each credential this
-build holds. A scan landing later reads that record rather than writing a second one.
+**Where the person is given it.** Not yet from a leak. CRED-16's scan of what a turn writes
+exists and refuses, but it reports the finding and reaches no part of this record: somebody told a
+credential would have landed in a file is not thereby told what would end the one they already
+hold. CRED-15's scan of the tree before a run does not exist, and nor does the place CRED-19 would
+write a finding. What exists is the record and one surface that reads it, `doctor`, which reports
+what would end each credential this build holds. A scan reaching it later reads that record rather
+than writing a second one.
 
 `verified-by: bravebot_config::lib::a_build_that_cannot_sign_for_itself_holds_no_signing_key_to_account_for`
 `verified-by: bravebot_config::lib::an_aws_account_holds_both_arrangements_and_they_end_differently`
@@ -680,7 +710,38 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
 - **Held is where most credentials live today**, and its obligations are the cost of that being
   true rather than a promise that it is rare.
 
-- **Almost nothing is implemented.** There is no scan, and no authority at the tier these clauses
-  describe. What exists is one performer: a credential a vault obtained itself, and a mail send
-  carried out against it so that the asking agent never holds the token. That much of the walk runs;
-  the rest of every clause here is a target.
+- **A credential written through a reference is not scanned.** The scan reads what a turn wrote in
+  its own words. A body that arrived as quarantined content is carried to the file without the
+  driver reading a byte of it, and examining one to decide whether to refuse would be a decision
+  taken from untrusted content, which [labels.md](labels.md) admits nowhere. So a value copied out
+  of a file nobody vouched for reaches the tree through a reference. What would close it is a scan
+  whose finding nothing here has to branch on.
+
+- **A file a turn creates is attributed to it whole.** A carried value is told from an authored one
+  by what the file at that path already held, and a file that did not exist held nothing. So a turn
+  that moves a file already holding a key is refused, where the clause above says that case is
+  reported. What would tell the two apart is the scan before the run, which is what records what
+  was already there.
+
+- **A fingerprint is salted per run and kept nowhere.** It tells two findings in one run apart and
+  says nothing between runs, so an acceptance cannot be carried forward and the baseline has
+  nothing to match against. A salt that outlives the run is a file somebody has to keep, and it
+  belongs with the store a finding is written to.
+
+  One consequence is worth naming: an inferred finding is re-raised every run, because nothing
+  remembers that somebody already said a development password was a development password. A person
+  working in a tree that holds one answers for it again each session. The allowlist that would fix
+  it needs the durable salt and the store above, so this is the cost of not having them yet rather
+  than a separate gap.
+
+- **Only what a turn writes is scanned, never what it reads.** A secret already in the tree reaches
+  the planner's context the moment a turn reads the file holding it, and nothing looks at it on the
+  way through. The gate here is about what this system *causes*; disclosure of what was already
+  there is CRED-15's business, and CRED-15 is unbuilt. The two together are why reading a `.env` is
+  currently unexamined in both directions.
+
+- **Most of this is not implemented.** What runs is the scan of what a turn writes, and one
+  performer: a credential a vault obtained itself, and a mail send carried out against it so that
+  the asking agent never holds the token. There is no scan of the tree before it is vouched for, no
+  store a finding is written to and no baseline over one, and no authority at the tier these clauses
+  describe. The rest of every clause here is a target.

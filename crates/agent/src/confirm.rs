@@ -71,6 +71,18 @@ pub struct WriteRequest {
     /// It decides nothing. No gate reads it, the approval is given from the diff, and a write
     /// goes the same way with it as without it.
     pub remark: Option<Remark>,
+    /// What the credential scan inferred about this body, where it inferred anything.
+    ///
+    /// Only the findings a person decides about: a name that says secret beside a value rare enough
+    /// to be one. A value that declared itself a credential is refused before this question is
+    /// ever put, so nothing listed here is something an approval could let through. See
+    /// [`bravebot_core::credentials::Scanned::refused`].
+    ///
+    /// Each entry is already a kind, a location and a masked preview, so drawing one repeats no
+    /// part of the value. They belong on this screen rather than in the transcript because the
+    /// decision is about these lines: somebody weighing a `POSTGRES_PASSWORD` wants the diff in
+    /// front of them while they weigh it.
+    pub credentials: Vec<String>,
 }
 
 /// What a processor said about the document it produced, released for the screen an approval is
@@ -1290,6 +1302,7 @@ mod tests {
             intent: Intent::Overwrite,
             untrusted: false,
             remark: None,
+            credentials: Vec::new(),
         }
     }
 
@@ -1580,6 +1593,7 @@ mod tests {
             intent: Intent::Create,
             untrusted: false,
             remark: None,
+            credentials: Vec::new(),
         }
     }
 

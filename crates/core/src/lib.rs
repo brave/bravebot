@@ -18,6 +18,7 @@ pub mod ask;
 pub mod cancel;
 pub mod capability;
 pub mod command;
+pub mod credentials;
 pub mod delegate;
 pub mod event;
 pub mod fence;

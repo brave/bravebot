@@ -190,6 +190,11 @@ pub fn said(said: &Said) -> Value {
 /// `untrusted` means the body came from somewhere nobody vouched for. Reviewing that is a
 /// different act from reviewing the model's own work, and a front-end must not make the
 /// two look alike.
+///
+/// `credentials` is why a write the path's own rule would not have asked about is being
+/// asked about at all: the scan inferred a secret in the body and put the guess to a
+/// person. Leaving it off the wire would send a front-end an approval prompt for an
+/// ordinary-looking write with the reason for it removed.
 pub fn write_request(id: u64, request: &WriteRequest) -> Value {
     let diff = request.diff();
     json!({
@@ -198,6 +203,11 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
         "intent": intent(request.intent),
         "untrusted": request.untrusted,
         "remark": request.remark.as_ref().map(|r| json!({"preview": r.preview, "lines": r.lines, "label": r.label})),
+        // Already a kind, a location and a masked preview each, so sending them repeats no
+        // character of the value. The terminal draws these beside the diff for the same
+        // reason `CONTEXT_LINES` is shared: the decision is about these lines, and an
+        // approval has to mean the same thing in both front-ends.
+        "credentials": request.credentials,
         "existing": request.existing.is_some(),
         "added": diff.added(),
         "removed": diff.removed(),

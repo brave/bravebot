@@ -1553,7 +1553,29 @@ fn write<S: Sink, C: Confirmer>(
         Intent::Create
     };
 
-    if policy.write_needs_approval(&path, body_label, Destination::Named) {
+    // What this would leave in the tree, before anything is written and before anybody is asked.
+    // A manifest run has no planner in the control path, so the refusal here is read by a person
+    // and is the whole of what they are told about the step.
+    let scanned = policy.scan_a_write("write_file", &path, existing.as_deref(), &body);
+    let refused = scanned.refused();
+    if !refused.is_empty() {
+        let found: Vec<String> = refused.iter().map(|finding| finding.describe()).collect();
+        return Err(format!(
+            "writing {path} would put a credential in the tree, so nothing was written: {}",
+            found.join("; ")
+        ));
+    }
+
+    // A value the scan inferred rather than recognised is put to whoever is watching, here as
+    // everywhere else. A manifest run that nobody is watching has a confirmer that refuses, so an
+    // unattended run stops on a step whose body looks like a secret rather than writing it.
+    let to_approve: Vec<String> = scanned
+        .to_approve()
+        .iter()
+        .map(|finding| finding.describe())
+        .collect();
+    if policy.write_needs_approval(&path, body_label, Destination::Named) || !to_approve.is_empty()
+    {
         let request = WriteRequest {
             intent,
             existing: existing.clone(),
@@ -1561,6 +1583,7 @@ fn write<S: Sink, C: Confirmer>(
             contents: shown.clone(),
             untrusted: !body_label.is_trusted(),
             remark,
+            credentials: to_approve,
         };
         if confirmer.confirm_write(&request) == Decision::Reject {
             return Err(format!("the user did not approve writing {path}"));
@@ -1576,7 +1599,7 @@ fn write<S: Sink, C: Confirmer>(
     let (note, changes) =
         crate::tools::change_report(intent, existing.as_deref(), &shown, replaced_age);
     Ok(Done {
-        note,
+        note: crate::tools::carried_note(note, &scanned),
         changes,
         ..Done::default()
     })
