@@ -129,6 +129,32 @@ pub fn typed_reference(line: &str) -> Option<&str> {
     last.strip_prefix('@')
 }
 
+/// Whether what has been typed already names a file in the workspace.
+///
+/// Asked of the workspace rather than of [`matching`], because that list is capped at
+/// [`MAX_ENTRIES`] for display and a name is no less finished for having been cut from it. Deciding
+/// from the offered entries lets the number of siblings a directory happens to hold change what
+/// Enter does: forty directories sharing a prefix sort above the file and push it out, so a
+/// finished `@test` is completed away into a directory nobody chose.
+///
+/// A directory is not a file here, since it is somewhere to type through rather than something to
+/// read, which is the same distinction [`referenced`] makes. Decided without following a symlink,
+/// so the answer agrees with the way [`matching`] classifies the same entry: a name the list would
+/// offer as a file is a finished name.
+pub fn names_a_file(root: &Path, typed: &str) -> bool {
+    // `..` and an absolute path are refused rather than resolved, the same string refusal
+    // `matching` makes of what is being typed. Not a confinement check, and it cannot become one:
+    // `matching` offers a symlink pointing out of the workspace as a file of its own, and a name
+    // the list offers has to count as finished or Enter completes it away, which is the whole
+    // thing this exists to stop.
+    if typed.contains("..") || typed.starts_with('/') {
+        return false;
+    }
+    root.join(typed)
+        .symlink_metadata()
+        .is_ok_and(|named| !named.is_dir())
+}
+
 /// Every file named with `@` in a line, in the order they were written.
 ///
 /// This is what becomes a turn's context. A trailing slash is dropped, since a directory is a place
@@ -259,6 +285,66 @@ mod tests {
     fn a_directory_is_not_collected_as_a_file() {
         assert!(referenced("look in @crates/").is_empty());
         assert_eq!(referenced("@crates/tui/lib.rs"), vec!["crates/tui/lib.rs"]);
+    }
+
+    /// A finished name is decided from the workspace, so the cap that bounds what is displayed
+    /// cannot change the answer, and a directory is still somewhere to type through.
+    #[test]
+    fn what_counts_as_already_naming_a_file() {
+        let scratch = Scratch::new("finished");
+        assert!(names_a_file(&scratch.path, "Makefile"));
+        assert!(names_a_file(&scratch.path, "crates/tui/lib.rs"));
+        assert!(!names_a_file(&scratch.path, "crates"), "a directory");
+        assert!(!names_a_file(&scratch.path, "Make"), "half typed");
+        assert!(!names_a_file(&scratch.path, ""), "a bare `@`");
+
+        // More siblings sharing the prefix than the list can hold. They sort above the file, so
+        // the cut takes the file first and nothing about it having been typed has changed.
+        for n in 0..MAX_ENTRIES + 5 {
+            std::fs::create_dir_all(scratch.path.join(format!("Makefile{n:03}"))).expect("create");
+        }
+        let offered = matching(&scratch.path, "Makefile");
+        assert!(
+            !paths(&offered).contains(&"Makefile"),
+            "the file was still offered, so the cap was never reached"
+        );
+        assert!(names_a_file(&scratch.path, "Makefile"));
+    }
+
+    /// A symlink counts as whatever the offered list calls it. The list classifies without
+    /// following one, so a symlink to a directory is offered as a file: following it here would
+    /// mean a name the user can see offered stops counting as finished, which is the same
+    /// completed-away failure from the other direction.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_is_a_finished_name_because_the_list_offers_it_as_one() {
+        let scratch = Scratch::new("finished-symlink");
+        std::os::unix::fs::symlink("crates", scratch.path.join("notes")).expect("link");
+        assert_eq!(
+            matching(&scratch.path, "notes"),
+            vec![Entry {
+                path: "notes".to_string(),
+                is_directory: false,
+            }],
+            "the list offers a symlink as a file, following nothing"
+        );
+        assert!(names_a_file(&scratch.path, "notes"));
+    }
+
+    /// Nothing outside the workspace is a name this answers for, the same refusal `matching` makes.
+    #[test]
+    fn dots_and_an_absolute_path_are_not_finished_names() {
+        let scratch = Scratch::new("finished-escape");
+        // The workspace is the nested directory, so the file one level up is genuinely outside it
+        // while still existing, which is what makes the refusal say anything.
+        let root = scratch.path.join("crates");
+        let outside = scratch.path.join("Makefile");
+        assert!(names_a_file(&scratch.path, "Makefile"), "it is there");
+        assert!(!names_a_file(&root, "../Makefile"), "climbing out");
+        assert!(
+            !names_a_file(&root, outside.to_str().expect("utf8")),
+            "an absolute path"
+        );
     }
 
     /// A bare `@` names nothing, so it is a character in a sentence rather than a file.

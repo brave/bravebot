@@ -3795,7 +3795,7 @@ impl Session {
             Offered::Commands(_) => self
                 .highlighted_completion()
                 .is_some_and(|command| command.name != self.input.trim()),
-            Offered::Files(entries) => {
+            Offered::Files(_) => {
                 let Some(typed) = crate::entries::typed_reference(&self.input) else {
                     return false;
                 };
@@ -3803,11 +3803,12 @@ impl Session {
                 // happens to be highlighting: `@test` names a file of its own while a `tests/`
                 // beside it sorts above. Walking the list with the arrows is a choice among the
                 // rows and still wins, which is why this asks the untouched cursor.
-                if self.completion == 0
-                    && entries
-                        .iter()
-                        .any(|entry| !entry.is_directory && entry.path == typed)
-                {
+                //
+                // Asked of the workspace rather than of `entries`, which is capped for display:
+                // forty directories sharing the prefix sort above the file and cut it from the
+                // list, and scanning the list would then complete a finished name away into a
+                // directory nobody chose.
+                if self.completion == 0 && crate::entries::names_a_file(&self.workspace, typed) {
                     return false;
                 }
                 self.highlighted_entry()
