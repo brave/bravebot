@@ -694,7 +694,7 @@ mod tests {
         // nothing an issuer would hand out. AWS is the vendor's own documented example value.
         for (line, kind) in [
             (
-                "GH_PAT=ghp_0123456789abcdefghijklmnopqrstuvwxyz\n", // nosemgrep: generic.secrets.gitleaks.github-pat.github-pat
+                "GH_PAT=ghp_0123456789abcdefghijklmnopqrstuvwxyz\n", // nosemgrep: generic.secrets.gitleaks.github-pat.github-pat, generic.secrets.security.detected-github-token.detected-github-token
                 Kind::GitHubToken,
             ),
             (
@@ -712,7 +712,7 @@ mod tests {
                 Kind::AwsAccessKey,
             ),
             (
-                "export GH=ghp_0123456789abcdefghijklmnopqrstuvwxyz\n", // nosemgrep: generic.secrets.gitleaks.github-pat.github-pat
+                "export GH=ghp_0123456789abcdefghijklmnopqrstuvwxyz\n", // nosemgrep: generic.secrets.gitleaks.github-pat.github-pat, generic.secrets.security.detected-github-token.detected-github-token
                 Kind::GitHubToken,
             ),
         ] {
@@ -745,7 +745,7 @@ mod tests {
     fn a_documented_placeholder_carrying_a_real_prefix_is_not_a_key() {
         for line in [
             "ANTHROPIC_API_KEY=sk-ant-api03-REPLACE-THIS-WITH-YOUR-REAL-KEY\n",
-            "GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+            "GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n", // nosemgrep: generic.secrets.gitleaks.github-pat.github-pat, generic.secrets.security.detected-github-token.detected-github-token
             "GOOGLE_API_KEY=AIzaYOUR_GOOGLE_API_KEY_GOES_HERE_1234\n",
         ] {
             assert!(
@@ -762,9 +762,9 @@ mod tests {
     fn a_password_in_a_connection_string_is_a_finding() {
         for line in [
             "DATABASE_URL=postgres://appuser:p9Kx2mQ7vL4nR8tZ3wY6@db.internal:5432/app\n",
-            "REDIS_URL=redis://:s3cretP9Kx2mQ7vL4nR8tZ@cache:6379/0\n",
-            "AMQP=amqp://svc:9zQmR4tL7vX2nB8kC5wY3jH6@mq:5672\n",
-            "  url: \"mongodb://admin:Tr0ub4dor3xKx2mQ7vL4@cluster0/db\"\n",
+            "REDIS_URL=redis://:s3cretP9Kx2mQ7vL4nR8tZ@cache:6379/0\n", // nosemgrep: trailofbits.generic.redis-unencrypted-transport.redis-unencrypted-transport
+            "AMQP=amqp://svc:9zQmR4tL7vX2nB8kC5wY3jH6@mq:5672\n", // nosemgrep: trailofbits.generic.amqp-unencrypted-transport.amqp-unencrypted-transport
+            "  url: \"mongodb://admin:Tr0ub4dor3xKx2mQ7vL4@cluster0/db\"\n", // nosemgrep: trailofbits.generic.mongodb-insecure-transport.mongodb-insecure-transport
         ] {
             let found = scan(".env", line, 1);
             assert!(
@@ -814,7 +814,7 @@ mod tests {
             "DATABASE_URL=postgres://appuser:$DB_PASSWORD@db.internal/app\n",
             "DATABASE_URL=postgres://appuser:your-password-here@db/app\n",
             "DOCS=https://example.com/guide/user:pass@notes\n",
-            "REDIS_URL=redis://cache:6379/0\n",
+            "REDIS_URL=redis://cache:6379/0\n", // nosemgrep: trailofbits.generic.redis-unencrypted-transport.redis-unencrypted-transport
         ] {
             let found: Vec<_> = scan(".env", line, 1)
                 .into_iter()
@@ -832,7 +832,7 @@ mod tests {
     fn one_key_in_a_json_field_is_one_finding() {
         for line in [
             "{\"apiKey\": \"AIza0123456789abcdefghijklmnopqrstuvwxy\"}\n",
-            "  {\"token\": \"ghp_0123456789abcdefghijklmnopqrstuvwxyz\"},\n",
+            "  {\"token\": \"ghp_0123456789abcdefghijklmnopqrstuvwxyz\"},\n", // nosemgrep: generic.secrets.gitleaks.github-pat.github-pat
             "secrets: [\"sk_live_0123456789abcdef\"]\n",
         ] {
             let found = scan("conf.json", line, 1);
