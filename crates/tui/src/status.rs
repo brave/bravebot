@@ -14,6 +14,7 @@
 //! are workspace-relative names shown to the person who owns the workspace, and the counts are this
 //! program's own arithmetic. No model reads any of it.
 
+use bravebot_agent::watch;
 use bravebot_config::Config;
 use bravebot_core::label::Integrity;
 use bravebot_core::programs::TrustedPrograms;
@@ -128,7 +129,7 @@ pub struct Facts<'a> {
     /// Empty says nothing at all, for the reason the loop's absence says nothing. A live one is
     /// a line each, because the number is what a person ends it by and the turn that armed it is
     /// what makes a prompt arriving hours later have a cause.
-    pub watches: &'a [crate::watches::Watch],
+    pub watches: &'a [watch::Watch],
     /// The command lines somebody asked to be remembered past a session, for this directory.
     ///
     /// `None` where this session keeps no such record at all: no state directory, or a mode that
@@ -685,12 +686,12 @@ mod tests {
     fn the_report_lists_every_live_watch_with_the_turn_that_armed_it() {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
-        let mut watches = crate::watches::Watches::new();
+        let mut watches = watch::Watches::new();
         watches
             .arm(
                 "notes/plan.md".to_string(),
                 3,
-                bravebot_agent::watch::Looked::Saw("first".to_string()),
+                watch::Looked::Saw("first".to_string()),
                 std::time::Instant::now(),
             )
             .expect("a watch");

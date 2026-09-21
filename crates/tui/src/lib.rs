@@ -48,7 +48,7 @@ pub mod update;
 pub const BUILD: &str = env!("BRAVEBOT_BUILD");
 pub mod verbs;
 pub mod vim;
-pub mod watches;
+pub mod watch_command;
 pub mod wrap;
 
 pub use state::{Entry, Session, Speaker, Status};

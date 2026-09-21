@@ -5,6 +5,7 @@
 //! stops routing from one turn leaking into the next as untrusted content accumulates.
 
 use bravebot_agent::report::{Activity, Landing, Phase, Printed, Reported, Shown};
+use bravebot_agent::watch;
 use bravebot_aichat::protocol::Effort;
 use bravebot_i18n::t;
 use bravebot_session::audit::TrailLine;
@@ -1054,7 +1055,7 @@ pub struct Session {
     /// Not in [`bravebot_session::sessions::Standing`] either, and more strongly than the other two: a watch
     /// that outlived its session would start sending prompts at somebody who opened a
     /// conversation to read it, about a file that moved while nobody was here.
-    watches: crate::watches::Watches,
+    watches: watch::Watches,
     /// The same prompts, resolved, for the turn in flight to take between rounds.
     ///
     /// Shared with the worker rather than sent down a channel, because a queued prompt can be
@@ -1242,7 +1243,7 @@ impl Session {
             running: None,
             queued: Vec::new(),
             looping: None,
-            watches: crate::watches::Watches::new(),
+            watches: watch::Watches::new(),
             goal: None,
             rewind_points: Vec::new(),
             turn_start: TurnStart::default(),
@@ -5041,7 +5042,7 @@ impl Session {
     }
 
     /// Every live watch, oldest first, for the report that lists them.
-    pub fn watches(&self) -> &[crate::watches::Watch] {
+    pub fn watches(&self) -> &[watch::Watch] {
         self.watches.live()
     }
 
@@ -5049,15 +5050,15 @@ impl Session {
     ///
     /// Read once, as the turn is started, and handed to it: the tool answers out of this rather
     /// than guessing, so what the planner is told matches what the session will actually do.
-    pub fn arming(&self) -> bravebot_agent::watch::Arming {
-        use bravebot_agent::watch::Arming;
+    pub fn arming(&self) -> watch::Arming {
+        use watch::Arming;
         if self.looping.is_some() {
             return Arming::UnderALoop;
         }
         if self.goal.is_some() {
             return Arming::UnderAGoal;
         }
-        match crate::watches::MAX_LIVE.saturating_sub(self.watches.live().len()) {
+        match watch::MAX_LIVE.saturating_sub(self.watches.live().len()) {
             0 => Arming::Full,
             free => Arming::Allowed { free },
         }
@@ -5069,7 +5070,7 @@ impl Session {
     /// asks a second time. What is decided here is what only the session can decide: whether it
     /// is already doing something that happens without anybody typing, whether it has room, and
     /// what the first look at the path saw.
-    pub fn arm_watch(&mut self, path: &str, first: bravebot_agent::watch::Looked) {
+    pub fn arm_watch(&mut self, path: &str, first: watch::Looked) {
         if self.looping.is_some() {
             self.note(t!(watch_not_armed_under_a_loop));
             return;
@@ -5083,10 +5084,10 @@ impl Session {
             .arm(path.to_string(), self.turns, first, Instant::now())
         {
             Ok(number) => self.note(t!(watch_armed, number = number, path = path)),
-            Err(crate::watches::Refused::Full) => {
-                self.note(t!(watch_not_armed_full, count = crate::watches::MAX_LIVE))
+            Err(watch::Refused::Full) => {
+                self.note(t!(watch_not_armed_full, count = watch::MAX_LIVE))
             }
-            Err(crate::watches::Refused::NothingToLookAt) => {
+            Err(watch::Refused::NothingToLookAt) => {
                 self.note(t!(watch_not_armed_unreadable, path = path))
             }
         }
@@ -5109,14 +5110,12 @@ impl Session {
     pub fn watch_fired(
         &mut self,
         now: Instant,
-        look: impl FnMut(&str) -> bravebot_agent::watch::Looked,
+        look: impl FnMut(&str) -> watch::Looked,
     ) -> Option<String> {
         for (number, why) in self.watches.look(now, look) {
             match why {
-                crate::watches::Reaped::Aged => self.note(t!(watch_aged_out, number = number)),
-                crate::watches::Reaped::OutOfReach => {
-                    self.note(t!(watch_out_of_reach, number = number))
-                }
+                watch::Reaped::Aged => self.note(t!(watch_aged_out, number = number)),
+                watch::Reaped::OutOfReach => self.note(t!(watch_out_of_reach, number = number)),
             }
         }
         if self.status != Status::Idle || !self.queued.is_empty() {
@@ -5126,7 +5125,7 @@ impl Session {
         let (number, path) = (watch.number(), watch.path().to_string());
         self.watches.dispatched(number);
         self.note(t!(watch_fired, number = number, path = &path));
-        let prompt = bravebot_agent::watch::fired(number, &path);
+        let prompt = watch::fired(number, &path);
         Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), None))
     }
 
@@ -8458,8 +8457,8 @@ mod tests {
 
     /// What a watch is armed with, for the tests below: a look that saw something, so the watch
     /// has a first token to compare a later one against.
-    fn saw(token: &str) -> bravebot_agent::watch::Looked {
-        bravebot_agent::watch::Looked::Saw(token.to_string())
+    fn saw(token: &str) -> watch::Looked {
+        watch::Looked::Saw(token.to_string())
     }
 
     /// The whole of what this feature is for. Nothing is running, nobody typed anything, and a
@@ -8489,7 +8488,7 @@ mod tests {
         let later = Instant::now() + Duration::from_secs(6);
         let prompt = s.watch_fired(later, |_| saw("second")).expect("a fire");
 
-        assert_eq!(prompt, bravebot_agent::watch::fired(1, "notes.md"));
+        assert_eq!(prompt, watch::fired(1, "notes.md"));
         let sent = s
             .transcript
             .iter()
@@ -8607,7 +8606,7 @@ mod tests {
     /// has to say to the person.
     #[test]
     fn what_a_turn_is_told_about_arming_is_read_off_the_session() {
-        use bravebot_agent::watch::Arming;
+        use watch::Arming;
 
         let mut s = session();
         assert_eq!(s.arming(), Arming::Allowed { free: 8 });
@@ -8628,21 +8627,20 @@ mod tests {
     /// read it.
     #[test]
     fn a_session_holding_as_many_watches_as_it_keeps_reports_itself_full() {
-        use bravebot_agent::watch::Arming;
+        use watch::Arming;
 
         let mut s = session();
-        for n in 0..crate::watches::MAX_LIVE {
+        for n in 0..watch::MAX_LIVE {
             s.arm_watch(&format!("{n}.md"), saw("first"));
         }
         assert_eq!(s.arming(), Arming::Full);
 
         s.arm_watch("ninth.md", saw("first"));
-        assert_eq!(s.watches().len(), crate::watches::MAX_LIVE);
+        assert_eq!(s.watches().len(), watch::MAX_LIVE);
         assert!(
             s.transcript
                 .iter()
-                .any(|entry| entry.text
-                    == t!(watch_not_armed_full, count = crate::watches::MAX_LIVE)),
+                .any(|entry| entry.text == t!(watch_not_armed_full, count = watch::MAX_LIVE)),
             "a refused ninth watch said nothing"
         );
     }
@@ -8652,7 +8650,7 @@ mod tests {
     #[test]
     fn a_path_that_cannot_be_looked_at_is_refused_and_said_so() {
         let mut s = session();
-        s.arm_watch("gone.md", bravebot_agent::watch::Looked::Absent);
+        s.arm_watch("gone.md", watch::Looked::Absent);
         assert!(s.watches().is_empty());
         assert!(
             s.transcript
@@ -8741,7 +8739,7 @@ mod tests {
         let mut gone = session();
         gone.arm_watch("notes.md", saw("first"));
         gone.watch_fired(Instant::now() + Duration::from_secs(6), |_| {
-            bravebot_agent::watch::Looked::OutOfReach
+            watch::Looked::OutOfReach
         });
         assert!(gone.watches().is_empty());
         assert!(
