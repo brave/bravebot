@@ -18,7 +18,6 @@ docs/specs/credential-protection.md:CRED-9: the issuer ends the credential's lif
 docs/specs/credential-protection.md:CRED-10: a brief window is sized against detection, and the size is recorded
 docs/specs/credential-protection.md:CRED-11: a turn does not copy a credential somewhere weaker than where it was
 docs/specs/credential-protection.md:CRED-13: a credential a turn creates is created into the authority
-docs/specs/credential-protection.md:CRED-14: the credentials this agent holds for itself reach no program, no prompt and no record
 docs/specs/credential-protection.md:CRED-15: the tree is scanned before it is vouched for
 docs/specs/credential-protection.md:CRED-17: no gate passes because the scan ran
 docs/specs/credential-protection.md:CRED-18: no part of the scan discloses the tree off this machine

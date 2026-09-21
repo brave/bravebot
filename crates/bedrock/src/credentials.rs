@@ -35,6 +35,58 @@ use std::sync::mpsc;
 /// be wrong on the several platforms that install it somewhere different.
 const AWS: &str = "aws";
 
+/// A command for that program, with this agent's own credentials taken off it.
+///
+/// Every `aws` this crate starts is built here, because the CLI is a program the agent started and
+/// [CRED-14](../../../docs/specs/credential-protection.md#CRED-14) puts what this agent
+/// authenticates with out of reach of one. What a person approving a session read was a model
+/// request, not a handover of the signing key, and `aws sso login` goes on to open a browser, so
+/// the reach of an inherited environment does not stop at the CLI.
+///
+/// Which names those are is the configuration surface's rather than this file's: a second list
+/// written down here would be a list one name out of date the first time the real one changed.
+/// This agent's own and no more, rather than the wider set a program somebody asked for is held
+/// to: nobody asked for this program, so there is no answer of theirs to apply, and what the
+/// machine holds for AWS is what the CLI is being run to resolve. `AWS_PROFILE`, `AWS_REGION` and
+/// the rest of the user's environment are exactly what the clause leaves in place.
+fn aws() -> Command {
+    let mut command = Command::new(AWS);
+    for name in bravebot_config::scrub::own_credentials() {
+        command.env_remove(name);
+    }
+    command
+}
+
+/// The export, as a command, so what it is handed can be read without running it.
+fn export_command(profile: Option<&str>) -> Command {
+    // `--format process` is the documented, stable shape for exactly this: a program asking another
+    // program for credentials. The alternative, `--format env`, returns shell assignments that would
+    // have to be parsed as such.
+    let mut command = aws();
+    command.args(["configure", "export-credentials", "--format", "process"]);
+    if let Some(profile) = profile {
+        command.args(["--profile", profile]);
+    }
+    command
+}
+
+/// The profile listing, as a command, for the same reason.
+fn profiles_command() -> Command {
+    let mut command = aws();
+    command.args(["configure", "list-profiles"]);
+    command
+}
+
+/// The sign-in, as a command, for the same reason.
+fn login_command(profile: Option<&str>) -> Command {
+    let mut command = aws();
+    command.args(["sso", "login"]);
+    if let Some(profile) = profile {
+        command.args(["--profile", profile]);
+    }
+    command
+}
+
 /// Credentials for signing, as the CLI reported them.
 pub struct Credentials {
     pub access_key_id: String,
@@ -275,21 +327,14 @@ pub fn sign_in_if_needed(
 
 /// Ask the CLI for credentials, without trying to fix anything.
 fn export(profile: Option<&str>) -> Result<Credentials, CredentialError> {
-    // `--format process` is the documented, stable shape for exactly this: a program asking another
-    // program for credentials. The alternative, `--format env`, returns shell assignments that would
-    // have to be parsed as such.
-    let mut command = Command::new(AWS);
-    command.args(["configure", "export-credentials", "--format", "process"]);
-    if let Some(profile) = profile {
-        command.args(["--profile", profile]);
-    }
-
-    let output = command.output().map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
-        _ => CredentialError::Refused {
-            detail: e.to_string(),
-        },
-    })?;
+    let output = export_command(profile)
+        .output()
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
+            _ => CredentialError::Refused {
+                detail: e.to_string(),
+            },
+        })?;
 
     if !output.status.success() {
         return Err(CredentialError::Refused {
@@ -309,10 +354,7 @@ fn export(profile: Option<&str>) -> Result<Credentials, CredentialError> {
 /// Run only after something has already failed, so the check before every turn still costs one
 /// export and no more.
 fn profiles() -> Option<Vec<String>> {
-    let output = Command::new(AWS)
-        .args(["configure", "list-profiles"])
-        .output()
-        .ok()?;
+    let output = profiles_command().output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -363,13 +405,7 @@ fn login(profile: Option<&str>, mut say: impl FnMut(String)) -> Result<(), Crede
         return Err(absent);
     }
 
-    let mut command = Command::new(AWS);
-    command.args(["sso", "login"]);
-    if let Some(profile) = profile {
-        command.args(["--profile", profile]);
-    }
-
-    let mut child = command
+    let mut child = login_command(profile)
         // Both streams, because which one carries the code is the CLI's business and a person who
         // cannot see it is stuck either way.
         .stdout(Stdio::piped())
@@ -552,6 +588,98 @@ fn first_line(stderr: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a command was told to unset, which is how `env_remove` reads back: a name a child will
+    /// not be handed is present here with no value, and one left alone is absent altogether.
+    fn withheld_from(command: &Command) -> Vec<String> {
+        command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// Every `aws` this crate starts, not only the export. The weakness this closes is that a
+    /// person approving a model request approved a request, and a credential travelling in the
+    /// environment of the CLI that signs it was handed over without having been seen; `aws sso
+    /// login` then opens a browser, so the environment does not stop at a program AWS wrote.
+    ///
+    /// Against what the configuration surface says rather than against a list spelled again here:
+    /// a copy is what stops agreeing with the original the first time either is edited, and the
+    /// comparison holds on a machine that has switched the withholding off, where handing the
+    /// credential over is what was asked for.
+    #[test]
+    fn this_agents_own_credentials_reach_none_of_the_aws_cli_this_crate_starts() {
+        let mut expected: Vec<String> = bravebot_config::scrub::own_credentials()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        expected.sort();
+        for (what, command) in [
+            ("the export", export_command(None)),
+            ("the export for a profile", export_command(Some("work"))),
+            ("the profile listing", profiles_command()),
+            ("the sign-in", login_command(None)),
+            ("the sign-in for a profile", login_command(Some("work"))),
+        ] {
+            let mut withheld = withheld_from(&command);
+            withheld.sort();
+            assert_eq!(
+                withheld, expected,
+                "{what} was handed a different set from the one the configuration names"
+            );
+        }
+    }
+
+    /// The machine's own AWS configuration is the credential the CLI is being asked to resolve, so
+    /// withholding it would leave the CLI resolving nothing. CRED-14 covers what this agent
+    /// authenticates with and deliberately leaves what the person already has.
+    #[test]
+    fn the_machines_own_aws_configuration_still_reaches_the_cli() {
+        let withheld = withheld_from(&export_command(Some("work")));
+        for kept in [
+            "AWS_PROFILE",
+            "AWS_REGION",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SESSION_TOKEN",
+            "HOME",
+            "PATH",
+        ] {
+            assert!(
+                !withheld.iter().any(|it| it == kept),
+                "{kept} was withheld, so the CLI cannot resolve the credential it is asked for"
+            );
+        }
+    }
+
+    /// The scrubbing is added to the command, not substituted for what the command is: an
+    /// implementation that dropped the profile while removing a variable would be a sign-in
+    /// against the wrong account.
+    #[test]
+    fn the_cli_is_still_asked_what_it_was_asked_before() {
+        let args = |command: &Command| -> Vec<String> {
+            command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect()
+        };
+        assert_eq!(
+            args(&export_command(Some("work"))),
+            [
+                "configure",
+                "export-credentials",
+                "--format",
+                "process",
+                "--profile",
+                "work"
+            ]
+        );
+        assert_eq!(args(&profiles_command()), ["configure", "list-profiles"]);
+        assert_eq!(
+            args(&login_command(Some("work"))),
+            ["sso", "login", "--profile", "work"]
+        );
+    }
 
     /// No sign-in fixes a profile that is not configured: `aws sso login` fails against it for the
     /// same reason the export did, so attempting one spends a browser on a certainty and replaces

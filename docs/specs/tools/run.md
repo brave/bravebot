@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/exec.rs
   - crates/agent/src/remembered.rs
   - crates/agent/src/scrub.rs
+  - crates/config/src/scrub.rs
   - crates/core/src/command.rs
   - crates/core/src/programs.rs
   - crates/core/src/policy.rs
@@ -491,9 +492,9 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_agent::exec::the_users_own_environment_still_reaches_a_program`
 `verified-by: bravebot_agent::exec::the_plumbing_a_program_needs_is_still_inherited`
 `verified-by: bravebot_agent::exec::the_filtering_can_be_switched_off_by_its_documented_spelling_only`
-`verified-by: bravebot_agent::scrub::this_agents_credentials_are_withheld_without_being_configured`
-`verified-by: bravebot_agent::scrub::nothing_of_the_users_own_is_withheld_by_guesswork`
-`verified-by: bravebot_agent::scrub::a_name_from_the_settings_file_is_withheld_as_well`
+`verified-by: bravebot_config::scrub::this_agents_credentials_are_withheld_without_being_configured`
+`verified-by: bravebot_config::scrub::nothing_of_the_users_own_is_withheld_by_guesswork`
+`verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_withheld_as_well`
 
 <a id="RUN-13"></a>
 ### RUN-13: the caller is told how the run ended, whichever way the label went
