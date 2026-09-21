@@ -28,8 +28,17 @@ it correctly. Cover materially different changed paths, such as streamed and who
 cancellation before and after output, without testing every unrelated combination. Name any
 changed path or required state left without coverage and explain why.
 
+For changes to shared agent behaviour, identify the affected callers: CLI, TUI, UI bridge, and
+desktop UI. Check each caller's handling of results, errors, cancellation, and saved state where
+relevant. Passing agent or TUI tests does not establish that the UI bridge or desktop UI handles
+the same behaviour correctly. Test the affected integration boundary; include UI tests when
+rendering or interaction is part of the requirement. Explain why any affected caller lacks
+coverage.
+
 Choose commands from [the repository checks](../../../docs/development/checks.md), the Makefile,
 and affected CI jobs. Include spec verification metadata and platform checks when relevant.
+Include build and type checks for affected consumers when shared APIs or protocol shapes change,
+even if those consumers need no source edits.
 
 ## While changing tests
 
