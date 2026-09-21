@@ -13,10 +13,44 @@
 use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
 use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
+use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::Command;
 
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+
+/// The program a confined process is reached through where the environment would not
+/// survive the journey otherwise.
+///
+/// `sandbox-exec` is protected by System Integrity Protection, and dyld empties the loader
+/// variables out of a protected process before its first instruction: what it removes is
+/// gone from the environ handed on to whatever that process execs, so it never reaches the
+/// program being confined. Which variables a program is trusted with is the caller's
+/// decision and not a platform's, so a variable lost between the two execs is that
+/// decision taken away with nothing saying so.
+///
+/// An argument vector is not an environment and nothing prunes one, so what would be lost
+/// travels to the far side of `sandbox-exec` as arguments and `env` assigns it back there.
+///
+/// **Known cost.** An argument vector is readable by any local user through `ps`, and the
+/// environment of another user's process is not, so a variable carried this way is
+/// disclosed more widely than one that is inherited. Only the variables named by
+/// [`stripped_from_a_protected_process`] are carried, which are loader search paths rather
+/// than anything a program authenticates with. Carrying the whole environment would put
+/// every credential in it on a command line every user of the machine can read.
+const ENV: &str = "/usr/bin/env";
+
+/// The variables dyld empties out of a process protected by System Integrity Protection:
+/// every `DYLD_` variable, and `LD_LIBRARY_PATH`.
+///
+/// Over-approximating is free and under-approximating is the bug: a variable named here
+/// that the platform would have passed on is assigned the value it already had, and one
+/// left out that the platform removes is gone.
+fn stripped_from_a_protected_process(name: &OsStr) -> bool {
+    let name = name.as_bytes();
+    name.starts_with(b"DYLD_") || name == b"LD_LIBRARY_PATH"
+}
 
 /// Seatbelt-based confinement.
 #[derive(Debug, Default)]
@@ -54,6 +88,12 @@ impl SeatbeltSandbox {
         // denied read. Reading `/` alone exposes no file contents.
         out.push_str("(allow file-read* (literal \"/\"))\n");
 
+        // The program is sometimes reached through the `ENV` constant above, which the
+        // process reads to exec it, and the profile is built from the policy alone and so
+        // cannot tell which times those are. One file, world-readable, and one a policy
+        // naming any of /usr grants already.
+        out.push_str(&format!("(allow file-read* (literal {}))\n", quote(ENV)));
+
         for path in &policy.readable {
             out.push_str(&format!(
                 "(allow file-read* (subpath {}))\n",
@@ -89,6 +129,61 @@ fn quote(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+/// What `sandbox-exec` is given after the profile: the program to confine, its arguments,
+/// and the assignments restoring whatever the caller holds that would not otherwise arrive.
+///
+/// A caller holding none of those variables reaches its program directly, and so does a
+/// caller asking to hand over no environment at all: there is nothing to restore, and an
+/// assignment written here would be a variable arriving by a route that emptying the
+/// environment does not reach.
+///
+/// A program whose path holds an `=` is refused where it is passed to `env`, because it
+/// would not be run. `env` reads its arguments as assignments up to the first that is not
+/// one, so such a path is read as a variable, the program it names is never exec'd, and
+/// `env` prints its environment and exits reporting success.
+fn confined_argv(
+    program: &str,
+    args: &[String],
+    environment: Environment,
+    held: &[(OsString, OsString)],
+) -> Result<Vec<OsString>, SandboxError> {
+    let mut argv = Vec::new();
+
+    // Matched rather than compared, so a third answer added to `Environment` is a compile
+    // error here instead of a program handed a variable by an argument that nothing in the
+    // new answer knows to withhold.
+    let restore: Vec<&(OsString, OsString)> = match environment {
+        Environment::Inherited => held,
+        Environment::Empty => &[],
+    }
+    .iter()
+    .filter(|(name, _)| stripped_from_a_protected_process(name))
+    .collect();
+
+    if !restore.is_empty() {
+        if program.contains('=') {
+            return Err(SandboxError::SetupFailed {
+                mechanism: "seatbelt",
+                detail: format!(
+                    "the program path {program} contains '=', which {ENV} reads as a \
+                     variable assignment rather than as the program to run"
+                ),
+            });
+        }
+        argv.push(OsString::from(ENV));
+        argv.extend(restore.iter().map(|(name, value)| {
+            let mut assignment = name.clone();
+            assignment.push("=");
+            assignment.push(value);
+            assignment
+        }));
+    }
+
+    argv.push(OsString::from(program));
+    argv.extend(args.iter().map(OsString::from));
+    Ok(argv)
+}
+
 impl Sandbox for SeatbeltSandbox {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
@@ -117,14 +212,166 @@ impl Sandbox for SeatbeltSandbox {
 
         let mut wrapped = Command::new(SANDBOX_EXEC);
         wrapped.arg("-p").arg(Self::profile(policy));
-        wrapped.arg(program);
-        wrapped.args(args);
+        wrapped.args(confined_argv(
+            program,
+            args,
+            environment,
+            &std::env::vars_os().collect::<Vec<_>>(),
+        )?);
 
         crate::process::start(wrapped, streams, environment)
     }
 }
 
+/// What this backend decides before any process starts, checked wherever the suite runs.
+///
+/// Seatbelt is compiled on macOS alone, so everything below the next module is checked by
+/// one CI job on one platform. What reaches the program, and what is put on a command line
+/// to get it there, is worth pinning on every job that runs, which is why this module has
+/// no platform of its own (see the declaration of `macos` in `lib.rs`).
 #[cfg(test)]
+mod argument_tests {
+    use super::*;
+
+    fn held(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        pairs
+            .iter()
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+            .collect()
+    }
+
+    /// A variable the platform empties out of the wrapper reaches the program anyway, so
+    /// the environment a confined process receives is the caller's whole environment and
+    /// not the part of it that survives a program the backend introduced. A variable holds
+    /// what no grant over paths withholds or hands over, so one the caller holds and the
+    /// program does not is the caller's decision made by the platform instead.
+    ///
+    /// Both loader variables are in the fixture because an implementation restoring the
+    /// `DYLD_` prefix alone passes on one of them and loses the other.
+    ///
+    /// The variables that are *not* restored matter as much: an argument vector is
+    /// readable by every user of the machine and another user's environment is not, so a
+    /// credential inherited in the ordinary way must not be written onto this command
+    /// line to reach a program that would have received it regardless.
+    #[test]
+    fn a_variable_the_platform_strips_from_the_wrapper_is_carried_to_the_program_as_an_argument() {
+        let argv = confined_argv(
+            "/opt/tool/server",
+            &["--stdio".to_owned()],
+            Environment::Inherited,
+            &held(&[
+                ("DYLD_LIBRARY_PATH", "/tmp/lib"),
+                ("AWS_SECRET_ACCESS_KEY", "a credential"),
+                ("LD_LIBRARY_PATH", "/tmp/other"),
+            ]),
+        )
+        .expect("a program path `env` can name");
+
+        assert_eq!(
+            argv,
+            vec![
+                OsString::from(ENV),
+                OsString::from("DYLD_LIBRARY_PATH=/tmp/lib"),
+                OsString::from("LD_LIBRARY_PATH=/tmp/other"),
+                OsString::from("/opt/tool/server"),
+                OsString::from("--stdio"),
+            ]
+        );
+    }
+
+    /// A caller holding nothing the platform would strip reaches its program the way it
+    /// did before there was anything to restore: the program `sandbox-exec` execs is the
+    /// caller's own. Everything the confined process receives arrives by inheritance, so
+    /// a second program in the chain would buy nothing and cost a dependency on that
+    /// program being readable under the policy.
+    #[test]
+    fn a_caller_holding_nothing_the_platform_strips_reaches_its_program_directly() {
+        let argv = confined_argv(
+            "/opt/tool/server",
+            &["--stdio".to_owned()],
+            Environment::Inherited,
+            &held(&[("PATH", "/usr/bin"), ("HOME", "/Users/someone")]),
+        )
+        .expect("nothing is carried, so there is nothing to refuse over");
+
+        assert_eq!(
+            argv,
+            vec![
+                OsString::from("/opt/tool/server"),
+                OsString::from("--stdio"),
+            ]
+        );
+    }
+
+    /// The other half of the caller's decision, and the one a caller launching third-party
+    /// code makes. Emptying the environment of the process the backend starts reaches no
+    /// assignment written on its command line, so a caller asking to hand over nothing
+    /// hands over nothing only while the argument vector carries no assignment at all.
+    #[test]
+    fn a_confined_process_asked_to_receive_no_variables_is_handed_none_as_an_argument() {
+        let argv = confined_argv(
+            "/opt/tool/server",
+            &["--stdio".to_owned()],
+            Environment::Empty,
+            &held(&[
+                ("DYLD_LIBRARY_PATH", "/tmp/lib"),
+                ("DYLD_INSERT_LIBRARIES", "/tmp/hook.dylib"),
+            ]),
+        )
+        .expect("nothing is carried, so there is nothing to refuse over");
+
+        assert_eq!(
+            argv,
+            vec![
+                OsString::from("/opt/tool/server"),
+                OsString::from("--stdio"),
+            ]
+        );
+    }
+
+    /// A program `env` would read as a variable assignment is refused rather than started,
+    /// because it would not be started: `env` would set a variable named after part of the
+    /// path, find no program to run, print its environment and exit reporting success, and
+    /// a caller that believes it launched a server would be reading that.
+    ///
+    /// The refusal belongs to the wrapper rather than to the path, so the same program
+    /// with nothing to restore is exec'd directly and runs.
+    #[test]
+    fn a_program_path_the_wrapper_would_read_as_a_variable_is_refused() {
+        let path = "/opt/name=value/server";
+
+        let refused = confined_argv(
+            path,
+            &[],
+            Environment::Inherited,
+            &held(&[("DYLD_LIBRARY_PATH", "/tmp/lib")]),
+        )
+        .expect_err("a path `env` cannot name is not a process to start");
+        assert!(
+            matches!(
+                refused,
+                SandboxError::SetupFailed {
+                    mechanism: "seatbelt",
+                    ..
+                }
+            ),
+            "the refusal does not say confinement could not be applied: {refused}"
+        );
+
+        assert_eq!(
+            confined_argv(
+                path,
+                &[],
+                Environment::Inherited,
+                &held(&[("PATH", "/usr/bin")])
+            )
+            .expect("no wrapper reads this path, so nothing misreads it"),
+            vec![OsString::from(path)]
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
     use crate::testutil::{
@@ -133,6 +380,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::os::unix::fs::MetadataExt;
+    use std::path::PathBuf;
 
     /// `CURLE_COULDNT_CONNECT`: curl reached the connection and was refused it. Any other code
     /// means it stopped before that, which is some other denial reported as this one.
@@ -140,6 +388,47 @@ mod tests {
 
     /// touch reporting that the operation it was asked for failed.
     const TOUCH_FAILED: i32 = 1;
+
+    /// `env` as a program the platform does not protect: it prints the environment it
+    /// received, one variable to a line, and is built in `dir` rather than found on the
+    /// machine.
+    ///
+    /// A test about which variables reach a confined process cannot read them back through
+    /// `/usr/bin/env`, or any other program macOS ships. dyld empties the loader variables
+    /// out of every program the platform protects, whatever route they took to arrive, so a
+    /// protected program asked what it received answers about the platform's treatment of
+    /// itself: `DYLD_LIBRARY_PATH=/tmp /usr/bin/env` prints no such variable with no sandbox
+    /// anywhere near it. A protected program reports a restored variable as missing and a
+    /// leaked one as withheld, so both the carrying and the emptying are read back through a
+    /// program that reports what it was handed.
+    ///
+    /// `cc` is what linked the binary running this test, so a machine that built the suite
+    /// has it.
+    fn unprotected_env(dir: &Path) -> PathBuf {
+        const SOURCE: &str = r#"#include <stdio.h>
+extern char **environ;
+int main(void) {
+    for (char **held = environ; *held; held++) {
+        puts(*held);
+    }
+    return 0;
+}
+"#;
+        let source = dir.join("env.c");
+        std::fs::write(&source, SOURCE).expect("the scratch directory is writable");
+        let program = dir.join("env");
+        let built = Command::new("cc")
+            .arg("-o")
+            .arg(&program)
+            .arg(&source)
+            .status()
+            .expect("cc, which linked this test binary, is on the machine");
+        assert!(
+            built.success(),
+            "the program reporting its environment did not compile"
+        );
+        program
+    }
 
     /// Answer one request, so a curl that was permitted a socket gets a reply and exits rather
     /// than waiting out its own timeout. Called only where a connection is expected to arrive.
@@ -530,20 +819,32 @@ mod tests {
     /// environment receives exactly that, on either platform, so the decision reads the
     /// same wherever it is made.
     ///
-    /// `CARGO_MANIFEST_DIR` is the variable read back because cargo sets it in the
-    /// environment of a test process, so it is one this process holds and nothing else
-    /// invents.
+    /// Every variable rather than one of them: what the backend puts between this process
+    /// and the program decides which variables survive the journey, so a test reading back
+    /// a variable chosen for being ordinary passes against a backend that drops the ones
+    /// that are not. Cargo hands a test `DYLD_FALLBACK_LIBRARY_PATH`, so the variables this
+    /// process holds include one of the class the platform empties out of the wrapper, and
+    /// this reads it back rather than standing in for it. A failure names what was withheld
+    /// and not what it held.
     #[test]
     fn the_environment_a_confined_process_receives_is_the_callers() {
         let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
-        let held = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets this for a test");
+        assert!(
+            std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+            "cargo sets this for a test, and without it there is nothing here to carry"
+        );
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-environment-carried");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let program = unprotected_env(&dir);
         let policy = SandboxPolicy::strict()
             .allow_read("/usr")
-            .allow_read("/bin");
+            .allow_read("/bin")
+            .allow_read(&dir);
 
         let mut child = sandbox
             .spawn(
-                "/usr/bin/env",
+                &program.to_string_lossy(),
                 &[],
                 &policy,
                 capturing_stdout(),
@@ -551,13 +852,82 @@ mod tests {
             )
             .expect("the confined process runs");
 
-        let environment = printed_by(&mut child);
+        let received = variable_names_received_by(&mut child);
+        let withheld: Vec<String> = std::env::vars_os()
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .filter(|name| !received.contains(name))
+            .collect();
         assert!(
-            environment
-                .lines()
-                .any(|line| line == format!("CARGO_MANIFEST_DIR={held}")),
-            "a variable this process holds did not reach the confined process: {environment}"
+            withheld.is_empty(),
+            "variables this process holds did not reach the confined process: {withheld:?}"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The reason the program is reached through `env` at all, on the platform that makes
+    /// it one. `sandbox-exec` is protected by System Integrity Protection, so a loader
+    /// variable named in its own environment is emptied out of it before the program it
+    /// execs is reached, and the caller holding that variable is the only one who knows it
+    /// is gone. Here it arrives.
+    ///
+    /// The value as well as the name, which is the whole of what a loader search path is:
+    /// a variable arriving emptied is a program told to look nowhere.
+    ///
+    /// Whether the plain route loses the variable is the machine's answer rather than this
+    /// code's, so it is not asserted here: the loss happens where the platform protects
+    /// `sandbox-exec`, and a machine with System Integrity Protection disabled, as the
+    /// hosted macOS runners are, hands the variable over untouched. Asserting the loss
+    /// reports a bug in this backend on a machine that is protecting nothing. What the
+    /// backend itself decided, the assignment written onto the command line and the
+    /// variables kept off it, is pinned on every platform by
+    /// `a_variable_the_platform_strips_from_the_wrapper_is_carried_to_the_program_as_an_argument`
+    /// above.
+    #[test]
+    fn a_variable_stripped_from_the_wrapper_still_reaches_the_confined_process() {
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-loader-variable");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let program = unprotected_env(&dir);
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&dir);
+        let stripped = [(OsString::from("DYLD_LIBRARY_PATH"), OsString::from("/tmp"))];
+
+        // Carried the way the backend carries it: as arguments, which nothing prunes.
+        let mut as_arguments = Command::new(SANDBOX_EXEC);
+        as_arguments
+            .arg("-p")
+            .arg(SeatbeltSandbox::profile(&policy));
+        as_arguments.args(
+            confined_argv(
+                &program.to_string_lossy(),
+                &[],
+                Environment::Inherited,
+                &stripped,
+            )
+            .expect("a program path `env` can name"),
+        );
+        let mut restored =
+            crate::process::start(as_arguments, capturing_stdout(), Environment::Inherited)
+                .expect("the confined process runs");
+
+        // Named without its value, so a failure says what arrived and not what a machine
+        // running this holds.
+        let carried = printed_by(&mut restored);
+        assert!(
+            carried.lines().any(|line| line == "DYLD_LIBRARY_PATH=/tmp"),
+            "the variable the caller holds did not reach the confined process, which \
+             received: {:?}",
+            carried
+                .lines()
+                .map(|line| line.split_once('=').map_or(line, |(name, _)| name))
+                .collect::<Vec<_>>()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The other half of that decision, and the one a caller launching third-party code
@@ -570,6 +940,11 @@ mod tests {
     /// socket a signature is made through has been handed a credential whatever else was
     /// withheld. A failure prints the names that arrived and not their values, so it says
     /// what leaked without publishing what a machine running this holds.
+    ///
+    /// Read back through the same unprotected program as the test above, because the leak
+    /// this guards against is a loader variable written onto the command line for a caller
+    /// who asked for no environment, and a program the platform protects would report one
+    /// that did arrive as absent.
     #[test]
     fn a_confined_process_given_an_empty_environment_receives_none_of_this_processes_variables() {
         let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
@@ -577,13 +952,18 @@ mod tests {
             std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
             "cargo sets this for a test, and without it there is nothing here to withhold"
         );
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-environment-emptied");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let program = unprotected_env(&dir);
         let policy = SandboxPolicy::strict()
             .allow_read("/usr")
-            .allow_read("/bin");
+            .allow_read("/bin")
+            .allow_read(&dir);
 
         let mut child = sandbox
             .spawn(
-                "/usr/bin/env",
+                &program.to_string_lossy(),
                 &[],
                 &policy,
                 capturing_stdout(),
@@ -596,5 +976,7 @@ mod tests {
             received.is_empty(),
             "a process asked to receive no variables received some: {received:?}"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
