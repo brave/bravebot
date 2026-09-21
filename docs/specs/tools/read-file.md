@@ -41,6 +41,8 @@ offset to continue from.
 `verified-by: bravebot_agent::workspace::a_paged_read_is_capped_and_says_where_to_continue`
 `verified-by: bravebot_agent::workspace::the_reported_next_offset_returns_the_following_lines`
 `verified-by: bravebot_agent::workspace::an_over_long_line_is_shortened_and_counted`
+`verified-by: bravebot_agent::workspace::a_multi_byte_line_inside_the_cap_is_returned_whole`
+`verified-by: bravebot_agent::workspace::the_cap_keeps_two_thousand_characters_of_a_multi_byte_line`
 `verified-by: bravebot_agent::workspace::an_offset_past_the_end_returns_nothing_and_says_the_length`
 `verified-by: bravebot_agent::turn::the_model_can_ask_for_a_later_page`
 
