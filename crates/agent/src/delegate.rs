@@ -165,10 +165,16 @@ impl fmt::Debug for Seeded {
 }
 
 /// What one delegate left behind.
-pub struct Finished {
-    /// Its report and what it cost.
-    pub delegated: Delegated,
+pub struct Ended {
+    /// Its report and what it cost, or why it stopped.
+    pub delegated: Result<Delegated, TurnError>,
     /// The standing decisions as they stood when it stopped, for the parent to take back.
+    ///
+    /// Outside the result rather than inside it, and unconditional. A delegate that did not
+    /// finish has still had a person answer inside it, and those answers are standing decisions
+    /// about their own machine rather than anything the run produced (DELEGATE-11). A record
+    /// that came back only on the success path would leave the next run asking about the build
+    /// this one was already told it could run.
     pub vouched: Vouched,
 }
 
@@ -218,7 +224,7 @@ pub fn run(
     confirmer: &mut (dyn Confirmer + Send),
     reporter: &mut (dyn Reporter + Send),
     sink: &mut (dyn Sink + Send),
-) -> Result<Finished, TurnError> {
+) -> Ended {
     // The mode is the spawning turn's, and inherited rather than chosen: a delegate is that turn's
     // own work done elsewhere, so a session that is planning must not have writes happening inside
     // one. Enforcement already comes down this way, the confirmer being the person's own; this is
@@ -236,7 +242,14 @@ pub fn run(
     // than a promise about the prose.
     let mut conversation = Conversation::new();
 
-    let outcome = turn::delegated(
+    // Where the run gets to, and the one place the parent reads it from. It starts as the copy
+    // the delegate was seeded with, which is what a run that fails before its first round hands
+    // back, and `turn::delegated` overwrites it with the record as the rounds left it. The
+    // outcome carries the same two lists on the success path, and taking them from there instead
+    // would leave one record with two sources that agree only by where the write happens to sit.
+    let mut vouched = seeded.vouched.clone();
+
+    let outcome = match turn::delegated(
         config,
         egress,
         workspace,
@@ -248,10 +261,21 @@ pub fn run(
         seeded.vouched.trust.clone(),
         seeded.vouched.programs.clone(),
         cancel,
-    )?;
+        &mut vouched,
+    ) {
+        Ok(outcome) => outcome,
+        // Nothing to report and nothing it cost that the parent can use, but the answers a
+        // person gave inside it still go home.
+        Err(error) => {
+            return Ended {
+                delegated: Err(error),
+                vouched,
+            };
+        }
+    };
 
-    Ok(Finished {
-        delegated: Delegated {
+    Ended {
+        delegated: Ok(Delegated {
             report: outcome.answer,
             kind: seeded.spec.kind(),
             rounds: outcome.steps,
@@ -266,12 +290,9 @@ pub fn run(
                 // turn whose cache never hit.
                 cached: outcome.cached,
             },
-        },
-        vouched: Vouched {
-            trust: outcome.trust,
-            programs: outcome.programs,
-        },
-    })
+        }),
+        vouched,
+    }
 }
 
 #[cfg(test)]

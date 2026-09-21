@@ -10566,6 +10566,37 @@ five
             );
         }
 
+        /// The commands half of the record. A person answering 'always' at a run prompt inside a
+        /// delegate has said the build may run, not that it may run in the delegate, so taking
+        /// only the trust map back would leave the command list where it was and put the same
+        /// prompt up again on the next thing that wanted it.
+        #[test]
+        fn what_a_person_vouched_for_running_inside_a_delegate_is_kept() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let build =
+                crate::programs::Command::new("/usr/bin/make", vec!["build".to_string()], "/work");
+            assert!(
+                !policy
+                    .programs()
+                    .contains(&build.program, &build.args, &build.directory)
+            );
+
+            let seeded = policy.vouched();
+            // What the delegate came back with: the same list, plus the command a person let it
+            // run. The trust map is untouched, so a copy taken from the map alone brings nothing.
+            let mut ended = seeded.clone();
+            ended.programs.trust(build.clone());
+            policy.adopt_from_delegate(&seeded, &ended);
+
+            assert!(
+                policy
+                    .programs()
+                    .contains(&build.program, &build.args, &build.directory),
+                "a command a person let a delegate run was thrown away with it"
+            );
+        }
+
         /// Delegates run alongside each other, so each is seeded before the others have answered
         /// anything and each hands back a copy that knows nothing of what they answered. Taking
         /// one back whole would undo the rest, and which answer survived would come down to which
