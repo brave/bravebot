@@ -394,6 +394,10 @@ write-too-large-to-show =
 write-untrusted = non fiable : personne n'a lu ceci, et le modèle ne l'a jamais vu
 write-remark =
     ce que le processeur isolé a dit de ce changement, que rien n'a vérifié par rapport à lui
+write-credentials =
+    ceci semble déposer un secret dans l'arbre, d'après le nom à côté de la valeur et l'allure de
+    la valeur. Rien ne l'a reconnu comme la clé d'un fournisseur précis : c'est donc une
+    supposition, et c'est à vous d'en décider
 write-unchanged = { $count ->
     [one] … { $count } ligne inchangée
    *[other] … { $count } lignes inchangées

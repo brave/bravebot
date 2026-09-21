@@ -164,6 +164,7 @@ fn a_write_request_sends_the_diff_and_never_the_body() {
         intent: Intent::Edit,
         untrusted: false,
         remark: None,
+        credentials: Vec::new(),
     };
 
     let value = wire::write_request(3, &request);
@@ -196,6 +197,7 @@ fn a_created_file_says_nothing_would_be_lost() {
             intent: Intent::Create,
             untrusted: true,
             remark: None,
+            credentials: Vec::new(),
         },
     );
     assert_eq!(value["existing"], json!(false));
@@ -205,6 +207,51 @@ fn a_created_file_says_nothing_would_be_lost() {
         json!(true),
         "a front-end must be able to draw this differently"
     );
+}
+
+/// What the scan inferred is the reason this write is being asked about, so it has to reach
+/// whoever draws the question.
+///
+/// A body holding a value that only looks like a secret is put to a person even where the
+/// path's own rule would have let the write through unasked. A front-end that does not receive
+/// the findings draws an approval prompt for an ordinary-looking write with the reason for it
+/// removed, which is a worse prompt than no prompt. The empty case is a list rather than a
+/// missing key so a front-end can read its length without a special case.
+#[test]
+fn what_the_scan_inferred_reaches_the_front_end_that_draws_the_question() {
+    let found = "a secret assigned by name at .env:1 \
+                 (40 characters of lower case, digits, f3aa7a9324a83add)";
+    let value = wire::write_request(
+        4,
+        &WriteRequest {
+            path: ".env".into(),
+            contents: "SECRET_KEY_BASE=c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n".into(),
+            existing: None,
+            intent: Intent::Create,
+            untrusted: false,
+            remark: None,
+            credentials: vec![found.to_string()],
+        },
+    );
+    assert_eq!(
+        value["credentials"],
+        json!([found]),
+        "the person deciding has to be told what was found and where"
+    );
+
+    let quiet = wire::write_request(
+        5,
+        &WriteRequest {
+            path: "notes.md".into(),
+            contents: "hello\n".into(),
+            existing: None,
+            intent: Intent::Create,
+            untrusted: false,
+            remark: None,
+            credentials: Vec::new(),
+        },
+    );
+    assert_eq!(quiet["credentials"], json!([]), "an empty list, not absent");
 }
 
 // ---------------------------------------------------------------- answering a run
@@ -465,6 +512,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
                 lines: 9,
                 label: "untrusted".into(),
             }),
+            credentials: Vec::new(),
         },
     );
     assert_eq!(write["remark"]["lines"], 9);

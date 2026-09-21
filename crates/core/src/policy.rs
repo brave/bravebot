@@ -19,6 +19,7 @@
 
 use crate::ask::{self, Answer};
 use crate::capability::{Capability, CapabilitySet};
+use crate::credentials::Scanned;
 use crate::event::{Event, Principle, Role, Sink};
 use crate::label::{Integrity, Label};
 use crate::slot::SlotId;
@@ -3398,6 +3399,79 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ),
         );
         needed
+    }
+
+    /// What a write would leave in the tree, scanned before the change is recorded as complete.
+    ///
+    /// The scan runs before the bytes reach the file rather than over the file afterwards, so a
+    /// value a turn is refused for never lands anywhere: deleting it after the write would leave
+    /// it in whatever the filesystem did with those blocks, and in any watcher that saw them.
+    ///
+    /// Two answers come back, and the difference between them is authorship rather than severity.
+    /// A value already in the file at this path is *carried*: a turn that reformats or moves a
+    /// file holding a key produces a change carrying that key without having written it, and
+    /// refusing there would refuse ordinary work over somebody else's secret. Anything else in
+    /// what the write would leave is the turn's own, and the turn's own is what this program is
+    /// accountable for.
+    ///
+    /// **Only the turn's own words are scanned.** A body nobody vouched for is carried to the
+    /// file without the driver reading a byte of it, and examining one to decide whether to
+    /// refuse would be a decision taken from untrusted content, which nothing in this system
+    /// may take. That is a gap rather than a subtlety: a credential routed through a reference
+    /// is written unscanned, and closing it needs a scan that can run without anything here
+    /// branching on what it found.
+    ///
+    /// **The pre-image is read to place the value, not to decide the effect.** It is the file's
+    /// own current contents, which the driver already holds to draw a diff with. All it can do
+    /// here is excuse a value that is *already* at this exact path, so the worst it produces is
+    /// a change that leaves the tree holding what it held before.
+    ///
+    /// Nothing about a finding reaches the planner: see [`crate::credentials`] for what a
+    /// finding is allowed to hold, and the caller for which half of its result is said to whom.
+    pub fn scan_a_write(
+        &mut self,
+        tool: &str,
+        path: &str,
+        existing: Option<&str>,
+        proposed: &Labelled<String>,
+    ) -> Scanned {
+        let label = proposed.label();
+        if !label.is_trusted() {
+            self.allow(
+                "credential-scan",
+                format!("{tool}: {path} is written from content that is {label}, not scanned"),
+            );
+            return Scanned::default();
+        }
+
+        // Cannot fail: the label was just checked, and this is how the bytes are taken so that
+        // reading them stays one gate rather than two.
+        let Ok(body) = self.read_trusted_content(tool, proposed) else {
+            return Scanned::default();
+        };
+
+        let salt = crate::credentials::run_salt();
+        let already: std::collections::BTreeSet<String> = existing
+            .map(|text| crate::credentials::scan(path, text, salt))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|finding| finding.fingerprint)
+            .collect();
+
+        let (carried, authored) = crate::credentials::scan(path, &body, salt)
+            .into_iter()
+            .partition(|finding| already.contains(&finding.fingerprint));
+
+        let scanned = Scanned { authored, carried };
+        self.allow(
+            "credential-scan",
+            format!(
+                "{tool}: {path} scanned, {} written by this turn and {} already there",
+                scanned.authored.len(),
+                scanned.carried.len()
+            ),
+        );
+        scanned
     }
 
     /// Update the trust map to match what was just written to `path`.

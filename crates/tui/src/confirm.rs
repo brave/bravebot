@@ -312,6 +312,31 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
         lines.push(Line::raw(""));
     }
 
+    // What the scan inferred about this body, above the lines it read it from. Drawn plainly
+    // rather than behind the quarantine margin: these are the driver's own words about its own
+    // findings, not content out of a file, and each is already a kind, a location and a masked
+    // preview, so nothing here repeats a character of the value.
+    //
+    // Unbounded on purpose. A finding is one short line, and a body holding several is one whose
+    // every finding the person wants in front of them; the alternative is a prompt that hides the
+    // reason it is asking.
+    if !request.credentials.is_empty() {
+        let warn = Style::default().fg(theme::fail());
+        lines.extend(marked_rows(
+            &margin,
+            &[Span::styled(t!(write_credentials), warn)],
+            inside.width as usize,
+        ));
+        for found in &request.credentials {
+            lines.extend(marked_rows(
+                &margin,
+                &[Span::styled(format!("  {found}"), warn)],
+                inside.width as usize,
+            ));
+        }
+        lines.push(Line::raw(""));
+    }
+
     // All of it. What does not fit is scrolled to, rather than dropped: the hunks nobody shows
     // you are exactly the ones an approval is supposed to cover.
     //
@@ -2021,6 +2046,7 @@ mod tests {
             existing: existing.map(str::to_string),
             untrusted: false,
             remark: None,
+            credentials: Vec::new(),
         }
     }
 
@@ -3317,6 +3343,7 @@ mod tests {
             intent: Intent::Edit,
             untrusted: false,
             remark: None,
+            credentials: Vec::new(),
         });
 
         assert!(output.contains("Edit"));
@@ -3344,6 +3371,7 @@ mod tests {
             intent: Intent::Overwrite,
             untrusted: true,
             remark: None,
+            credentials: Vec::new(),
         });
 
         assert!(
@@ -3373,6 +3401,7 @@ mod tests {
             intent: Intent::Overwrite,
             untrusted: false,
             remark: None,
+            credentials: Vec::new(),
         });
 
         assert!(
@@ -3549,6 +3578,7 @@ mod tests {
             intent: Intent::Overwrite,
             untrusted: true,
             remark: None,
+            credentials: Vec::new(),
         };
         let drawn = rows_of(60, 24, |frame| {
             draw(frame, &request, 0);
@@ -3574,6 +3604,7 @@ mod tests {
                 lines: 1,
                 label: "(U,priv)".to_string(),
             }),
+            credentials: Vec::new(),
         };
         let output = rendered(&request);
 
@@ -3616,6 +3647,7 @@ mod tests {
                 lines: 1,
                 label: "(U,priv)".to_string(),
             }),
+            credentials: Vec::new(),
         };
         let drawn = rows_of(60, 24, |frame| {
             draw(frame, &request, 0);
@@ -3650,6 +3682,7 @@ mod tests {
                 lines: 4,
                 label: "(U,priv)".to_string(),
             }),
+            credentials: Vec::new(),
         };
 
         for (width, height) in [(80, 24), (100, 30), (60, 20)] {
@@ -3689,6 +3722,7 @@ mod tests {
                 lines: 1,
                 label: "(U,priv)".to_string(),
             }),
+            credentials: Vec::new(),
         };
         let output = rendered(&request);
 

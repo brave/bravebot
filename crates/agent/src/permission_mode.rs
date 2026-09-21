@@ -281,6 +281,7 @@ mod tests {
             intent: Intent::Create,
             untrusted: false,
             remark: None,
+            credentials: Vec::new(),
         }
     }
 
