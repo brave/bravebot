@@ -387,6 +387,35 @@ what catches it.
 `verified-by: bravebot_core::policy::answering_never_raises_a_context_that_has_already_fallen`
 `verified-by: bravebot_agent::turn::what_the_planner_writes_after_a_quarantined_read_stays_trusted`
 
+## Carrying a label out of this process
+
+<a id="LABEL-10"></a>
+### LABEL-10: content released to a surface in another process carries its label with it
+
+Where released content leaves this process for a surface to draw, the label it was released under
+travels with it, as the label rather than as a word composed at the boundary. Every carrier of such
+content states one: a preview of quarantined bytes, and a remark accompanying a write. The boundary
+neither reads the content nor decides the label, so what arrives is what the gate released, and a
+carrier added later states one too.
+
+**Why.** A surface can only mark content it can still tell apart, and out there the label is the
+whole of what it has to tell it apart by: the bytes arrive over a pipe carrying no provenance of
+their own, so a boundary that dropped the label would not have lost a detail, it would have made the
+content trusted by moving it. Everything on the far side would then look alike, and the surface
+would have nothing distinguishing quarantined bytes from the planner's own words.
+
+A word composed at the boundary is the same failure wearing the right shape. It is a function of the
+boundary rather than of the gate, so it agrees with the label only while somebody keeps the two in
+step, and the first label it stops distinguishing is the one nobody told it about.
+
+What such a surface must then *do* with the label is addressed to surfaces rather than to this
+process, and is [layering.md](layering.md)'s: a rule about the crates here cannot reach a program
+this workspace does not compile. This clause is the half enforceable here, which is that the label
+arrives at all.
+
+`verified-by: bravebot_ui_bridge::wire::released_content_crosses_the_transport_with_the_label_it_was_released_under`
+`verified-by: bravebot_ui_bridge::wire::quarantined_content_says_how_much_it_left_out`
+
 ## Known costs
 
 - **Three places in the policy layer do look at untrusted bytes in order to decide something.**

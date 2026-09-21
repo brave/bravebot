@@ -335,6 +335,29 @@ mod posix {
             assert!(read_at(&parent, "bad\0name", 100).is_err());
         }
 
+        /// A root that is not absolute is refused rather than resolved against anything.
+        ///
+        /// The walk starts at `/` and descends by name, so a relative root has no directory to
+        /// start from that anybody named: taking it against the working directory would put the
+        /// boundary wherever this process happens to have been started, which is not a place a
+        /// person opened. A root that merely looks absolute after a `..` is refused too, since
+        /// the components are taken as written.
+        #[test]
+        fn a_root_that_is_not_an_absolute_path_is_refused() {
+            let f = Fixture::new();
+            fs::create_dir(f.path.join("project")).unwrap();
+            for root in ["project", "./project", "", "relative/project"] {
+                assert!(
+                    root_directory(root).is_err(),
+                    "a relative root must not resolve: {root}"
+                );
+            }
+            assert!(root_directory(&format!("{}/../..", f.root())).is_err());
+            // The absolute spelling of the same tree is what does work, so the refusals above
+            // are about the spelling rather than about an unreadable directory.
+            assert!(root_directory(f.path.join("project").to_str().unwrap()).is_ok());
+        }
+
         #[test]
         fn exclusive_temporary_creation_refuses_existing_files_and_links() {
             let f = Fixture::new();

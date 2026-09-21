@@ -9,6 +9,7 @@ governs:
   - crates/session/src/store.rs
   - crates/cli/src/main.rs
   - crates/agent/src/aside.rs
+  - crates/ui-bridge/src/store.rs
 documented-by: docs/website/docs/using/sessions.md
 ---
 
@@ -755,6 +756,35 @@ what makes the second one visible without the reader dividing each row by the to
 `verified-by: bravebot_tui::state::a_total_with_no_breakdown_does_not_read_as_a_session_that_spent_nothing`
 `verified-by: bravebot_tui::state::a_session_that_has_spent_nothing_says_so`
 `verified-by: bravebot_tui::app::typing_the_cost_command_reports_rather_than_prompting`
+
+<a id="SESSION-28"></a>
+### SESSION-28: a second front end reads and writes the same store, and adds only the question of which projects exist
+
+The store holds one kind of record whoever wrote it, so a session written by one surface is listed,
+resumed and continued by the other. Everything above decides what a record holds and how it is
+found, whichever surface is asking: one directory per working directory, the naming, the ordering,
+the modes, and degrading to nothing where there is no directory to write into.
+
+A surface showing one list across every project asks a question a terminal never asks, and that
+question is the whole of what it adds. Which projects have sessions is read from the store rather
+than reconstructed from a directory name, because the name a working directory reduces to is lossy
+and un-mangling it would be a guess that is wrong for every path legitimately holding a separator. A
+directory holding no readable record names no project, and each project's sessions are then listed
+by the same reader the terminal uses, so the ordering, the byte counts and the handling of a corrupt
+record cannot differ between the two. The list is then ordered once across the whole of it rather
+than within each project, since which checkout a session happened in is not a reason to put a
+month-old one above this morning's.
+
+**Why.** A second surface inventing a store would be the same records in two formats, and the first
+thing to diverge would be what a corrupt one does. A window is not a terminal in one respect only:
+it opens on the machine rather than in a checkout, so it needs a list a terminal has no question to
+ask about. Adding the discovery and borrowing the listing is what keeps that difference to the one
+place it genuinely is.
+
+`verified-by: bravebot_ui_bridge::interop::a_record_written_here_is_read_back_by_the_agents_own_reader`
+`verified-by: bravebot_ui_bridge::interop::resuming_a_session_writes_back_to_it_rather_than_forking`
+`verified-by: bravebot_ui_bridge::interop::every_project_is_listed_in_one_order_rather_than_project_by_project`
+`verified-by: bravebot_ui_bridge::dispatch::listing_sessions_never_fails_however_little_is_on_disk`
 
 ## Known costs
 

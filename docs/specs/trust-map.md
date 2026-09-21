@@ -12,6 +12,7 @@ governs:
   - crates/agent/src/scratch.rs
   - crates/cli/src/main.rs
   - crates/tui/src/app.rs
+  - crates/ui-files/src/main.rs
 guards:
   - symbol: TrustStore::trust
   - symbol: TrustStore::distrust
@@ -725,6 +726,53 @@ ran at this time rather than that a session ran in this project at this time.
   account's own at the mode it should have. `flock` is reached through `rustix`, which is already a
   dependency; the Windows equivalent is `LockFileEx` and nothing here offers it today, so the sweep
   begins as Unix's and Windows leans on its own cleaner until it does.
+
+## A file helper a surface hands a directory to
+
+A surface that draws files of its own reads and writes them through a helper it hands a directory
+to, rather than through the turn's own file tools: what it shows a person is not something a turn
+read and nothing it writes there enters a turn. The confinement that helper performs is
+[layering.md](layering.md)'s, which is that every path component is resolved relative to the handed
+directory and no link is followed, so nothing can leave the tree. What is left is which directory it
+may be handed, which is this document's.
+
+<a id="TRUST-20"></a>
+### TRUST-20: a directory such a helper is pinned to is one a person opened, and the helper grants nothing
+
+The directory is an absolute path a person chose: the working directory a session was given, or the
+state directory. Never a path a model wrote, and never one that arrived from the surface drawing the
+files, which has only the directories it was already told about to name. A relative one is refused
+rather than resolved against anything, since there is no directory it could be relative to that a
+person named.
+
+Being handed such a directory grants nothing. It is not a rule in the map, so it neither trusts what
+is under it nor makes any of it reachable by a turn: bytes a person read or wrote this way have not
+been vouched for, and a turn asking for the same path is answered by whatever the map says about it.
+The map is where the question of what a *turn* may read is settled, and this road does not reach it.
+
+**Why a person's directory and not any absolute path.** Refusing a relative path bounds where the
+walk starts and says nothing about which tree it starts in, and a helper that resolved each component
+faithfully under a directory the caller chose freely would still read any file on the machine. The
+grounds for reading these bytes are that somebody opened this place, so the place has to be one they
+opened.
+
+**Why the grant is nil.** The rules here are about what a turn may read, and the reason they are
+worth having is that a turn's context is what an attacker is trying to reach. Bytes on a person's
+screen are not in that context. Treating a read here as vouching would write standing rules about a
+whole tree out of somebody looking at a file, which is the largest grant this document has
+([TRUST-9](#TRUST-9)) issued for the smallest gesture. Writing there is the same: what a person
+edited themselves is theirs, and a turn reading it later is a read like any other.
+
+**The state directory is admitted for what it is.** [TRUST-11](#TRUST-11) is that the map does not
+govern `~/.bravebot`, so a path under it has no rule to be answered by, and its standing comes from
+whose directory it is rather than from anything here. That is the same footing the rest of this
+system reads it on, and it is why pinning to it is not an exception to the paragraph above but an
+instance of it: it is the person's own directory.
+
+`verified-by: bravebot_ui_files::main::a_root_that_is_not_an_absolute_path_is_refused`
+`verified-by: bravebot_ui_files::main::a_symlink_replacing_the_root_or_leaf_is_refused`
+`verified-by: bravebot_ui_files::main::traversal_nonregular_binary_and_oversized_reads_are_bounded`
+`verified-by: by-construction (the helper is a process of its own that runs no command and speaks to no turn, so a byte it read reaches a screen and has no road into a turn's context: it holds no labelled value, mints no witness, and writes nothing the map is consulted about)`
 
 ## Known costs
 

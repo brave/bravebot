@@ -14,6 +14,20 @@ Every request this process makes to the network: what has to be true before one 
 comes back. What the returned bytes are labelled, and what may then be done with them, is
 [labels.md](labels.md).
 
+A crate that drives a turn for a surface elsewhere is under these clauses without being named by
+them. It builds no client of its own, so it is not a second egress and needs no clause here; what it
+does instead is [layering.md](layering.md)'s, and it is narrower than "reaches the network through
+the one call": a front end composes no request at all. Asking a service what it serves is the crate
+that speaks to that service's job, and a front end asks that crate. Two front ends wanting different
+fields out of one answer is a reason to widen what that crate returns, never a reason for either to
+assemble the request itself.
+
+**Why it matters here rather than only in the layering.** A front end that composes its own request
+decodes its own reply, and decoding a reply off the network is a declassification. So the cost of
+the shorter road is a guarded site in a crate that should hold none, and it is paid in
+[labels.md](labels.md) rather than here, which is why a reader of this document would not otherwise
+see it.
+
 ## Clauses
 
 <a id="NET-1"></a>

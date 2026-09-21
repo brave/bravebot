@@ -8,6 +8,8 @@ governs:
   - crates/agent/src/vet.rs
   - crates/session/src/store.rs
   - crates/tui/src/status.rs
+  - crates/ui-bridge/src/wire.rs
+  - crates/ui-bridge/src/turn.rs
 guards:
   - symbol: VettingSpec::new
   - symbol: Policy::before_vetting
@@ -405,6 +407,38 @@ owns the content gains from this, which is the reason it is off by default.
 `verified-by: bravebot_core::policy::a_promotion_nobody_was_asked_about_is_no_wider`
 `verified-by: bravebot_core::policy::output_released_by_a_safe_verdict_is_no_wider`
 `verified-by: bravebot_core::policy::the_trail_says_which_of_the_two_released_the_output`
+
+<a id="CHECK-13"></a>
+### CHECK-13: every surface a promotion prompt reaches is given the verdict, and none of them is given an answer
+
+Wherever one of those prompts is put to a person on a surface in another process, what the check
+said travels with the question: the verdict word, and the sentence where there is one. It travels as
+the verdict rather than as a sentence composed for a screen, so the surface renders its own words
+and two different verdicts cannot arrive looking alike. A verdict that could not be reached is
+carried as such and not as an absence, since a check that did not complete is a different thing to
+be told from a check that found nothing.
+
+Nothing about the verdict answers the question on that surface. Approving is a reply the person
+makes, and a reply is held to the question it answers: it is single-use, it is matched to the
+question that was asked, and a reply of another kind does not answer this one. A surface that
+produced an approval from a verdict would be deciding on the strength of a word an attacker steers.
+
+**Why.** [CHECK-9](#CHECK-9) is that what the check says reaches a person and no model, and a second
+surface is where both halves could quietly fail: dropping the verdict leaves somebody answering the
+question that most needs a second opinion with nothing but the bytes, which is the case that made a
+check exist at all, and sending a sentence instead of the verdict makes the distinctions
+[CHECK-4](#CHECK-4) draws a matter of wording.
+
+The other half is why this is stated rather than left to [CHECK-8](#CHECK-8). Out here the reply
+arrives as data from another process, so "an approval covers one slot once" is a property of what
+this side accepts rather than of a key somebody pressed. The verdict is on the same wire as the
+question, so a boundary that let one stand in for the other would be reading an attacker's word as a
+person's answer.
+
+`verified-by: bravebot_ui_bridge::wire::approval_evidence_is_kept_beside_the_decision`
+`verified-by: bravebot_ui_bridge::refusal::vetted_content_never_approves_itself_or_consumes_another_kind_of_reply`
+`verified-by: bravebot_ui_bridge::refusal::vetted_content_requires_its_own_explicit_approval`
+`verified-by: bravebot_ui_bridge::refusal::an_approval_cannot_be_replayed`
 
 ## Known costs
 

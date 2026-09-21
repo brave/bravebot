@@ -11,6 +11,7 @@ governs:
   - crates/session/src/sessions.rs
   - crates/skus/src/store.rs
   - crates/lsp/src/server.rs
+  - crates/ui-bridge/src/store.rs
   - install.sh
 guards:
   - symbol: home::create_directory
@@ -150,6 +151,27 @@ that invented a fallback would be the case above, whichever crate it happened in
 `verified-by: bravebot_config::settings::an_absent_or_empty_home_yields_no_directory_rather_than_a_guess`
 `verified-by: bravebot_config::settings::the_profile_directory_answers_where_no_home_is_named`
 `verified-by: bravebot_config::settings::a_named_home_answers_before_the_profile_directory`
+
+<a id="STATE-3"></a>
+### STATE-3: a surface that only reads this directory does not write into it
+
+A surface above the crates that own what is kept here reads the directory and never writes into it
+itself: it may resolve the path, walk it and read a file, and every write goes through the crate
+that owns the thing being written. Reading is not restricted, since the modes are what keep the
+contents to one account and a reader is already that account.
+
+**Why.** STATE-1 holds because a small number of helpers ask for the modes, and it holds for
+whichever subsystem writes first. A second writer opening a file or creating a directory for itself
+lands at the process umask instead, and a directory that already exists is not narrowed by being
+created again, so one such write decides the mode for every session afterwards. The files most
+exposed by that are the ones a second surface writes most: the records hold whole conversations and
+the standing permissions a resume restores.
+
+This is a bound on where a write goes rather than a rule about modes, because a surface repeating
+the modes would be a third copy of them to keep in step, and one that got them wrong would be wrong
+about a directory the other surfaces share.
+
+`verified-by: bravebot_ui_bridge::layering::the_state_directory_is_written_only_through_the_crate_that_owns_it`
 
 ## Known costs
 

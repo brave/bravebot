@@ -126,6 +126,51 @@ fn quarantined_content_says_how_much_it_left_out() {
     assert_eq!(value["preview"], json!(["first line"]));
 }
 
+/// Released content reaches the wire with the label it was released under, not a fixed word.
+///
+/// The label is what the surface at the other end has left to mark by, so a boundary that sent
+/// a constant would have made the content trusted by moving it: every preview would arrive
+/// looking alike and the renderer would have nothing to tell quarantined bytes from the
+/// planner's own. Two differing labels on each carrier are what distinguish carrying the label
+/// from writing one down.
+#[test]
+fn released_content_crosses_the_transport_with_the_label_it_was_released_under() {
+    let shown = |label: &str| {
+        wire::shown(&Shown {
+            origin: "https://example.com/page".into(),
+            reach: Reach::NotThePlanner,
+            label: label.into(),
+            preview: vec!["first line".into()],
+            lines: 240,
+        })["label"]
+            .clone()
+    };
+    assert_eq!(shown("(U,priv)"), json!("(U,priv)"));
+    assert_eq!(shown("(T,pub)"), json!("(T,pub)"));
+
+    let remark = |label: &str| {
+        wire::write_request(
+            1,
+            &WriteRequest {
+                path: "notes.md".into(),
+                contents: "new".into(),
+                existing: None,
+                intent: Intent::Create,
+                untrusted: true,
+                remark: Some(bravebot_agent::confirm::Remark {
+                    preview: vec!["what it did".into()],
+                    lines: 3,
+                    label: label.into(),
+                }),
+                credentials: Vec::new(),
+            },
+        )["remark"]["label"]
+            .clone()
+    };
+    assert_eq!(remark("(U,priv)"), json!("(U,priv)"));
+    assert_eq!(remark("(T,pub)"), json!("(T,pub)"));
+}
+
 #[test]
 fn a_replayed_tool_line_carries_no_outcome() {
     let value = wire::said(&Said::Tool("read(src/main.rs)".into()));
