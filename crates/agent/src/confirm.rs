@@ -362,7 +362,9 @@ impl OutputRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VetRequest {
     /// Where the content came from, as the driver recorded it: a path, or the command that
-    /// printed it. Never taken from the content.
+    /// printed it. Never taken from the content it describes. A path out of a listing nobody
+    /// vouched for is still a name an attacker chose, so it reaches this screen and stops,
+    /// exactly as the resolved path on a write through a reference does.
     pub origin: String,
     /// What the planner said it expects the slot to hold, in its own words.
     pub expects: String,
