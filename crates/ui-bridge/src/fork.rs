@@ -122,9 +122,7 @@ pub fn cut(snapshot: &Snapshot, said: &[Said], ordinal: usize) -> Option<Cut> {
 mod tests {
     use super::*;
     use bravebot_agent::Conversation;
-    use bravebot_agent::conversation::{
-        COMPACTED_PREFIX, RESUMED_PREFIX, TOOL_RESULT_PREFIX,
-    };
+    use bravebot_agent::conversation::{COMPACTED_PREFIX, RESUMED_PREFIX, TOOL_RESULT_PREFIX};
     use bravebot_aichat::protocol::{Message, ToolCallRequest, ToolCallRequestFunction};
 
     fn snapshot(messages: Vec<Message>) -> Snapshot {
@@ -184,7 +182,9 @@ mod tests {
 
         let request = Conversation::restored(cut.before).with_system("system");
         assert!(
-            !request.iter().any(|m| m.content.text().contains("did not run")),
+            !request
+                .iter()
+                .any(|m| m.content.text().contains("did not run")),
             "a cut in front of a prompt left nothing for the filler to answer",
         );
     }
@@ -198,7 +198,11 @@ mod tests {
             Message::assistant_calling("looking", vec![call("c1")]),
         ]);
         let request = Conversation::restored(before).with_system("system");
-        assert!(request.iter().any(|m| m.content.text().contains("did not run")));
+        assert!(
+            request
+                .iter()
+                .any(|m| m.content.text().contains("did not run"))
+        );
     }
 
     #[test]
@@ -238,7 +242,10 @@ mod tests {
         let cut = cut(&before, &said, 1).expect("the archived second prompt");
         assert_eq!(cut.prompt, "second");
         assert_eq!(texts(&cut.before.messages), vec!["first", "one"]);
-        assert!(cut.before.archive.is_empty(), "nothing is left standing in for");
+        assert!(
+            cut.before.archive.is_empty(),
+            "nothing is left standing in for"
+        );
     }
 
     #[test]
@@ -256,7 +263,10 @@ mod tests {
         assert_eq!(cut.prompt, "fourth");
         assert_eq!(cut.before.archive.len(), 2, "the archive is untouched");
         assert!(
-            cut.before.messages[0].content.text().starts_with(COMPACTED_PREFIX),
+            cut.before.messages[0]
+                .content
+                .text()
+                .starts_with(COMPACTED_PREFIX),
             "the summary is still at the head of the request",
         );
         assert_eq!(cut.before.messages.len(), 3);
@@ -268,7 +278,10 @@ mod tests {
         let cut = cut(&before, &drawn(&before), 1).expect("a second prompt");
 
         assert_eq!(cut.before.measured, 0);
-        assert_eq!(cut.before.references, 3, "but the names handed out are remembered");
+        assert_eq!(
+            cut.before.references, 3,
+            "but the names handed out are remembered"
+        );
     }
 
     #[test]

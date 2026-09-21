@@ -138,7 +138,9 @@ fn gateway_models<S: Sink>(
             )
             .ok()?;
         let label = response.body.label();
-        let (bytes, _) = policy.decode_transport("gateway models", label).decode(response.body);
+        let (bytes, _) = policy
+            .decode_transport("gateway models", label)
+            .decode(response.body);
         serde_json::from_slice(&bytes).ok()
     };
     let listed = fetch(policy, provider.account_models_url())
@@ -149,7 +151,9 @@ fn gateway_models<S: Sink>(
 fn model_request(url: &str, credential: &Credential) -> Option<Request> {
     let request = Request::get(url).header("accept", "application/json");
     match credential {
-        Credential::Token(token) => Some(request.header("authorization", format!("Bearer {token}"))),
+        Credential::Token(token) => {
+            Some(request.header("authorization", format!("Bearer {token}")))
+        }
         Credential::NotNeeded => Some(request),
         Credential::Absent => None,
     }
@@ -279,9 +283,16 @@ mod tests {
         let url = "https://gateway.example/v1/models";
         assert!(model_request(url, &Credential::Absent).is_none());
         let public = model_request(url, &Credential::NotNeeded).unwrap();
-        assert_eq!(public.headers, vec![("accept".into(), "application/json".into())]);
+        assert_eq!(
+            public.headers,
+            vec![("accept".into(), "application/json".into())]
+        );
         let authenticated = model_request(url, &Credential::Token("test-token".into())).unwrap();
-        assert!(authenticated.headers.contains(&("authorization".into(), "Bearer test-token".into())));
+        assert!(
+            authenticated
+                .headers
+                .contains(&("authorization".into(), "Bearer test-token".into()))
+        );
     }
 
     #[test]

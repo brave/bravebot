@@ -8,8 +8,8 @@
 //! back the way `bravebot --resume` does.
 
 use bravebot_aichat::protocol::Message;
-use bravebot_core::todo::{Row, Status};
 use bravebot_core::programs::TrustedPrograms;
+use bravebot_core::todo::{Row, Status};
 use bravebot_core::trust::TrustStore;
 use bravebot_session::sessions::{self, Handle, Standing};
 use std::collections::BTreeMap;
@@ -45,7 +45,11 @@ fn a_record_written_here_is_read_back_by_the_agents_own_reader() {
     let mut todos = BTreeMap::new();
     todos.insert(
         1,
-        vec![Row { content: "read the parser".into(), marker: "[x]", status: Status::Done }],
+        vec![Row {
+            content: "read the parser".into(),
+            marker: "[x]",
+            status: Status::Done,
+        }],
     );
 
     let mut handle = Handle::begin(&project, bravebot_ui_bridge::agent_build());
@@ -80,14 +84,19 @@ fn a_record_written_here_is_read_back_by_the_agents_own_reader() {
     assert_eq!(record.turns, 1);
     assert_eq!(record.tokens, 42);
     assert_eq!(record.directory, project.display().to_string());
-    assert!(record.trust.is_some(), "the map must survive, not be re-derived");
+    assert!(
+        record.trust.is_some(),
+        "the map must survive, not be re-derived"
+    );
     assert_eq!(record.todo_rows()[&1][0].content, "read the parser");
 
     // And as the bridge's own cross-project discovery does, which is the part that is
     // ours rather than upstream's.
     let found = bravebot_ui_bridge::store::list_all();
     assert!(
-        found.iter().any(|entry| entry.summary.id == id && entry.project == project),
+        found
+            .iter()
+            .any(|entry| entry.summary.id == id && entry.project == project),
         "a session in a new project must be discovered without being told where to look"
     );
 
@@ -171,9 +180,15 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
 
     let trust = TrustStore::new(&project);
     let todos = BTreeMap::new();
-    let timing = BTreeMap::from([(1, bravebot_agent::timing::Timing {
-        wall_ms: 120, inference_ms: 80, tools_ms: 20, stalled_ms: 10,
-    })]);
+    let timing = BTreeMap::from([(
+        1,
+        bravebot_agent::timing::Timing {
+            wall_ms: 120,
+            inference_ms: 80,
+            tools_ms: 20,
+            stalled_ms: 10,
+        },
+    )]);
 
     let mut handle = Handle::begin(&project, bravebot_ui_bridge::agent_build());
     handle.save(
@@ -183,16 +198,24 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
             rewind: &[bravebot_session::sessions::RewindPoint {
                 snapshot: bravebot_session::sessions::TurnSnapshot {
                     conversation: bravebot_agent::Conversation::new().snapshot(),
-                    turns: 0, tokens: 0, spend: BTreeMap::new(), timing: BTreeMap::new(),
-                    cached: None, trust: TrustStore::new(&project),
-                    programs: TrustedPrograms::new(), transcript_len: 0,
-                    title: "Before haddock".into(), was_wrote: false,
+                    turns: 0,
+                    tokens: 0,
+                    spend: BTreeMap::new(),
+                    timing: BTreeMap::new(),
+                    cached: None,
+                    trust: TrustStore::new(&project),
+                    programs: TrustedPrograms::new(),
+                    transcript_len: 0,
+                    title: "Before haddock".into(),
+                    was_wrote: false,
                 },
-                backups: Vec::new(), prompt: "remember the word haddock".into(),
+                backups: Vec::new(),
+                prompt: "remember the word haddock".into(),
             }],
             asides: &[bravebot_session::sessions::Aside {
                 question: "what is haddock?".into(),
-                answer: Some("a fish".into()), kept: true,
+                answer: Some("a fish".into()),
+                kept: true,
             }],
             conversation: &conversation.snapshot(),
             turns: 1,
@@ -216,7 +239,10 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
     // What the worker does at the end of a turn: the same call, through the same handle.
     state.turns = 2;
     state.tokens = 25;
-    let saved = state.handle.as_mut().expect("a resumed session already has its handle");
+    let saved = state
+        .handle
+        .as_mut()
+        .expect("a resumed session already has its handle");
     saved.save(
         &state.first_prompt.clone().unwrap_or_default(),
         Standing {
@@ -238,11 +264,18 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
     );
 
     let listed = sessions::list(&project);
-    assert_eq!(listed.len(), 1, "resuming must not leave a second session behind");
+    assert_eq!(
+        listed.len(),
+        1,
+        "resuming must not leave a second session behind"
+    );
     assert_eq!(listed[0].id, original, "the continued session keeps its id");
 
     let reread = sessions::load(&project, &original).expect("the record should still load");
-    assert_eq!(reread.turns, 2, "the turn landed in the session it was taken in");
+    assert_eq!(
+        reread.turns, 2,
+        "the turn landed in the session it was taken in"
+    );
     assert_eq!(reread.tokens, 25);
     let rewind = reread.rewind_points(&project);
     assert_eq!(rewind.len(), 1);
@@ -253,8 +286,14 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
     assert_eq!(recalled.asides[0].question, "what is haddock?");
     assert_eq!(recalled.asides[0].answer.as_deref(), Some("a fish"));
     assert!(recalled.asides[0].kept);
-    assert_eq!(reread.timing, timing, "resuming must preserve the timing from the terminal");
-    assert_eq!(reread.title, "remember the word haddock", "the title survives the resume");
+    assert_eq!(
+        reread.timing, timing,
+        "resuming must preserve the timing from the terminal"
+    );
+    assert_eq!(
+        reread.title, "remember the word haddock",
+        "the title survives the resume"
+    );
 
     clean_up(&project);
 }
@@ -281,7 +320,9 @@ fn call(
 ) -> serde_json::Value {
     let line = serde_json::json!({ "id": 1, "method": method, "params": params }).to_string();
     let request = bravebot_ui_bridge::protocol::Request::parse(&line).expect("well formed");
-    bridge.dispatch(&request).expect("the call should be served")
+    bridge
+        .dispatch(&request)
+        .expect("the call should be served")
 }
 
 /// A session on disk with two prompts in it, and its id.
@@ -301,7 +342,8 @@ fn two_prompt_session(project: &std::path::Path, trust: Option<&TrustStore>) -> 
             rewind: &[],
             asides: &[bravebot_session::sessions::Aside {
                 question: "what is haddock?".into(),
-                answer: Some("a fish".into()), kept: true,
+                answer: Some("a fish".into()),
+                kept: true,
             }],
             conversation: &conversation.snapshot(),
             turns: 2,
@@ -348,7 +390,10 @@ fn forking_a_stored_session_leaves_the_parent_record_untouched() {
     );
 
     let after = sessions::load(&project, &parent).expect("the record should still load");
-    assert_eq!(after.updated, before.updated, "forking is not a write to the parent");
+    assert_eq!(
+        after.updated, before.updated,
+        "forking is not a write to the parent"
+    );
     assert_eq!(after.turns, before.turns);
     assert_eq!(
         after.conversation.messages.len(),
@@ -383,7 +428,11 @@ fn a_fork_writes_nothing_until_it_has_something_to_say() {
 
     let child = forked["id"].as_str().expect("a durable id").to_string();
     assert_ne!(child, parent, "a fork is a session of its own");
-    assert_eq!(sessions::list(&project).len(), 1, "only the parent has a record");
+    assert_eq!(
+        sessions::list(&project).len(),
+        1,
+        "only the parent has a record"
+    );
     assert!(
         sessions::load(&project, &child).is_none(),
         "the id is reserved, but nothing stands behind it until the first turn",
@@ -415,9 +464,15 @@ fn a_fork_recounts_to_everything_before_the_prompt_it_was_cut_at() {
     );
 
     let said = forked["said"].as_array().expect("a transcript");
-    let texts: Vec<&str> = said.iter().map(|line| line["text"].as_str().unwrap_or("")).collect();
+    let texts: Vec<&str> = said
+        .iter()
+        .map(|line| line["text"].as_str().unwrap_or(""))
+        .collect();
     assert_eq!(texts, vec!["remember the word haddock", "haddock it is"]);
-    assert_eq!(forked["prefill"], "now forget it", "the prompt is handed back to be edited");
+    assert_eq!(
+        forked["prefill"], "now forget it",
+        "the prompt is handed back to be edited"
+    );
     assert_eq!(forked["turns"], 1);
     assert_eq!(forked["parent"]["id"], parent.as_str());
     assert_eq!(forked["parent"]["title"], "remember the word haddock");
@@ -469,8 +524,10 @@ fn a_fork_inherits_the_trust_map_rather_than_asking_again() {
     assert_eq!(forked["trust"]["known"], true);
     let asked = events.lock().expect("not poisoned");
     assert!(
-        !asked.iter().any(|event| event.session.as_deref() == forked["session"].as_str()
-            && event.name == "trust.request"),
+        !asked.iter().any(
+            |event| event.session.as_deref() == forked["session"].as_str()
+                && event.name == "trust.request"
+        ),
         "the person who answered for this directory is the person forking in it",
     );
 
@@ -513,8 +570,10 @@ fn a_fork_of_a_record_with_no_trust_map_asks() {
     assert_eq!(forked["trust"]["known"], false);
     let asked = events.lock().expect("not poisoned");
     assert!(
-        asked.iter().any(|event| event.session.as_deref() == forked["session"].as_str()
-            && event.name == "trust.request"),
+        asked.iter().any(
+            |event| event.session.as_deref() == forked["session"].as_str()
+                && event.name == "trust.request"
+        ),
         "the fork must ask what its parent never answered",
     );
 
@@ -552,7 +611,10 @@ fn a_fork_gets_an_id_of_its_own_rather_than_the_one_it_came_from() {
 
     // What the worker does at the end of the fork's first turn.
     state.turns = 2;
-    let saved = state.handle.as_mut().expect("a fork has its handle from the start");
+    let saved = state
+        .handle
+        .as_mut()
+        .expect("a fork has its handle from the start");
     saved.save(
         &state.first_prompt.clone().unwrap_or_default(),
         Standing {
@@ -574,7 +636,10 @@ fn a_fork_gets_an_id_of_its_own_rather_than_the_one_it_came_from() {
     );
     let child = saved.id().to_string();
 
-    assert_ne!(child, parent, "the fork must not write back to the session it came from");
+    assert_ne!(
+        child, parent,
+        "the fork must not write back to the session it came from"
+    );
     assert_eq!(sessions::list(&project).len(), 2, "both sessions are there");
 
     let reread = sessions::load(&project, &parent).expect("the parent should still load");
@@ -619,7 +684,10 @@ fn two_forks_in_the_same_second_stay_two_sessions() {
         serde_json::json!({ "session": &handle, "prompt": 1, "text": "now forget it" }),
     );
 
-    assert_ne!(first["id"], second["id"], "one click must not overwrite the other");
+    assert_ne!(
+        first["id"], second["id"],
+        "one click must not overwrite the other"
+    );
     assert_ne!(first["id"].as_str(), Some(parent.as_str()));
     assert_ne!(second["id"].as_str(), Some(parent.as_str()));
 

@@ -20,17 +20,17 @@ fn nothing_below_bin_writes_to_stdout_or_ends_the_process() {
             let code = line.split("//").next().unwrap_or("");
             for forbidden in ["println!", "print!", "std::process::exit", "eprintln!"] {
                 if code.contains(forbidden) {
-                    offences.push(format!(
-                        "{}:{}: {forbidden}",
-                        path.display(),
-                        number + 1
-                    ));
+                    offences.push(format!("{}:{}: {forbidden}", path.display(), number + 1));
                 }
             }
         }
     });
 
-    assert!(offences.is_empty(), "the library must not print:\n{}", offences.join("\n"));
+    assert!(
+        offences.is_empty(),
+        "the library must not print:\n{}",
+        offences.join("\n")
+    );
 }
 
 fn visit(directory: &Path, each: &mut impl FnMut(&Path, &str)) {

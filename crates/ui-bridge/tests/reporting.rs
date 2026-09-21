@@ -19,7 +19,12 @@ fn harness() -> (BridgeReporter, Arc<Mutex<Vec<Event>>>) {
 }
 
 fn names(events: &Arc<Mutex<Vec<Event>>>) -> Vec<&'static str> {
-    events.lock().expect("not poisoned").iter().map(|e| e.name).collect()
+    events
+        .lock()
+        .expect("not poisoned")
+        .iter()
+        .map(|e| e.name)
+        .collect()
 }
 
 /// The engine reports the token count on a timer, not on a change. Over a pipe that is a
@@ -100,7 +105,14 @@ fn every_other_report_is_passed_through_unfiltered() {
 
     assert_eq!(
         names(&events),
-        vec!["phase", "phase", "tool.started", "tool.finished", "landed", "landed"],
+        vec![
+            "phase",
+            "phase",
+            "tool.started",
+            "tool.finished",
+            "landed",
+            "landed"
+        ],
         "repeats here are real repeats"
     );
 }

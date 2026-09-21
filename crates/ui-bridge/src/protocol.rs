@@ -58,7 +58,10 @@ pub struct Failure {
 
 impl Failure {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into() }
+        Self {
+            code,
+            message: message.into(),
+        }
     }
 
     pub fn bad_request(message: impl Into<String>) -> Self {
@@ -98,9 +101,10 @@ impl Request {
     /// produce one bad line will produce another and silence is the hardest version of
     /// that to debug.
     pub fn parse(line: &str) -> Result<Self, Unreadable> {
-        let value: Value = serde_json::from_str(line).map_err(|error| Unreadable::Unanswerable {
-            detail: format!("not JSON: {error}"),
-        })?;
+        let value: Value =
+            serde_json::from_str(line).map_err(|error| Unreadable::Unanswerable {
+                detail: format!("not JSON: {error}"),
+            })?;
 
         let Some(id) = value.get("id").and_then(Value::as_u64) else {
             return Err(Unreadable::Unanswerable {
@@ -152,7 +156,10 @@ impl Request {
 
     /// An optional string parameter. Absent and null are the same thing.
     pub fn optional_string(&self, name: &str) -> Option<String> {
-        self.params.get(name).and_then(Value::as_str).map(str::to_string)
+        self.params
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_string)
     }
 
     /// An optional boolean parameter, and what it means when it is not there.
@@ -162,7 +169,10 @@ impl Request {
     /// care, get the behaviour they had before it existed — a front-end that has never heard of
     /// the flag must not be able to trip over it by sending nothing.
     pub fn flag(&self, name: &str, default: bool) -> bool {
-        self.params.get(name).and_then(Value::as_bool).unwrap_or(default)
+        self.params
+            .get(name)
+            .and_then(Value::as_bool)
+            .unwrap_or(default)
     }
 }
 
@@ -189,12 +199,20 @@ pub struct Event {
 
 impl Event {
     pub fn new(name: &'static str, session: impl Into<String>, data: Value) -> Self {
-        Self { name, session: Some(session.into()), data }
+        Self {
+            name,
+            session: Some(session.into()),
+            data,
+        }
     }
 
     /// An event that belongs to no session.
     pub fn global(name: &'static str, data: Value) -> Self {
-        Self { name, session: None, data }
+        Self {
+            name,
+            session: None,
+            data,
+        }
     }
 
     pub fn to_value(&self) -> Value {

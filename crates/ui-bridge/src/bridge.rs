@@ -90,18 +90,23 @@ impl Bridge {
             "agent.info" => {
                 let mut info = self.info();
                 if let Some(handle) = request.optional_string("session") {
-                    let open = self.open.get(&handle).ok_or_else(Failure::no_such_session)?;
-                    let config = crate::settings::config(Some(&open.project), self.settings.as_deref());
+                    let open = self
+                        .open
+                        .get(&handle)
+                        .ok_or_else(Failure::no_such_session)?;
+                    let config =
+                        crate::settings::config(Some(&open.project), self.settings.as_deref());
                     info["configured"] = json!(config.is_ok());
                     info["defaultModel"] = json!(config.ok().map(|c| c.default_model));
                 }
                 Ok(info)
-            },
+            }
             "models.list" => {
                 let directory = request.optional_string("directory").map(PathBuf::from);
-                let config = crate::settings::config(directory.as_deref(), self.settings.as_deref())?;
+                let config =
+                    crate::settings::config(directory.as_deref(), self.settings.as_deref())?;
                 Ok(crate::models::list(&config))
-            },
+            }
             "session.list" => self.list(request),
             "session.open" => self.open_session(request),
             "session.new" => self.new_session(request),
@@ -110,27 +115,40 @@ impl Bridge {
             "turn.send" => self.send_turn(request),
             "turn.cancel" => self.cancel_turn(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
-            "watches.poll" => { self.poll_watches(); Ok(json!({})) },
+            "watches.poll" => {
+                self.poll_watches();
+                Ok(json!({}))
+            }
             "confirm.reply" => self.reply_confirm(request),
             "run.reply" => self.reply_run(request),
             "output.reply" => self.reply_output(request),
             "vouch.reply" => self.reply_vouch(request),
-            "vet.reply" => self.deliver(request, Reply::Vet(wire::decision(request.param("decision")))),
+            "vet.reply" => self.deliver(
+                request,
+                Reply::Vet(wire::decision(request.param("decision"))),
+            ),
             "ask.reply" => self.reply_ask(request),
             "trust.reply" => self.reply_trust(request),
             "permissions.list" => self.permissions(request, false),
             "permissions.revoke" => self.permissions(request, true),
             "settings.inspect" => {
-                let project = request.optional_string("session").and_then(|id| self.open.get(&id)).map(|s| s.project.as_path());
+                let project = request
+                    .optional_string("session")
+                    .and_then(|id| self.open.get(&id))
+                    .map(|s| s.project.as_path());
                 Ok(crate::settings::report(project, self.settings.as_deref()))
-            },
+            }
             "settings.select" => {
                 let path = request.optional_string("path").map(PathBuf::from);
-                if let Some(path) = &path { crate::settings::validate(path)?; }
+                if let Some(path) = &path {
+                    crate::settings::validate(path)?;
+                }
                 self.settings = path;
                 Ok(crate::settings::report(None, self.settings.as_deref()))
-            },
-            "doctor" => Ok(json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()})),
+            }
+            "doctor" => Ok(
+                json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()}),
+            ),
             other => Err(Failure::bad_request(format!("unknown method `{other}`"))),
         }
     }
@@ -193,7 +211,11 @@ impl Bridge {
         // answer on behalf of somebody who was never asked.
         let inherited = record.trust_map(&directory);
         let answered_trust = inherited.is_some();
-        let state = State::resumed(&directory, &record, inherited.unwrap_or_else(|| TrustStore::new(&directory)));
+        let state = State::resumed(
+            &directory,
+            &record,
+            inherited.unwrap_or_else(|| TrustStore::new(&directory)),
+        );
 
         let handle = self.mint(Open {
             project: directory.clone(),
@@ -278,7 +300,10 @@ impl Bridge {
             ));
         }
         if bravebot_session::store::directory().is_none() {
-            return Err(Failure::new(ErrorCode::NoHome, "no home directory to store sessions in"));
+            return Err(Failure::new(
+                ErrorCode::NoHome,
+                "no home directory to store sessions in",
+            ));
         }
 
         let branch = bravebot_session::sessions::branch_of(&directory);
@@ -328,7 +353,10 @@ impl Bridge {
 
         self.reap(&handle);
 
-        let open = self.open.get(&handle).ok_or_else(Failure::no_such_session)?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
         // Refused rather than queued, and not out of tidiness: a worker holds the session's
         // state for the whole of its turn, and dispatch is one thread. A fork that waited for
         // the lock would stop this bridge answering anything — including the question the turn
@@ -392,8 +420,10 @@ impl Bridge {
 
         // Cut to the same place the conversation was: a turn's plan belongs to the turn, and the
         // child has the turns before the cut and no others.
-        let todos: std::collections::BTreeMap<_, _> =
-            todos.into_iter().filter(|(turn, _)| *turn <= ordinal).collect();
+        let todos: std::collections::BTreeMap<_, _> = todos
+            .into_iter()
+            .filter(|(turn, _)| *turn <= ordinal)
+            .collect();
         // The child knows its map exactly when the parent did. A parent still holding the
         // question — a record written before maps were kept — hands the question down.
         let known = answered_trust;
@@ -459,7 +489,10 @@ impl Bridge {
 
     fn close_session(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
-        let open = self.open.remove(&handle).ok_or_else(Failure::no_such_session)?;
+        let open = self
+            .open
+            .remove(&handle)
+            .ok_or_else(Failure::no_such_session)?;
 
         // Stop the work, then refuse whatever it was waiting on. Both, and in that order:
         // cancelling alone would leave a write blocked on an answer that is never coming,
@@ -470,7 +503,6 @@ impl Bridge {
         }
         Ok(json!({}))
     }
-
 
     // ------------------------------------------------------------ turns
 
@@ -528,7 +560,10 @@ impl Bridge {
 
         self.reap(&handle);
 
-        let open = self.open.get(&handle).ok_or_else(Failure::no_such_session)?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
 
         if !open.answered_trust {
             return Err(Failure::bad_request(
@@ -619,7 +654,6 @@ impl Bridge {
             });
         });
 
-
         Ok(json!({ "turn": turn_number }))
     }
 
@@ -630,11 +664,16 @@ impl Bridge {
     /// Cancellation never sends an approval or authorises a write.
     fn cancel_turn(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
-        let open = self.open.get(&handle).ok_or_else(Failure::no_such_session)?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
         if let Some(running) = &open.running {
             running.cancel.cancel();
         }
-        if let Ok(mut watches) = open.watches.lock() { watches.stop_firing(); }
+        if let Ok(mut watches) = open.watches.lock() {
+            watches.stop_firing();
+        }
         // Cancelling when nothing is running is not an error: the turn may have finished
         // between the user pressing the key and this arriving.
         Ok(json!({}))
@@ -684,7 +723,10 @@ impl Bridge {
         let handle = request.string("session")?;
         let id = request.number("request")?;
 
-        let open = self.open.get(&handle).ok_or_else(Failure::no_such_session)?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
         let Some(running) = &open.running else {
             return Err(Failure::new(
                 ErrorCode::NoSuchRequest,
@@ -713,7 +755,10 @@ impl Bridge {
             .and_then(Value::as_bool)
             .ok_or_else(|| Failure::bad_request("`trusted` must be a boolean"))?;
 
-        let open = self.open.get_mut(&handle).ok_or_else(Failure::no_such_session)?;
+        let open = self
+            .open
+            .get_mut(&handle)
+            .ok_or_else(Failure::no_such_session)?;
 
         // Trusting records the workspace root, which covers everything beneath it.
         // Declining records nothing, leaving a map in which no path is trusted. The same
@@ -734,31 +779,58 @@ impl Bridge {
     fn permissions(&mut self, request: &Request, revoke: bool) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         self.reap(&handle);
-        let open = self.open.get(&handle).ok_or_else(Failure::no_such_session)?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
         if open.running.is_some() {
-            return Err(Failure::new(ErrorCode::TurnInFlight, "Stop the current turn before reviewing or revoking permissions."));
+            return Err(Failure::new(
+                ErrorCode::TurnInFlight,
+                "Stop the current turn before reviewing or revoking permissions.",
+            ));
         }
-        let mut state = open.state.lock().map_err(|_| Failure::new(ErrorCode::Internal, "Session state unavailable"))?;
+        let mut state = open
+            .state
+            .lock()
+            .map_err(|_| Failure::new(ErrorCode::Internal, "Session state unavailable"))?;
         if revoke {
             match request.string("kind")?.as_str() {
                 "path" => {
                     let path = request.string("path")?;
                     if !state.trust.rules().any(|(held, _)| held == path) {
-                        return Err(Failure::bad_request("This path grant is no longer present."));
+                        return Err(Failure::bad_request(
+                            "This path grant is no longer present.",
+                        ));
                     }
                     state.trust.distrust(&path);
                 }
                 "command" => {
-                    let selected = request.params.get("command").ok_or_else(|| Failure::bad_request("Missing command"))?;
-                    let command = state.programs.iter().find(|command| json!({"program": command.program, "args": command.args}) == *selected).cloned()
-                        .ok_or_else(|| Failure::bad_request("This command grant is no longer present."))?;
+                    let selected = request
+                        .params
+                        .get("command")
+                        .ok_or_else(|| Failure::bad_request("Missing command"))?;
+                    let command = state
+                        .programs
+                        .iter()
+                        .find(|command| {
+                            json!({"program": command.program, "args": command.args}) == *selected
+                        })
+                        .cloned()
+                        .ok_or_else(|| {
+                            Failure::bad_request("This command grant is no longer present.")
+                        })?;
                     state.programs.forget(&command);
                 }
                 _ => return Err(Failure::bad_request("Unknown permission kind")),
             }
             if state.handle.is_some() {
                 let turn = state.turns;
-                save(&open.project, &mut state, turn, &bravebot_session::audit::Trail::default());
+                save(
+                    &open.project,
+                    &mut state,
+                    turn,
+                    &bravebot_session::audit::Trail::default(),
+                );
             }
         }
         Ok(json!({
@@ -770,49 +842,96 @@ impl Bridge {
     fn watches(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         self.reap(&handle);
-        let open = self.open.get(&handle).ok_or_else(Failure::no_such_session)?;
-        let mut watches = open.watches.lock().map_err(|_| Failure::bad_request("Watches unavailable."))?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let mut watches = open
+            .watches
+            .lock()
+            .map_err(|_| Failure::bad_request("Watches unavailable."))?;
         if request.method == "watches.add" {
-            if !open.answered_trust { return Err(Failure::bad_request("Answer the project trust question first.")); }
-            if open.running.is_some() { return Err(Failure::new(ErrorCode::TurnInFlight, "Wait for the current turn before adding a watch.")); }
+            if !open.answered_trust {
+                return Err(Failure::bad_request(
+                    "Answer the project trust question first.",
+                ));
+            }
+            if open.running.is_some() {
+                return Err(Failure::new(
+                    ErrorCode::TurnInFlight,
+                    "Wait for the current turn before adding a watch.",
+                ));
+            }
             let path = request.string("path")?;
-            if path.is_empty() || path.chars().any(char::is_control) { return Err(Failure::bad_request("Choose a project file.")); }
+            if path.is_empty() || path.chars().any(char::is_control) {
+                return Err(Failure::bad_request("Choose a project file."));
+            }
             if !watches.live().iter().any(|w| w.path() == path) {
-                let workspace = Workspace::new(open.project.clone()).map_err(|_| Failure::bad_request("Project unavailable."))?;
+                let workspace = Workspace::new(open.project.clone())
+                    .map_err(|_| Failure::bad_request("Project unavailable."))?;
                 watches.arm(path.clone(), 0, workspace.look(&path), std::time::Instant::now())
                     .map_err(|_| Failure::bad_request("Cannot watch this file. It must exist inside the project, with fewer than eight active watches."))?;
             }
         } else if request.method == "watches.stop" {
-            if request.flag("all", false) { watches.stop_all(); }
-            else { let number = request.param("number").as_u64().ok_or_else(|| Failure::bad_request("A watch number is required."))?; watches.stop(number as usize); }
+            if request.flag("all", false) {
+                watches.stop_all();
+            } else {
+                let number = request
+                    .param("number")
+                    .as_u64()
+                    .ok_or_else(|| Failure::bad_request("A watch number is required."))?;
+                watches.stop(number as usize);
+            }
         }
         let now = std::time::Instant::now();
-        Ok(json!({"watches": watches.live().iter().map(|w| json!({"number": w.number(), "path": w.path(),
+        Ok(
+            json!({"watches": watches.live().iter().map(|w| json!({"number": w.number(), "path": w.path(),
             "remainingSeconds": w.left(now).as_secs(), "armedBy": w.armed_by(),
             "state": if watches.firing() == Some(w.number()) { "running" } else { "watching" }
-        })).collect::<Vec<_>>(), "busy": open.running.is_some()}))
+        })).collect::<Vec<_>>(), "busy": open.running.is_some()}),
+        )
     }
 
     /// Called by the desktop's clock, never a renderer-supplied generated prompt.
-    fn poll_watches(&mut self) { self.poll_watches_at(std::time::Instant::now()); }
+    fn poll_watches(&mut self) {
+        self.poll_watches_at(std::time::Instant::now());
+    }
 
     fn poll_watches_at(&mut self, now: std::time::Instant) {
         let handles: Vec<_> = self.open.keys().cloned().collect();
         for handle in handles {
             self.reap(&handle);
-            let Some(open) = self.open.get(&handle) else { continue };
-            if open.running.is_some() || !open.answered_trust { continue; }
-            if open.watches.lock().map(|w| w.is_empty()).unwrap_or(true) { continue; }
+            let Some(open) = self.open.get(&handle) else {
+                continue;
+            };
+            if open.running.is_some() || !open.answered_trust {
+                continue;
+            }
+            if open.watches.lock().map(|w| w.is_empty()).unwrap_or(true) {
+                continue;
+            }
             let Ok(mut workspace) = Workspace::new(open.project.clone()) else {
                 if let Ok(mut watches) = open.watches.lock() {
-                    for watch in watches.live() { self.emitter.send(Event::new("watch.ended", &handle, json!({"number": watch.number(), "reason": "project-unavailable"}))); }
+                    for watch in watches.live() {
+                        self.emitter.send(Event::new(
+                            "watch.ended",
+                            &handle,
+                            json!({"number": watch.number(), "reason": "project-unavailable"}),
+                        ));
+                    }
                     watches.stop_all();
                 }
                 continue;
             };
-            if let Ok(state) = open.state.try_lock() { for directory in &state.directories { let _ = workspace.add_directory(&directory.display().to_string()); } }
+            if let Ok(state) = open.state.try_lock() {
+                for directory in &state.directories {
+                    let _ = workspace.add_directory(&directory.display().to_string());
+                }
+            }
             let due = {
-                let Ok(mut watches) = open.watches.lock() else { continue };
+                let Ok(mut watches) = open.watches.lock() else {
+                    continue;
+                };
                 let ended = watches.look(now, |path| workspace.look(path));
                 for (number, reason) in ended {
                     self.emitter.send(Event::new("watch.ended", &handle, json!({"number": number, "reason": match reason {
@@ -824,12 +943,28 @@ impl Bridge {
             let Some((number, path)) = due else { continue };
             let prompt = bravebot_agent::watch::fired(number, &path);
             // Announce the cause before starting a worker, so early events follow it.
-            self.emitter.send(Event::new("watch.fired", &handle, json!({"number": number, "path": path})));
-            if let Ok(mut watches) = open.watches.lock() { watches.dispatched(number); }
+            self.emitter.send(Event::new(
+                "watch.fired",
+                &handle,
+                json!({"number": number, "path": path}),
+            ));
+            if let Ok(mut watches) = open.watches.lock() {
+                watches.dispatched(number);
+            }
             let request = Request::parse(&json!({"id": 0, "method": "turn.send", "params": {"session": handle, "prompt": prompt, "recall": false}}).to_string());
-            if let Ok(request) = request && let Err(error) = self.send_turn(&request) {
-                if let Some(open) = self.open.get(&handle) && let Ok(mut watches) = open.watches.lock() { watches.stop(number); }
-                self.emitter.send(Event::new("watch.ended", &handle, json!({"number": number, "reason": "failed", "message": error.message})));
+            if let Ok(request) = request
+                && let Err(error) = self.send_turn(&request)
+            {
+                if let Some(open) = self.open.get(&handle)
+                    && let Ok(mut watches) = open.watches.lock()
+                {
+                    watches.stop(number);
+                }
+                self.emitter.send(Event::new(
+                    "watch.ended",
+                    &handle,
+                    json!({"number": number, "reason": "failed", "message": error.message}),
+                ));
             }
         }
     }
@@ -960,11 +1095,11 @@ fn work(work: Work) {
         return;
     };
 
-    let history = bravebot_session::store::Entry::sent(
-        &prompt,
-        Some(project.display().to_string()),
-    );
-    let mut task = Task::new(&prompt).with_home(bravebot_agent::home::directory()).with_model(model);
+    let history =
+        bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
+    let mut task = Task::new(&prompt)
+        .with_home(bravebot_agent::home::directory())
+        .with_model(model);
     for file in &files {
         task = task.with_file(file);
     }
@@ -972,10 +1107,18 @@ fn work(work: Work) {
         task = task.with_dropped_text(path);
     }
 
-    let free = watches.lock().map(|w| bravebot_agent::watch::MAX_LIVE.saturating_sub(w.live().len())).unwrap_or(0);
-    task = task.arming(if free == 0 { bravebot_agent::watch::Arming::Full } else { bravebot_agent::watch::Arming::Allowed { free } });
+    let free = watches
+        .lock()
+        .map(|w| bravebot_agent::watch::MAX_LIVE.saturating_sub(w.live().len()))
+        .unwrap_or(0);
+    task = task.arming(if free == 0 {
+        bravebot_agent::watch::Arming::Full
+    } else {
+        bravebot_agent::watch::Arming::Allowed { free }
+    });
     let mut reporter = BridgeReporter::new(emitter.clone(), &session);
-    let mut confirmer = BridgeConfirmer::new(emitter.clone(), &session, pending, answers, cancel.clone());
+    let mut confirmer =
+        BridgeConfirmer::new(emitter.clone(), &session, pending, answers, cancel.clone());
     let mut sink = BridgeSink::new(emitter.clone(), &session, turn);
     let egress = Egress::new();
 
@@ -1018,7 +1161,12 @@ fn work(work: Work) {
             if let Ok(mut watches) = watches.lock() {
                 for path in &outcome.watches {
                     if !watches.live().iter().any(|w| w.path() == path) {
-                        let _ = watches.arm(path.clone(), turn, workspace.look(path), std::time::Instant::now());
+                        let _ = watches.arm(
+                            path.clone(),
+                            turn,
+                            workspace.look(path),
+                            std::time::Instant::now(),
+                        );
                     }
                 }
             }
@@ -1093,8 +1241,15 @@ fn work(work: Work) {
                 && !config.serves_aichat()
                 && config.provider_for(chosen).is_none()
                 && config.bedrock_for(chosen).is_none()
-            { Some("model-unconfigured") } else { category };
-            let attempts = match ending { bravebot_agent::outcome::Ending::Stopped { attempts } => attempts, _ => diagnosis.and_then(|d| d.attempts) };
+            {
+                Some("model-unconfigured")
+            } else {
+                category
+            };
+            let attempts = match ending {
+                bravebot_agent::outcome::Ending::Stopped { attempts } => attempts,
+                _ => diagnosis.and_then(|d| d.attempts),
+            };
             let kind = match &error {
                 TurnError::Cancelled { .. } => "cancelled",
                 TurnError::Precommit(_) => "precommit",
@@ -1119,7 +1274,9 @@ fn work(work: Work) {
 
     // Last, and after the record is on disk, so a front-end that reloads on being told
     // the turn ended reads the same thing this wrote.
-    if let Ok(mut watches) = watches.lock() { watches.turn_ended(std::time::Instant::now()); }
+    if let Ok(mut watches) = watches.lock() {
+        watches.turn_ended(std::time::Instant::now());
+    }
     finished.store(true, std::sync::atomic::Ordering::Release);
 }
 
@@ -1223,20 +1380,34 @@ mod watch_tests {
         let now = Instant::now();
         let mut watches = bravebot_agent::watch::Watches::new();
         let workspace = Workspace::new(root.clone()).unwrap();
-        watches.arm("watched".into(), 1, workspace.look("watched"), now).unwrap();
+        watches
+            .arm("watched".into(), 1, workspace.look("watched"), now)
+            .unwrap();
         let watches = Arc::new(Mutex::new(watches));
         let handle = bridge.mint(Open {
-            project: root.clone(), state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
-            answered_trust: true, running: None, model: None, watches: Arc::clone(&watches),
+            project: root.clone(),
+            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
+            answered_trust: true,
+            running: None,
+            model: None,
+            watches: Arc::clone(&watches),
         });
-        std::fs::write(root.join("watched"), "PRIVATE FILE CONTENT MUST NOT BE SENT").unwrap();
+        std::fs::write(
+            root.join("watched"),
+            "PRIVATE FILE CONTENT MUST NOT BE SENT",
+        )
+        .unwrap();
         bridge.poll_watches_at(now + Duration::from_secs(6));
         assert!(watches.lock().unwrap().is_empty());
         let events = events.lock().unwrap();
         assert_eq!(events.iter().filter(|e| e.name == "watch.fired").count(), 1);
         assert_eq!(events.last().unwrap().name, "watch.ended");
         assert!(events.iter().all(|e| e.session.as_deref() == Some(&handle)));
-        assert!(!events.iter().any(|e| e.data.to_string().contains("PRIVATE FILE")));
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.data.to_string().contains("PRIVATE FILE"))
+        );
     }
 
     #[test]
@@ -1252,19 +1423,46 @@ mod watch_tests {
         let project = directory.path().to_path_buf();
         let now = Instant::now();
         let mut watches = bravebot_agent::watch::Watches::new();
-        let first = watches.arm("first".into(), 1, bravebot_agent::watch::Looked::Saw("a".into()), now).unwrap();
-        let second = watches.arm("second".into(), 1, bravebot_agent::watch::Looked::Saw("b".into()), now).unwrap();
+        let first = watches
+            .arm(
+                "first".into(),
+                1,
+                bravebot_agent::watch::Looked::Saw("a".into()),
+                now,
+            )
+            .unwrap();
+        let second = watches
+            .arm(
+                "second".into(),
+                1,
+                bravebot_agent::watch::Looked::Saw("b".into()),
+                now,
+            )
+            .unwrap();
         watches.dispatched(first);
         let watches = Arc::new(Mutex::new(watches));
         let cancel = Cancel::new();
         let (answers, _receiver) = mpsc::channel();
-        let running = Running { cancel: cancel.clone(), answers, pending: Arc::new(Mutex::new(None)), turn: 1,
-            finished: Arc::new(std::sync::atomic::AtomicBool::new(false)) };
+        let running = Running {
+            cancel: cancel.clone(),
+            answers,
+            pending: Arc::new(Mutex::new(None)),
+            turn: 1,
+            finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let handle = bridge.mint(Open { project: project.clone(),
+        let handle = bridge.mint(Open {
+            project: project.clone(),
             state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&project)))),
-            answered_trust: true, running: Some(running), model: None, watches: Arc::clone(&watches) });
-        let request = Request::parse(&json!({"id": 1, "method": "turn.cancel", "params": {"session": handle}}).to_string()).unwrap();
+            answered_trust: true,
+            running: Some(running),
+            model: None,
+            watches: Arc::clone(&watches),
+        });
+        let request = Request::parse(
+            &json!({"id": 1, "method": "turn.cancel", "params": {"session": handle}}).to_string(),
+        )
+        .unwrap();
         bridge.dispatch(&request).unwrap();
         assert!(cancel.is_cancelled());
         let watches = watches.lock().unwrap();
@@ -1286,13 +1484,26 @@ mod watch_tests {
         std::fs::write(root.join("file"), "original").unwrap();
         let now = Instant::now();
         let mut watches = bravebot_agent::watch::Watches::new();
-        watches.arm("file".into(), 1, Workspace::new(root.clone()).unwrap().look("file"), now).unwrap();
+        watches
+            .arm(
+                "file".into(),
+                1,
+                Workspace::new(root.clone()).unwrap().look("file"),
+                now,
+            )
+            .unwrap();
         let watches = Arc::new(Mutex::new(watches));
         let events = Arc::new(Mutex::new(Vec::new()));
         let held = Arc::clone(&events);
         let mut bridge = Bridge::new(Box::new(move |e| held.lock().unwrap().push(e)));
-        bridge.mint(Open { project: root.clone(), state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
-            answered_trust: true, running: None, model: None, watches: Arc::clone(&watches) });
+        bridge.mint(Open {
+            project: root.clone(),
+            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
+            answered_trust: true,
+            running: None,
+            model: None,
+            watches: Arc::clone(&watches),
+        });
         bridge.poll_watches_at(now + Duration::from_secs(7 * 24 * 60 * 60));
         assert!(watches.lock().unwrap().is_empty());
         assert_eq!(events.lock().unwrap()[0].data["reason"], "expired");

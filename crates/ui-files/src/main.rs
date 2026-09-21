@@ -140,18 +140,24 @@ fn handle(request: Request) -> io::Result<Value> {
             Ok(json!({"text": text, "truncated": truncated}))
         }
         "hooks.read" | "hooks.replace" => {
-            if request.path != "hooks.json" { return Err(invalid("Only the hooks file is allowed")); }
+            if request.path != "hooks.json" {
+                return Err(invalid("Only the hooks file is allowed"));
+            }
             let (parent, leaf) = parent_directory(&request.root, "hooks.json", false)?;
             if request.operation == "hooks.read" {
                 return match read_at(&parent, &leaf, 65536) {
                     Ok((_, true)) => Err(invalid("Hooks exceed 64 KB")),
                     Ok((text, false)) => Ok(json!({"text": text})),
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(json!({"text": null})),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        Ok(json!({"text": null}))
+                    }
                     Err(error) => Err(error),
                 };
             }
             let text = request.text.ok_or_else(|| invalid("Missing hooks"))?;
-            if text.len() > 65536 || text.contains('\0') { return Err(invalid("Hooks must be text under 64 KB")); }
+            if text.len() > 65536 || text.contains('\0') {
+                return Err(invalid("Hooks must be text under 64 KB"));
+            }
             let previous = replace_at(&parent, &leaf, &text, request.expected.as_deref())?;
             Ok(json!({"previous": previous}))
         }
@@ -356,14 +362,23 @@ mod hooks_tests {
         let directory = builder.tempdir().unwrap();
         // Normalize the system temp alias before the helper's no-follow traversal.
         let root = fs::canonicalize(directory.path()).unwrap();
-        let call = |operation: &str, path: &str, text: Option<&str>, expected: Option<&str>| handle(Request {
-            root: root.display().to_string(), path: path.into(), operation: operation.into(),
-            limit: None, text: text.map(str::to_string), expected: expected.map(str::to_string),
-        });
+        let call = |operation: &str, path: &str, text: Option<&str>, expected: Option<&str>| {
+            handle(Request {
+                root: root.display().to_string(),
+                path: path.into(),
+                operation: operation.into(),
+                limit: None,
+                text: text.map(str::to_string),
+                expected: expected.map(str::to_string),
+            })
+        };
         assert!(call("hooks.read", "hooks.json", None, None).unwrap()["text"].is_null());
         assert!(call("hooks.replace", "other.json", Some("{}"), None).is_err());
         assert!(call("hooks.replace", "hooks.json", Some("first"), None).is_ok());
         assert!(call("hooks.replace", "hooks.json", Some("overwrite"), None).is_err());
-        assert_eq!(fs::read_to_string(root.join("hooks.json")).unwrap(), "first");
+        assert_eq!(
+            fs::read_to_string(root.join("hooks.json")).unwrap(),
+            "first"
+        );
     }
 }

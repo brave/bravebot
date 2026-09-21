@@ -24,8 +24,8 @@ pub mod fork;
 pub mod models;
 pub mod protocol;
 pub mod running;
-pub mod store;
 pub mod settings;
+pub mod store;
 pub mod turn;
 pub mod wire;
 

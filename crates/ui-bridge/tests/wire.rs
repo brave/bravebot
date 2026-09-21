@@ -8,9 +8,9 @@ use bravebot_agent::confirm::{Decision, Intent, WriteRequest};
 use bravebot_agent::conversation::Said;
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
-use bravebot_ui_bridge::wire;
 use bravebot_core::ask::{self, Answer, Asking, Choice, Question, Series};
 use bravebot_core::todo::{Row, Status};
+use bravebot_ui_bridge::wire;
 use serde_json::{Value, json};
 
 #[test]
@@ -147,7 +147,10 @@ fn a_todo_row_sends_its_status_not_its_glyph() {
         marker: "[x]",
         status: Status::Done,
     });
-    assert_eq!(value, json!({ "content": "fix the parser", "status": "done" }));
+    assert_eq!(
+        value,
+        json!({ "content": "fix the parser", "status": "done" })
+    );
 }
 
 /// The body never goes on the wire. A reviewer reads a diff; shipping `contents` invites
@@ -198,7 +201,8 @@ fn a_created_file_says_nothing_would_be_lost() {
     assert_eq!(value["existing"], json!(false));
     assert_eq!(value["intent"], json!("create"));
     assert_eq!(
-        value["untrusted"], json!(true),
+        value["untrusted"],
+        json!(true),
         "a front-end must be able to draw this differently"
     );
 }
@@ -254,7 +258,11 @@ fn a_series() -> Asking {
         Question::new(
             "Files",
             "Which of these?",
-            vec![Choice::new("a.rs", None), Choice::new("b.rs", None), Choice::new("c.rs", None)],
+            vec![
+                Choice::new("a.rs", None),
+                Choice::new("b.rs", None),
+                Choice::new("c.rs", None),
+            ],
             true,
         ),
     ]))
@@ -328,7 +336,10 @@ fn answers_are_held_to_the_questions_they_answer() {
 
     // Fewer is left short rather than padded. The kernel reads a missing answer as a
     // decline; padding here would be this code answering on somebody's behalf.
-    assert_eq!(wire::fitted(vec![Answer::Typed("just this".into())], &asking).len(), 1);
+    assert_eq!(
+        wire::fitted(vec![Answer::Typed("just this".into())], &asking).len(),
+        1
+    );
 }
 
 /// Every choice becomes exactly one row, in order, with its index carried as data.
@@ -356,25 +367,44 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
     use bravebot_agent::confirm::RunRequest;
     use bravebot_core::command::{Joiner, Plan, Route, Step, Steps};
     let step = Step {
-        program: "printf".into(), resolved: "/usr/bin/printf".into(),
+        program: "printf".into(),
+        resolved: "/usr/bin/printf".into(),
         args: vec!["hello world".into()],
         environment: vec![("MODE".into(), "preview".into())],
-        routes: vec![Route::Stdout { path: "/tmp/result.txt".into(), append: false }],
+        routes: vec![Route::Stdout {
+            path: "/tmp/result.txt".into(),
+            append: false,
+        }],
     };
-    let request = RunRequest { record: None, pattern: None, stdin: Some("ref:3".into()), plan: Plan {
-        line: "context only".into(), directory: "/tmp".into(),
-        steps: Steps::Join {
-            left: Box::new(Steps::Pipeline(vec![step.clone()])), joiner: Joiner::And,
-            right: Box::new(Steps::Pipeline(vec![Step { routes: vec![], ..step }])),
+    let request = RunRequest {
+        record: None,
+        pattern: None,
+        stdin: Some("ref:3".into()),
+        plan: Plan {
+            line: "context only".into(),
+            directory: "/tmp".into(),
+            steps: Steps::Join {
+                left: Box::new(Steps::Pipeline(vec![step.clone()])),
+                joiner: Joiner::And,
+                right: Box::new(Steps::Pipeline(vec![Step {
+                    routes: vec![],
+                    ..step
+                }])),
+            },
+            writes: vec!["/tmp/result.txt".into()],
+            reads: vec![],
+            stdin: None,
         },
-        writes: vec!["/tmp/result.txt".into()], reads: vec![], stdin: None,
-    }};
+    };
     let value = wire::run_request(7, &request);
     assert_eq!(value["request"], 7);
     assert_eq!(value["directory"], "/tmp");
     assert_eq!(value["stages"].as_array().unwrap().len(), 2);
     assert_eq!(value["stages"][0]["resolved"], "/usr/bin/printf");
-    assert_eq!(value["stages"][0]["display"], "MODE=preview printf 'hello world' > /tmp/result.txt");
+    assert_eq!(
+        value["stages"][0]["display"],
+        "MODE=preview printf 'hello world' > /tmp/result.txt"
+    );
     assert!(value["plan"].as_str().unwrap().contains(" && "));
     assert_ne!(value["plan"], "context only");
     assert_eq!(value["writes"], json!(["/tmp/result.txt"]));
@@ -383,30 +413,60 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
 
 #[test]
 fn approval_evidence_is_kept_beside_the_decision() {
-    use bravebot_agent::confirm::{VetRequest, OutputRequest, VouchRequest, Remark};
+    use bravebot_agent::confirm::{OutputRequest, Remark, VetRequest, VouchRequest};
     use bravebot_core::vetting::Verdict;
-    let vet = wire::vet_request(7, &VetRequest {
-        origin: "file.md".into(), expects: "notes".into(), content: "first\nsecond\n".into(),
-        verdict: Verdict::Unsafe, reason: Some("Do not trust this assessment as permission".into()),
-    });
+    let vet = wire::vet_request(
+        7,
+        &VetRequest {
+            origin: "file.md".into(),
+            expects: "notes".into(),
+            content: "first\nsecond\n".into(),
+            verdict: Verdict::Unsafe,
+            reason: Some("Do not trust this assessment as permission".into()),
+        },
+    );
     assert_eq!(vet["request"], 7);
     assert_eq!(vet["content"], "first\nsecond\n");
     assert_eq!(vet["vetting"]["verdict"], "unsafe");
     assert!(vet.get("decision").is_none());
-    let output = wire::output_request(8, &OutputRequest {
-        command: "cat file".into(), output: "content".into(), reference: "1".into(),
-        verdict: Verdict::Inconclusive("offline"), reason: None,
-    });
+    let output = wire::output_request(
+        8,
+        &OutputRequest {
+            command: "cat file".into(),
+            output: "content".into(),
+            reference: "1".into(),
+            verdict: Verdict::Inconclusive("offline"),
+            reason: None,
+        },
+    );
     assert_eq!(output["vetting"]["detail"], "offline");
-    let vouch = wire::vouch_request(9, &VouchRequest {
-        path: "file".into(), preview: "part".into(), truncated: true, verdict: Verdict::Safe, reason: Some("advice".into()),
-    });
+    let vouch = wire::vouch_request(
+        9,
+        &VouchRequest {
+            path: "file".into(),
+            preview: "part".into(),
+            truncated: true,
+            verdict: Verdict::Safe,
+            reason: Some("advice".into()),
+        },
+    );
     assert_eq!(vouch["vetting"]["reason"], "advice");
     assert_eq!(vouch["truncated"], true);
-    let write = wire::write_request(10, &WriteRequest {
-        path: "file".into(), contents: "new".into(), existing: None, intent: Intent::Create, untrusted: true,
-        remark: Some(Remark { preview: vec!["Fixed a typo".into()], lines: 9, label: "untrusted".into() }),
-    });
+    let write = wire::write_request(
+        10,
+        &WriteRequest {
+            path: "file".into(),
+            contents: "new".into(),
+            existing: None,
+            intent: Intent::Create,
+            untrusted: true,
+            remark: Some(Remark {
+                preview: vec!["Fixed a typo".into()],
+                lines: 9,
+                label: "untrusted".into(),
+            }),
+        },
+    );
     assert_eq!(write["remark"]["lines"], 9);
     assert_eq!(write["remark"]["preview"], json!(["Fixed a typo"]));
 }

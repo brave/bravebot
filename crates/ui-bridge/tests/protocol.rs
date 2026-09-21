@@ -30,8 +30,8 @@ fn an_optional_flag_reads_as_its_default_unless_it_is_really_there() {
         .expect("should parse");
     assert!(!sent.flag("recall", true));
 
-    let absent = Request::parse(r#"{"id":2,"method":"turn.send","params":{}}"#)
-        .expect("should parse");
+    let absent =
+        Request::parse(r#"{"id":2,"method":"turn.send","params":{}}"#).expect("should parse");
     assert!(absent.flag("recall", true));
     assert!(!absent.flag("recall", false));
 
@@ -44,7 +44,9 @@ fn an_optional_flag_reads_as_its_default_unless_it_is_really_there() {
         r#"{"id":5,"method":"turn.send","params":{"recall":null}}"#,
     ] {
         assert!(
-            Request::parse(wrong).expect("should parse").flag("recall", true),
+            Request::parse(wrong)
+                .expect("should parse")
+                .flag("recall", true),
             "{wrong} should have read as the default"
         );
     }
@@ -69,7 +71,10 @@ fn a_bad_line_is_answerable_only_when_the_id_survived() {
         r#"[]"#,
     ] {
         assert!(
-            matches!(Request::parse(hopeless), Err(Unreadable::Unanswerable { .. })),
+            matches!(
+                Request::parse(hopeless),
+                Err(Unreadable::Unanswerable { .. })
+            ),
             "{hopeless} should be unanswerable"
         );
     }
@@ -77,7 +82,8 @@ fn a_bad_line_is_answerable_only_when_the_id_survived() {
 
 #[test]
 fn a_missing_parameter_names_itself() {
-    let request = Request::parse(r#"{"id":1,"method":"session.open","params":{}}"#).expect("parses");
+    let request =
+        Request::parse(r#"{"id":1,"method":"session.open","params":{}}"#).expect("parses");
     let failure = request.string("directory").expect_err("should fail");
     assert_eq!(failure.code, ErrorCode::BadRequest);
     assert!(failure.message.contains("directory"), "{}", failure.message);

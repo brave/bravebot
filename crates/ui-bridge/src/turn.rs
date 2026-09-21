@@ -16,10 +16,11 @@ use crate::emit::Emitter;
 use crate::protocol::Event;
 use crate::wire;
 use bravebot_agent::confirm::{
-    Confirmer, Decision, FetchRequest, ManifestRequest, ServerRequest, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest, WriteRequest,
+    Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RunDecision, RunRequest,
+    ServerRequest, VetRequest, VouchRequest, WriteRequest,
 };
-use bravebot_core::ask::{Answer, Asking};
 use bravebot_agent::report::{Activity, Landing, Phase, Reporter, Shown};
+use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::event::Sink;
 use bravebot_core::todo::Row;
 use serde_json::{Value, json};
@@ -257,8 +258,15 @@ impl BridgeConfirmer {
     /// `None` means nobody answered — a poisoned lock, a departed front-end, a closed
     /// session, a shutting-down process, or a reply to a different question. Every caller
     /// turns that into its own flavour of no.
-    fn ask(&mut self, kind: Kind, event: &'static str, data: impl FnOnce(u64) -> Value) -> Option<Reply> {
-        if self.cancel.is_cancelled() { return None; }
+    fn ask(
+        &mut self,
+        kind: Kind,
+        event: &'static str,
+        data: impl FnOnce(u64) -> Value,
+    ) -> Option<Reply> {
+        if self.cancel.is_cancelled() {
+            return None;
+        }
         self.next += 1;
         let id = self.next;
 
@@ -279,8 +287,13 @@ impl BridgeConfirmer {
         // dropped — which is what a departed front-end, a closed session, or a shutting
         // down process looks like from here. All of them are refusals.
         let reply = loop {
-            if self.cancel.is_cancelled() { break None; }
-            match self.answers.recv_timeout(std::time::Duration::from_millis(50)) {
+            if self.cancel.is_cancelled() {
+                break None;
+            }
+            match self
+                .answers
+                .recv_timeout(std::time::Duration::from_millis(50))
+            {
                 Ok(reply) => break (!self.cancel.is_cancelled()).then_some(reply),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break None,
@@ -317,7 +330,9 @@ impl Confirmer for BridgeConfirmer {
     }
 
     fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
-        match self.ask(Kind::Vet, "vet.request", |id| wire::vet_request(id, request)) {
+        match self.ask(Kind::Vet, "vet.request", |id| {
+            wire::vet_request(id, request)
+        }) {
             Some(Reply::Vet(decision)) => decision,
             _ => Decision::Reject,
         }
@@ -345,7 +360,9 @@ impl Confirmer for BridgeConfirmer {
     /// a program on the strength of a question nobody saw. `RunDecision::reject()` is that
     /// pair, and it is what every failure here resolves to.
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
-        match self.ask(Kind::Run, "run.request", |id| wire::run_request(id, request)) {
+        match self.ask(Kind::Run, "run.request", |id| {
+            wire::run_request(id, request)
+        }) {
             Some(Reply::Run(decision)) => decision,
             _ => RunDecision::reject(),
         }

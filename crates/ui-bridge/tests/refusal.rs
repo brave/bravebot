@@ -8,8 +8,7 @@
 //! failing, the question is not how to make it pass.
 
 use bravebot_agent::confirm::{
-    Confirmer, Decision, Intent, OutputRequest, RunDecision, RunRequest, VouchRequest,
-    WriteRequest,
+    Confirmer, Decision, Intent, OutputRequest, RunDecision, RunRequest, VouchRequest, WriteRequest,
 };
 // `Question` is also the bridge's name for an outstanding request, so this one stays
 // qualified as `ask::Question` rather than shadowing it.
@@ -25,7 +24,10 @@ use std::sync::{Arc, Mutex};
 
 /// A question of the ordinary kind, for the tests that plant one directly.
 fn a_question(id: u64) -> Question {
-    Question { id, kind: Kind::Write }
+    Question {
+        id,
+        kind: Kind::Write,
+    }
 }
 
 fn a_write() -> WriteRequest {
@@ -58,7 +60,13 @@ fn harness() -> Harness {
 
     let cancel = bravebot_core::cancel::Cancel::new();
     Harness {
-        confirmer: BridgeConfirmer::new(emitter, "s1", Arc::clone(&pending), answers_rx, cancel.clone()),
+        confirmer: BridgeConfirmer::new(
+            emitter,
+            "s1",
+            Arc::clone(&pending),
+            answers_rx,
+            cancel.clone(),
+        ),
         events,
         running: Running {
             cancel,
@@ -74,12 +82,19 @@ fn harness() -> Harness {
 #[test]
 fn polling_for_interjections_leaves_approval_replies_untouched() {
     let mut harness = harness();
-    harness.running.answers.send(Reply::Write(Decision::Approve)).expect("connected");
+    harness
+        .running
+        .answers
+        .send(Reply::Write(Decision::Approve))
+        .expect("connected");
     assert_eq!(harness.confirmer.interjection(), None);
     assert!(harness.events.lock().expect("not poisoned").is_empty());
     drop(harness.running);
     // Consuming the queued approval would leave a closed channel and return a refusal.
-    assert_eq!(harness.confirmer.confirm_write(&a_write()), Decision::Approve);
+    assert_eq!(
+        harness.confirmer.confirm_write(&a_write()),
+        Decision::Approve
+    );
 }
 
 /// The front-end has gone. Nobody can be asked, so nothing is approved.
@@ -90,13 +105,19 @@ fn a_closed_answer_channel_refuses() {
     // down process all look like from inside a turn.
     drop(harness.running);
 
-    assert_eq!(harness.confirmer.confirm_write(&a_write()), Decision::Reject);
+    assert_eq!(
+        harness.confirmer.confirm_write(&a_write()),
+        Decision::Reject
+    );
 }
 
 /// An explicit refusal, sent while the turn waits.
 #[test]
 fn an_answered_write_gets_the_answer_that_was_sent() {
-    for (sent, expected) in [(Decision::Approve, Decision::Approve), (Decision::Reject, Decision::Reject)] {
+    for (sent, expected) in [
+        (Decision::Approve, Decision::Approve),
+        (Decision::Reject, Decision::Reject),
+    ] {
         let mut harness = harness();
         let running = harness.running;
 
@@ -179,7 +200,10 @@ fn refusing_the_pending_write_sends_a_rejection() {
         panic!("the write was never registered as pending");
     });
 
-    assert_eq!(harness.confirmer.confirm_write(&a_write()), Decision::Reject);
+    assert_eq!(
+        harness.confirmer.confirm_write(&a_write()),
+        Decision::Reject
+    );
     closer.join().expect("the closer should not panic");
 }
 
@@ -336,7 +360,10 @@ fn an_answer_to_another_question_does_not_apply() {
     let harness = harness();
     let running = harness.running;
 
-    *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind: Kind::Run });
+    *running.pending.lock().expect("not poisoned") = Some(Question {
+        id: 1,
+        kind: Kind::Run,
+    });
 
     assert!(
         !running.answer(1, Reply::Write(Decision::Approve)),
@@ -404,22 +431,31 @@ fn an_unanswerable_series_claims_no_answers() {
     );
 }
 
-
 #[test]
 fn cancelling_wakes_a_waiting_confirmer_without_approval() {
     let mut harness = harness();
     let running = harness.running;
     let (finished_tx, finished_rx) = mpsc::channel();
     let worker = std::thread::spawn(move || {
-        finished_tx.send(harness.confirmer.confirm_write(&a_write())).unwrap();
+        finished_tx
+            .send(harness.confirmer.confirm_write(&a_write()))
+            .unwrap();
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     while running.pending.lock().unwrap().is_none() {
-        assert!(std::time::Instant::now() < deadline, "question never arrived");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "question never arrived"
+        );
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     running.cancel.cancel();
-    assert_eq!(finished_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap(), Decision::Reject);
+    assert_eq!(
+        finished_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap(),
+        Decision::Reject
+    );
     assert!(running.pending.lock().unwrap().is_none());
     worker.join().unwrap();
 }
@@ -428,26 +464,45 @@ fn cancelling_wakes_a_waiting_confirmer_without_approval() {
 fn cancelling_before_a_question_cannot_leave_it_waiting() {
     let mut harness = harness();
     harness.running.cancel.cancel();
-    assert_eq!(harness.confirmer.confirm_write(&a_write()), Decision::Reject);
+    assert_eq!(
+        harness.confirmer.confirm_write(&a_write()),
+        Decision::Reject
+    );
     assert!(harness.events.lock().unwrap().is_empty());
 }
 
 /// Newly added upstream powers stay denied until the window can present their consent.
 #[test]
 fn unsupported_approvals_refuse_without_consuming_other_answers() {
-    use bravebot_agent::confirm::{FetchRequest, ServerRequest, ManifestRequest};
+    use bravebot_agent::confirm::{FetchRequest, ManifestRequest, ServerRequest};
     let mut h = harness();
-    h.running.answers.send(Reply::Write(Decision::Approve)).unwrap();
-    assert_eq!(h.confirmer.confirm_fetch(&FetchRequest {
-        url: "https://example.com".into(), host: "example.com".into(),
-    }), Decision::Reject);
-    assert_eq!(h.confirmer.confirm_server(&ServerRequest {
-        language: "Rust", program: "/usr/bin/rust-analyzer".into(),
-        workspace: "/project".into(), runs_build_tooling: true,
-    }), Decision::Reject);
-    assert_eq!(h.confirmer.confirm_manifest(&ManifestRequest {
-        task: "work".into(), steps: vec!["run command".into()],
-    }), Decision::Reject);
+    h.running
+        .answers
+        .send(Reply::Write(Decision::Approve))
+        .unwrap();
+    assert_eq!(
+        h.confirmer.confirm_fetch(&FetchRequest {
+            url: "https://example.com".into(),
+            host: "example.com".into(),
+        }),
+        Decision::Reject
+    );
+    assert_eq!(
+        h.confirmer.confirm_server(&ServerRequest {
+            language: "Rust",
+            program: "/usr/bin/rust-analyzer".into(),
+            workspace: "/project".into(),
+            runs_build_tooling: true,
+        }),
+        Decision::Reject
+    );
+    assert_eq!(
+        h.confirmer.confirm_manifest(&ManifestRequest {
+            task: "work".into(),
+            steps: vec!["run command".into()],
+        }),
+        Decision::Reject
+    );
     assert!(h.events.lock().unwrap().is_empty());
     assert_eq!(h.confirmer.confirm_write(&a_write()), Decision::Approve);
 }
@@ -456,13 +511,26 @@ fn unsupported_approvals_refuse_without_consuming_other_answers() {
 fn vetted_content_never_approves_itself_or_consumes_another_kind_of_reply() {
     use bravebot_agent::confirm::VetRequest;
     use bravebot_core::vetting::Verdict;
-    for verdict in [Verdict::Safe, Verdict::Unsafe, Verdict::Inconclusive("offline")] {
+    for verdict in [
+        Verdict::Safe,
+        Verdict::Unsafe,
+        Verdict::Inconclusive("offline"),
+    ] {
         let mut h = harness();
-        h.running.answers.send(Reply::Write(Decision::Approve)).unwrap();
-        assert_eq!(h.confirmer.confirm_vetted_read(&VetRequest {
-            origin: "untrusted.txt".into(), expects: "data".into(),
-            content: "untrusted content".into(), verdict, reason: None,
-        }), Decision::Reject);
+        h.running
+            .answers
+            .send(Reply::Write(Decision::Approve))
+            .unwrap();
+        assert_eq!(
+            h.confirmer.confirm_vetted_read(&VetRequest {
+                origin: "untrusted.txt".into(),
+                expects: "data".into(),
+                content: "untrusted content".into(),
+                verdict,
+                reason: None,
+            }),
+            Decision::Reject
+        );
         assert!(h.running.pending.lock().unwrap().is_none());
     }
 }
@@ -471,10 +539,19 @@ fn vetted_content_never_approves_itself_or_consumes_another_kind_of_reply() {
 fn vetted_content_requires_its_own_explicit_approval() {
     use bravebot_agent::confirm::VetRequest;
     let mut h = harness();
-    h.running.answers.send(Reply::Vet(Decision::Approve)).unwrap();
-    assert_eq!(h.confirmer.confirm_vetted_read(&VetRequest {
-        origin: "notes.md".into(), expects: "notes".into(), content: "text".into(),
-        verdict: bravebot_core::vetting::Verdict::Unsafe, reason: Some("instructions".into()),
-    }), Decision::Approve);
+    h.running
+        .answers
+        .send(Reply::Vet(Decision::Approve))
+        .unwrap();
+    assert_eq!(
+        h.confirmer.confirm_vetted_read(&VetRequest {
+            origin: "notes.md".into(),
+            expects: "notes".into(),
+            content: "text".into(),
+            verdict: bravebot_core::vetting::Verdict::Unsafe,
+            reason: Some("instructions".into()),
+        }),
+        Decision::Approve
+    );
     assert_eq!(h.events.lock().unwrap()[0].name, "vet.request");
 }

@@ -8,10 +8,10 @@
 //! for the duration of the turn and hands it back by releasing the lock; the dispatch
 //! thread holds only what it needs to answer a question or stop the work.
 
-use bravebot_agent::Conversation;
-use bravebot_agent::conversation::Snapshot;
 use crate::turn::{Kind, Reply};
+use bravebot_agent::Conversation;
 use bravebot_agent::confirm::{Decision, RunDecision};
+use bravebot_agent::conversation::Snapshot;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::programs::TrustedPrograms;
 use bravebot_core::todo::Row;
@@ -110,7 +110,11 @@ impl State {
     /// is what makes a turn taken here land in the session it was taken in — and what
     /// `bravebot --resume` needs in order to pick the same session back up. The terminal does
     /// the same at `crates/tui/src/app.rs`.
-    pub fn resumed(project: &Path, record: &bravebot_session::sessions::Record, trust: TrustStore) -> Self {
+    pub fn resumed(
+        project: &Path,
+        record: &bravebot_session::sessions::Record,
+        trust: TrustStore,
+    ) -> Self {
         Self {
             conversation: Conversation::restored(record.conversation.clone()),
             trust,

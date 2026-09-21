@@ -18,10 +18,11 @@
 //! decision, because refusing to parse an answer and refusing the write it answers are
 //! the same outcome and only one of them is honest about it.
 
-use bravebot_agent::conversation::Said;
 use bravebot_agent::confirm::{
-    Decision, Intent, VetRequest, OutputRequest, RunDecision, RunRequest, VouchRequest, WriteRequest,
+    Decision, Intent, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
+    WriteRequest,
 };
+use bravebot_agent::conversation::Said;
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
 use bravebot_core::ask::{Answer, Asking};
