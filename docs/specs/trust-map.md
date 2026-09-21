@@ -794,8 +794,10 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   holds rather than to confinement.
 - **A platform that spells its paths from a drive letter cannot open a directory by name.** Every
   rule is keyed under a `/`-spelled name (TRUST-18), so `/add-dir` and `/cd` both refuse a resolved
-  path that is not one, which on Windows is every path there is, until whether that platform is
-  supported has an answer ([issue #88](https://github.com/brave/bravebot/issues/88)).
+  path that is not one, which on Windows is every path there is. Windows is a platform this project
+  supports and publishes binaries for, so that is a gap to close rather than a caveat to keep, and
+  what closes it is one canonical key spelling on that platform's separator
+  ([issue #25](https://github.com/brave/bravebot/issues/25)).
   Refusing is the closed direction of the two: admitting such a directory would key its rule under
   a name read as a path inside the project, where the answer given about the project at startup
   covers every file in it.

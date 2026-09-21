@@ -1157,12 +1157,12 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
     // what is here is the reading and the ending: the two halves of a standing watch that a
     // transcript cannot show.
     if let Some(argument) = argument_to(line, WATCH_COMMAND) {
-        match crate::watches::parse(argument) {
-            crate::watches::Asked::List => session.report_watches(),
-            crate::watches::Asked::Stop(number) => {
+        match crate::watch_command::parse(argument) {
+            crate::watch_command::Asked::List => session.report_watches(),
+            crate::watch_command::Asked::Stop(number) => {
                 session.stop_watch(number);
             }
-            crate::watches::Asked::Unreadable => session.note(t!(watch_command_takes)),
+            crate::watch_command::Asked::Unreadable => session.note(t!(watch_command_takes)),
         }
         return Action::Redraw;
     }
