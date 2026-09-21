@@ -211,9 +211,16 @@ impl Conversation {
     /// began with, which is the point: that prompt is one of the things the summary is required
     /// to carry, and a turn on its fortieth round has more history behind it than the sentence
     /// that started it.
+    ///
+    /// A round that answered by id is found by the field alone: its results carry one and its
+    /// own start does not. A round sent as prose carries no ids anywhere, so the field alone
+    /// would take each of its results for the start of a round of its own, which both puts the
+    /// cut inside a round and makes [`RECENT_ROUNDS_KEPT`] count results rather than rounds.
     fn by_round(&self) -> Option<usize> {
         self.cut_keeping(
-            &self.boundaries(|message| message.tool_call_id.is_none()),
+            &self.boundaries(|message| {
+                message.tool_call_id.is_none() && !is_a_prose_result(message)
+            }),
             RECENT_ROUNDS_KEPT,
         )
     }
@@ -562,14 +569,27 @@ const RECENT_ROUNDS_KEPT: usize = 6;
 /// between the two would separate a call from its answer.
 fn opens_an_exchange(message: &Message) -> bool {
     message.role == Role::User
-        && !message
-            .content
-            .as_text()
-            .is_some_and(|text| text.starts_with(TOOL_RESULT_PREFIX))
+        && !is_a_prose_result(message)
         && !message
             .content
             .as_text()
             .is_some_and(|text| text.starts_with(RESUMED_PREFIX))
+}
+
+/// Whether a message is a tool result sent as prose rather than in the API's own shape.
+///
+/// The fallback for a round the API's own fields cannot carry: one whose calls arrived without
+/// ids, which nothing could then answer by id, or one whose own account of itself was
+/// quarantined and so replays no calls. Either way it looks exactly like a prompt to anything
+/// reading roles and ids, and it is the one thing here recognised by its text: examining it
+/// decides only where a cut may fall, and the text being examined has already been past the
+/// present gate.
+fn is_a_prose_result(message: &Message) -> bool {
+    message.role == Role::User
+        && message
+            .content
+            .as_text()
+            .is_some_and(|text| text.starts_with(TOOL_RESULT_PREFIX))
 }
 
 /// How a tool result is introduced when it is sent as prose rather than in the API's own shape.
@@ -1070,6 +1090,60 @@ mod tests {
                     .iter()
                     .any(|m| m.content.text().contains("did not run")),
                 "with {answers} answers to a call, a round was cut in half"
+            );
+        }
+    }
+
+    /// The same rule where the round was sent as prose. A call whose id the server left off
+    /// cannot be answered by id, so the whole round falls back to prose: an assistant message
+    /// with no calls on it, then each result as a plain message. None of those carries a
+    /// `tool_call_id`, so a cut point found by that field alone lands as readily in the middle of
+    /// such a round as between two of them, and counting each result as a round of its own keeps
+    /// a fraction of the history [`RECENT_ROUNDS_KEPT`] says it keeps.
+    #[test]
+    fn a_prose_shaped_round_is_as_indivisible_as_an_api_shaped_one() {
+        // The same family of shapes as the test above, for the same reason: where a cut lands in
+        // a run of answers depends on how many of them there are.
+        for answers in 1..=5 {
+            let mut conversation = Conversation::new();
+            conversation.push(Message::user("fix it"));
+            for _ in 0..14 {
+                // No `tool_calls` field, which is what the fallback produces.
+                conversation.push(Message::assistant("looking"));
+                for answer in 0..answers {
+                    conversation.push(Message::user(format!(
+                        "{TOOL_RESULT_PREFIX}search:\n\nresult {answer}"
+                    )));
+                }
+            }
+
+            let boundary = conversation
+                .compaction_boundary()
+                .expect("a long prose turn has rounds to give up");
+            assert!(
+                !conversation.messages()[boundary]
+                    .content
+                    .as_text()
+                    .is_some_and(|text| text.starts_with(TOOL_RESULT_PREFIX)),
+                "with {answers} prose answers to a call, the cut landed on one of them"
+            );
+
+            conversation.compacted(boundary, "they are looking for a bug");
+            let kept = conversation.messages();
+            assert!(
+                !kept[1]
+                    .content
+                    .as_text()
+                    .is_some_and(|text| text.starts_with(TOOL_RESULT_PREFIX)),
+                "with {answers} prose answers to a call, the tail opens with an answer to a call \
+                 that was summarised away"
+            );
+            assert_eq!(
+                kept.iter()
+                    .filter(|message| message.role == Role::Assistant)
+                    .count(),
+                RECENT_ROUNDS_KEPT,
+                "with {answers} prose answers to a call, each answer counted as a round"
             );
         }
     }

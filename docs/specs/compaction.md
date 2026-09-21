@@ -84,6 +84,7 @@ tail holding an answer to a call that is not there.
 
 `verified-by: bravebot_agent::conversation::compaction_never_separates_a_call_from_its_results`
 `verified-by: bravebot_agent::conversation::a_round_in_progress_is_never_a_place_to_cut`
+`verified-by: bravebot_agent::conversation::a_prose_shaped_round_is_as_indivisible_as_an_api_shaped_one`
 `verified-by: bravebot_agent::conversation::compaction_keeps_the_most_recent_exchanges_word_for_word`
 `verified-by: bravebot_agent::turn::a_long_turn_summarises_its_earlier_rounds_partway_through`
 
