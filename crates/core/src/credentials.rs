@@ -285,7 +285,15 @@ fn shaped(line: &str) -> Vec<(Kind, String)> {
                 (taken.len() >= *least).then(|| format!("{prefix}{taken}"))
             });
             if let Some(value) = matched {
-                found.push((*kind, value));
+                // A prefix and a length are a shape, and a documented placeholder has both: the
+                // line a README tells somebody to copy carries the real prefix and enough
+                // characters after it, so the shape alone cannot tell it from an issued key. The
+                // stand-in words are what says a human typed it as an example, and the rarity
+                // layer already refuses on them — without this the two layers disagree about the
+                // same value and a `.env.example` is refused.
+                if !is_a_filler(&value) {
+                    found.push((*kind, value));
+                }
                 break;
             }
         }
@@ -360,6 +368,38 @@ const STAND_INS: &[&str] = &[
     "notasecret",
 ];
 
+/// The words that say a human typed this where a key goes, asked of a value that already matched
+/// a provider's shape.
+///
+/// A narrower list than [`STAND_INS`], and deliberately so. `example` and `sample` are in that one
+/// because a value the rarity layer is guessing about is not worth refusing over; here the shape
+/// has already matched a prefix and an alphabet, and `AKIAIOSFODNN7EXAMPLE` is AWS's own
+/// documented key id — well formed, the fixture every scanner tests against, and the thing a
+/// person most wants told about if a turn writes it. So a blank somebody has to fill in is
+/// recognised by the filling-in, not by the word `example` appearing anywhere in the value.
+const FILLERS: &[&str] = &[
+    "xxxx",
+    "changeme",
+    "change-me",
+    "change_me",
+    "replace",
+    "placeholder",
+    "redacted",
+    "your-",
+    "your_",
+    "goes-here",
+    "goes_here",
+    "dummy",
+    "fake",
+    "notasecret",
+];
+
+/// Whether a value that matched a provider's shape is a blank rather than a key.
+fn is_a_filler(value: &str) -> bool {
+    let lowered = value.to_ascii_lowercase();
+    FILLERS.iter().any(|word| lowered.contains(word))
+}
+
 /// Whether a value is rare enough that a name calling it a secret should be believed.
 ///
 /// Four questions, and a value has to answer all of them. Is it long enough to be a key rather
@@ -377,8 +417,10 @@ fn looks_rare(value: &str) -> bool {
     if value.contains("${") || value.starts_with('<') || value.starts_with('$') {
         return false;
     }
-    let lowered = value.to_ascii_lowercase();
-    if STAND_INS.iter().any(|word| lowered.contains(word)) {
+    if STAND_INS
+        .iter()
+        .any(|word| value.to_ascii_lowercase().contains(word))
+    {
         return false;
     }
     entropy(value) >= 3.0
@@ -592,6 +634,25 @@ mod tests {
         assert_eq!(assigned.len(), 1, "got {assigned:?}");
         assert_eq!(alone.len(), 1, "got {alone:?}");
         assert_eq!(assigned[0].fingerprint, alone[0].fingerprint);
+    }
+
+    /// A `.env.example` is a file a project is expected to hold, and the line in it carries the
+    /// provider's real prefix and enough characters after it to satisfy the shape — that is what
+    /// makes it copyable. So the prefix layer has to consult the stand-in words too: the rarity
+    /// layer refused these already, and a shape that did not would have the two layers disagree
+    /// about one value and refuse a write of the documentation telling somebody what to set.
+    #[test]
+    fn a_documented_placeholder_carrying_a_real_prefix_is_not_a_key() {
+        for line in [
+            "ANTHROPIC_API_KEY=sk-ant-api03-REPLACE-THIS-WITH-YOUR-REAL-KEY\n",
+            "GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+            "GOOGLE_API_KEY=AIzaYOUR_GOOGLE_API_KEY_GOES_HERE_1234\n",
+        ] {
+            assert!(
+                scan(".env.example", line, 1).is_empty(),
+                "a documented placeholder was reported as a key: {line:?}"
+            );
+        }
     }
 
     /// A generated framework key carries no provider prefix, so the only thing that says what it
