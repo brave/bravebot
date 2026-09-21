@@ -129,6 +129,7 @@ def build_fixture(root):
     (root / "docs" / "specs" / "demo.md").write_text(CLEAN_SPEC, encoding="utf-8")
     (root / "docs" / "specs" / "README.md").write_text(CLEAN_README, encoding="utf-8")
     # No clause here is verified by nothing, so the list the fixture starts with is empty.
+    (root / check.UNVERIFIED_FILE).parent.mkdir(parents=True, exist_ok=True)
     (root / check.UNVERIFIED_FILE).write_text(check.render_unverified([]), encoding="utf-8")
     website = root / "docs" / "website" / "docs"
     website.mkdir(parents=True)

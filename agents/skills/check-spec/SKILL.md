@@ -203,7 +203,7 @@ first, and how many drafts are waiting. Nothing else. The report is the delivera
 | `verified-by` names a `#[test]` that exists, in the module it says | mechanical | error |
 | `by-construction` says what makes the clause hold | mechanical | error |
 | `verified-by: none` | mechanical | warning |
-| `unverified-clauses.txt` lists exactly the clauses a full run finds uncovered | mechanical | error |
+| `agents/unverified-clauses.txt` lists exactly the clauses a full run finds uncovered | mechanical | error |
 | `governs` paths exist | mechanical | error |
 | `guards` symbols exist | mechanical | error |
 | A `guards` entry that pins its sites is used in exactly those files, that many times | mechanical | error |
