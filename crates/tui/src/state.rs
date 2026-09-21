@@ -4805,7 +4805,10 @@ impl Session {
         };
         let gone = self.queued.remove(taken);
         self.transcript.push(Entry::user(gone.prompt));
-        self.scroll = 0;
+        // Through [`Session::back_to_the_tail`], so an open view stays where its reader put it.
+        // The turn taking a queued prompt is the turn's own doing and nobody pressed anything for
+        // it, and while a view is open `scroll` is that view's position rather than the turn's.
+        self.back_to_the_tail();
     }
 
     /// Begin the turn for the prompt queued longest ago, if the session is free to start one.
@@ -5624,9 +5627,14 @@ impl Session {
     /// for it or the session reads as stopped at the moment it is busiest. Not a turn: nothing
     /// joins the transcript, the count of turns does not move, and the task list is left alone,
     /// since the work it describes is still outstanding afterwards.
+    ///
+    /// Through [`Session::back_to_the_tail`] rather than by writing `scroll`, because an aside
+    /// begins without anybody pressing anything for it: a goal check goes out as soon as the turn
+    /// ends, and nothing closes a view when a turn ends. While a view is open `scroll` is that
+    /// view's position, so putting it back to the tail here would yank the run somebody opened.
     pub fn begin_aside(&mut self) {
         self.status = Status::Working;
-        self.scroll = 0;
+        self.back_to_the_tail();
         self.phase = None;
         self.running = None;
         self.started = Some(Instant::now());
@@ -6596,6 +6604,69 @@ mod tests {
                 session.scroll, 6,
                 "the reply taking shape pulled the open view back to its tail"
             );
+        }
+
+        /// An aside begins with nobody having pressed anything: a goal check goes out the moment
+        /// a turn ends, and nothing closes a view when a turn ends, so one opened while the turn
+        /// ran is still standing over the session when the check goes. Where no view is open the
+        /// tail is still where the turn's own view belongs, so both states are checked: a fix
+        /// that simply stopped moving the scroll would leave the session's own tail behind.
+        #[test]
+        fn an_aside_beginning_leaves_an_open_view_where_its_reader_put_it() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.watch();
+            session.scroll_up(6);
+
+            session.begin_aside();
+            assert_eq!(
+                session.scroll, 6,
+                "an aside beginning pulled the open view back to its tail"
+            );
+
+            let mut session = Session::new("none");
+            session.scroll_up(6);
+
+            session.begin_aside();
+            assert_eq!(
+                session.scroll, 0,
+                "an aside beginning left the turn's own view short of its tail"
+            );
+        }
+
+        /// The turn taking a queued prompt is the turn's doing and not a press: the prompt was
+        /// sent rounds ago and the person has been reading a view since. Both states again, for
+        /// the reason above.
+        #[test]
+        fn a_turn_taking_a_queued_prompt_leaves_an_open_view_where_its_reader_put_it() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.watch();
+            queue(&mut session, "and tidy up");
+            session.scroll_up(6);
+
+            session.interjected();
+            assert_eq!(
+                session.scroll, 6,
+                "the turn taking a queued prompt pulled the open view back to its tail"
+            );
+
+            let mut session = Session::new("none");
+            queue(&mut session, "and tidy up");
+            session.scroll_up(6);
+
+            session.interjected();
+            assert_eq!(
+                session.scroll, 0,
+                "the turn taking a queued prompt left the transcript short of its tail"
+            );
+        }
+
+        /// A prompt typed and sent while a turn is running, which is what the turn later takes.
+        fn queue(session: &mut Session, prompt: &str) {
+            session.status = Status::Working;
+            session.input = prompt.to_string();
+            assert!(session.queue(), "the prompt was not taken as a queued one");
         }
 
         /// The whole of what the mode is for: the lines on the screen are the delegate's own.

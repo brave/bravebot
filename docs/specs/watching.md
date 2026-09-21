@@ -246,6 +246,8 @@ could not keep on the screen.
 `verified-by: bravebot_tui::state::a_new_delegate_does_not_move_the_lists_highlight`
 `verified-by: bravebot_tui::state::a_new_delegate_leaves_an_open_view_where_its_reader_put_it`
 `verified-by: bravebot_tui::state::nothing_the_turn_reports_moves_an_open_view`
+`verified-by: bravebot_tui::state::an_aside_beginning_leaves_an_open_view_where_its_reader_put_it`
+`verified-by: bravebot_tui::state::a_turn_taking_a_queued_prompt_leaves_an_open_view_where_its_reader_put_it`
 
 <a id="WATCH-11"></a>
 ### WATCH-11: the footer speaks in the interface's own words, and the turn's own row names the key
