@@ -610,6 +610,9 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         .with_effort(bravebot_session::store::load_effort())
         .with_permissions(permissions)
         .with_permission_mode(permission_mode)
+        // What the settings say this run may add to a commit message or a pull request it writes
+        // (BACKEND-30). Read off the same resolved settings the permission rules came from.
+        .with_attribution(settings.attribution().clone())
         // Whether a check that finds nothing answers in a person's place. Resolved here, once, out
         // of the three routes: `bravebot_core::vetting::auto` is the rule and nothing below reads
         // any of the three again. A run nobody is watching has no prompt to fall back to, so

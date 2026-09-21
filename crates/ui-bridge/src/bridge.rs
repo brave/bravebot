@@ -580,6 +580,13 @@ impl Bridge {
 
         let model = requested_model.or_else(|| open.model.clone());
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
+        // What the settings say a commit message or a pull request this turn writes may carry
+        // (BACKEND-30). Read off the same layers the configuration above came from, and here
+        // rather than in the worker so the answer is the one that stood when the turn was asked
+        // for.
+        let attribution = crate::settings::layers(Some(&open.project), self.settings.as_deref())
+            .attribution()
+            .clone();
         let mut workspace = Workspace::new(open.project.clone())
             .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
 
@@ -641,6 +648,7 @@ impl Bridge {
                 project,
                 state,
                 config,
+                attribution,
                 workspace,
                 prompt,
                 files,
@@ -1047,6 +1055,8 @@ struct Work {
     project: PathBuf,
     state: Arc<Mutex<State>>,
     config: Config,
+    /// What the settings say a commit message and a pull request this turn writes may carry.
+    attribution: bravebot_config::Attribution,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
     model: Option<String>,
     workspace: Workspace,
@@ -1074,6 +1084,7 @@ fn work(work: Work) {
         project,
         state,
         config,
+        attribution,
         watches,
         model,
         workspace,
@@ -1099,7 +1110,8 @@ fn work(work: Work) {
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
     let mut task = Task::new(&prompt)
         .with_home(bravebot_agent::home::directory())
-        .with_model(model);
+        .with_model(model)
+        .with_attribution(attribution);
     for file in &files {
         task = task.with_file(file);
     }

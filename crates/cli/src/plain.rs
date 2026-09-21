@@ -159,6 +159,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         workspace: &workspace,
         permissions,
         mode,
+        attribution: settings.attribution().clone(),
         model,
         in_force: named,
         complained: None,
@@ -301,6 +302,11 @@ struct Running<'a> {
     programs: TrustedPrograms,
     servers: Option<bravebot_agent::lsp::LanguageServers>,
     asked_about: AskedAbout,
+    /// What the settings say a commit message and a pull request this session writes may carry.
+    ///
+    /// Read once, where the session is assembled, for the reason the permission rules are: a file
+    /// edited mid-session describes the next one.
+    attribution: bravebot_config::Attribution,
     /// Whether a check that finds nothing may promote a slot without the person being asked.
     ///
     /// Resolved once, where the session is assembled, out of the three routes
@@ -323,6 +329,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .with_effort(bravebot_session::store::load_effort())
             .with_permissions(self.permissions.clone())
             .with_permission_mode(self.mode)
+            .with_attribution(self.attribution.clone())
             .with_auto_vetting(self.auto_vetting)
             .already_asked_about(self.asked_about.clone());
 

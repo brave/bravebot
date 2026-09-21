@@ -220,6 +220,10 @@ pub fn run(
     model: Option<&str>,
     // The spawning turn's, since a delegate is that turn's work done elsewhere.
     permission_mode: crate::PermissionMode,
+    // The spawning turn's too. A delegate writes commit messages and opens pull requests in the
+    // same tree for the same person, so a settings key that decided what the parent's carry and
+    // said nothing about a delegate's would be answered by whichever of the two did the writing.
+    attribution: &bravebot_config::Attribution,
     cancel: &bravebot_core::cancel::Cancel,
     confirmer: &mut (dyn Confirmer + Send),
     reporter: &mut (dyn Reporter + Send),
@@ -235,7 +239,8 @@ pub fn run(
         .remembering(seeded.remembering.clone())
         .with_model(model.map(str::to_string))
         .with_permissions(seeded.permissions.clone())
-        .with_permission_mode(permission_mode);
+        .with_permission_mode(permission_mode)
+        .with_attribution(attribution.clone());
 
     // Its own, and it dies here. A reference minted inside a delegate names nothing once it has
     // gone, which is what makes "nothing but the report crosses back" a fact about the data rather
