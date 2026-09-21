@@ -16,9 +16,18 @@ set -eu
 REPO="brave/bravebot"
 API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 BIN_NAME="bravebot"
-STATE_DIR="${HOME:-}/.bravebot"
-INSTALLED_BY="${STATE_DIR}/installed-by"
 DEFAULT_INSTALL_DIR="/usr/local/bin"
+
+# An unset or empty HOME names no profile directory, and then there is no state directory at all:
+# nothing is read from one and nothing written to one (docs/specs/state-directory.md#STATE-2).
+# Joining the name onto nothing makes `/.bravebot`, a location nobody stated, and a record under it
+# would decide where this release lands.
+STATE_DIR=""
+INSTALLED_BY=""
+if [ -n "${HOME:-}" ]; then
+  STATE_DIR="${HOME}/.bravebot"
+  INSTALLED_BY="${STATE_DIR}/installed-by"
+fi
 
 fail() {
   echo "error: $1" >&2
@@ -77,7 +86,7 @@ ASSET_NAME="${BIN_NAME}-${OS_KEY}-${ARCH_KEY}"
 
 # Where the last install put it, so running this again updates that copy instead of leaving a
 # second one somewhere else on the PATH. INSTALL_DIR wins, for a person who is moving it.
-if [ -z "${INSTALL_DIR:-}" ] && [ -r "$INSTALLED_BY" ]; then
+if [ -z "${INSTALL_DIR:-}" ] && [ -n "$INSTALLED_BY" ] && [ -r "$INSTALLED_BY" ]; then
   recorded="$(head -n 1 "$INSTALLED_BY" 2>/dev/null || true)"
   if [ -n "$recorded" ]; then
     INSTALL_DIR="$(dirname "$recorded")"
@@ -148,7 +157,7 @@ fi
 # program steps over one: chmod without -h resolves it on both platforms this supports, so a
 # linked directory would have an install setting the mode of wherever the link leads, which is
 # outside anything this was given.
-if [ -n "${HOME:-}" ] && (umask 077 && mkdir -p "$STATE_DIR") 2>/dev/null; then
+if [ -n "$STATE_DIR" ] && (umask 077 && mkdir -p "$STATE_DIR") 2>/dev/null; then
   if [ ! -L "$STATE_DIR" ]; then
     chmod 700 "$STATE_DIR" 2>/dev/null || true
   fi
