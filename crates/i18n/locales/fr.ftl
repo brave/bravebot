@@ -296,6 +296,19 @@ trust-directory-regardless =
     montré avant d'être écrit.
 trust-directory-yes = lui faire confiance
 trust-directory-no = me demander à chaque écriture
+trust-directory-scan-found =
+    { $count ->
+        [one] { $count } identifiant se trouve déjà dans ce répertoire :
+       *[other] { $count } identifiants se trouvent déjà dans ce répertoire :
+    }
+trust-directory-scan-more = et { $count } de plus, non affichés
+trust-directory-scan-none =
+    { $files ->
+        [one] Rien trouvé dans le seul fichier lu ici, ce qui ne garantit pas qu'il n'y ait rien.
+       *[other] Rien trouvé dans les { $files } fichiers lus ici, ce qui ne garantit pas qu'il n'y ait rien.
+    }
+trust-directory-scan-partial =
+    Une partie de ce répertoire n'a pas été lue, donc rien ici ne parle du reste.
 quit = quitter
 
 

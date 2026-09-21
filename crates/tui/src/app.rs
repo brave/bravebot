@@ -3733,10 +3733,27 @@ fn opening_trust(
     root: &std::path::Path,
     beginning: Beginning,
 ) -> Option<(TrustStore, Whence)> {
+    // Before the map is settled, whichever way it is settled, because the question this runs
+    // ahead of is not always put: a session bypassing every permission vouches for the tree
+    // without asking, and one being resumed carries an answer given earlier. Both then read the
+    // tree, so both are told what is in it, and neither is told after the reading has begun.
+    let scan = bravebot_agent::credential_scan::scan_tree(root);
     let (trust, whence) = match opening_for(beginning, session.permission_mode(), root) {
         Opening::Settled(trust, whence) => (trust, whence),
-        Opening::Ask => (crate::trust_prompt::ask(terminal, root)?, Whence::Asked),
+        Opening::Ask => (
+            crate::trust_prompt::ask(terminal, root, &scan)?,
+            Whence::Asked,
+        ),
     };
+
+    // In the transcript as well as in the panel, and in the transcript even where the panel was
+    // never drawn. The box is gone the moment it is answered, and what was in the directory is
+    // the thing a person wants to look at again once the session is running. Whole here where
+    // the box named a few: nothing stores a finding yet, so a finding named nowhere is one that
+    // was counted and then lost.
+    for line in crate::trust_prompt::scan_report(&scan) {
+        session.note(line);
+    }
 
     if !trust.is_trusted(".") {
         session.note(t!(session_not_trusting));

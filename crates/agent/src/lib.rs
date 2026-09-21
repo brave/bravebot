@@ -12,6 +12,7 @@ pub mod cmdline;
 pub mod compact;
 pub mod confirm;
 pub mod conversation;
+pub mod credential_scan;
 pub mod delegate;
 pub mod diff;
 pub mod exec;

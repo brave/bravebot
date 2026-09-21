@@ -12,6 +12,12 @@
 //! The one session that is not asked is the one bypassing every permission, which answers this
 //! question along with the rest. [`answered_by`] is where that is decided.
 //!
+//! What the tree already holds is put in the same box, above the question, because vouching is
+//! the moment the contents of the directory become readable by a turn and disclosed to whoever
+//! performs inference. A scan reported after the answer would describe a disclosure that had
+//! already happened. It answers nothing on the person's behalf: the findings are there to be read
+//! while the question is still open.
+//!
 //! A settings file may name directories to open beside the working directory, and a name in one is
 //! a request rather than a grant: each is put as its own question and only an accepted one is
 //! opened. A file arriving with a checkout is the easiest thing on the machine to write to, so a
@@ -19,6 +25,7 @@
 //! edited it.
 
 use bravebot_agent::PermissionMode;
+use bravebot_agent::credential_scan::TreeScan;
 use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
 use ratatui::Terminal;
@@ -54,8 +61,12 @@ pub enum Answer {
 ///
 /// `None` is the third answer: the user pressed Ctrl-C, which is neither trusting nor declining
 /// but a request to leave, so no session begins at all.
-pub fn ask<B: Backend>(terminal: &mut Terminal<B>, directory: &Path) -> Option<TrustStore> {
-    let answer = match terminal.draw(|frame| draw(frame, directory)) {
+pub fn ask<B: Backend>(
+    terminal: &mut Terminal<B>,
+    directory: &Path,
+    scan: &TreeScan,
+) -> Option<TrustStore> {
+    let answer = match terminal.draw(|frame| draw(frame, directory, scan)) {
         Ok(_) => read_answer(),
         // A terminal that cannot be drawn to cannot carry the question.
         Err(_) => Answer::Decline,
@@ -187,13 +198,16 @@ fn answer_for(key: KeyEvent) -> Option<Answer> {
 }
 
 /// Draw the question about the working directory.
-fn draw(frame: &mut ratatui::Frame, directory: &Path) {
-    let lines = vec![
+fn draw(frame: &mut ratatui::Frame, directory: &Path, scan: &TreeScan) {
+    let mut lines = vec![
         asking(
             t!(trust_directory_question),
             &directory.display().to_string(),
         ),
         Line::raw(""),
+    ];
+    lines.extend(found(scan));
+    lines.extend([
         // One line each, wrapped by the paragraph rather than broken here: a translation does
         // not break where the English did, and a sentence split into two spans cannot be rewrapped.
         Line::from(Span::raw(t!(trust_directory_explained))),
@@ -202,11 +216,99 @@ fn draw(frame: &mut ratatui::Frame, directory: &Path) {
             t!(trust_directory_regardless),
             Style::default().fg(theme::muted()),
         )),
-        Line::raw(""),
-        keys(t!(trust_directory_yes), t!(trust_directory_no)),
-    ];
+    ]);
 
-    panel(frame, t!(trust_directory_title), lines);
+    panel(
+        frame,
+        t!(trust_directory_title),
+        lines,
+        keys(t!(trust_directory_yes), t!(trust_directory_no)),
+    );
+}
+
+/// How many findings are put on the screen before the rest become a count.
+///
+/// A real repository answers a first scan with more findings than anybody reads standing at a
+/// modal box, and a list long enough to push the question off the screen is how a scan gets
+/// ignored. The ranking in [`TreeScan::findings`] is what makes a short list the right short
+/// list.
+const SHOWN: usize = 3;
+
+/// What the scan of the working tree says, as lines a person reads.
+///
+/// Public because the question is put on two surfaces and a scan is reported on both, and because
+/// a session that is never asked is told the same thing in its transcript: three readings of what
+/// a finding says would be three chances for one of them to say the value.
+///
+/// Every line is the driver's own words about a path, with the path put through the same
+/// replacement the rest of the interface uses. A file in the tree is named by whoever wrote the
+/// tree, so a name carrying an escape sequence would otherwise draw over a panel that exists to
+/// be read before a grant.
+pub fn scan_report(scan: &TreeScan) -> Vec<String> {
+    said(scan, scan.findings().len())
+}
+
+/// The same report with the findings cut to the few that are put in front of somebody at once.
+///
+/// What a question carries, on either surface. The whole of it is what the transcript keeps:
+/// a finding nothing names anywhere is a finding that was counted and then lost, and there is
+/// no store yet for it to be looked up in.
+pub fn scan_summary(scan: &TreeScan) -> Vec<String> {
+    said(scan, SHOWN)
+}
+
+/// The report, naming at most `most` of the findings.
+fn said(scan: &TreeScan, most: usize) -> Vec<String> {
+    let findings = scan.findings();
+    let mut lines = Vec::new();
+
+    if findings.is_empty() {
+        lines.push(t!(trust_directory_scan_none, files = scan.read()));
+    } else {
+        lines.push(t!(trust_directory_scan_found, count = findings.len()));
+        lines.extend(
+            findings
+                .iter()
+                .take(most)
+                .map(|finding| crate::render::printable(&finding.describe())),
+        );
+        if findings.len() > most {
+            lines.push(t!(trust_directory_scan_more, count = findings.len() - most));
+        }
+    }
+
+    if !scan.everything_was_read() {
+        lines.push(t!(trust_directory_scan_partial).to_string());
+    }
+    lines
+}
+
+/// The report, styled for the panel: what was found reads as a warning and the rest as an aside.
+///
+/// The first line is the one that changes the answer, so it is the one drawn in the colour that
+/// says so. A directory where nothing matched says so quietly, because a scan that shouts about
+/// finding nothing is one people learn to skip past.
+fn found(scan: &TreeScan) -> Vec<Line<'static>> {
+    // A directory where the whole walk ran and matched nothing has nothing to put in the box.
+    // The scan is recorded in the transcript either way, which is where a person can go and look
+    // for it; a modal box that says "nothing found" on every launch is a box people stop reading,
+    // and this one grants standing permission over a whole tree.
+    if scan.findings().is_empty() && scan.everything_was_read() {
+        return Vec::new();
+    }
+    let findings = scan.findings().len();
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (index, said) in scan_summary(scan).into_iter().enumerate() {
+        let style = match index == 0 && findings > 0 {
+            true => Style::default()
+                .fg(theme::fail())
+                .add_modifier(Modifier::BOLD),
+            false => Style::default().fg(theme::muted()),
+        };
+        lines.push(Line::from(Span::styled(said, style)));
+    }
+    lines.push(Line::raw(""));
+    lines
 }
 
 /// Draw the question about one directory a settings file named.
@@ -220,11 +322,14 @@ fn draw_named(frame: &mut ratatui::Frame, directory: &str) {
             t!(named_directory_regardless),
             Style::default().fg(theme::muted()),
         )),
-        Line::raw(""),
-        keys(t!(named_directory_yes), t!(named_directory_no)),
     ];
 
-    panel(frame, t!(named_directory_title), lines);
+    panel(
+        frame,
+        t!(named_directory_title),
+        lines,
+        keys(t!(named_directory_yes), t!(named_directory_no)),
+    );
 }
 
 /// What is being asked, and the path it is being asked about.
@@ -276,28 +381,57 @@ fn keys(yes: &str, no: &str) -> Line<'static> {
     ])
 }
 
-/// Draw one question, in a box whose every cell the theme paints.
+/// Draw one question, in a box whose every cell the theme paints, with its answers on the last
+/// row.
 ///
 /// One implementation for both questions here, because the chrome is what says the question is the
 /// system's own: `Clear` empties the cells under the panel without colouring them, so the
 /// background and text colour are set for the block rather than for the border alone.
-fn panel(frame: &mut ratatui::Frame, title: &str, lines: Vec<Line<'static>>) {
+///
+/// The answers are drawn into a row of their own at the foot of the box rather than as the last
+/// line of the prose. A paragraph longer than the box is clipped at the bottom, and the line that
+/// goes first is then the one saying which keys answer the question: a panel that grants standing
+/// permission over a whole tree, asked on a small terminal or in a directory with something to
+/// report, would be a box with no visible way to answer it. Clipping the middle of the
+/// explanation costs a reader something; clipping the keys costs them the question.
+fn panel(
+    frame: &mut ratatui::Frame,
+    title: &str,
+    lines: Vec<Line<'static>>,
+    answers: Line<'static>,
+) {
     let area = centred(frame.area());
     frame.render_widget(Clear, area);
 
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme::brand_primary()))
-                    .title(format!(" {title} "))
-                    .style(Style::default().bg(theme::background()).fg(theme::text())),
-            )
-            .wrap(Wrap { trim: false }),
-        area,
-    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::brand_primary()))
+        .title(format!(" {title} "))
+        .style(Style::default().bg(theme::background()).fg(theme::text()));
+    let inside = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inside.height == 0 {
+        return;
+    }
+    // As many rows as the answers need at this width, never more than the box has. A narrow
+    // terminal wraps them rather than cutting them off at the edge, which is the same reason
+    // they are drawn at the foot rather than at the end of the prose.
+    let answers = Paragraph::new(answers).wrap(Wrap { trim: false });
+    let needed = (answers.line_count(inside.width) as u16).clamp(1, inside.height);
+    let prose = Rect {
+        height: inside.height - needed,
+        ..inside
+    };
+    let foot = Rect {
+        y: inside.y + inside.height - needed,
+        height: needed,
+        ..inside
+    };
+
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), prose);
+    frame.render_widget(answers, foot);
 }
 
 /// A centred box, sized to the terminal but never larger than it.
@@ -324,13 +458,38 @@ fn centred(area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_agent::credential_scan::{scan_tree, scan_tree_within};
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
+    use std::time::Duration;
 
     /// The working directory these answers are about.
     fn here() -> &'static Path {
         Path::new("/work")
     }
+
+    /// A tree built for one test, removed first so a previous run leaves nothing behind.
+    fn tree(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+        let root = crate::testutil::scratch_dir(&format!("bravebot-trust-prompt-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("make the directory");
+        for (path, contents) in files {
+            std::fs::write(root.join(path), contents).expect("write the file");
+        }
+        root
+    }
+
+    /// A finished scan of a directory holding nothing, which is what most of these tests are
+    /// about the absence of.
+    ///
+    /// Named by its caller, because these tests run beside each other and two of them making and
+    /// removing one directory is a race that fails whichever got there second.
+    fn nothing_found(name: &str) -> TreeScan {
+        scan_tree(&tree(name, &[]))
+    }
+
+    /// An AWS key id, which is a shape rather than a guess.
+    const A_DECLARED_KEY: &str = "AKIAIOSFODNN7EXAMPLE";
 
     /// The characters one question puts on a terminal, in reading order.
     ///
@@ -414,7 +573,13 @@ mod tests {
 
     #[test]
     fn the_prompt_names_the_directory_and_both_answers() {
-        let output = rendered(|frame| draw(frame, Path::new("/home/me/project")));
+        let output = rendered(|frame| {
+            draw(
+                frame,
+                Path::new("/home/me/project"),
+                &nothing_found("named"),
+            )
+        });
         assert!(output.contains("/home/me/project"));
         assert!(output.contains("trust it"));
         assert!(output.contains("every write"));
@@ -424,7 +589,8 @@ mod tests {
     /// permission rather than approving one action.
     #[test]
     fn the_prompt_explains_the_consequence() {
-        let output = rendered(|frame| draw(frame, Path::new("/tmp/x")));
+        let output =
+            rendered(|frame| draw(frame, Path::new("/tmp/x"), &nothing_found("explained")));
         assert!(output.contains("trusted"), "no mention of trust: {output}");
         // Wrapping can split a phrase across lines, so assert on a short fragment.
         assert!(
@@ -437,7 +603,219 @@ mod tests {
     /// so its chrome is the first thing that says the question is the system's own.
     #[test]
     fn the_prompt_paints_the_themes_background_inside_its_border() {
-        paints_the_themes_chrome(|frame| draw(frame, Path::new("/home/me/project")));
+        paints_the_themes_chrome(|frame| {
+            draw(
+                frame,
+                Path::new("/home/me/project"),
+                &nothing_found("painted"),
+            )
+        });
+    }
+
+    /// The whole of the clause: what is in the directory is on the screen while the question
+    /// about vouching for it is still unanswered. Trusting is the moment the tree becomes
+    /// readable by a turn and disclosed to whoever performs inference, so a report drawn after
+    /// the answer would describe a disclosure that had already happened.
+    #[test]
+    fn what_the_scan_found_is_on_the_panel_the_question_is_asked_in() {
+        let root = tree("found", &[(".env", &format!("KEY={A_DECLARED_KEY}\n"))]);
+        let scan = scan_tree(&root);
+
+        let output = rendered(|frame| draw(frame, &root, &scan));
+
+        assert!(
+            output.contains("1 credential is already in this directory"),
+            "the finding was not drawn beside the question: {output}"
+        );
+        assert!(
+            output.contains("an AWS access key id at .env:1"),
+            "the finding did not say what it was or where: {output}"
+        );
+        assert!(
+            output.contains("trust it"),
+            "the answer was pushed off the panel by the report: {output}"
+        );
+    }
+
+    /// The answers have to fit the terminal they are drawn on, not just the wide one. Drawn in a
+    /// row of their own they are clipped at the edge rather than wrapped unless the row is given
+    /// the height the width needs, and a narrow window is where the box is already tightest.
+    #[test]
+    fn the_answers_wrap_rather_than_run_off_a_narrow_terminal() {
+        let mut terminal = Terminal::new(TestBackend::new(48, 20)).expect("terminal");
+        terminal
+            .draw(|frame| draw(frame, Path::new("/tmp/x"), &nothing_found("narrow")))
+            .expect("draw");
+        let output: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+
+        assert!(output.contains("trust it"), "{output}");
+        assert!(output.contains("ask me about every write"), "{output}");
+        assert!(output.contains("ctrl-c"), "{output}");
+    }
+
+    /// The keys are the question. This box grants standing permission over a whole tree and is
+    /// answered by one press, so a report long enough to fill the panel must not be what takes
+    /// the answers off it: a person looking at findings with no visible way to say no is a
+    /// person who presses `y`.
+    #[test]
+    fn the_answers_stay_on_the_panel_however_much_there_is_to_report() {
+        let root = tree(
+            "crowded",
+            &[(
+                ".env",
+                &format!(
+                    "A={A_DECLARED_KEY}\nB={A_DECLARED_KEY}1\nC={A_DECLARED_KEY}2\n\
+                     D={A_DECLARED_KEY}3\nE={A_DECLARED_KEY}4\n"
+                ),
+            )],
+        );
+        let scan = scan_tree(&root);
+
+        let output = rendered(|frame| draw(frame, &root, &scan));
+
+        assert!(output.contains("trust it"), "{output}");
+        assert!(output.contains("ask me about every write"), "{output}");
+        assert!(output.contains("ctrl-c"), "{output}");
+    }
+
+    /// A report that quoted what it found would be a second copy of every credential in the
+    /// directory, drawn by the thing that was checking for copies, on a screen anybody walking
+    /// past can read.
+    #[test]
+    fn the_panel_never_draws_the_value_that_was_found() {
+        let root = tree(
+            "quiet",
+            &[("config.env", &format!("KEY={A_DECLARED_KEY}\n"))],
+        );
+        let scan = scan_tree(&root);
+
+        let output = rendered(|frame| draw(frame, &root, &scan));
+
+        assert!(!output.contains(A_DECLARED_KEY), "{output}");
+        assert!(
+            !output.contains(&A_DECLARED_KEY[..8]),
+            "a prefix of the value is most of what identifies it: {output}"
+        );
+    }
+
+    /// A real repository answers a first scan with more findings than anybody reads standing at
+    /// a modal box. A list long enough to push the question and its answers off the screen is
+    /// how a person ends up pressing `y` at a panel they could not read.
+    #[test]
+    fn a_long_list_of_findings_is_cut_short_and_the_rest_counted() {
+        let root = tree(
+            "many",
+            &[(
+                ".env",
+                &format!(
+                    "A={A_DECLARED_KEY}\nB={A_DECLARED_KEY}1\nC={A_DECLARED_KEY}2\nD={A_DECLARED_KEY}3\nE={A_DECLARED_KEY}4\n"
+                ),
+            )],
+        );
+        let scan = scan_tree(&root);
+        assert_eq!(
+            scan.findings().len(),
+            5,
+            "the fixture must overflow the cut"
+        );
+
+        let shown = scan_summary(&scan);
+
+        assert_eq!(
+            shown.iter().filter(|line| line.contains(".env:")).count(),
+            SHOWN,
+            "{shown:?}"
+        );
+        assert!(
+            shown.iter().any(|line| line.contains("and 2 more")),
+            "the findings past the cut were dropped rather than counted: {shown:?}"
+        );
+
+        // And the record keeps every one of them. Nothing stores a finding yet, so one that is
+        // counted and named nowhere is one nobody can ever look at.
+        let whole = scan_report(&scan);
+        assert_eq!(
+            whole.iter().filter(|line| line.contains(".env:")).count(),
+            5,
+            "{whole:?}"
+        );
+        assert!(
+            !whole.iter().any(|line| line.contains("more")),
+            "the whole report still counted something it had named: {whole:?}"
+        );
+    }
+
+    /// A walk that stopped has to say so wherever it is reported. Silence read as a clean
+    /// directory is the one thing a partial scan must never produce, and the person is about to
+    /// answer a question on the strength of it.
+    #[test]
+    fn a_scan_that_ran_out_of_time_says_so_rather_than_reading_as_clean() {
+        let root = tree("cut", &[(".env", &format!("KEY={A_DECLARED_KEY}\n"))]);
+
+        let stopped = scan_tree_within(&root, Duration::ZERO);
+        let report = scan_report(&stopped);
+        assert!(
+            report
+                .iter()
+                .any(|line| line.contains("Part of this directory was not read")),
+            "{report:?}"
+        );
+
+        let output = rendered(|frame| draw(frame, &root, &stopped));
+        assert!(
+            output.contains("Part of this directory was not read"),
+            "{output}"
+        );
+    }
+
+    /// The scan is recorded whatever it found, because a person who cannot tell whether it ran
+    /// cannot read its silence. It is kept out of the panel in that case and not out of the
+    /// record: the box grants standing permission over a tree and is the wrong place for a line
+    /// that says nothing happened.
+    #[test]
+    fn a_directory_where_nothing_matched_is_reported_without_crowding_the_question() {
+        let scan = nothing_found("quiet-directory");
+
+        let report = scan_report(&scan);
+        assert!(
+            report.iter().any(|line| line.contains("Matched nothing")),
+            "{report:?}"
+        );
+
+        let output = rendered(|frame| draw(frame, Path::new("/home/me/project"), &scan));
+        assert!(!output.contains("Matched nothing"), "{output}");
+    }
+
+    /// A file in the tree is named by whoever wrote the tree. A name carrying an escape sequence
+    /// would otherwise move the cursor and recolour the very panel that exists to be read before
+    /// a grant, which is the one screen where a forged line costs the most.
+    #[test]
+    #[cfg(unix)]
+    fn a_file_name_carrying_an_escape_sequence_cannot_draw_on_the_panel() {
+        let root = tree("escaping", &[]);
+        std::fs::write(
+            root.join("\u{1b}[31mgotcha.env"),
+            format!("KEY={A_DECLARED_KEY}\n"),
+        )
+        .expect("write the file");
+        let scan = scan_tree(&root);
+
+        let report = scan_report(&scan);
+
+        assert!(
+            report.iter().any(|line| line.contains('\u{241b}')),
+            "the escape was not turned into a glyph: {report:?}"
+        );
+        assert!(
+            !report.iter().any(|line| line.contains('\u{1b}')),
+            "an escape sequence reached the panel: {report:?}"
+        );
     }
 
     /// A settings file arrives with whatever produced the checkout, so a directory named in one is
@@ -519,7 +897,7 @@ mod tests {
     fn a_tiny_terminal_still_renders() {
         let mut terminal = Terminal::new(TestBackend::new(24, 8)).expect("terminal");
         terminal
-            .draw(|frame| draw(frame, Path::new("/tmp/x")))
+            .draw(|frame| draw(frame, Path::new("/tmp/x"), &nothing_found("tiny")))
             .expect("must not panic on a small area");
         assert!(
             drawn_on(&terminal).contains("Trust /tmp/x?"),

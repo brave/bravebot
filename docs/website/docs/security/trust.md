@@ -21,6 +21,33 @@ every unvouched file the planner reads, so the tree becomes trusted a file at a 
 resume still takes the map from its own record even there. See
 [modes](permissions.md#answering-in-advance-modes).
 
+## What is already in the directory, before you answer
+
+The working directory is read for credentials before the question is put, and what was found is in
+the box above it: the kind, the file and the line, never the value. Trusting the directory is the
+moment its contents become readable by a turn and disclosed to whoever performs inference, so the
+findings arrive while the question is still open rather than afterwards.
+
+Only the first few are shown and the rest are counted. The whole list goes into the session's
+transcript, since the box is gone once you answer. A session in lines gets the short list and
+nothing below it.
+
+**Nothing about it is a gate.** A finding refuses nothing and answers nothing on your behalf, and
+the scan can be lied to by anything running as you. It is there because the common case is not an
+attack: it is a key somebody left in a file and forgot about.
+
+**A clean result is not a clearance.** The scan reads what it recognises, in the part of the tree
+it got through inside two seconds, and it says so where it did not read all of it, whether that
+was the time running out or a file it was not allowed to open. It does not resolve symlinks, read
+inside `.git`, or read past the first 256 kilobytes of a file. Silence means nothing matched.
+
+It runs at every session start, so `/clear` scans again: the directory may not be what it was, and
+the question is being put again.
+
+A session started with `--dangerously-skip-permissions` is still scanned, and the report is in the
+transcript rather than in a box, because there is no question to put it above. `bravebot -p` in
+that mode prints nothing, since its output is the answer.
+
 ## Nothing is trusted until it is granted
 
 An empty map trusts no path. Trust is granted by a person, and never inferred from silence, from a

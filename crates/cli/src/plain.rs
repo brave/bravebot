@@ -430,18 +430,32 @@ fn opening_trust<R: BufRead, W: Write>(
     mode: PermissionMode,
     root: &std::path::Path,
 ) -> Option<TrustStore> {
+    // Nothing is read or said where the mode has already answered. A session in lines writes the
+    // answer and nothing else, so a mode that puts no question puts no report either: the one in
+    // the interface goes into a transcript a person scrolls, and the one here would go into the
+    // output of `bravebot -p`. What that costs is written down beside CRED-15.
     if let Some(answered) = bravebot_tui::trust_prompt::answered_by(mode, root) {
         return Some(answered);
     }
 
+    // Read before the question rather than after the answer: vouching is what discloses these
+    // files to whoever performs inference, so a report that arrived afterwards would describe a
+    // disclosure that had already happened.
+    //
+    // Cut to the few a question can carry, as the panel's is. A session in lines has no
+    // transcript to keep the rest in, which is the cost written down beside CRED-15.
+    let report =
+        bravebot_tui::trust_prompt::scan_summary(&bravebot_agent::credential_scan::scan_tree(root));
+
     // What is being asked about first and the question last, as every question here is put: a
     // person reading a line at a time, or hearing one, has read the detail by the time they are
     // asked to answer it.
-    let lines = [
-        root.display().to_string(),
+    let mut lines = vec![root.display().to_string()];
+    lines.extend(report.iter().cloned());
+    lines.extend([
         t!(trust_directory_explained).to_string(),
         t!(trust_directory_regardless).to_string(),
-    ];
+    ]);
     let answer = match asking.put(&lines, t!(trust_directory_title)) {
         Some(Decision::Approve) => bravebot_tui::trust_prompt::Answer::Trust,
         Some(Decision::Reject) => bravebot_tui::trust_prompt::Answer::Decline,
@@ -1048,6 +1062,45 @@ mod tests {
             asked("").is_none(),
             "the end of the input started a session"
         );
+    }
+
+    /// The clause a session in lines has to hold too: what is already in the directory is put
+    /// before the question about vouching for it, because vouching is what discloses those files
+    /// to whoever performs inference. A report printed after the answer would describe a
+    /// disclosure that had already happened.
+    #[test]
+    fn what_the_scan_found_is_said_before_the_directory_is_vouched_for() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join("bravebot-plain-credential-scan");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        std::fs::write(root.join(".env"), "KEY=AKIAIOSFODNN7EXAMPLE\n").expect("write the file");
+
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+            Vec::new(),
+        );
+        let trust = opening_trust(&mut asking, PermissionMode::Ask, &root);
+
+        assert!(trust.is_some_and(|trust| trust.is_trusted(".")));
+        let said = String::from_utf8(asking.output).expect("what was written is text");
+        let (before, after) = said
+            .split_once("trust this directory?")
+            .expect("the question was put");
+        assert!(
+            before.contains("1 credential is already in this directory"),
+            "the finding was not said before the question: {said:?}"
+        );
+        assert!(
+            before.contains("an AWS access key id at .env:1"),
+            "the finding did not say what it was or where: {said:?}"
+        );
+        assert!(
+            !said.contains("AKIAIOSFODNN7EXAMPLE"),
+            "the report repeated the value it found: {said:?}"
+        );
+        assert!(after.contains("trusting"), "the answer was not reported");
     }
 
     /// The mode that asks about nothing answers this question along with the rest, and answers it

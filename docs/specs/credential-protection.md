@@ -7,6 +7,7 @@ governs:
   - crates/config/src/env_var.rs
   - crates/bedrock/src/credentials.rs
   - crates/core/src/credentials.rs
+  - crates/agent/src/credential_scan.rs
 guards:
   - symbol: Secret::expose
 documented-by:
@@ -449,7 +450,42 @@ anything in the tree can reach the planner. The question it runs ahead of is the
 **Why the ordering is the whole design.** After vouching, the tree's contents are disclosed to
 whoever performs inference. A scan that runs later reports on a disclosure that already happened.
 
-`verified-by: none`
+**What is shown, and where.** The findings are in the box the question is asked in, above the
+question and below the path being asked about, ranked so the values a provider's own format
+declared come before the ones inferred from a name. Only the first few are drawn and the rest are
+counted: a real repository answers a first scan with more findings than anybody reads standing at
+a modal box, and a list long enough to push the answers off the panel is how a person ends up
+pressing `y` at a screen they could not read. The whole report goes into the session's transcript
+as well, because the box is gone the moment it is answered.
+
+A finding says the kind, the path, the line, a fingerprint and a masked preview, which is what
+[CRED-19](#CRED-19) allows it to hold, and the path is put through the interface's own replacement
+for control characters first: a file in the tree is named by whoever wrote the tree, and a name
+carrying an escape sequence would otherwise draw over the panel that exists to be read before a
+grant.
+
+**What it does not decide.** Nothing here refuses a read, moves a value, or answers the question,
+which is [CRED-17](#CRED-17). That is also why reading the tree here is not a decision taken from
+untrusted content: the walk runs before a session exists, nothing it reads reaches a model or a
+turn, and the one thing a match produces is a line on a terminal.
+
+`verified-by: bravebot_agent::credential_scan::a_credential_in_an_ignored_file_is_found_before_anybody_is_asked`
+`verified-by: bravebot_agent::credential_scan::a_declared_key_is_reported_ahead_of_an_inferred_one`
+`verified-by: bravebot_agent::credential_scan::nothing_the_report_says_repeats_the_value_that_was_found`
+`verified-by: bravebot_agent::credential_scan::a_walk_that_runs_out_of_time_says_it_did_not_reach_the_end`
+`verified-by: bravebot_agent::credential_scan::a_dependency_directory_is_not_read_and_build_output_is`
+`verified-by: bravebot_agent::credential_scan::a_link_out_of_the_tree_is_not_followed`
+`verified-by: bravebot_agent::credential_scan::a_binary_file_is_not_read_as_text`
+`verified-by: bravebot_tui::trust_prompt::what_the_scan_found_is_on_the_panel_the_question_is_asked_in`
+`verified-by: bravebot_tui::trust_prompt::the_panel_never_draws_the_value_that_was_found`
+`verified-by: bravebot_tui::trust_prompt::a_long_list_of_findings_is_cut_short_and_the_rest_counted`
+`verified-by: bravebot_tui::trust_prompt::a_scan_that_ran_out_of_time_says_so_rather_than_reading_as_clean`
+`verified-by: bravebot_tui::trust_prompt::the_answers_stay_on_the_panel_however_much_there_is_to_report`
+`verified-by: bravebot_tui::trust_prompt::a_file_name_carrying_an_escape_sequence_cannot_draw_on_the_panel`
+`verified-by: bravebot_tui::trust_prompt::the_answers_wrap_rather_than_run_off_a_narrow_terminal`
+`verified-by: bravebot_agent::credential_scan::what_the_walk_could_not_read_is_not_reported_as_covered`
+`verified-by: bravebot_core::credentials::an_unclosed_armour_marker_is_read_no_further_than_a_body_could_run`
+`verified-by: bravebot_cli::plain::what_the_scan_found_is_said_before_the_directory_is_vouched_for`
 
 <a id="CRED-16"></a>
 ### CRED-16: what a turn writes to the tree is scanned before the change is recorded as complete
@@ -724,8 +760,8 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
 - **A file a turn creates is attributed to it whole.** A carried value is told from an authored one
   by what the file at that path already held, and a file that did not exist held nothing. So a turn
   that moves a file already holding a key is refused, where the clause above says that case is
-  reported. What would tell the two apart is the scan before the run, which is what records what
-  was already there.
+  reported. What would tell the two apart is a baseline kept from the scan before the run, and
+  that scan keeps nothing.
 
 - **A fingerprint is salted per run and kept nowhere.** It tells two findings in one run apart and
   says nothing between runs, so an acceptance cannot be carried forward and the baseline has
@@ -741,8 +777,8 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
 - **Only what a turn writes is scanned, never what it reads.** A secret already in the tree reaches
   the planner's context the moment a turn reads the file holding it, and nothing looks at it on the
   way through. The gate here is about what this system *causes*; disclosure of what was already
-  there is CRED-15's business, and CRED-15 is unbuilt. The two together are why reading a `.env` is
-  currently unexamined in both directions.
+  there is CRED-15's business, and what that scan reports is shown once, before the tree is
+  vouched for, rather than again when a turn reads the file.
 
 - **Half of CRED-14 is pinned and half is argued.** The tests on it are the environment of a program
   this agent starts. That what it holds reaches no session record rests on
@@ -750,8 +786,60 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   redaction rests on the type it is held in; neither is pinned by a test that scans a record or a
   screen for every secret the process holds, which is what the clause says is owed.
 
-- **Most of this is not implemented.** What runs is the scan of what a turn writes, and one
-  performer: a credential a vault obtained itself, and a mail send carried out against it so that
-  the asking agent never holds the token. There is no scan of the tree before it is vouched for, no
-  store a finding is written to and no baseline over one, and no authority at the tier these clauses
-  describe. The rest of every clause here is a target.
+- **Nothing a finding says is kept.** There is no store outside the tree, so a finding lives as
+  long as the panel it was drawn in and the transcript below it. Nobody can accept one, deny the
+  path it names, or record that a development password is a development password, and the same
+  findings are reported again at the next launch. The dispositions
+  [credential-discovery.md](../design/credential-discovery.md) describes all wait on that store,
+  and so does a baseline that would tell what was already in the tree from what a turn wrote.
+
+- **There is no path layer.** A file is reported for what is written in it, not for what it is
+  called, so a `.env` holding a value no layer recognises is a file nobody is told about. The
+  inventory of paths at the top of this document is what a layer over names would be written from.
+
+- **What the walk does not read.** A symlink is skipped rather than resolved, so a link into
+  `~/.aws` is reported as nothing at all. `.git` is not descended into, so a secret that was
+  committed and deleted is invisible. A file is read to its first 256 kilobytes, so a key in the
+  tail of a dump is not found. A file holding a zero byte early on is treated as binary and not
+  read as text. Each of those is a place a credential can sit and be reported as absent, which is
+  why a clean scan is not a clearance. A file or a directory the scan could not open at all is
+  the one case it does account for: the report then says part of the directory was not read.
+
+- **A large tree spends the budget before it is finished.** The walk has two seconds, because it
+  blocks the question, and build output is read rather than skipped for the reason a key baked
+  into a bundle is in the tree and about to ship. So a checkout with a large `target` or `dist`
+  can spend most of the budget there. What it read is what the report says, and a scan that did
+  not finish says so rather than reading as clean, which is the most this can do without either
+  waiting longer or reading less.
+
+- **The budget is checked between files, not inside one.** A file is read to a quarter of a
+  megabyte and matched in one pass, so the walk can overrun by whatever that one file costs. The
+  worst case was a minute before the armour rule was given a bound, and is a fraction of a second
+  now; it is still not zero, and closing it would take a deadline the matching itself honours.
+
+- **The question is put again for every session, and so is the walk.** `/clear` begins a session
+  and asks again, and a resume takes its answer from its own record without asking; both scan
+  first, because the tree may not be what it was and a report from earlier would describe a
+  directory that has changed. The cost is that the interface is not drawing while it runs, at
+  startup and at every `/clear`.
+
+- **Only the working directory, and only at startup.** A directory `/add-dir` or a settings file
+  opens later is not scanned as it is added, though the clause in
+  [credential-discovery.md](../design/credential-discovery.md) asks for that too.
+
+- **A session in lines that is not asked is not told.** `bravebot -p` bypassing every permission
+  vouches for the tree without a question, and the report is not printed there: its output is the
+  answer, and a finding on that stream is a line in somebody's pipeline. The interface has a
+  transcript to put it in and does so whether or not the question was put, which is why the gap
+  is on this surface alone.
+
+- **A session in lines is told about the first few findings only.** The question carries the same
+  short list the panel does, and a session in lines has no transcript for the rest to go into, so
+  what the interface keeps below the box is nowhere on that surface. It is the store again: with
+  one, the tail would be a thing to ask for rather than a thing to print.
+
+- **Most of the rest is not implemented.** What runs is this scan and the scan of what a turn
+  writes, and one performer: a credential a vault obtained itself, and a mail send carried out
+  against it so that the asking agent never holds the token. There is no store a finding is
+  written to, no baseline over one, and no authority at the tier these clauses describe. The rest
+  of every clause here is a target.

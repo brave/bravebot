@@ -339,6 +339,26 @@ trust-directory-regardless =
     before it is written.
 trust-directory-yes = trust it
 trust-directory-no = ask me about every write
+# Said before the question is answered, because vouching is what discloses these files to
+# whoever performs inference. The count is of findings rather than of files: one file can hold
+# several.
+trust-directory-scan-found =
+    { $count ->
+        [one] { $count } credential is already in this directory:
+       *[other] { $count } credentials are already in this directory:
+    }
+trust-directory-scan-more = and { $count } more, not shown
+# Silence has to say what it is silence about. A person who reads a blank panel as a clean
+# directory has been told something this scan cannot know.
+trust-directory-scan-none =
+    { $files ->
+        [one] Matched nothing in the one file read here, which is no promise there is nothing.
+       *[other] Matched nothing in the { $files } files read here, which is no promise there is nothing.
+    }
+# Said where the budget ran out and where a file or a directory could not be read, because both
+# are one fact to whoever reads it: the silence covers less than the directory.
+trust-directory-scan-partial =
+    Part of this directory was not read, so nothing here is said about the rest.
 quit = quit
 
 

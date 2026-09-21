@@ -110,7 +110,7 @@ fn placeholder() -> &'static str {
 /// Everything the terminal would act on becomes a visible glyph, so what is on the screen stays a
 /// faithful record of the bytes without being able to act. Tabs and newlines are handled before this
 /// (lines are already split, and a tab is only ever width), so both are safe to keep.
-fn printable(text: &str) -> String {
+pub(crate) fn printable(text: &str) -> String {
     if !text.chars().any(|c| c.is_control() && c != '\t') {
         return text.to_string();
     }
@@ -1699,12 +1699,20 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
             // The session in its own voice, indented to the column the rest of the transcript's
             // text starts in. Not behind the detail marker: that says the line belongs to the
             // entry above it, and the notes starting up leaves are drawn before there is one.
+            //
+            // Wrapped here rather than left to the paragraph, for the reason a reason is: the
+            // paragraph's own rows begin at column 0, so a note longer than the width continues
+            // outside the column every other line of the transcript starts in.
             Speaker::System => {
                 for text in entry.text.lines() {
-                    lines.push(Line::from(Span::styled(
-                        format!("{:LEAD$}{text}", ""),
-                        Style::default().fg(theme::note()),
-                    )));
+                    for row in
+                        wrap::wrap(text, (width as usize).saturating_sub(LEAD).max(8), 0).rows
+                    {
+                        lines.push(Line::from(Span::styled(
+                            format!("{:LEAD$}{row}", ""),
+                            Style::default().fg(theme::note()),
+                        )));
+                    }
                 }
             }
             // In the same column as a note and in the colour of a failure, wrapped rather than
@@ -6832,6 +6840,51 @@ mod tests {
         let mut session = Session::new("none");
         session.note("confinement unavailable");
         assert!(rendered(&session).contains("confinement unavailable"));
+    }
+
+    /// A note the session makes about itself is drawn in the column the rest of the transcript
+    /// starts in, and a long one has to stay there. The paragraph wraps what does not fit and
+    /// begins its own rows at column zero, so a note that outgrew the width continued outside
+    /// every other line in the transcript. Notes were all short until a scan of the working
+    /// directory started writing findings into one.
+    #[test]
+    fn a_long_system_note_keeps_the_column_the_transcript_starts_in() {
+        let mut session = Session::new("none");
+        session.note(
+            "a secret assigned by name at deep/nested/configuration/settings.env:1 \
+             (40 characters of lower case, digits, 3b10f0e8028f4f52)",
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, &session);
+            })
+            .expect("draw succeeds");
+        let buffer = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..buffer.area().height)
+            .map(|y| {
+                (0..buffer.area().width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
+            .collect();
+
+        let carried: Vec<&String> = rows
+            .iter()
+            .filter(|row| row.contains("3b10f0e8028f4f52"))
+            .collect();
+        assert_eq!(
+            carried.len(),
+            1,
+            "the note was not wrapped onto a second row"
+        );
+        assert!(
+            carried[0].starts_with(&" ".repeat(LEAD))
+                && !carried[0].starts_with(&" ".repeat(LEAD + 1)),
+            "the row the note continued on began outside the transcript's column: {:?}",
+            carried[0]
+        );
     }
 
     /// Yellow is spoken for: a call still running, and the margin down every block of content the

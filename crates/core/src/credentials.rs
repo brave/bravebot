@@ -565,11 +565,22 @@ fn armoured_key(lines: &[&str], index: usize) -> Option<String> {
     }
     let body: String = lines[index + 1..]
         .iter()
+        .take(MOST_LINES_OF_A_BODY)
         .take_while(|line| !line.trim().starts_with("-----END"))
         .map(|line| line.trim())
         .collect();
     (!body.is_empty()).then_some(body)
 }
+
+/// How far past an opening marker the body is read before the armour is given up on.
+///
+/// A body is bounded in reality: the longest key anybody armours is a few dozen lines of base64,
+/// and a marker with no `-----END` after it is not a key at all. Unbounded, this reads the rest of
+/// the file at every opening marker it meets, so a file that is nothing but opening markers costs
+/// the square of its own length. That is cheap enough to ignore over what a turn wrote, which is
+/// one file the planner composed, and not over a working tree that arrived from somewhere else:
+/// a quarter of a megabyte of them took a minute, which is a startup nobody would wait out.
+const MOST_LINES_OF_A_BODY: usize = 200;
 
 #[cfg(test)]
 mod tests {
@@ -923,6 +934,36 @@ mod tests {
         assert_eq!(
             found[0].fingerprint,
             fingerprint(1, "MIIBOgIBAAJBAK7Z9fGh2kQ==")
+        );
+    }
+
+    /// An opening marker with nothing closing it is not a key, and reading to the end of the
+    /// file at every one of them costs the square of the file's length. That is nothing over
+    /// what a turn wrote, which is one file the planner composed, and it was a minute over a
+    /// quarter of a megabyte of markers in a working tree that arrived from somewhere else.
+    #[test]
+    fn an_unclosed_armour_marker_is_read_no_further_than_a_body_could_run() {
+        // The opening line is assembled for the reason [`armoured`] assembles a whole block:
+        // written out, it is a hard-coded private key to every scanner that reads this file.
+        let mut text = format!("-----BEGIN {} KEY-----\n", "RSA PRIVATE");
+        for line in 0..MOST_LINES_OF_A_BODY * 2 {
+            text.push_str(&format!("line{line:04}\n"));
+        }
+
+        let found = scan("armour.pem", &text, 1);
+
+        let armoured = found
+            .iter()
+            .find(|finding| finding.kind == Kind::PrivateKey)
+            .expect("the marker opened a body");
+        // Each line is eight characters and the body is what they concatenate to, so the length
+        // in the preview is what says how far past the marker the read went.
+        assert!(
+            armoured
+                .preview
+                .starts_with(&format!("{} characters", MOST_LINES_OF_A_BODY * 8)),
+            "the body ran past the length a body can be: {}",
+            armoured.preview
         );
     }
 
