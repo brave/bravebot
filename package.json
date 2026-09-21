@@ -28,7 +28,8 @@
   "scripts": {
     "postinstall": "node npm/scripts/postinstall.js",
     "lint:lockfile": "lockfile-lint --path package-lock.json --type npm --allowed-hosts npm --validate-https --validate-package-names --validate-integrity",
-    "lint:lockfile:website": "lockfile-lint --path docs/website/package-lock.json --type npm --allowed-hosts npm --validate-https --validate-package-names --validate-integrity --allowed-package-name-aliases image-size:image-size-next react-helmet-async:@slorber/react-helmet-async react-loadable:@docusaurus/react-loadable"
+    "lint:lockfile:website": "lockfile-lint --path docs/website/package-lock.json --type npm --allowed-hosts npm --validate-https --validate-package-names --validate-integrity --allowed-package-name-aliases image-size:image-size-next react-helmet-async:@slorber/react-helmet-async react-loadable:@docusaurus/react-loadable",
+    "lint:lockfile:ui": "lockfile-lint --path ui/package-lock.json --type npm --allowed-hosts npm --validate-https --validate-package-names --validate-integrity"
   },
   "engines": {
     "node": ">=18"

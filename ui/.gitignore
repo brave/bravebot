@@ -1,0 +1,16 @@
+node_modules/
+out/
+target/
+dist/
+*.log
+output.txt
+.DS_Store
+.worktrees/
+
+# Source art. The renders that ship are checked in under src/; what is here is the
+# material they were keyed from, which nothing in the build reads.
+images/
+
+# Credentials, read from ~/.config/bravebot/env or the agent's own .envrc, and never a
+# candidate for a commit. See the README on Credentials.
+.envrc

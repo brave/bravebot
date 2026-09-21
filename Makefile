@@ -203,11 +203,14 @@ check-reviewdog-full:
 	@contrib/check-reviewdog.sh --full
 
 # The npm-lockfile job. The published package is a thin wrapper that downloads the
-# release binary, so the lockfile is the whole supply chain surface it has.
+# release binary, so the lockfile is the whole supply chain surface it has. The front end
+# under ui/ has a lockfile of its own, holding Electron's tree, and it gets the same lint:
+# it is not an npm workspace of this package deliberately, so nothing else reaches it.
 .PHONY: check-npm
 check-npm:
 	npm ci --ignore-scripts
 	npm run lint:lockfile
+	npm run lint:lockfile:ui
 
 # The dependency policy in deny.toml. CI runs this target rather than cargo-deny's action,
 # so the version below is the only one anywhere and a pass here means what it means there.

@@ -1,0 +1,28 @@
+[package]
+name = "bravebot-ui-bridge"
+description = "Drives bravebot for a graphical front-end"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bravebot-agent = { path = "../agent" }
+# For `Message` and `Role`: cutting a conversation has to look at what a message *is*, and
+# `Snapshot::messages` is a `Vec<Message>` from this crate. Reading the type the agent already
+# hands us is not a widening of what this depends on.
+bravebot-aichat = { path = "../aichat" }
+bravebot-config = { path = "../config" }
+bravebot-net = { path = "../net" }
+bravebot-core = { path = "../core" }
+# Session records, state storage, and audit trails are shared with the terminal UI.
+bravebot-session = { path = "../session" }
+# Which build wrote a record. The stamp is a crate of its own, so naming the build no longer
+# costs a front end that draws nothing a dependency on the terminal library.
+bravebot-stamp = { path = "../stamp" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
