@@ -46,11 +46,13 @@ whether a spec pins the constructors of one as well as the releases, whether eve
 is on a commit rather than a tag its owner can move, whether every container image this tree runs
 names a digest rather than a tag its publisher can move, and whether a job holding `id-token: write`
 or a secret installs or runs an npm dependency, which every step in that job could read the
-credential from. CI runs it too, so a pull request that moves a workflow step or a build image onto a
-movable tag, that puts an install back beside the publish credential, or that drops the entry pinning
-a constructor, fails rather than holding only for whoever remembers to run this. It is the
-deterministic half of the [security-audit skill](../../agents/skills/security-audit/SKILL.md); the
-lanes that read code are the other half, and a person runs those. Run it before a commit that
+credential from, and whether a checkout of this tree names a kind of ref rather than a bare name a
+branch and a tag can share. CI runs it too, so a pull request that moves a workflow step or a build
+image onto a movable tag, that puts an install back beside the publish credential, that points a
+checkout at a name instead of a ref, or that drops the entry pinning a constructor, fails rather than
+holding only for whoever remembers to run this. It is the deterministic half of the
+[security-audit skill](../../agents/skills/security-audit/SKILL.md); the lanes that read code are the
+other half, and a person runs those. Run it before a commit that
 touches a label, `.github/workflows`, a Dockerfile, the Makefile's containers, or the trust specs.
 
 `make check-locales` holds every message catalog to
