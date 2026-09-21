@@ -207,8 +207,13 @@ fn finding(kind: Kind, path: &str, line: usize, value: &str, salt: u64) -> Findi
 ///
 /// Wider than any single format: the run is cut out first and matched afterwards, so a token
 /// sitting in quotes, in YAML, or in a URL comes out the same either way.
+///
+/// `=` is not one of them, and that is the separator rather than an omission. A rule matches a run
+/// that *begins* with its prefix, so admitting `=` would make `KEY=ghp_...` a single run beginning
+/// with `KEY`, and every shape below unreachable in the one form a key is most often written in.
+/// No [`Body`] admits `=` either, so a value is cut at the same place whether it is here or not.
 fn is_token(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '/' | '=' | '.')
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '/' | '.')
 }
 
 /// What a key's body is written in, after its prefix.
@@ -533,6 +538,60 @@ mod tests {
         assert_eq!(prose.len(), 1, "got {prose:?}");
         assert_eq!(quoted[0].fingerprint, prose[0].fingerprint);
         assert_eq!(quoted[0].preview, "20 characters of upper case, digits");
+    }
+
+    /// `KEY=value` is where a credential is written more often than anywhere else, and the prefix
+    /// layer has to reach into it. It did not: `=` was a token character, so the name and the key
+    /// were one run, the run began with the name, and no shape matched. What caught a key in a
+    /// `.env` at all was the rarity layer underneath, and only when the name held one of [`NAMES`]
+    /// — so `GH_PAT=ghp_...` and `gcp_key=AIza...` were found by nothing.
+    #[test]
+    fn a_provider_key_is_recognised_when_it_is_assigned_to_a_name() {
+        // Each body below is a counted-off alphabet at exactly the shape's declared minimum, so a
+        // fixture carries the length and the character classes a rule matches on and reads as
+        // nothing an issuer would hand out. AWS is the vendor's own documented example value.
+        for (line, kind) in [
+            (
+                "GH_PAT=ghp_0123456789abcdefghijklmnopqrstuvwxyz\n", // nosemgrep: generic.secrets.gitleaks.github-pat.github-pat
+                Kind::GitHubToken,
+            ),
+            (
+                "gcp_key=AIza0123456789abcdefghijklmnopqrstuvwxy\n",
+                Kind::GoogleApiKey,
+            ),
+            ("STRIPE=sk_live_0123456789abcdef\n", Kind::StripeKey),
+            ("SLACK_BOT=xoxb-0123456789\n", Kind::SlackToken),
+            (
+                "ANTHROPIC=sk-ant-0123456789abcdefghijklmn\n",
+                Kind::AnthropicKey,
+            ),
+            (
+                "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
+                Kind::AwsAccessKey,
+            ),
+            (
+                "export GH=ghp_0123456789abcdefghijklmnopqrstuvwxyz\n", // nosemgrep: generic.secrets.gitleaks.github-pat.github-pat
+                Kind::GitHubToken,
+            ),
+        ] {
+            let found = scan(".env", line, 1);
+            assert!(
+                found.iter().any(|finding| finding.kind == kind),
+                "no {kind:?} found in {line:?}, got {found:?}"
+            );
+        }
+    }
+
+    /// The same key assigned and standing alone is the same key, so attribution compares the two
+    /// as equal. Cutting at `=` is what makes the value the key rather than the name and the key
+    /// together.
+    #[test]
+    fn a_key_fingerprints_alike_assigned_and_alone() {
+        let assigned = scan(".env", "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n", 1);
+        let alone = scan("t.txt", "AKIAIOSFODNN7EXAMPLE\n", 1);
+        assert_eq!(assigned.len(), 1, "got {assigned:?}");
+        assert_eq!(alone.len(), 1, "got {alone:?}");
+        assert_eq!(assigned[0].fingerprint, alone[0].fingerprint);
     }
 
     /// A generated framework key carries no provider prefix, so the only thing that says what it
