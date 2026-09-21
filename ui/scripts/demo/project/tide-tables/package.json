@@ -1,0 +1,12 @@
+{
+  "name": "tide-tables",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "bin": { "tide-tables": "./src/index.ts" },
+  "scripts": {
+    "build": "node --experimental-strip-types src/index.ts",
+    "test": "node --test"
+  },
+  "devDependencies": { "typescript": "^5.7.2" }
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "local>brave-experiments/renovate-config"
+  ],
+  "ignorePaths": [
+    "scripts/demo/project/**"
+  ],
+  "description": [
+    "The projects under scripts/demo/project are stage sets, not software: the demo film opens them, and scripts/demo/world.mjs and the scenes are the only things that read them. They have no lockfiles and are never installed, so a version bump there fixes nothing and changes what the film shows on screen."
+  ]
+}

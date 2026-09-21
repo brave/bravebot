@@ -1,0 +1,23 @@
+:root {
+  --ink: #14181d;
+  --paper: #fbfaf7;
+  --sea: #2f6f8f;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.5 system-ui, sans-serif;
+}
+
+.app { max-width: 46rem; margin: 0 auto; padding: 2rem 1.25rem; }
+.where { color: #6a747e; margin: 0; }
+
+.stations { display: flex; gap: .5rem; flex-wrap: wrap; margin: 1.25rem 0; }
+.station { padding: .4rem .8rem; border-radius: 999px; border: 1px solid #d7d2c8; background: none; }
+.station[aria-pressed='true'] { background: var(--sea); color: var(--paper); border-color: var(--sea); }
+
+.chart svg { width: 100%; height: auto; }
+.chart polyline { stroke: var(--sea); }
+.chart figcaption { color: #6a747e; font-variant-numeric: tabular-nums; }

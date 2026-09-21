@@ -1,0 +1,6 @@
+[
+  { "id": "whitby", "name": "Whitby", "constants": [1.94, 0.62, 0.14, 0.11] },
+  { "id": "oban", "name": "Oban", "constants": [1.42, 0.48, 0.09, 0.07] },
+  { "id": "fishguard", "name": "Fishguard", "constants": [1.31, 0.44, 0.12, 0.08] },
+  { "id": "lerwick", "name": "Lerwick", "constants": [0.62, 0.21, 0.06, 0.05] }
+]

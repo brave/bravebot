@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A push that supersedes an earlier one on the same branch cancels it. The cargo job
+# clones a second repository and compiles the whole agent, so a stale run is expensive
+# to leave finishing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      # The Electron *package* is needed — `src/main` and `src/preload` are typed against
+      # it. The Electron *binary* is not needed in this job.
+      # The real Electron walkthrough runs with Xvfb in the bridge job below.
+      - name: Install
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+  cargo:
+    name: Lint and test the bridge
+    runs-on: ubuntu-latest
+    steps:
+      # One checkout, with submodules: the agent is `vendor/bravebot`, and
+      # `crates/bravebot-bridge/Cargo.toml` depends on it by path from inside this tree.
+      # The gitlink is the pin, so this job compiles the same agent revision a developer
+      # gets — an upstream commit cannot turn this repository red on its own, and a bump
+      # of the pin is a pull request that CI runs before it lands.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: brave-bot-ui
+          submodules: true
+
+      # `rustup` rather than `dtolnay/rust-toolchain`, which is what this was and what the
+      # agent's CI still uses. Brave's action-pinning rule wants a commit SHA followed by a
+      # three-part semver comment, and that action has no such tag to name — its only tag is
+      # `v1`, and `stable` is a branch. Rather than invent a version in the comment, the
+      # dependency goes: the runner image ships a stable toolchain already, and clippy is
+      # the one thing the action was being asked for.
+      - name: Set up Rust
+        run: rustup component add clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: brave-bot-ui
+
+      # No `--locked`. Cargo.lock here pins the agent's dependency tree as well as our own,
+      # and the lock is regenerated whenever the submodule pin moves; a run that fails on a
+      # stale lock file would be reporting the bump rather than the change under test.
+      #
+      # `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1` is not set here — `.cargo/config.toml` in this
+      # repository already sets it, and these jobs compile and test rather than producing a
+      # binary anyone runs against the backend.
+      - name: Clippy
+        working-directory: brave-bot-ui
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test
+        working-directory: brave-bot-ui
+        run: cargo test --all
+
+      # Reuse the compiled bridge for a credential-free, real Electron walkthrough.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: brave-bot-ui/package-lock.json
+
+      - name: Install desktop test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64
+
+      - name: Build desktop and run Node tests
+        working-directory: brave-bot-ui
+        run: |
+          npm ci
+          npm run build
+          node --test scripts/*.test.mjs
+
+      - name: Manual walkthrough regression
+        working-directory: brave-bot-ui
+        timeout-minutes: 5
+        run: xvfb-run -a node scripts/drive-manual-walkthrough.mjs
+
+      # Deliberately no `cargo fmt --all -- --check`, which the agent's own CI does run. The
+      # bridge crate is not rustfmt-clean: rustfmt would rewrite around 490 lines, mostly
+      # breaking method chains and `assert!` calls that are on one line on purpose. Adding
+      # the check means reformatting the crate first, which is a change to make on its own
+      # and not as a side effect of turning CI on.
