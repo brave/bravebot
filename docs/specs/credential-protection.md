@@ -617,10 +617,13 @@ be written down while the arrangement is still understood.
 **What it does not claim.** Recording the surface does not revoke anything, and nothing here reaches
 an issuer on a person's behalf.
 
-**Where the person is given it.** There is no leak to answer yet: the scan CRED-15 and CRED-16
-describe does not exist, and nor does the place CRED-19 would write a finding. What exists is the
-record and one surface that reads it, `doctor`, which reports what would end each credential this
-build holds. A scan landing later reads that record rather than writing a second one.
+**Where the person is given it.** Not yet from a leak. CRED-16's scan of what a turn writes
+exists and refuses, but it reports the finding and reaches no part of this record: somebody told a
+credential would have landed in a file is not thereby told what would end the one they already
+hold. CRED-15's scan of the tree before a run does not exist, and nor does the place CRED-19 would
+write a finding. What exists is the record and one surface that reads it, `doctor`, which reports
+what would end each credential this build holds. A scan reaching it later reads that record rather
+than writing a second one.
 
 `verified-by: bravebot_config::lib::a_build_that_cannot_sign_for_itself_holds_no_signing_key_to_account_for`
 `verified-by: bravebot_config::lib::an_aws_account_holds_both_arrangements_and_they_end_differently`
