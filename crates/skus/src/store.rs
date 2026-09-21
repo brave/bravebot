@@ -252,7 +252,16 @@ pub fn save(credentials: &StoredCredentials) -> Result<(), StoreError> {
             .mode(0o700)
             .create(parent)
             .map_err(|e| unusable(format!("{}: {e}", parent.display())))?;
-        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        // A link is stepped over rather than followed. `set_permissions` resolves one, and the
+        // name this was given says where the directory sits and nothing about where it leads:
+        // somebody who keeps their sessions on a synced volume and links `~/.bravebot` into place
+        // would otherwise have importing a subscription setting the mode of the volume's
+        // directory, which is outside anything this program was given.
+        let is_link =
+            std::fs::symlink_metadata(parent).is_ok_and(|found| found.file_type().is_symlink());
+        if !is_link {
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        }
     }
 
     let mut file = std::fs::OpenOptions::new()
@@ -1214,6 +1223,46 @@ mod tests {
                 0,
                 "group or other can reach {}",
                 parent.display()
+            );
+        });
+    }
+
+    /// STATE-1 bounds the narrowing at the state directory by comparing names, which says where a
+    /// directory sits and nothing about where it leads. Somebody who keeps their sessions on a
+    /// synced volume links `~/.bravebot` into place, and `set_permissions` resolves that link, so
+    /// narrowing through one has importing a subscription setting the mode of a directory this
+    /// program was never given.
+    #[cfg(unix)]
+    #[test]
+    fn narrowing_does_not_follow_a_linked_state_directory() {
+        with_temp_home("parent-link", || {
+            use std::os::unix::fs::PermissionsExt;
+
+            let parent = path()
+                .expect("a home")
+                .parent()
+                .expect("a parent")
+                .to_path_buf();
+            // The synced volume: outside the state directory, and at a mode of its owner's
+            // choosing rather than one this program decided.
+            let elsewhere = parent.with_file_name("elsewhere");
+            std::fs::create_dir_all(&elsewhere).expect("the directory");
+            std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o755))
+                .expect("loosen");
+            std::os::unix::fs::symlink(&elsewhere, &parent).expect("link");
+
+            save(&batch()).expect("a write");
+
+            let mode = std::fs::metadata(&elsewhere)
+                .expect("the directory")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(
+                mode,
+                0o755,
+                "a directory outside the state directory was narrowed through a link: {}",
+                elsewhere.display()
             );
         });
     }
