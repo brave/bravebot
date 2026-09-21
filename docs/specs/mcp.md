@@ -130,8 +130,9 @@ The environment this process holds is emptied before a server starts, on every p
 in a variable rather than in a file, so confinement over paths withholds none of it. A program
 `run` starts keeps the rest of the environment because a person typed the line and it is meant to
 behave as their own terminal does ([tools/run.md](tools/run.md)); nobody types a server, so there
-is no such expectation to meet here. Emptying it where the server is launched rather than leaving
-it to whichever backend confines the process is what makes the answer the same on both platforms.
+is no such expectation to meet here. The launch asks for an empty environment rather than leaving
+the answer to whichever backend confines the process, so both platforms hand a server the same
+nothing.
 
 **A known cost.** A server that reads a variable to work at all is one that does not work: a
 command resolved through `PATH`, and a server wanting a token of a person's own, are both left to

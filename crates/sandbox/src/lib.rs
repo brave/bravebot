@@ -19,12 +19,15 @@ pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod policy;
-#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+pub mod process;
+#[cfg(test)]
 mod testutil;
 
 use policy::{Capabilities, ConfinementLevel, SandboxPolicy};
+pub use process::{
+    ConfinedChild, ConfinedStderr, ConfinedStdin, ConfinedStdout, Environment, Stream, Streams,
+};
 use std::fmt;
-use std::process::{Child, Command};
 
 #[derive(Debug)]
 pub enum SandboxError {
@@ -75,36 +78,22 @@ pub trait Sandbox {
     /// What this backend can enforce here, on this kernel.
     fn capabilities(&self) -> Capabilities;
 
-    /// Build a confined [`Command`], or refuse.
+    /// Start a confined process, or refuse.
     ///
-    /// Returns a command rather than taking one because `Command` exposes no getters for
-    /// its stdio configuration: a backend that rebuilt the command, as the macOS one
-    /// must, to wrap it in `sandbox-exec`, would silently discard any pipes the caller
-    /// had set up. Handing the command back lets the caller configure stdio on the
-    /// thing that will actually run.
-    ///
-    /// The environment of the returned command is this process's own, and confining a
-    /// process is not a decision about it: a variable holds what no path grant can
-    /// withhold or hand over, so which of them a program is trusted with is the caller's
-    /// to settle, and a caller that means a program to see none empties it here.
-    fn command(
-        &self,
-        program: &str,
-        args: &[String],
-        policy: &SandboxPolicy,
-    ) -> Result<Command, SandboxError>;
-
-    /// Build and start a confined process with default stdio.
+    /// The backend starts the process rather than handing back a command for the caller
+    /// to spawn, because confinement can be carried by an argument to the call that
+    /// creates the process: there is no command a caller could spawn itself on such a
+    /// platform and still be confined. The stdio and the environment are therefore
+    /// decided here, and [`process`] applies both, so they mean the same thing whichever
+    /// backend this is.
     fn spawn(
         &self,
         program: &str,
         args: &[String],
         policy: &SandboxPolicy,
-    ) -> Result<Child, SandboxError> {
-        self.command(program, args, policy)?
-            .spawn()
-            .map_err(SandboxError::SpawnFailed)
-    }
+        streams: Streams,
+        environment: Environment,
+    ) -> Result<ConfinedChild, SandboxError>;
 }
 
 /// The backend for the current platform.
@@ -150,12 +139,14 @@ impl Sandbox for Unavailable {
         }
     }
 
-    fn command(
+    fn spawn(
         &self,
         _program: &str,
         _args: &[String],
         _policy: &SandboxPolicy,
-    ) -> Result<Command, SandboxError> {
+        _streams: Streams,
+        _environment: Environment,
+    ) -> Result<ConfinedChild, SandboxError> {
         Err(SandboxError::Unavailable {
             platform: std::env::consts::OS,
             detail: "confinement is unavailable".into(),
@@ -166,11 +157,18 @@ impl Sandbox for Unavailable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::nothing_attached;
 
     #[test]
     fn an_unavailable_backend_refuses_to_spawn() {
         let sandbox = Unavailable;
-        let result = sandbox.spawn("echo", &[], &SandboxPolicy::strict());
+        let result = sandbox.spawn(
+            "echo",
+            &[],
+            &SandboxPolicy::strict(),
+            nothing_attached(),
+            Environment::Inherited,
+        );
         assert!(matches!(result, Err(SandboxError::Unavailable { .. })));
     }
 
@@ -180,7 +178,13 @@ mod tests {
     fn refusal_is_not_a_silent_fallback() {
         let sandbox = Unavailable;
         let err = sandbox
-            .spawn("echo", &[], &SandboxPolicy::strict())
+            .spawn(
+                "echo",
+                &[],
+                &SandboxPolicy::strict(),
+                nothing_attached(),
+                Environment::Inherited,
+            )
             .expect_err("must refuse");
         assert!(err.to_string().contains("refusing to run"));
     }

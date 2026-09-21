@@ -11,6 +11,7 @@
 //! to exec and read permitted paths.
 
 use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
+use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
 use std::path::Path;
 use std::process::Command;
@@ -102,12 +103,14 @@ impl Sandbox for SeatbeltSandbox {
         }
     }
 
-    fn command(
+    fn spawn(
         &self,
         program: &str,
         args: &[String],
         policy: &SandboxPolicy,
-    ) -> Result<Command, SandboxError> {
+        streams: Streams,
+        environment: Environment,
+    ) -> Result<ConfinedChild, SandboxError> {
         if !policy.is_meaningful() {
             return Err(SandboxError::PolicyTooPermissive);
         }
@@ -117,17 +120,19 @@ impl Sandbox for SeatbeltSandbox {
         wrapped.arg(program);
         wrapped.args(args);
 
-        Ok(wrapped)
+        crate::process::start(wrapped, streams, environment)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::{
+        capturing_stdout, nothing_attached, printed_by, variable_names_received_by,
+    };
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::os::unix::fs::MetadataExt;
-    use std::process::Stdio;
 
     /// `CURLE_COULDNT_CONNECT`: curl reached the connection and was refused it. Any other code
     /// means it stopped before that, which is some other denial reported as this one.
@@ -170,8 +175,8 @@ mod tests {
     /// than granting less than it asked for, so a caller that meets a refusal there knows
     /// it is the platform and not the policy.
     ///
-    /// The command is built as well as the profile, so validation added here later has to
-    /// be decided rather than inherited from the other backend.
+    /// The process is started as well as the profile built, so validation added here later
+    /// has to be decided rather than inherited from the other backend.
     #[test]
     fn a_path_that_is_not_there_yet_is_granted_as_named() {
         let absent = "/bravebot-no-such-path/known_hosts";
@@ -188,9 +193,16 @@ mod tests {
             profile.contains(&format!(r#"(allow file-write* (subpath "{absent}"))"#)),
             "the grant the policy named is not in the profile: {profile}"
         );
-        SeatbeltSandbox
-            .command("/usr/bin/true", &[], &policy)
+        let mut confined = SeatbeltSandbox
+            .spawn(
+                "/usr/bin/true",
+                &[],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
             .expect("a path that is not there yet is a grant, not a refusal");
+        assert!(confined.wait().expect("should wait").success());
     }
 
     /// A caller reads this to decide whether an absent path in a policy needs creating
@@ -219,17 +231,23 @@ mod tests {
             .allow_read("/usr")
             .allow_read("/bin")
             .allow_write(&absent);
-        let granted = sandbox
-            .command("/usr/bin/true", &[], &policy)
-            .ok()
-            .and_then(|mut command| {
-                command
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .ok()
-            })
-            .is_some_and(|status| status.success());
+        let started = sandbox.spawn(
+            "/usr/bin/true",
+            &[],
+            &policy,
+            nothing_attached(),
+            Environment::Inherited,
+        );
+        // Whether the backend installed the grant, which is what the capability reports.
+        // How the process then exited is a separate question, asked separately below, so
+        // that a program failing for its own reasons cannot read as a refused policy.
+        let granted = started.is_ok();
+        if let Ok(mut confined) = started {
+            assert!(
+                confined.wait().expect("should wait").success(),
+                "the confined process failed, so it says nothing about the grant"
+            );
+        }
 
         assert_eq!(
             granted,
@@ -280,11 +298,13 @@ mod tests {
             .allow_read(r#"/tmp/x") (allow network-outbound) ("#);
 
         let mut child = sandbox
-            .command("/usr/bin/true", &[], &policy)
-            .expect("command builds")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
+            .spawn(
+                "/usr/bin/true",
+                &[],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
             .expect("should spawn");
         assert!(child.wait().expect("should wait").success());
     }
@@ -297,7 +317,13 @@ mod tests {
             .allow_subprocesses()
             .allow_write("/");
         let err = sandbox
-            .spawn("/usr/bin/true", &[], &policy)
+            .spawn(
+                "/usr/bin/true",
+                &[],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
             .expect_err("must refuse a policy that confines nothing");
         assert!(matches!(err, SandboxError::PolicyTooPermissive));
     }
@@ -319,11 +345,13 @@ mod tests {
             .allow_read("/usr")
             .allow_read("/bin");
         let mut child = sandbox
-            .command("/usr/bin/true", &[], &policy)
-            .expect("command builds")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
+            .spawn(
+                "/usr/bin/true",
+                &[],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
             .expect("should spawn");
         assert!(child.wait().expect("should wait").success());
     }
@@ -346,11 +374,13 @@ mod tests {
         let target = dir.join("must-not-exist");
 
         let mut child = sandbox
-            .command("/usr/bin/touch", &[target.display().to_string()], &policy)
-            .expect("command builds")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
+            .spawn(
+                "/usr/bin/touch",
+                &[target.display().to_string()],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
             .expect("should spawn");
         let status = child.wait().expect("should wait");
 
@@ -409,11 +439,13 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
             sandbox
-                .command("/usr/bin/curl", &args, policy)
-                .expect("command builds")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
+                .spawn(
+                    "/usr/bin/curl",
+                    &args,
+                    policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
                 .expect("should spawn")
         };
 
@@ -465,18 +497,16 @@ mod tests {
             .allow_read(&dir)
             .allow_write(&dir);
         let mut child = sandbox
-            .command(
+            .spawn(
                 "/bin/mv",
                 &[
                     source.display().to_string(),
                     destination.display().to_string(),
                 ],
                 &policy,
+                nothing_attached(),
+                Environment::Inherited,
             )
-            .expect("command builds")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
             .expect("should spawn");
         assert!(
             child.wait().expect("should wait").success(),
@@ -496,9 +526,9 @@ mod tests {
     /// What a program may be trusted with in the environment is the caller's decision and
     /// not a backend's: a credential lives in a variable rather than in a file, so no
     /// grant over paths either withholds one or hands one over, and the agent socket a
-    /// push signs through is named by a variable as well. A backend that emptied it would
-    /// take that decision away from the caller here and leave it with the caller on the
-    /// other platform, which is one policy meaning two things.
+    /// push signs through is named by a variable as well. A caller that asks for its own
+    /// environment receives exactly that, on either platform, so the decision reads the
+    /// same wherever it is made.
     ///
     /// `CARGO_MANIFEST_DIR` is the variable read back because cargo sets it in the
     /// environment of a test process, so it is one this process holds and nothing else
@@ -511,18 +541,60 @@ mod tests {
             .allow_read("/usr")
             .allow_read("/bin");
 
-        let printed = sandbox
-            .command("/usr/bin/env", &[], &policy)
-            .expect("command builds")
-            .output()
+        let mut child = sandbox
+            .spawn(
+                "/usr/bin/env",
+                &[],
+                &policy,
+                capturing_stdout(),
+                Environment::Inherited,
+            )
             .expect("the confined process runs");
 
-        let environment = String::from_utf8_lossy(&printed.stdout);
+        let environment = printed_by(&mut child);
         assert!(
             environment
                 .lines()
                 .any(|line| line == format!("CARGO_MANIFEST_DIR={held}")),
             "a variable this process holds did not reach the confined process: {environment}"
+        );
+    }
+
+    /// The other half of that decision, and the one a caller launching third-party code
+    /// makes. Emptying it is this crate's to do rather than each caller's, so a program
+    /// meant to hold none of this process's credentials holds none of them under either
+    /// backend.
+    ///
+    /// Empty means empty rather than short of one named variable, which is the clause as
+    /// written and the only form of it worth having: a process handed `PATH`, `HOME` or the
+    /// socket a signature is made through has been handed a credential whatever else was
+    /// withheld. A failure prints the names that arrived and not their values, so it says
+    /// what leaked without publishing what a machine running this holds.
+    #[test]
+    fn a_confined_process_given_an_empty_environment_receives_none_of_this_processes_variables() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        assert!(
+            std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+            "cargo sets this for a test, and without it there is nothing here to withhold"
+        );
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin");
+
+        let mut child = sandbox
+            .spawn(
+                "/usr/bin/env",
+                &[],
+                &policy,
+                capturing_stdout(),
+                Environment::Empty,
+            )
+            .expect("the confined process runs");
+
+        let received = variable_names_received_by(&mut child);
+        assert!(
+            received.is_empty(),
+            "a process asked to receive no variables received some: {received:?}"
         );
     }
 }

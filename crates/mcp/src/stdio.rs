@@ -17,18 +17,20 @@ use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
-use bravebot_sandbox::Sandbox;
 use bravebot_sandbox::policy::SandboxPolicy;
+use bravebot_sandbox::{
+    ConfinedChild, ConfinedStdin, ConfinedStdout, Environment, Sandbox, SandboxError, Stream,
+    Streams,
+};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 
 /// A server reached over stdin/stdout.
 pub struct StdioServer {
     /// Kept so the child is killed when this is dropped.
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    child: ConfinedChild,
+    stdin: ConfinedStdin,
+    stdout: BufReader<ConfinedStdout>,
     next_id: u64,
     name: String,
 }
@@ -65,30 +67,41 @@ impl StdioServer {
         sandbox: &dyn Sandbox,
         policy: &SandboxPolicy,
     ) -> McpResult<Self> {
-        // The sandbox builds the command so stdio can be configured on the process that
-        // actually runs; a wrapped command would lose these pipes.
         let mut child = sandbox
-            .command(program, args, policy)
-            .map_err(|e| McpError::Confinement(e.to_string()))?
-            // A server is code we did not write, and a credential this process
-            // authenticates with sits in a variable rather than in a file, so no
-            // confinement policy over paths withholds one. Emptied here rather than left
-            // to the backend, which would make it a different answer on each platform.
-            .env_clear()
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            // stderr is inherited so server diagnostics reach the user.
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|e| McpError::Transport(format!("could not start the server: {e}")))?;
+            .spawn(
+                program,
+                args,
+                policy,
+                Streams {
+                    stdin: Stream::Piped,
+                    stdout: Stream::Piped,
+                    // stderr is inherited so server diagnostics reach the user.
+                    stderr: Stream::Inherited,
+                },
+                // A server is code we did not write, and a credential this process
+                // authenticates with sits in a variable rather than in a file, so no
+                // confinement policy over paths withholds one.
+                Environment::Empty,
+            )
+            .map_err(|e| match e {
+                // A program that is not there is a person's own configuration to correct,
+                // so it is reported as one rather than as confinement that could not be
+                // established. The two are not fully separable: a backend that installs
+                // its restrictions between the fork and the exec reports that failure the
+                // same way the kernel reports a missing program, so a confinement failure
+                // on such a backend arrives here as a transport error. MCP-3 is unaffected,
+                // since either way the server does not run.
+                SandboxError::SpawnFailed(e) => {
+                    McpError::Transport(format!("could not start the server: {e}"))
+                }
+                refused => McpError::Confinement(refused.to_string()),
+            })?;
 
         let stdin = child
-            .stdin
-            .take()
+            .take_stdin()
             .ok_or_else(|| McpError::Transport("the server's stdin was not available".into()))?;
         let stdout = child
-            .stdout
-            .take()
+            .take_stdout()
             .ok_or_else(|| McpError::Transport("the server's stdout was not available".into()))?;
 
         Ok(Self {
