@@ -281,6 +281,7 @@ The press did nothing a person could see, and the list came up when the turn end
 attached to no press.
 
 `verified-by: bravebot_tui::app::the_two_paths_answer_the_same_set_of_keys`
+`verified-by: bravebot_tui::app::the_way_out_stops_being_offered_at_the_next_press_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_question_mark_lists_the_keys_while_a_turn_runs`
 `verified-by: bravebot_tui::app::nothing_is_offered_for_completion_while_a_turn_runs`
 `verified-by: bravebot_tui::app::the_trail_can_be_asked_for_while_a_turn_runs`
