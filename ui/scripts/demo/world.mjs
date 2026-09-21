@@ -26,6 +26,13 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
+/// A pattern matching exactly this name, with every metacharacter in it taken literally.
+///
+/// A bot name is display text rather than a pattern, so a name holding a `.` or a bracket would
+/// otherwise match a row it does not name.
+// nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+const exactly = (name) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
+
 const here = dirname(fileURLToPath(import.meta.url))
 
 /** The checked-in templates. Copied into the world rather than filmed in place, so a turn
@@ -239,7 +246,7 @@ async function ensureResidents(world) {
       for (const bot of unspoken) {
         const row = page
           .locator('.bot')
-          .filter({ has: page.locator('.bot-name', { hasText: new RegExp(`^${bot.name}$`) }) })
+          .filter({ has: page.locator('.bot-name', { hasText: exactly(bot.name) }) })
         if (!(await row.count())) {
           console.log(`  ${bot.name} is not in the list; leaving it unspoken to`)
           continue

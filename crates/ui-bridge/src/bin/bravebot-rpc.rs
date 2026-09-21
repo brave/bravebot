@@ -16,6 +16,10 @@ use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 
 fn main() {
+    // Not a security decision. The only argument is `--settings <path>`, which names a
+    // settings file for a developer driving this by hand, and what that file may then grant
+    // is decided by the policy layer rather than here. Nothing is authorised by an argument.
+    // nosemgrep: rust.lang.security.args.args
     let mut args = std::env::args().skip(1);
     let mut settings = None;
     if let Some(flag) = args.next() {

@@ -33,6 +33,15 @@ import { tmpdir } from 'node:os'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
+/// A pattern matching exactly this name, with every metacharacter in it taken literally.
+///
+/// The names below are this file's own literals, so nothing here is attacker-controlled. Escaping
+/// rather than interpolating is still the right construction: a bot name is display text, one of
+/// them already contains parentheses, and hand-escaping them at the call site is how the next name
+/// with a `.` or a `+` in it silently matches the wrong row.
+// nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+const exactly = (name) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
+
 const problems = []
 const check = (ok, what) => {
   console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
@@ -163,7 +172,7 @@ await page.waitForTimeout(400)
 // already had, sorted by slug, so "the first row" is not this driver's row and asserting on it
 // would be asserting about somebody's own bot.
 const rowFor = (name) =>
-  page.locator('.bot').filter({ has: page.locator('.bot-name', { hasText: new RegExp(`^${name}$`) }) })
+  page.locator('.bot').filter({ has: page.locator('.bot-name', { hasText: exactly(name) }) })
 const mine = rowFor('Release Notes')
 const other = rowFor('Triage')
 
@@ -231,8 +240,8 @@ await back.waitForLoadState('domcontentloaded')
 await back.waitForTimeout(2500)
 
 const backRow = (name) =>
-  back.locator('.bot').filter({ has: back.locator('.bot-name', { hasText: new RegExp(`^${name}$`) }) })
-const backMine = backRow('Release Notes \\(weekly\\)')
+  back.locator('.bot').filter({ has: back.locator('.bot-name', { hasText: exactly(name) }) })
+const backMine = backRow('Release Notes (weekly)')
 
 check(
   (await back.locator('.sidebar-tab').nth(1).getAttribute('aria-pressed')) === 'true',

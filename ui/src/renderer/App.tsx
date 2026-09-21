@@ -388,6 +388,11 @@ export function App(): React.JSX.Element {
   const refresh = useCallback(async () => {
     try {
       const { sessions } = await call<{ sessions: SessionSummary[] }>('session.list')
+      // The `sessions` here is the field destructured from the reply on the line above, which
+      // shadows the state of the same name rather than being it. Setting state from itself
+      // would be the no-op this rule is about; setting it from what the agent just answered
+      // is the refresh.
+      // nosemgrep: javascript.react.correctness.hooks.set-state-no-op.calling-set-state-on-current-state
       setSessions(sessions)
     } catch (error) {
       setProblem(String(error))
