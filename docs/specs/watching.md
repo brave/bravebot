@@ -104,6 +104,7 @@ delegate runs as long as a turn does, and this is held in memory for a person wh
 
 `verified-by: bravebot_tui::state::a_delegate_keeps_the_work_its_block_has_no_room_for`
 `verified-by: bravebot_tui::state::a_delegate_stops_keeping_its_oldest_work`
+`verified-by: bravebot_tui::state::a_delegates_previews_are_held_to_the_bound_its_calls_are`
 
 <a id="WATCH-5"></a>
 ### WATCH-5: a delegate that has finished collapses to what the turn was told

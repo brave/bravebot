@@ -168,13 +168,23 @@ impl Delegate {
         latest
     }
 
-    /// Keep one more of its lines, dropping the oldest where there are already enough.
-    fn keep(&mut self, entry: Entry) {
-        self.calls += 1;
+    /// Hold one more of its lines, dropping the oldest where there are already enough.
+    ///
+    /// Every line a delegate gains goes through here, because the bound is on what is held and
+    /// not on what was counted. A delegate's results release previews of their own, so a bound
+    /// applied only where a call was added leaves one keeping two lines for every one it drops,
+    /// which is unbounded in the memory this is held in for a person who may never look.
+    fn hold(&mut self, entry: Entry) {
         self.lines.push(entry);
         if self.lines.len() > DELEGATE_KEPT {
             self.lines.remove(0);
         }
+    }
+
+    /// Hold one more line that is a call it made.
+    fn keep(&mut self, entry: Entry) {
+        self.calls += 1;
+        self.hold(entry);
     }
 }
 
@@ -1835,6 +1845,22 @@ impl Session {
         }
     }
 
+    /// Add a line where the driver said the reports belong.
+    ///
+    /// Not a push onto what [`Session::working_lines`] hands back: a delegate's lines are
+    /// bounded and the turn's are not, so a line that reaches a delegate any other way is one
+    /// [`Delegate::hold`] never sees.
+    fn hold_line(&mut self, entry: Entry) {
+        match self.attributed_to.and_then(|id| self.at(id)) {
+            Some(at) => self.transcript[at]
+                .delegate
+                .as_mut()
+                .expect("a delegate entry holds its delegate")
+                .hold(entry),
+            None => self.transcript.push(entry),
+        }
+    }
+
     /// Where a delegate's block is, by the number the driver gave it.
     ///
     /// Searched from the end, because the one being reported on is almost always the one most
@@ -2196,7 +2222,7 @@ impl Session {
             _ => {
                 let mut entry = Entry::system("");
                 entry.shown = Some(shown);
-                self.working_lines().push(entry);
+                self.hold_line(entry);
             }
         }
     }
@@ -7182,6 +7208,46 @@ mod tests {
                 held[0].lines[0].activity.as_ref().unwrap().target,
                 "step 50",
                 "the newest were dropped rather than the oldest"
+            );
+        }
+
+        /// A delegate's results release previews of their own, and a preview is a line it holds
+        /// like any other. A bound applied only where a call was added let a delegate reporting
+        /// two previews per call keep two lines for every one it dropped, so what is held for a
+        /// person who may never look grew past the bound without limit.
+        #[test]
+        fn a_delegates_previews_are_held_to_the_bound_its_calls_are() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "worker", "the long one");
+            let rounds = DELEGATE_KEPT + 50;
+            for round in 0..rounds {
+                let call = Activity::running("Isolated processor", format!("notes{round}.md"));
+                session.start_activity(call.clone());
+                session.finish_activity(call.done("wrote 1 line"));
+                // What the processor said about the file, and then the file it wrote: two
+                // released previews for the one call, as a spawn_processor result reports.
+                session.show(quarantined("what the isolated processor said"));
+                session.show(quarantined(&format!("notes{round}.md")));
+            }
+
+            let held = session.delegates();
+            assert_eq!(held[0].calls, rounds, "a preview was counted as a call");
+            assert_eq!(
+                held[0].lines.len(),
+                DELEGATE_KEPT,
+                "the delegate held more than the bound"
+            );
+            assert_eq!(
+                held[0]
+                    .latest()
+                    .last()
+                    .unwrap()
+                    .activity
+                    .as_ref()
+                    .unwrap()
+                    .target,
+                format!("notes{}.md", rounds - 1),
+                "the newest work was dropped rather than the oldest"
             );
         }
 
