@@ -464,12 +464,31 @@ why this scan can refuse where the other can only inform. It is not authorship: 
 reformats or moves a file already holding a key produces a diff carrying it without having written
 it, and that case is reported rather than refused.
 
+**What is refused and what is asked about.** A value that declared itself a credential (a
+provider's prefix over its own alphabet at its own length, or the password field of a URL) is
+refused, and nobody is asked: there is no judgement to put to anybody, and a prompt that can be
+answered "write it anyway" is a prompt a turn eventually gets past. A value inferred from a name
+that sounds like a secret beside one that looks rare is raised on the approval the write already
+needs, and the person decides. That inference catches a generated framework key, and it also
+catches an inline Kubernetes `Secret`, a local development password and a test fixture; refusing on
+all four with no override would stop ordinary work over a guess, and a scan people have to fight is
+a scan they turn off. The prompt names the finding, so the question can be answered.
+
+A finding raised this way goes to the person and never to the planner, which is what CRED-19
+requires of a finding however it is answered.
+
 `verified-by: bravebot_agent::turn::a_credential_a_turn_writes_never_reaches_the_tree`
 `verified-by: bravebot_agent::turn::a_credential_pasted_by_an_edit_leaves_the_file_as_it_was`
 `verified-by: bravebot_agent::turn::a_credential_the_file_already_held_does_not_refuse_the_change_carrying_it`
 `verified-by: bravebot_agent::turn::what_the_scan_found_is_told_to_the_person_and_not_to_the_planner`
+`verified-by: bravebot_agent::turn::a_value_that_only_looks_like_a_secret_is_put_to_the_person`
+`verified-by: bravebot_agent::turn::the_prompt_says_which_value_it_is_asking_about`
 `verified-by: bravebot_core::credentials::a_generated_key_is_recognised_from_its_name_and_its_rarity`
 `verified-by: bravebot_core::credentials::a_provider_key_is_recognised_with_nothing_around_it_saying_so`
+`verified-by: bravebot_core::credentials::a_provider_key_is_recognised_when_it_is_assigned_to_a_name`
+`verified-by: bravebot_core::credentials::a_password_in_a_connection_string_is_a_finding`
+`verified-by: bravebot_core::credentials::each_shape_matches_at_its_minimum_and_not_below_it`
+`verified-by: bravebot_core::credentials::one_key_in_a_json_field_is_one_finding`
 `verified-by: bravebot_core::credentials::an_armoured_private_key_is_one_finding_over_its_whole_body`
 `verified-by: bravebot_core::credentials::nothing_a_finding_says_repeats_the_value`
 
@@ -705,6 +724,18 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   says nothing between runs, so an acceptance cannot be carried forward and the baseline has
   nothing to match against. A salt that outlives the run is a file somebody has to keep, and it
   belongs with the store a finding is written to.
+
+  One consequence is worth naming: an inferred finding is re-raised every run, because nothing
+  remembers that somebody already said a development password was a development password. A person
+  working in a tree that holds one answers for it again each session. The allowlist that would fix
+  it needs the durable salt and the store above, so this is the cost of not having them yet rather
+  than a separate gap.
+
+- **Only what a turn writes is scanned, never what it reads.** A secret already in the tree reaches
+  the planner's context the moment a turn reads the file holding it, and nothing looks at it on the
+  way through. The gate here is about what this system *causes*; disclosure of what was already
+  there is CRED-15's business, and CRED-15 is unbuilt. The two together are why reading a `.env` is
+  currently unexamined in both directions.
 
 - **Most of this is not implemented.** What runs is the scan of what a turn writes, and one
   performer: a credential a vault obtained itself, and a mail send carried out against it so that

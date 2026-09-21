@@ -2082,7 +2082,7 @@ fn refused_with_a_note(text: impl Into<String>, note: impl Into<String>) -> Prod
 /// fingerprint and a masked preview, which is the whole of what a finding may hold.
 fn credential_refusal(path: &str, scanned: &Scanned) -> Produced {
     let found: Vec<String> = scanned
-        .authored
+        .refused()
         .iter()
         .map(|finding| finding.describe())
         .collect();
@@ -2096,6 +2096,34 @@ fn credential_refusal(path: &str, scanned: &Scanned) -> Produced {
             "refused, a credential would have landed here: {}",
             found.join("; ")
         ),
+    )
+}
+
+/// A list of findings said the one way a finding may be said.
+fn describe_all(findings: &[&bravebot_core::credentials::Finding]) -> Vec<String> {
+    findings.iter().map(|finding| finding.describe()).collect()
+}
+
+/// What the planner is told when a person declined a write the scan had doubts about.
+///
+/// A plain rejection tells it to ask what the user would prefer, which is right when a person
+/// simply did not want the change. Where the scan raised something, the planner is told that much
+/// and no more: enough to write a reference instead of asking again, and nothing about what was
+/// found, because a finding still may not enter a model's context.
+fn credential_aware_rejection(path: &str, scanned: &Scanned) -> Produced {
+    if scanned.to_approve().is_empty() {
+        return problem(format!(
+            "refused: the user did not approve writing {path}. Do not retry \
+             the same write; ask what they would prefer."
+        ));
+    }
+    refused_with_a_note(
+        format!(
+            "refused: the user did not approve writing {path}, which looks like it would put a \
+             credential in the tree. Put a reference to the value in the file instead, and tell \
+             the user which secret they have to set and where."
+        ),
+        "not approved".to_string(),
     )
 }
 
@@ -3047,11 +3075,17 @@ fn write_file<S: Sink, C: Confirmer>(
     // still seen it. Asked before the approval prompt for a smaller reason: a person should not be
     // shown a diff to approve that is going to be refused whatever they answer.
     let scanned = policy.scan_a_write("write_file", &shown_path, existing.as_deref(), &body);
-    if !scanned.authored.is_empty() {
+    if !scanned.refused().is_empty() {
         return credential_refusal(&shown_path, &scanned);
     }
 
-    if policy.write_needs_approval(&proposed_path, body_label, destination) {
+    // A guess goes to the person rather than deciding by itself, and asking is the only way to put
+    // it to them, so a body the scan has doubts about is a body somebody looks at even where the
+    // path's own rule would not have asked.
+    let to_approve = describe_all(&scanned.to_approve());
+    if policy.write_needs_approval(&proposed_path, body_label, destination)
+        || !to_approve.is_empty()
+    {
         let request = WriteRequest {
             intent,
             existing: existing.clone(),
@@ -3060,13 +3094,11 @@ fn write_file<S: Sink, C: Confirmer>(
             // The reviewer is the only one who will read this. Say what they are reading.
             untrusted: !body_label.is_trusted(),
             remark,
+            credentials: to_approve,
         };
 
         if confirmer.confirm_write(&request) == Decision::Reject {
-            return problem(format!(
-                "refused: the user did not approve writing {shown_path}. Do not retry \
-                 the same write; ask what they would prefer."
-            ));
+            return credential_aware_rejection(&shown_path, &scanned);
         }
     }
 
@@ -3213,11 +3245,16 @@ fn edit_file<S: Sink, C: Confirmer>(
     // lands in the tree exactly as one written whole does. The pre-image here is the text the
     // passage was located in, which the edit already read.
     let scanned = policy.scan_a_write("edit_file", &shown_path, Some(&current), &body);
-    if !scanned.authored.is_empty() {
+    if !scanned.refused().is_empty() {
         return credential_refusal(&shown_path, &scanned);
     }
 
-    if policy.write_needs_approval(&proposed_path, body_label, destination) {
+    // As in a whole-file write: a guess is put to a person rather than deciding on its own, and
+    // asking is the only way to put it.
+    let to_approve = describe_all(&scanned.to_approve());
+    if policy.write_needs_approval(&proposed_path, body_label, destination)
+        || !to_approve.is_empty()
+    {
         let request = WriteRequest {
             path: proposed_path.clone(),
             contents: shown.clone(),
@@ -3227,9 +3264,13 @@ fn edit_file<S: Sink, C: Confirmer>(
             // An edit is the planner's own words over a file it read. No processor was involved,
             // so there is nothing anybody said about it.
             remark: None,
+            credentials: to_approve,
         };
 
         if confirmer.confirm_write(&request) == Decision::Reject {
+            if !scanned.to_approve().is_empty() {
+                return credential_aware_rejection(&shown_path, &scanned);
+            }
             return problem(format!(
                 "refused: the user did not approve editing {shown_path}. Do not retry the \
                  same edit; ask what they would prefer."

@@ -596,6 +596,13 @@ fn change(request: &WriteRequest) -> Vec<String> {
         lines.push(t!(write_remark).to_string());
         lines.extend(quarantined(&remark.preview.join("\n")));
     }
+    // What the scan inferred, beside the lines it read it from. These are the driver's own words
+    // about its own findings, each already a kind, a location and a masked preview, so no part of
+    // the value is repeated here and none of it needs the margin content sits behind.
+    if !request.credentials.is_empty() {
+        lines.push(t!(write_credentials).to_string());
+        lines.extend(request.credentials.iter().map(|found| shown(found)));
+    }
 
     let diff = request.diff();
     // A change too large to diff says so rather than showing a guess at it, which is what the
@@ -1075,6 +1082,7 @@ mod tests {
             intent: bravebot_agent::confirm::Intent::Edit,
             untrusted: false,
             remark: None,
+            credentials: Vec::new(),
         };
 
         let lines = change(&request).join("\n");
@@ -1108,6 +1116,7 @@ mod tests {
                 lines: 1,
                 label: "untrusted".to_string(),
             }),
+            credentials: Vec::new(),
         };
 
         let lines = change(&request).join("\n");

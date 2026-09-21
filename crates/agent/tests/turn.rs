@@ -20270,14 +20270,96 @@ fn planner_retry_costs_do_not_replace_the_last_prompt_measurement() {
 /// on a framework key, so the name and the rarity are the whole of what says it is a secret.
 const GENERATED_SECRET: &str = "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7";
 
+/// A key that says what it is: AWS's own documented access key id, matched on the provider's
+/// prefix over the provider's alphabet at the provider's length. Nothing about it is a guess, which
+/// is why a write carrying it is refused rather than put to anybody.
+const DECLARED_KEY: &str = "AKIAIOSFODNN7EXAMPLE";
+
+/// Approves writes and keeps what it was shown, so a test can read the question rather than only
+/// the answer. Everything else is [`bravebot_agent::confirm::ApproveWrites`]'s refusal.
+#[derive(Default)]
+struct RemembersWrites {
+    asked: Vec<bravebot_agent::confirm::WriteRequest>,
+}
+
+impl bravebot_agent::confirm::Confirmer for RemembersWrites {
+    fn confirm_write(
+        &mut self,
+        request: &bravebot_agent::confirm::WriteRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.asked.push(request.clone());
+        bravebot_agent::confirm::Decision::Approve
+    }
+
+    fn confirm_server(
+        &mut self,
+        request: &bravebot_agent::confirm::ServerRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_server(request)
+    }
+
+    fn confirm_run(
+        &mut self,
+        request: &bravebot_agent::confirm::RunRequest,
+    ) -> bravebot_agent::confirm::RunDecision {
+        bravebot_agent::confirm::ApproveWrites.confirm_run(request)
+    }
+
+    fn confirm_read_output(
+        &mut self,
+        request: &bravebot_agent::confirm::OutputRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_read_output(request)
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_vetted_read(request)
+    }
+
+    fn confirm_fetch(
+        &mut self,
+        request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_fetch(request)
+    }
+
+    fn confirm_manifest(
+        &mut self,
+        request: &bravebot_agent::confirm::ManifestRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_manifest(request)
+    }
+
+    fn confirm_vouch(
+        &mut self,
+        request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_vouch(request)
+    }
+
+    fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
+        bravebot_agent::confirm::ApproveWrites.ask_user(asking)
+    }
+
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
 /// The one thing this system causes is the one thing nothing checked. A turn asked to set a
-/// project up generates a key, writes it into `.env`, and reports the file written: the value is
-/// then in the tree, read back by every later turn, pushed with any other change, and nobody
-/// decided anything about it.
+/// project up writes a key into `.env` and reports the file written: the value is then in the tree,
+/// read back by every later turn, pushed with any other change, and nobody decided anything about
+/// it.
 ///
 /// Refused before the write rather than deleted after it, which is why the assertion is that the
 /// file never existed: a file removed afterwards has still held the secret, and whatever was
 /// watching the directory has still seen it.
+///
+/// The confirmer approves everything, so the refusal is the only thing that can stop this. A value
+/// that declared itself a credential is not a judgement anybody is asked for.
 #[test]
 fn a_credential_a_turn_writes_never_reaches_the_tree() {
     let scratch = Scratch::new("credential-write-refused");
@@ -20286,7 +20368,7 @@ fn a_credential_a_turn_writes_never_reaches_the_tree() {
     let (endpoint, _received) = serve_sequence(vec![
         tool_request_2(
             "write_file",
-            &format!(r#"{{"path":".env","contents":"SECRET_KEY_BASE={GENERATED_SECRET}\n"}}"#),
+            &format!(r#"{{"path":".env","contents":"AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"}}"#),
         ),
         reply_with("understood"),
     ]);
@@ -20300,7 +20382,7 @@ fn a_credential_a_turn_writes_never_reaches_the_tree() {
         &egress,
         &workspace,
         &task,
-        // Approving every write, so the scan is the only thing that can stop this one.
+        // Approving every write, so the refusal is the only thing that can stop this one.
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut sink,
     )
@@ -20309,6 +20391,112 @@ fn a_credential_a_turn_writes_never_reaches_the_tree() {
     assert!(
         !scratch.path.join(".env").exists(),
         "a credential a turn generated was written to the tree"
+    );
+}
+
+/// The other half of the same question. A name that sounds like a secret beside a value that looks
+/// rare is a guess, and a guess is worth raising and not worth refusing on: the rule that catches a
+/// generated framework key also catches a Kubernetes manifest, a local development password and a
+/// test fixture. So it becomes the approval prompt the person is standing in anyway.
+///
+/// Refusing here instead would mean a turn that can write none of those, with no way to say
+/// otherwise, which is what splitting the two apart is for.
+#[test]
+fn a_value_that_only_looks_like_a_secret_is_put_to_the_person() {
+    let body = format!(r#"{{"path":".env","contents":"SECRET_KEY_BASE={GENERATED_SECRET}\n"}}"#);
+
+    // Declined: nothing is written.
+    let scratch = Scratch::new("credential-guess-declined");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("write_file", &body),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("set the project up"),
+        // Refuses every question, which is what a person saying no looks like here.
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+    assert!(
+        !scratch.path.join(".env").exists(),
+        "a write the person declined still reached the tree"
+    );
+
+    // Approved: the write goes through, because the person is the one who gets to say that a
+    // development password is a development password.
+    let scratch = Scratch::new("credential-guess-approved");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("write_file", &body),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("set the project up"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        format!("SECRET_KEY_BASE={GENERATED_SECRET}\n"),
+        "the person approved the write and it did not happen"
+    );
+}
+
+/// The prompt has to say why it is asking. A person shown a diff with no reason attached is being
+/// asked to approve a `.env` line, which they would; the finding is the whole of what makes this
+/// question different from any other write.
+///
+/// What reaches them is the finding's own words (a kind, a location and a masked preview) and
+/// never the value, which is the rule that governs a refusal's note too.
+#[test]
+fn the_prompt_says_which_value_it_is_asking_about() {
+    let scratch = Scratch::new("credential-prompt-says-why");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            &format!(r#"{{"path":".env","contents":"SECRET_KEY_BASE={GENERATED_SECRET}\n"}}"#),
+        ),
+        reply_with("understood"),
+    ]);
+
+    let mut confirmer = RemembersWrites::default();
+    let mut sink = RecordingSink::new();
+    turn::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("set the project up"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let asked = confirmer
+        .asked
+        .iter()
+        .find(|request| !request.credentials.is_empty())
+        .expect("the person was asked about a write and told nothing about the finding");
+    let said = asked.credentials.join("; ");
+    assert!(
+        said.contains("a secret assigned by name") && said.contains(".env:1"),
+        "the prompt did not say what was found or where: {said}"
+    );
+    assert!(
+        !said.contains(GENERATED_SECRET),
+        "the prompt repeated the value it was asking about: {said}"
     );
 }
 
@@ -20327,7 +20515,7 @@ fn what_the_scan_found_is_told_to_the_person_and_not_to_the_planner() {
     let (endpoint, received) = serve_sequence(vec![
         tool_request_2(
             "write_file",
-            &format!(r#"{{"path":".env","contents":"SECRET_KEY_BASE={GENERATED_SECRET}\n"}}"#),
+            &format!(r#"{{"path":".env","contents":"AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"}}"#),
         ),
         reply_with("understood"),
     ]);
@@ -20356,11 +20544,11 @@ fn what_the_scan_found_is_told_to_the_person_and_not_to_the_planner() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        told.contains("a secret assigned by name") && told.contains(".env:1"),
+        told.contains("an AWS access key id") && told.contains(".env:1"),
         "the person was not told what was found or where: {told}"
     );
     assert!(
-        !told.contains(GENERATED_SECRET),
+        !told.contains(DECLARED_KEY),
         "the value itself was put on the screen: {told}"
     );
 
@@ -20375,11 +20563,11 @@ fn what_the_scan_found_is_told_to_the_person_and_not_to_the_planner() {
         "the planner was not told its write did not happen: {answered}"
     );
     assert!(
-        !answered.contains(GENERATED_SECRET),
+        !answered.contains(DECLARED_KEY),
         "the value reached the planner's context: {answered}"
     );
     assert!(
-        !answered.contains("a secret assigned by name"),
+        !answered.contains("an AWS access key id"),
         "a finding reached the planner's context: {answered}"
     );
 }
@@ -20465,14 +20653,14 @@ fn a_credential_the_file_already_held_does_not_refuse_the_change_carrying_it() {
 #[test]
 fn a_credential_pasted_by_an_edit_leaves_the_file_as_it_was() {
     let scratch = Scratch::new("credential-edit-refused");
-    let before = "SECRET_KEY_BASE=changeme\n";
+    let before = "AWS_ACCESS_KEY_ID=changeme\n";
     std::fs::write(scratch.path.join(".env"), before).unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, _received) = serve_sequence(vec![
         tool_request_2(
             "edit_file",
-            &format!(r#"{{"path":".env","old_text":"changeme","new_text":"{GENERATED_SECRET}"}}"#),
+            &format!(r#"{{"path":".env","old_text":"changeme","new_text":"{DECLARED_KEY}"}}"#),
         ),
         reply_with("understood"),
     ]);

@@ -48,6 +48,8 @@ pub enum Kind {
     AnthropicKey,
     /// The body of a private key in PEM armour.
     PrivateKey,
+    /// The password in a connection string, which the URL's own syntax says is one.
+    UrlPassword,
     /// A value assigned to a name that says it is a secret, rare enough to be one.
     Assigned,
 }
@@ -63,8 +65,25 @@ impl Kind {
             Kind::StripeKey => "a live Stripe key",
             Kind::AnthropicKey => "an Anthropic API key",
             Kind::PrivateKey => "a private key",
+            Kind::UrlPassword => "a password in a connection string",
             Kind::Assigned => "a secret assigned by name",
         }
+    }
+
+    /// Whether the value said what it was, or whether a layer inferred it.
+    ///
+    /// A shape is a provider's own prefix over its own alphabet at its own length, and a URL names
+    /// its password field in its syntax: those values declare themselves, and a match is not a
+    /// judgement anybody needs to review. [`Kind::Assigned`] is the other thing, a name that
+    /// sounds like a secret beside a value that looks rare, and it is right often enough to be
+    /// worth running and wrong often enough that refusing on it alone would refuse a k8s manifest,
+    /// a local development password and a test fixture, none of which anybody should have to argue
+    /// with a scanner about.
+    ///
+    /// The distinction exists because the two deserve different answers, not because one matters
+    /// less: see [`Scanned::refused`] and [`Scanned::to_approve`].
+    pub fn is_declared(self) -> bool {
+        !matches!(self, Kind::Assigned)
     }
 }
 
@@ -109,6 +128,33 @@ pub struct Scanned {
     pub authored: Vec<Finding>,
     /// Values the file already held at this path, which the change carries along.
     pub carried: Vec<Finding>,
+}
+
+impl Scanned {
+    /// The findings a write is refused for outright, with nobody asked.
+    ///
+    /// A value that declared itself: a provider's prefix over its own alphabet, or a password in
+    /// the field a URL reserves for one. There is no judgement to put to anybody, and a prompt
+    /// that can be answered "write it anyway" is a prompt a turn will eventually get past.
+    pub fn refused(&self) -> Vec<&Finding> {
+        self.authored
+            .iter()
+            .filter(|finding| finding.kind.is_declared())
+            .collect()
+    }
+
+    /// The findings a person decides about, shown on the diff they are already approving.
+    ///
+    /// A guess from a name and an entropy score. Refusing on one of these alone stops a turn
+    /// writing a Kubernetes manifest, a local development password or a test fixture, with no way
+    /// to say otherwise; see [`Kind::is_declared`]. The person is standing in the write-approval
+    /// path anyway, and this is a judgement rather than a rule, so it goes to them.
+    pub fn to_approve(&self) -> Vec<&Finding> {
+        self.authored
+            .iter()
+            .filter(|finding| !finding.kind.is_declared())
+            .collect()
+    }
 }
 
 /// The salt every fingerprint in this run is taken under.
@@ -173,22 +219,35 @@ pub fn scan(path: &str, text: &str, salt: u64) -> Vec<Finding> {
     let mut found = Vec::new();
 
     for (index, line) in lines.iter().enumerate() {
-        for (kind, value) in shaped(line) {
+        // Gathered as values and reduced before any of them is fingerprinted. One value is one
+        // finding, and two layers reading the same key can spell it differently: a shape cuts at
+        // its alphabet where an assignment keeps whatever punctuation the format left on the end.
+        // Comparing fingerprints would call those two different credentials and report both.
+        let mut on_this_line: Vec<(Kind, String)> = shaped(line);
+        on_this_line.extend(url_password(line).map(|value| (Kind::UrlPassword, value)));
+        if let Some(value) = assigned(line) {
+            on_this_line.push((Kind::Assigned, value));
+        }
+
+        // The more specific layer wins. A value another finding already spans is the same
+        // credential seen with more of the surrounding format attached to it.
+        let mut kept: Vec<(Kind, String)> = Vec::new();
+        for (kind, value) in on_this_line {
+            let spanned_by_kept = kept
+                .iter()
+                .any(|(_, held)| held.contains(&value) || value.contains(held.as_str()));
+            if !spanned_by_kept {
+                kept.push((kind, value));
+            }
+        }
+        for (kind, value) in kept {
             found.push(finding(kind, path, index + 1, &value, salt));
         }
-        if let Some(value) = assigned(line) {
-            found.push(finding(Kind::Assigned, path, index + 1, &value, salt));
-        }
+
         if let Some(value) = armoured_key(&lines, index) {
             found.push(finding(Kind::PrivateKey, path, index + 1, &value, salt));
         }
     }
-
-    // One value is one finding. A provider key assigned to a name that says it is a secret is
-    // recognised by both layers, and reporting it twice would have a person looking for a second
-    // credential that is not there. The first layer to name it is the more specific one.
-    let mut seen = std::collections::BTreeSet::new();
-    found.retain(|finding| seen.insert((finding.line, finding.fingerprint.clone())));
     found
 }
 
@@ -301,6 +360,38 @@ fn shaped(line: &str) -> Vec<(Kind, String)> {
     found
 }
 
+/// The password in a connection string, which is where a generated one most often reaches a tree.
+///
+/// `scheme://user:password@host` says the value is a password in its own syntax, so this needs no
+/// name beside it and no guess about how rare it looks: the format has already declared what the
+/// field is. That is why it is a layer of its own rather than a case in [`assigned`], which cuts a
+/// line at the first `:` or `=` and would take `//user` as the name of a secret called `password`.
+///
+/// Only the password field is taken. The user, the host and the path are not credentials, and a
+/// finding over the whole URL would fingerprint the database name with the secret.
+fn url_password(line: &str) -> Option<String> {
+    let (_, after_scheme) = line.split_once("://")?;
+    // The authority ends at the first `/`, `?` or `#`; anything after that is a path, and an `@`
+    // in a path is not a credential separator.
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    // The last `@` divides credentials from host: a password may itself contain one.
+    let (userinfo, _) = authority.rsplit_once('@')?;
+    let (_, password) = userinfo.split_once(':')?;
+    let password = password.trim_end_matches(['"', '\'']);
+
+    // A reference to a secret is not one, and an empty field is not a password.
+    if password.is_empty() || password.contains("${") || password.starts_with('$') {
+        return None;
+    }
+    if is_a_filler(password) || password.len() < 8 {
+        return None;
+    }
+    Some(password.to_string())
+}
+
 /// The names that say the value beside them is a secret.
 ///
 /// Matched against the name only. A keyword in a value decides nothing, which is what keeps a
@@ -342,11 +433,20 @@ fn assigned(line: &str) -> Option<String> {
     looks_rare(value).then(|| value.to_string())
 }
 
-/// What the format put around a value, taken off: spaces, quotes, and a separator at the end.
+/// What the format put around a value, taken off: spaces, quotes, and the punctuation a container
+/// closes with.
+///
+/// The closing brackets matter for agreement between layers rather than for tidiness. In
+/// `{"apiKey":"AIza..."}` the shape layer cuts the value at its alphabet and this one used to keep
+/// the trailing `"}`, so one key produced two spellings, two fingerprints, and two findings for a
+/// person to chase. Taken in two passes because the quote sits inside the bracket.
 fn trim_quoting(value: &str) -> &str {
     value
         .trim()
-        .trim_end_matches([',', ';'])
+        .trim_end_matches([',', ';', '}', ']', ')'])
+        .trim()
+        .trim_matches(['"', '\''])
+        .trim_end_matches([',', ';', '}', ']', ')'])
         .trim()
         .trim_matches(['"', '\''])
 }
@@ -652,6 +752,125 @@ mod tests {
                 scan(".env.example", line, 1).is_empty(),
                 "a documented placeholder was reported as a key: {line:?}"
             );
+        }
+    }
+
+    /// A connection string is how a generated password most often reaches a tree, and neither
+    /// other layer sees it: the URL carries no name a rule matches, and [`assigned`] cuts the line
+    /// at the first `:`, which in a URL is the one after the scheme.
+    #[test]
+    fn a_password_in_a_connection_string_is_a_finding() {
+        for line in [
+            "DATABASE_URL=postgres://appuser:p9Kx2mQ7vL4nR8tZ3wY6@db.internal:5432/app\n",
+            "REDIS_URL=redis://:s3cretP9Kx2mQ7vL4nR8tZ@cache:6379/0\n",
+            "AMQP=amqp://svc:9zQmR4tL7vX2nB8kC5wY3jH6@mq:5672\n",
+            "  url: \"mongodb://admin:Tr0ub4dor3xKx2mQ7vL4@cluster0/db\"\n",
+        ] {
+            let found = scan(".env", line, 1);
+            assert!(
+                found.iter().any(|f| f.kind == Kind::UrlPassword),
+                "no password found in {line:?}, got {found:?}"
+            );
+        }
+    }
+
+    /// The password and nothing else. A finding over the whole URL would fingerprint the host and
+    /// the database name along with the secret, so the same password at a second host would read
+    /// as a different credential and attribution would not match it.
+    #[test]
+    fn a_connection_string_finding_is_the_password_and_not_the_url() {
+        let at_one_host = scan(
+            "a.env",
+            "DATABASE_URL=postgres://u:p9Kx2mQ7vL4nR8tZ3wY6@host-one:5432/app\n",
+            1,
+        );
+        let at_another = scan(
+            "b.env",
+            "DATABASE_URL=postgres://u:p9Kx2mQ7vL4nR8tZ3wY6@host-two:5432/other\n",
+            1,
+        );
+        let one = at_one_host
+            .iter()
+            .find(|f| f.kind == Kind::UrlPassword)
+            .expect("a finding");
+        let two = at_another
+            .iter()
+            .find(|f| f.kind == Kind::UrlPassword)
+            .expect("a finding");
+        assert_eq!(one.fingerprint, two.fingerprint);
+        assert_eq!(
+            one.preview,
+            "20 characters of upper case, lower case, digits"
+        );
+    }
+
+    /// A URL that spells no password, or spells a reference to one, is not a credential. A path
+    /// holding an `@` is not a credential separator either.
+    #[test]
+    fn a_connection_string_without_a_password_is_not_a_finding() {
+        for line in [
+            "DATABASE_URL=postgres://appuser@db.internal:5432/app\n",
+            "DATABASE_URL=postgres://appuser:${DB_PASSWORD}@db.internal/app\n",
+            "DATABASE_URL=postgres://appuser:$DB_PASSWORD@db.internal/app\n",
+            "DATABASE_URL=postgres://appuser:your-password-here@db/app\n",
+            "DOCS=https://example.com/guide/user:pass@notes\n",
+            "REDIS_URL=redis://cache:6379/0\n",
+        ] {
+            let found: Vec<_> = scan(".env", line, 1)
+                .into_iter()
+                .filter(|f| f.kind == Kind::UrlPassword)
+                .collect();
+            assert!(found.is_empty(), "reported for {line:?}: {found:?}");
+        }
+    }
+
+    /// One value is one finding, however many layers recognise it. A provider key in a quoted JSON
+    /// field is seen by the shape layer, which cuts at its alphabet, and by the assignment layer,
+    /// which used to keep the `"}` the container closed with, giving two spellings of one key, two
+    /// fingerprints, so a person chasing a second credential that was never there.
+    #[test]
+    fn one_key_in_a_json_field_is_one_finding() {
+        for line in [
+            "{\"apiKey\": \"AIza0123456789abcdefghijklmnopqrstuvwxy\"}\n",
+            "  {\"token\": \"ghp_0123456789abcdefghijklmnopqrstuvwxyz\"},\n",
+            "secrets: [\"sk_live_0123456789abcdef\"]\n",
+        ] {
+            let found = scan("conf.json", line, 1);
+            assert_eq!(found.len(), 1, "for {line:?} got {found:?}");
+        }
+    }
+
+    /// A length is half of what a shape is, and nothing pinned the halves. Each rule is checked at
+    /// its declared minimum and one character short of it, so a threshold cannot drift without a
+    /// test saying so.
+    #[test]
+    fn each_shape_matches_at_its_minimum_and_not_below_it() {
+        for (kind, prefixes, body, least) in SHAPES {
+            // Written in the rule's own alphabet, or the length would not be the thing under test:
+            // an AWS body admits capitals only, so a lower case filler fails it for the wrong
+            // reason.
+            let alphabet: String = ('a'..='z')
+                .chain('A'..='Z')
+                .chain('0'..='9')
+                .filter(|c| body.admits(*c))
+                .collect();
+            for prefix in *prefixes {
+                let body: String = alphabet.chars().cycle().take(*least).collect();
+                let at_minimum = format!("{prefix}{body}");
+                let found = scan("t.txt", &format!("{at_minimum}\n"), 1);
+                assert!(
+                    found.iter().any(|f| f.kind == *kind),
+                    "{kind:?} did not match at its minimum of {least}: {at_minimum}"
+                );
+
+                let short: String = alphabet.chars().cycle().take(least - 1).collect();
+                let below = format!("{prefix}{short}");
+                let found = scan("t.txt", &format!("{below}\n"), 1);
+                assert!(
+                    !found.iter().any(|f| f.kind == *kind),
+                    "{kind:?} matched one character below its minimum: {below}"
+                );
+            }
         }
     }
 
