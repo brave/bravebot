@@ -174,7 +174,7 @@ fn writing_a_session_narrows_the_state_directory() {
 
     let mut conversation = Conversation::new();
     conversation.push(Message::user("a prompt worth keeping private"));
-    let mut handle = Handle::begin(&project, bravebot_tui::BUILD);
+    let mut handle = Handle::begin(&project, bravebot_stamp::BUILD);
     handle.save(
         "a prompt worth keeping private",
         Standing {

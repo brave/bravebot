@@ -1,0 +1,10 @@
+[package]
+name = "bravebot-stamp"
+description = "Which build this is: the version, the commit, and whether the tree was modified"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

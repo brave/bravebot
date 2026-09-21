@@ -39,13 +39,6 @@ pub mod theme;
 pub mod theme_prompt;
 pub mod trust_prompt;
 pub mod update;
-
-/// What this build is: the version, the commit it was built from, and whether the tree had
-/// uncommitted changes at the time.
-///
-/// Written into every session record, so a transcript read later can be matched to the code that
-/// produced it rather than inferred from its own symptoms.
-pub const BUILD: &str = env!("BRAVEBOT_BUILD");
 pub mod verbs;
 pub mod vim;
 pub mod watch_command;
@@ -65,18 +58,8 @@ pub(crate) fn asked_for(value: Option<&std::ffi::OsStr>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{BUILD, asked_for};
+    use super::asked_for;
     use std::ffi::OsStr;
-
-    /// The stamp is what a session record is matched against later, so a stamp that does not name
-    /// the version says nothing about which code wrote the transcript in front of you.
-    #[test]
-    fn the_build_stamp_names_the_version_it_was_built_from() {
-        assert!(
-            BUILD.starts_with(env!("CARGO_PKG_VERSION")),
-            "the build stamp does not name the version: {BUILD}"
-        );
-    }
 
     /// The whole of the convention, and the half of it that surprises people: any value at all
     /// counts, including one that reads as a denial.

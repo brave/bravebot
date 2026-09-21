@@ -21,6 +21,7 @@ bravebot-i18n = { path = "../i18n" }
 bravebot-net = { path = "../net" }
 bravebot-sandbox = { path = "../sandbox" }
 bravebot-session = { path = "../session" }
+bravebot-stamp = { path = "../stamp" }
 ratatui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

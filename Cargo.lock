@@ -151,6 +151,7 @@ dependencies = [
  "bravebot-sandbox",
  "bravebot-session",
  "bravebot-skus",
+ "bravebot-stamp",
  "bravebot-tui",
 ]
 
@@ -243,6 +244,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bravebot-stamp"
+version = "0.9.0"
+
+[[package]]
 name = "bravebot-tui"
 version = "0.9.0"
 dependencies = [
@@ -255,6 +260,7 @@ dependencies = [
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-session",
+ "bravebot-stamp",
  "ratatui",
  "rustix",
  "serde",

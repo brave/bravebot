@@ -1323,7 +1323,7 @@ mod tests {
     /// resolves to the built-in before the list is ever searched.
     #[test]
     fn a_user_file_cannot_take_a_name_that_reaches_the_default_theme() {
-        let root = PathBuf::from(env!("OUT_DIR")).join("bravebot-themes-reserved-names");
+        let root = crate::testutil::scratch_dir("bravebot-themes-reserved-names");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("dir");
         for stem in [BRAVE, "system"] {
@@ -1463,7 +1463,7 @@ mod tests {
 
     #[test]
     fn user_themes_come_from_a_directory_of_json_files() {
-        let root = PathBuf::from(env!("OUT_DIR")).join("bravebot-themes-user-json");
+        let root = crate::testutil::scratch_dir("bravebot-themes-user-json");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("dir");
         std::fs::write(root.join("mine.json"), "{\"primary\": \"#123456\"}").expect("write");

@@ -2247,7 +2247,7 @@ fn event_loop(
         // Already answered before the loop was entered: the picker runs once, in `run`.
         Start::Fresh | Start::Choose => (
             Conversation::new(),
-            bravebot_session::sessions::Handle::begin(workspace.root(), crate::BUILD),
+            bravebot_session::sessions::Handle::begin(workspace.root(), bravebot_stamp::BUILD),
             // A session that was never asked vouches for nothing, exactly as with the map.
             TrustedPrograms::new(),
         ),
@@ -2255,7 +2255,7 @@ fn event_loop(
             let handle = bravebot_session::sessions::Handle::resuming(
                 workspace.root(),
                 &record,
-                crate::BUILD,
+                bravebot_stamp::BUILD,
             );
             let conversation = Conversation::restored(record.conversation.clone());
             // Shown before anything else, because a session that silently continues something
@@ -2283,9 +2283,10 @@ fn event_loop(
             }
             // The same caveat about the other half of what produced that transcript: not the
             // tree it ran against, but the code that ran.
-            if let Some(note) =
-                bravebot_session::sessions::build_note(record.build.as_deref(), crate::BUILD)
-            {
+            if let Some(note) = bravebot_session::sessions::build_note(
+                record.build.as_deref(),
+                bravebot_stamp::BUILD,
+            ) {
                 session.note(note);
             }
             // The programs go the way the map does and for the same reason: the person resuming
@@ -2782,7 +2783,10 @@ fn event_loop(
                 // throwing away the record would be answering a question they did not ask.
                 session.clear();
                 conversation = Conversation::new();
-                stored = bravebot_session::sessions::Handle::begin(workspace.root(), crate::BUILD);
+                stored = bravebot_session::sessions::Handle::begin(
+                    workspace.root(),
+                    bravebot_stamp::BUILD,
+                );
                 session.note(t!(session_cleared));
 
                 // A new session, so it is asked what a new session is asked. The map goes with the
@@ -4408,7 +4412,7 @@ fn manifest_animated(
             workspace.root(),
             &asked,
             &outcome,
-            crate::BUILD,
+            bravebot_stamp::BUILD,
         ),
     };
 
@@ -12044,7 +12048,7 @@ mod tests {
         let conversation = Conversation::new();
         let trust = TrustStore::new("/work");
         let programs = TrustedPrograms::new();
-        let stored = bravebot_session::sessions::Handle::begin(&root, crate::BUILD);
+        let stored = bravebot_session::sessions::Handle::begin(&root, bravebot_stamp::BUILD);
 
         type_line(&mut session, "delete the tests");
         session.submit().expect("the prompt is sent");
@@ -12859,7 +12863,7 @@ mod tests {
         let workspace = Workspace::new(&root).unwrap();
         let mut trust = TrustStore::new(&root);
         let mut programs = TrustedPrograms::new();
-        let mut stored = sessions::Handle::begin(&root, crate::BUILD);
+        let mut stored = sessions::Handle::begin(&root, bravebot_stamp::BUILD);
         let mut session = Session::new("test");
         let mut conversation = Conversation::new();
         for (index, prompt) in ["kept", "failed", "cancelled"].into_iter().enumerate() {

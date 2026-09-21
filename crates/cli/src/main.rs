@@ -92,7 +92,7 @@ fn main() -> ExitCode {
         Some("--version" | "-V") => {
             // The same words a session record writes down, so the two can be compared without
             // anyone having to work out what "the current build" means.
-            println!("bravebot {}", bravebot_tui::BUILD);
+            println!("bravebot {}", bravebot_stamp::BUILD);
             ExitCode::SUCCESS
         }
         Some("--help" | "-h") => {
@@ -718,7 +718,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             workspace.root(),
             &task.prompt,
             &outcome,
-            bravebot_tui::BUILD,
+            bravebot_stamp::BUILD,
         );
     }
 
