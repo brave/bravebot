@@ -1149,6 +1149,12 @@ impl Handle {
     ///
     /// Read, amended and written rather than rebuilt, because everything else in the record belongs
     /// to the turns that produced it and this knows none of it.
+    ///
+    /// The rewind points are the exception: renaming a session gives up every one of them
+    /// (SESSION-19), so a record being retitled holds points the session itself no longer has, each
+    /// describing a session that still had the old name. Carried over, a resume would hand them
+    /// back to `/undo`, which would rewind to a turn the session it resumed had already given up
+    /// and rename the session back on the way.
     fn rewrite_title(&self) {
         let Some(directory) = self.directory() else {
             return;
@@ -1159,6 +1165,7 @@ impl Handle {
         };
         record.title = self.title.clone();
         record.updated = now();
+        record.rewind.clear();
 
         let Ok(body) = serde_json::to_vec_pretty(&record) else {
             return;

@@ -1841,6 +1841,76 @@ fn a_rewind_point_keeps_no_cache_figure_in_the_record() {
     );
 }
 
+/// Renaming a session gives up every rewind point it had, and the rename writes the record, so the
+/// points have to leave the record with them: one kept describes a session that still had the old
+/// name, and a resume reading it back would hand a turn to `/undo` that the session it resumed had
+/// already said there was nothing left to undo about.
+#[test]
+fn a_rename_takes_the_points_it_gave_up_out_of_the_record() {
+    use base64::Engine;
+    use bravebot_agent::workspace::{Backup, Before};
+
+    let scratch = Scratch::new("rename-rewind");
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(&scratch.project, bravebot_stamp::BUILD);
+
+    let kept = b"the first line\n";
+    let point = bravebot_session::sessions::RewindPoint {
+        snapshot: a_point_before_turn_two(&conversation),
+        backups: vec![Backup {
+            path: scratch.project.join("notes.md"),
+            was: Before::Bytes(kept.to_vec()),
+        }],
+        prompt: "add a second line to notes.md".to_string(),
+    };
+
+    handle.save(
+        "add a second line to notes.md",
+        Standing {
+            history: None,
+            conversation: &conversation.snapshot(),
+            turns: 2,
+            tokens: 1_200,
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &a_trust_map(),
+            programs: &a_program_list(),
+            directories: &[],
+            manifest: None,
+            rewind: &[point],
+        },
+    );
+
+    assert!(handle.rename("the parser bug"));
+
+    let record = sessions::load(&scratch.project, handle.id()).expect("the record");
+    assert!(
+        record.rewind_points(&scratch.project).is_empty(),
+        "the rename left a point in the record, so a resume hands it back to /undo"
+    );
+
+    let path = sessions::project_directory(&scratch.project)
+        .expect("a project directory")
+        .join(format!("{}.json", handle.id()));
+    let body = std::fs::read_to_string(&path).expect("the record reads");
+    assert!(
+        !body.contains(&base64::engine::general_purpose::STANDARD.encode(kept)),
+        "what the rewound turn overwrote is still in the record after the rename: {body}"
+    );
+
+    // The rest of the record is not the rename's to touch, and a resume needs all of it.
+    assert_eq!(record.title, "the parser bug");
+    assert_eq!(record.turns, 2);
+    assert_eq!(record.tokens, 1_200);
+    assert!(
+        !record.conversation.messages.is_empty(),
+        "the conversation was lost with the points"
+    );
+}
+
 /// The state before the second turn of a session, for a record to carry.
 fn a_point_before_turn_two(
     conversation: &Conversation,
