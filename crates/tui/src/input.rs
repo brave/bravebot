@@ -19,16 +19,21 @@
 //!   so a run cannot press `y` at a trust question or `a` at a run prompt. Those two questions do
 //!   not take a single key at all (PROMPT-11), which is the stronger half of the same point.
 //!
-//! **What this does not buy, measured rather than assumed.** The test is whether the next character
-//! was already waiting when the reader looked, not how many milliseconds apart they were, and the
-//! reader looks in microseconds. So a writer that pauses at all defeats it: a pause of thirty
-//! milliseconds between characters is enough, which is well inside what ordinary software does, not
-//! the patient adversary a coarser reading of this would suggest. A key carrying no text is a
-//! second gap, since a run of them is not a burst by [`characters`] and a control byte written on
-//! its own is delivered as the keypress it looks like. What the timing test buys is the single
-//! write, which is the common shape and the one that was reported; the rest is bought by the two
-//! clauses above, which do not rest on timing at all. The guarantee that keeps untrusted content
-//! out of the driver's decisions is none of this, and does not rest on it.
+//! A write does not always arrive as one read, so a run is not always the whole of what was
+//! written. The line VS Code sends crosses the extension host and the pty host on its way to the
+//! terminal and can be split anywhere, which leaves a piece of it arriving alone; one character
+//! alone is a keystroke by [`characters`], and the piece that arrives alone most often is the
+//! carriage return that ended the line. So the run is not the unit. [`CONTINUATION`] is: what
+//! follows a run closely enough is the rest of the same write, and is carried or dropped with it
+//! rather than read as a key.
+//!
+//! **What this does not buy, measured rather than assumed.** The test is a gap, so a writer that
+//! leaves a bigger one defeats it: past [`CONTINUATION`] a character delivered on its own is a
+//! keystroke, because a person typing is exactly that and there is nothing to tell them apart. What
+//! the timing buys is the write that arrives at once or in pieces, which is the shape every writer
+//! doing this today has and the one that was reported. The rest is bought by the two clauses above,
+//! which do not rest on timing at all. The guarantee that keeps untrusted content out of the
+//! driver's decisions is none of this, and does not rest on it.
 //!
 //! Every reader in this crate goes through [`read`] and [`poll`] rather than calling crossterm
 //! directly, because a run can only be recognised where the whole run is visible. A prompt that
@@ -41,7 +46,7 @@ use ratatui::crossterm::event::{
 use std::collections::VecDeque;
 use std::io;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// One thing read from the terminal, and whether a person produced it.
 ///
@@ -72,6 +77,11 @@ impl Input {
             _ => None,
         }
     }
+
+    /// Whether this is words another program typed.
+    fn is_typed_in(&self) -> bool {
+        matches!(self, Input::TypedIn(_))
+    }
 }
 
 /// The most keys taken into one run.
@@ -83,6 +93,20 @@ impl Input {
 /// and a very long burst arrives as a few pastes rather than one.
 const MOST_IN_A_RUN: usize = 8192;
 
+/// How long after words another program typed a key still belongs to them.
+///
+/// A write does not always arrive as one read. `terminal.sendText` in VS Code crosses the extension
+/// host and the pty host before it reaches the terminal, and the line can land in pieces, which
+/// leaves the carriage return at the end of it arriving alone a few milliseconds behind the rest.
+/// One key carrying one character is a keystroke by [`characters`], so that return was read as a
+/// person pressing Enter and answered the question on screen: the defect in #403 that survived
+/// recognising the run.
+///
+/// So a key this close behind a run belongs to the run. Well above the gap a fragmented write
+/// leaves, and well below the time a person needs to see a question that has just appeared and
+/// decide about it.
+const CONTINUATION: Duration = Duration::from_millis(100);
+
 /// Events taken from the terminal and not yet handed out.
 ///
 /// A run has to be read in full before it can be classified, and a run that turns out to be
@@ -92,6 +116,16 @@ const MOST_IN_A_RUN: usize = 8192;
 fn pending() -> &'static Mutex<VecDeque<Input>> {
     static PENDING: OnceLock<Mutex<VecDeque<Input>>> = OnceLock::new();
     PENDING.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+/// When words another program typed were last handed out, if the stream has not moved on since.
+///
+/// What [`CONTINUATION`] is measured from, so a write that arrived in pieces is recognised as one
+/// run rather than as a run and then a keystroke. Cleared as soon as a real keypress is delivered,
+/// because the next thing after that is a person's again.
+fn typed_in_at() -> &'static Mutex<Option<Instant>> {
+    static AT: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+    AT.get_or_init(|| Mutex::new(None))
 }
 
 /// Whether an event is waiting, here or at the terminal.
@@ -111,17 +145,32 @@ pub fn poll(timeout: Duration) -> io::Result<bool> {
 /// Hands out what is buffered before reading the terminal again, so the order the terminal wrote
 /// events in is the order callers see them.
 pub fn read() -> io::Result<Input> {
-    if let Some(event) = pending().lock().expect("input queue").pop_front() {
-        return Ok(event);
+    // A loop because a run can resolve to nothing: a key a program wrote that carries no text is
+    // dropped rather than delivered, and the caller is still waiting for something.
+    loop {
+        if let Some(event) = pending().lock().expect("input queue").pop_front() {
+            return Ok(event);
+        }
+        gather()?;
     }
+}
 
+/// Read one run from the terminal and put what it resolves to on the queue.
+///
+/// May add nothing, when the run was part of what another program wrote and carried no text.
+fn gather() -> io::Result<()> {
     let first = event::read()?;
     // Only keys are gathered. A mouse event, a resize or a focus change says nothing about who
     // typed and is delivered as it arrived. A paste is here too, and this is the one place a
     // person's paste is told from a program's: the terminal marked this one, so it came off the
     // clipboard and goes through as itself.
     let TermEvent::Key(first) = first else {
-        return Ok(Input::Terminal(first));
+        *typed_in_at().lock().expect("typed in at") = None;
+        pending()
+            .lock()
+            .expect("input queue")
+            .push_back(Input::Terminal(first));
+        return Ok(());
     };
 
     let mut run = vec![first];
@@ -141,17 +190,23 @@ pub fn read() -> io::Result<Input> {
         }
     }
 
+    // Held across the resolving so the window cannot move between the asking and the recording.
+    let mut mark = typed_in_at().lock().expect("typed in at");
+    let resolved = resolve(run, mark.is_some_and(|at| at.elapsed() < CONTINUATION));
+    if resolved.iter().any(|taken| taken.is_typed_in()) {
+        // Refreshed rather than left where it was, so a line arriving in many pieces stays one run
+        // for as long as the pieces keep coming.
+        *mark = Some(Instant::now());
+    } else if !resolved.is_empty() {
+        *mark = None;
+    }
+    drop(mark);
+
     let mut queue = pending().lock().expect("input queue");
-    for event in resolve(run) {
+    for event in resolved {
         queue.push_back(event);
     }
-    // Unreachable for an empty run, and `resolve` returns at least one event for a non-empty one.
-    queue.pop_front().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "a run of keys resolved to nothing",
-        )
-    })
+    Ok(())
 }
 
 /// What a run of keys that arrived together is: one paste, or the keys themselves.
@@ -172,7 +227,20 @@ pub fn read() -> io::Result<Input> {
 /// interrupt. They are dropped rather than delivered because the run is text, and an instruction
 /// inside text is one nobody gave. Delivering them is what lets a burst say `ctrl-c` to a running
 /// turn or Escape to a prompt, which is the same defect as the one this fixes.
-pub(crate) fn resolve(run: Vec<KeyEvent>) -> Vec<Input> {
+pub(crate) fn resolve(run: Vec<KeyEvent>, continuing: bool) -> Vec<Input> {
+    // Behind words another program typed, and close enough behind them to be the rest of the same
+    // write. Then the count does not apply: the piece a fragmented write leaves on its own is one
+    // character, and in the reported case it is the carriage return that ended the line.
+    if continuing {
+        let carried: String = run.iter().filter_map(text_of).collect();
+        // Nothing in it spells anything, so there is nothing to carry. Dropped for the reason a
+        // chord inside a burst is: a key a program wrote decides nothing.
+        if carried.is_empty() {
+            return Vec::new();
+        }
+        return vec![Input::TypedIn(carried)];
+    }
+
     if characters(&run) < 2 {
         return run
             .into_iter()
@@ -247,7 +315,7 @@ mod tests {
     }
 
     fn pasted(run: Vec<KeyEvent>) -> Option<String> {
-        match resolve(run).as_slice() {
+        match resolve(run, false).as_slice() {
             [Input::TypedIn(text)] => Some(text.clone()),
             _ => None,
         }
@@ -273,7 +341,7 @@ mod tests {
     #[test]
     fn a_run_carrying_two_characters_reaches_nothing_that_reads_keys() {
         assert!(
-            resolve(typed("no"))
+            resolve(typed("no"), false)
                 .iter()
                 .all(|taken| !matches!(taken, Input::Terminal(TermEvent::Key(_))))
         );
@@ -285,7 +353,7 @@ mod tests {
     #[test]
     fn one_character_on_its_own_stays_a_key() {
         assert_eq!(
-            resolve(typed("y")),
+            resolve(typed("y"), false),
             vec![Input::Terminal(TermEvent::Key(key(KeyCode::Char('y'))))]
         );
     }
@@ -296,7 +364,7 @@ mod tests {
     #[test]
     fn a_run_of_keys_carrying_no_text_is_still_keys() {
         let run = vec![key(KeyCode::Down); 5];
-        assert_eq!(resolve(run).len(), 5);
+        assert_eq!(resolve(run, false).len(), 5);
     }
 
     /// The other half of a run that is text: what is in it that is not. An interrupt inside a
@@ -321,7 +389,7 @@ mod tests {
         let mut release = key(KeyCode::Char('y'));
         release.kind = KeyEventKind::Release;
         assert_eq!(
-            resolve(vec![press, release]),
+            resolve(vec![press, release], false),
             vec![
                 Input::Terminal(TermEvent::Key(press)),
                 Input::Terminal(TermEvent::Key(release)),
@@ -338,7 +406,56 @@ mod tests {
         press.kind = KeyEventKind::Press;
         let mut repeat = key(KeyCode::Char('j'));
         repeat.kind = KeyEventKind::Repeat;
-        assert_eq!(resolve(vec![press, repeat, repeat]).len(), 3);
+        assert_eq!(resolve(vec![press, repeat, repeat], false).len(), 3);
+    }
+
+    /// The half of the reported case that survived recognising the run. VS Code's write crosses two
+    /// process boundaries before it reaches the terminal, so the line can arrive in pieces and the
+    /// carriage return that ends it lands on its own. Alone it is one character, which is a
+    /// keystroke by every test this module can make, and it answered the question on screen.
+    #[test]
+    fn the_return_a_fragmented_write_leaves_on_its_own_is_not_a_keypress() {
+        assert_eq!(
+            resolve(vec![key(KeyCode::Enter)], true),
+            vec![Input::TypedIn("\n".to_string())],
+            "the return that ended a written line was read as a person pressing Enter"
+        );
+    }
+
+    /// The same for a letter, which is what a write split mid-word leaves. It is the `n` of `.venv`
+    /// that answered the trust question in the report, and one letter alone is what a split can
+    /// always produce however the rest of the line was buffered.
+    #[test]
+    fn a_letter_a_fragmented_write_leaves_on_its_own_is_not_a_keypress() {
+        assert_eq!(
+            resolve(typed("n"), true),
+            vec![Input::TypedIn("n".to_string())]
+        );
+    }
+
+    /// A piece carrying nothing that spells anything has nothing to add to the line, and obeying it
+    /// is what let a written Escape or interrupt reach a prompt. Dropped for the reason a chord
+    /// inside a burst is.
+    #[test]
+    fn a_continuation_that_spells_nothing_is_dropped() {
+        assert!(resolve(vec![key(KeyCode::Esc)], true).is_empty());
+        assert!(
+            resolve(
+                vec![KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)],
+                true
+            )
+            .is_empty()
+        );
+    }
+
+    /// The limit of it, said out loud. Past the window a lone character is a keystroke, because that
+    /// is what a person typing is, and a prompt that stopped answering one would stop working.
+    #[test]
+    fn past_the_window_a_lone_character_is_a_keypress_again() {
+        assert_eq!(
+            resolve(typed("y"), false),
+            vec![Input::Terminal(TermEvent::Key(key(KeyCode::Char('y'))))]
+        );
     }
 
     /// A command line written into a terminal carries the newlines its author wrote, and a shell

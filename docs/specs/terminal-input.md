@@ -1534,6 +1534,18 @@ what key autorepeat looks like behind a slow redraw, is delivered key by key; re
 of nothing would eat the scrolling. And a press with its release is one character rather than two,
 since disambiguated keys report both (INPUT-33) and a repeat is one press the terminal is repeating.
 
+**A write is not always one read, so the run is not the unit.** A line written into a terminal
+crosses whatever lies between its writer and the pty, and can be split anywhere along the way: the
+editor case goes through an extension host and a pty host before it arrives. A piece left on its own
+carries one character, which by the test above is a keystroke, and the piece most often left on its
+own is the carriage return that ended the line. **So what follows a recognised run closely enough is
+the rest of the same write, and is carried or dropped with it rather than read as a key.** Close
+enough is a hundred milliseconds, which is well above the gap splitting a write leaves and well below
+the time a person needs to see a question that has just appeared and decide about it. A piece that
+spells nothing is dropped, for the reason a chord inside a run is. A piece that spells something
+extends the run, so a line arriving in many pieces stays one run for as long as the pieces keep
+coming, and the first key that genuinely arrives alone ends it.
+
 **Why.** Answering a question grants something: trust in a directory's contents, or a command that
 runs again unasked with its output read as trusted. A keystroke is the whole of the evidence that a
 person granted it, so a program able to write bytes at the terminal could otherwise grant it
@@ -1543,22 +1555,25 @@ running there.
 
 **Why the sending half matters as much.** Without this, the Enter at the end of an injected command
 line is Enter: the words before it go to the planner as a prompt, and a turn starts that nobody
-asked for. Recognising the run is only half of stopping that, because the return at the end of a
-write often arrives in a read of its own and is then a keypress like any other. What the run leaves
-behind is a mark on the line, and [INPUT-35](#INPUT-35) is what the mark does.
+asked for. Recognising the run is only half of stopping that in the box, and what the run leaves
+behind there is a mark on the line, which is what [INPUT-35](#INPUT-35) does. The continuation window
+is the other half, and it is the half a question needs: a mark on the line says nothing about a
+return that reaches a prompt, because a prompt is not the box.
 
-**What this does not buy, measured rather than assumed.** Timing is evidence and not proof, and this
-test is narrower than it reads. What it asks is whether the next character was already waiting when
-the reader looked, not how far apart in time they were, and the reader looks in microseconds. A
-writer that pauses at all therefore defeats it: thirty milliseconds between characters is enough,
-which is inside what ordinary software does rather than the patient adversary a coarser reading would
-suggest. A key carrying no text is a second gap, since a run of them is not a burst by this test at
-all, and a control byte written on its own is delivered as the keypress it looks like, an interrupt
-among them. So what this clause buys is the single write, which is the common shape and the one that
-was reported. It does not buy the paced writer. The clauses that do not rest on timing,
-[INPUT-35](#INPUT-35) and [PROMPT-11](prompting.md#PROMPT-11), are what carry the rest. The
-guarantee this repository exists for does not rest on any of them, since the terminal is a person's
-own channel and not a route untrusted content travels.
+**What this does not buy, measured rather than assumed.** Timing is evidence and not proof. What the
+first test asks is whether the next character was already waiting when the reader looked, and the
+reader looks in microseconds; what the window asks is whether the next piece came within a hundred
+milliseconds of a run already recognised. Both are defeated by a writer that pauses longer, and one
+character delivered on its own past the window is a keystroke, because a person typing is exactly
+that and there is nothing to tell the two apart. What these buy together is the write that arrives at
+once and the write that arrives in pieces, which is the shape every writer doing this today has and
+the one that was reported. **Neither buys the writer that paces itself a character at a time**: its
+first character arrives alone with no run behind it, so it is a key, and each one after it is too. The
+clauses that do not rest on timing, [INPUT-35](#INPUT-35) and
+[PROMPT-11](prompting.md#PROMPT-11), are what carry that case, and what they leave is a question
+dismissed to its own safe default rather than an answer granting anything. The guarantee this
+repository exists for does not rest on any of them, since the terminal is a person's own channel and
+not a route untrusted content travels.
 
 `verified-by: bravebot_tui::input::a_line_that_arrived_all_at_once_is_a_paste`
 `verified-by: bravebot_tui::input::a_run_carrying_two_characters_reaches_nothing_that_reads_keys`
@@ -1568,6 +1583,10 @@ own channel and not a route untrusted content travels.
 `verified-by: bravebot_tui::input::a_press_and_its_release_are_one_character_and_not_a_burst`
 `verified-by: bravebot_tui::input::a_repeat_does_not_make_a_press_into_a_burst`
 `verified-by: bravebot_tui::input::a_burst_keeps_the_newlines_and_tabs_it_carried`
+`verified-by: bravebot_tui::input::the_return_a_fragmented_write_leaves_on_its_own_is_not_a_keypress`
+`verified-by: bravebot_tui::input::a_letter_a_fragmented_write_leaves_on_its_own_is_not_a_keypress`
+`verified-by: bravebot_tui::input::a_continuation_that_spells_nothing_is_dropped`
+`verified-by: bravebot_tui::input::past_the_window_a_lone_character_is_a_keypress_again`
 `verified-by: bravebot_tui::trust_prompt::a_command_line_another_program_typed_in_answers_nothing`
 `verified-by: bravebot_tui::confirm::a_line_another_program_typed_in_endorses_nothing`
 

@@ -2140,7 +2140,7 @@ mod tests {
     #[test]
     fn a_line_another_program_typed_in_endorses_nothing() {
         let request = a_run(false);
-        for taken in crate::input::resolve(crate::input::run_spelling("deactivate\r")) {
+        for taken in crate::input::resolve(crate::input::run_spelling("deactivate\r"), false) {
             if let Some(key) = taken.key() {
                 assert!(
                     run_answer_for(key, &request).is_none(),

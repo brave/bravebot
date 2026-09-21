@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn a_command_line_another_program_typed_in_answers_nothing() {
         let as_keys: Vec<KeyEvent> =
-            crate::input::resolve(crate::input::run_spelling(A_TYPED_IN_COMMAND_LINE))
+            crate::input::resolve(crate::input::run_spelling(A_TYPED_IN_COMMAND_LINE), false)
                 .into_iter()
                 .filter_map(|taken| taken.key())
                 .collect();
