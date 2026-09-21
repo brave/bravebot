@@ -26,8 +26,16 @@ pub mod linux;
 pub mod macos;
 pub mod policy;
 pub mod process;
+// Compiled under test on every platform as well as on the one it confines, so what this
+// backend decides before a process starts is pinned by every job that runs the suite
+// rather than by the one job that lints this target: the capability the policy asks for,
+// what each grant permits, which policies are refused, and how an argument is written onto
+// a command line. The Win32 calls applying those decisions are compiled only where they
+// exist.
 #[cfg(test)]
 mod testutil;
+#[cfg(any(windows, test))]
+pub mod windows;
 
 use policy::{Capabilities, ConfinementLevel, SandboxPolicy};
 pub use process::{
@@ -117,7 +125,12 @@ pub fn for_current_platform() -> Result<Box<dyn Sandbox>, SandboxError> {
         Ok(Box::new(linux::LandlockSandbox::new()?))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    {
+        Ok(Box::new(windows::AppContainerSandbox::new()?))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
         Err(SandboxError::Unavailable {
             platform: std::env::consts::OS,
