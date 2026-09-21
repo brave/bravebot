@@ -459,8 +459,9 @@ them.
 ### WATCH-19: the view opens on an aside the moment it is answered
 
 An answered question puts its own row on the screen, and leaving the mode puts the turn's own view
-back where it was left. This is the one thing that opens the mode without a person pressing the
-key.
+back where it was left. Whatever mode a person opened while they waited is put away as this one
+opens, and the view the transcript comes back on is the one it had before any of them. This is the
+one thing that opens the mode without a person pressing the key.
 
 **Why.** WATCH-10 keeps the screen still because the events it is about are a turn's, and a person
 reading one delegate did not ask for another to take the screen. An aside is not one of those: the
@@ -468,7 +469,16 @@ person typed the question a moment ago, and the press that asked for it came fro
 which this mode does not draw. An answer left behind a key they have not been told about is not an
 answer.
 
+The wait answers keys, so the mode standing over the session when the answer lands is whichever
+one the person opened during it. The scroller is drawn in front of this view, so an answer under
+one is on no screen at all; and while this view is open the field the transcript's offset lives in
+holds an offset into a watched row's lines, so taking it for the turn's own view brings the
+conversation back somewhere it never was.
+
 `verified-by: bravebot_tui::state::answering_a_question_beside_the_work_opens_the_view_on_it`
+`verified-by: bravebot_tui::state::answering_a_question_while_the_view_is_open_keeps_the_turns_own_view`
+`verified-by: bravebot_tui::state::answering_a_question_closes_a_history_search_opened_during_the_wait`
+`verified-by: bravebot_tui::render::an_answer_takes_the_screen_from_a_scroller_opened_while_it_was_awaited`
 
 <a id="WATCH-20"></a>
 ### WATCH-20: an answer the record cannot hold is said to be on the screen only
