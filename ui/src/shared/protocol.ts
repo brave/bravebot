@@ -152,6 +152,12 @@ export interface VetRequest { request: number; origin: string; expects: string; 
 
 export interface ConfirmRequest {
   remark?: { preview: string[]; lines: number; label: string } | null
+  /**
+   * What the credential scan inferred about this body, where it inferred anything: the reason a
+   * write the path's own rule would have let through unasked is being asked about. Each entry is
+   * already a kind, a location and a masked preview, so drawing one repeats no part of the value.
+   */
+  credentials?: string[]
   request: number
   path: string
   intent: Intent

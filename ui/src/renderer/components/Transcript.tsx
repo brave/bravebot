@@ -1036,6 +1036,10 @@ function Row({
             <pre>{request.remark.preview.join('\n')}</pre>
             <small>{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
           </div>}
+          {request.credentials && request.credentials.length > 0 && <div className="credential-finding"><strong>This looks like it would put a secret in the tree</strong>
+            <ul>{request.credentials.map((found) => <li key={found}>{found}</li>)}</ul>
+            <small>Going by the name beside the value and how the value reads. Nothing recognised it as a particular provider’s key, so it is a guess and yours to settle.</small>
+          </div>}
           <Diff changes={request.changes} />
 
           {decision === null ? (
