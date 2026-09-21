@@ -34,6 +34,51 @@ const PRESENTATION: &str = "Presentation";
 /// this file checks.
 const NOT_A_SURFACE: [&str; 1] = ["Presentation text only"];
 
+/// What a constraint says when the crate must reach no terminal library at all.
+///
+/// Two rows say it, and each is the reason its crate was separated out: a session record is read
+/// back by whatever is resuming it, and the build stamp is written by every front end, so neither
+/// may cost a caller that draws nothing a dependency on the terminal.
+const DRAWS_NOTHING: &str = "Not presentation: draws nothing and links no terminal library";
+
+/// The crates that draw a terminal, which the rows above promise not to reach.
+///
+/// Named rather than derived: what makes these the terminal is what they are for, and a list read
+/// off the tree would be whatever the tree currently happens to contain.
+///
+/// Each name matches the crate itself and the family published under it, because both ship in
+/// pieces: `ratatui` is a facade over `ratatui-core`, `ratatui-widgets` and a backend crate per
+/// terminal, and `crossterm` has `crossterm_winapi` beneath it. An exact-name list would be
+/// satisfied by a manifest that asked for the part it wanted instead of the whole.
+const TERMINAL_LIBRARIES: [&str; 2] = ["ratatui", "crossterm"];
+
+/// Whether a crate is one of the terminal libraries or a piece of one.
+fn draws_a_terminal(name: &str) -> bool {
+    TERMINAL_LIBRARIES.iter().any(|library| {
+        name.strip_prefix(library)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['-', '_']))
+    })
+}
+
+/// Whether a constraint cell promises the crate reaches no terminal library.
+///
+/// A cell that makes the promise in its own words is an error rather than a `false`, for the reason
+/// [`is_a_surface`] rejects an unrecognised opening: the words are what addresses the rule to the
+/// row, so a reword that still reads as the same promise to a person would quietly take the row out
+/// of the check while leaving the claim on the page.
+fn draws_nothing(constraint: &str) -> bool {
+    if constraint.starts_with(DRAWS_NOTHING) {
+        return true;
+    }
+    assert!(
+        !constraint.contains("links no terminal library"),
+        "a constraint promises it links no terminal library without opening `{DRAWS_NOTHING}`, \
+         which is the wording the check for that promise reads. Open with it or drop the promise: \
+         a row that claims it in other words is a row nothing holds to it"
+    );
+    false
+}
+
 /// The column headings LAYER-1's table carries.
 ///
 /// The header is told from a data row by matching these rather than by being the first row
@@ -229,10 +274,14 @@ fn members(manifest: &str) -> Vec<String> {
         .collect()
 }
 
-/// The first double-quoted string in a fragment of TOML.
+/// The first quoted string in a fragment of TOML.
 fn quoted(value: &str) -> Option<&str> {
-    let (_, rest) = value.split_once('"')?;
-    let (inner, _) = rest.split_once('"')?;
+    // Either quote, since TOML spells a string both ways and which one a manifest used is a
+    // reformatting. Read as double-quoted only, `package = 'ratatui'` yields the version beside it
+    // and the crate a rename points at goes unseen.
+    let quote = value.chars().find(|c| *c == '"' || *c == '\'')?;
+    let (_, rest) = value.split_once(quote)?;
+    let (inner, _) = rest.split_once(quote)?;
     Some(inner)
 }
 
@@ -243,15 +292,16 @@ fn renamed_from(value: &str) -> Option<&str> {
     quoted(rest)
 }
 
-/// Keep a name if it is one of this workspace's crates.
-fn note(found: &mut BTreeSet<String>, name: &str) {
-    if name.starts_with(PREFIX) {
-        found.insert(name.to_string());
-    }
+/// The crates in this workspace a member depends on.
+fn workspace_dependencies(manifest: &str) -> BTreeSet<String> {
+    dependencies(manifest)
+        .into_iter()
+        .filter(|name| name.starts_with(PREFIX))
+        .collect()
 }
 
-/// The crates in this workspace a member depends on, whatever section of its manifest asks for
-/// them and however that section spells the request.
+/// Every crate a member depends on, whatever section of its manifest asks for it and however that
+/// section spells the request.
 ///
 /// A dependency is an edge whether it was declared for the build, the tests, the build script or
 /// one platform: what LAYER-1 grants is the reach of the crate, and a test that links the
@@ -259,7 +309,7 @@ fn note(found: &mut BTreeSet<String>, name: &str) {
 /// dependency as one line in a table, as a table of its own, and under a name of the caller's
 /// choosing with the real crate in a `package` key, so a reader that saw only the first of those
 /// would be satisfied by a manifest that had merely been reformatted.
-fn workspace_dependencies(manifest: &str) -> BTreeSet<String> {
+fn dependencies(manifest: &str) -> BTreeSet<String> {
     let mut found = BTreeSet::new();
     // The dependency the current `[dependencies.<name>]` table is about. A `package` key inside
     // such a table renames it and may come anywhere in it, so the name is held until the table
@@ -274,7 +324,7 @@ fn workspace_dependencies(manifest: &str) -> BTreeSet<String> {
         }
         if line.starts_with('[') {
             if let Some(name) = entry.take() {
-                note(&mut found, &name);
+                found.insert(name);
             }
             let path = line.trim_matches(|c| c == '[' || c == ']');
             let parts: Vec<&str> = path
@@ -321,10 +371,10 @@ fn workspace_dependencies(manifest: &str) -> BTreeSet<String> {
         } else {
             renamed_from(value).unwrap_or(declared)
         };
-        note(&mut found, name);
+        found.insert(name.to_string());
     }
     if let Some(name) = entry.take() {
-        note(&mut found, &name);
+        found.insert(name);
     }
     found
 }
@@ -456,6 +506,58 @@ fn every_presentation_crate_is_named_by_the_clause_that_marks_content() {
     }
 }
 
+/// "Links no terminal library" is what a caller that draws nothing gets out of the row saying it,
+/// and it is the one claim in the table a manifest can contradict without reading differently: an
+/// edge added to such a crate is a line in a file, and the caller that pays for it is a front end
+/// in another repository whose build is the first thing to say so. Transitively, because the cost
+/// is what gets linked rather than what gets written down: a row that reached the terminal through
+/// one more crate would have kept its wording and lost its meaning.
+#[test]
+fn a_crate_that_draws_nothing_reaches_no_terminal_library() {
+    let (rows, manifests) = table_and_manifests();
+    let asked_for: std::collections::BTreeMap<String, BTreeSet<String>> = manifests
+        .iter()
+        .map(|(member, manifest)| {
+            let directory = member.rsplit('/').next().expect("a member path");
+            (format!("{PREFIX}{directory}"), dependencies(manifest))
+        })
+        .collect();
+
+    let drawing_nothing: BTreeSet<&str> = rows
+        .iter()
+        .filter(|row| draws_nothing(&row.constraint))
+        .map(|row| row.name.as_str())
+        .collect();
+    assert!(
+        !drawing_nothing.is_empty(),
+        "no row of LAYER-1's table opens `{DRAWS_NOTHING}`, so this test would pass by checking \
+         nothing. That opening is what it reads"
+    );
+
+    for name in &drawing_nothing {
+        // Only this workspace's edges are followed: a crate outside it contributes none of ours to
+        // follow. Order does not matter, since every reachable edge is visited either way.
+        let mut seen = BTreeSet::new();
+        let mut queue = vec![(*name).to_string()];
+        while let Some(crate_name) = queue.pop() {
+            let Some(edges) = asked_for.get(&crate_name) else {
+                continue;
+            };
+            for edge in edges {
+                assert!(
+                    !draws_a_terminal(edge),
+                    "LAYER-1 says {name} links no terminal library, and {crate_name} asks for \
+                     {edge}. Whichever of the two is wrong, a caller that draws nothing is linking \
+                     the terminal either way"
+                );
+                if seen.insert(edge.clone()) {
+                    queue.push(edge.clone());
+                }
+            }
+        }
+    }
+}
+
 /// A reader that accepts the wrong shapes enforces nothing, and the wrong shapes here are the ones
 /// a table drifting out of the spec's own format would have: a separator taken for data, a column
 /// added or removed, and a line that is no table row at all.
@@ -553,6 +655,8 @@ bravebot-core = { path = \"../core\", features = [\"testing\"] }
 
 [build-dependencies]
 bravebot-lsp = { path = \"../lsp\" }
+ratatui = { workspace = true }
+term = { package = 'ratatui-core', version = \"0.1\" }
 ";
     assert_eq!(
         workspace_dependencies(manifest),
@@ -566,6 +670,17 @@ bravebot-lsp = { path = \"../lsp\" }
             "bravebot-sandbox".to_string(),
             "bravebot-tui".to_string(),
         ])
+    );
+    // A crate from outside this workspace is an edge too, and the rule about reaching no terminal
+    // library is entirely about those: a reader that dropped them would report the promise kept by
+    // every crate that broke it. A rename spelled with TOML's other quote is the same edge, and
+    // read as double-quoted only it comes back as the version string beside it.
+    assert_eq!(
+        dependencies(manifest)
+            .into_iter()
+            .filter(|name| !name.starts_with(PREFIX))
+            .collect::<BTreeSet<String>>(),
+        BTreeSet::from(["ratatui".to_string(), "ratatui-core".to_string()])
     );
 }
 
