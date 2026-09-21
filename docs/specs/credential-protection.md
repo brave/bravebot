@@ -6,6 +6,7 @@ governs:
   - crates/config/src/lib.rs
   - crates/config/src/env_var.rs
   - crates/bedrock/src/credentials.rs
+  - crates/core/src/credentials.rs
 guards:
   - symbol: Secret::expose
 documented-by:
@@ -463,7 +464,14 @@ why this scan can refuse where the other can only inform. It is not authorship: 
 reformats or moves a file already holding a key produces a diff carrying it without having written
 it, and that case is reported rather than refused.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_credential_a_turn_writes_never_reaches_the_tree`
+`verified-by: bravebot_agent::turn::a_credential_pasted_by_an_edit_leaves_the_file_as_it_was`
+`verified-by: bravebot_agent::turn::a_credential_the_file_already_held_does_not_refuse_the_change_carrying_it`
+`verified-by: bravebot_agent::turn::what_the_scan_found_is_told_to_the_person_and_not_to_the_planner`
+`verified-by: bravebot_core::credentials::a_generated_key_is_recognised_from_its_name_and_its_rarity`
+`verified-by: bravebot_core::credentials::a_provider_key_is_recognised_with_nothing_around_it_saying_so`
+`verified-by: bravebot_core::credentials::an_armoured_private_key_is_one_finding_over_its_whole_body`
+`verified-by: bravebot_core::credentials::nothing_a_finding_says_repeats_the_value`
 
 <a id="CRED-17"></a>
 ### CRED-17: no gate passes because the scan ran
@@ -680,7 +688,26 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
 - **Held is where most credentials live today**, and its obligations are the cost of that being
   true rather than a promise that it is rare.
 
-- **Almost nothing is implemented.** There is no scan, and no authority at the tier these clauses
-  describe. What exists is one performer: a credential a vault obtained itself, and a mail send
-  carried out against it so that the asking agent never holds the token. That much of the walk runs;
-  the rest of every clause here is a target.
+- **A credential written through a reference is not scanned.** The scan reads what a turn wrote in
+  its own words. A body that arrived as quarantined content is carried to the file without the
+  driver reading a byte of it, and examining one to decide whether to refuse would be a decision
+  taken from untrusted content, which [labels.md](labels.md) admits nowhere. So a value copied out
+  of a file nobody vouched for reaches the tree through a reference. What would close it is a scan
+  whose finding nothing here has to branch on.
+
+- **A file a turn creates is attributed to it whole.** A carried value is told from an authored one
+  by what the file at that path already held, and a file that did not exist held nothing. So a turn
+  that moves a file already holding a key is refused, where the clause above says that case is
+  reported. What would tell the two apart is the scan before the run, which is what records what
+  was already there.
+
+- **A fingerprint is salted per run and kept nowhere.** It tells two findings in one run apart and
+  says nothing between runs, so an acceptance cannot be carried forward and the baseline has
+  nothing to match against. A salt that outlives the run is a file somebody has to keep, and it
+  belongs with the store a finding is written to.
+
+- **Most of this is not implemented.** What runs is the scan of what a turn writes, and one
+  performer: a credential a vault obtained itself, and a mail send carried out against it so that
+  the asking agent never holds the token. There is no scan of the tree before it is vouched for, no
+  store a finding is written to and no baseline over one, and no authority at the tier these clauses
+  describe. The rest of every clause here is a target.

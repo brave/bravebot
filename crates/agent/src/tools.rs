@@ -29,6 +29,7 @@ use crate::processor::{self, Chat};
 use crate::report::{Activity, Reporter};
 use bravebot_aichat::protocol::{Tool, ToolCall, Usage};
 use bravebot_core::ask::{self, Choice, Question, Series};
+use bravebot_core::credentials::Scanned;
 use bravebot_core::event::{Role, Sink};
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Destination, Policy};
@@ -2057,6 +2058,68 @@ fn problem(text: impl Into<String>) -> Produced {
     }
 }
 
+/// A refusal the planner is told the fact of and the person watching is told the detail of.
+///
+/// [`problem`] says the same thing to both, which is right for almost everything: an error is
+/// about the call, and the planner is the one that has to do something differently. A credential
+/// found in what a write would leave is not about the call. What was found, where, and what it
+/// looks like is a record the planner must not be given ([`bravebot_core::credentials`]), and a
+/// screen is not the planner's context, so the detail goes to the note and the text says only
+/// that the write did not happen.
+fn refused_with_a_note(text: impl Into<String>, note: impl Into<String>) -> Produced {
+    Produced {
+        note: note.into(),
+        ..problem(text)
+    }
+}
+
+/// What a write is refused with, and what the person watching is told about why.
+///
+/// Both halves are the driver's own words. The planner's half names the path and says a
+/// credential would have landed in it, which is what it needs to stop retrying the same write and
+/// write a reference instead; it carries no finding, so nothing about what was found is in a
+/// model's context. The person's half is the findings, each said as a kind, a location, a
+/// fingerprint and a masked preview, which is the whole of what a finding may hold.
+fn credential_refusal(path: &str, scanned: &Scanned) -> Produced {
+    let found: Vec<String> = scanned
+        .authored
+        .iter()
+        .map(|finding| finding.describe())
+        .collect();
+    refused_with_a_note(
+        format!(
+            "refused: writing {path} would put a credential in the tree, so nothing was \
+             written. Put a reference to the value in the file instead, and tell the user which \
+             secret they have to set and where."
+        ),
+        format!(
+            "refused, a credential would have landed here: {}",
+            found.join("; ")
+        ),
+    )
+}
+
+/// What the person watching is told beside a change that carries a credential it did not write.
+///
+/// A change is refused for what the turn wrote and reported for what it found already there: a
+/// turn that reformats or moves a file holding a key produces a change carrying that key without
+/// having written it, and the person is the one who can decide what to do about a secret that was
+/// in their tree before this session started.
+pub(crate) fn carried_note(note: String, scanned: &Scanned) -> String {
+    if scanned.carried.is_empty() {
+        return note;
+    }
+    let found: Vec<String> = scanned
+        .carried
+        .iter()
+        .map(|finding| finding.describe())
+        .collect();
+    format!(
+        "{note}; carries a credential that was already there: {}",
+        found.join("; ")
+    )
+}
+
 /// A tool's own words about something that did happen, with what to show for it.
 fn confirmed(text: impl Into<String>, note: impl Into<String>) -> Produced {
     Produced::new(Labelled::trusted(text.into()), "", note)
@@ -2978,6 +3041,16 @@ fn write_file<S: Sink, C: Confirmer>(
         );
     }
 
+    // What this would leave in the tree, before it is put to anybody and before a byte of it is
+    // written. Asked here rather than after the write so that a refused value never lands: a file
+    // deleted afterwards has still held the secret, and whatever was watching the directory has
+    // still seen it. Asked before the approval prompt for a smaller reason: a person should not be
+    // shown a diff to approve that is going to be refused whatever they answer.
+    let scanned = policy.scan_a_write("write_file", &shown_path, existing.as_deref(), &body);
+    if !scanned.authored.is_empty() {
+        return credential_refusal(&shown_path, &scanned);
+    }
+
     if policy.write_needs_approval(&proposed_path, body_label, destination) {
         let request = WriteRequest {
             intent,
@@ -3034,7 +3107,7 @@ fn write_file<S: Sink, C: Confirmer>(
                     body_from
                 ),
             };
-            confirmed(done, note)
+            confirmed(done, carried_note(note, &scanned))
                 .with_changes(changes)
                 .marked_untrusted(!body_label.is_trusted())
                 .having_changed_a_file()
@@ -3135,6 +3208,15 @@ fn edit_file<S: Sink, C: Confirmer>(
         body.clone().declassify(&proof)
     };
 
+    // The same scan a whole-file write goes through, for the same reason and at the same moment:
+    // an edit is a write of the file with a passage swapped, and a secret pasted into a passage
+    // lands in the tree exactly as one written whole does. The pre-image here is the text the
+    // passage was located in, which the edit already read.
+    let scanned = policy.scan_a_write("edit_file", &shown_path, Some(&current), &body);
+    if !scanned.authored.is_empty() {
+        return credential_refusal(&shown_path, &scanned);
+    }
+
     if policy.write_needs_approval(&proposed_path, body_label, destination) {
         let request = WriteRequest {
             path: proposed_path.clone(),
@@ -3164,6 +3246,7 @@ fn edit_file<S: Sink, C: Confirmer>(
         Ok(_) => {
             policy.reconcile_after_write(&workspace.trust_key(&proposed_path), body_label);
             let (note, changes) = change_report(Intent::Edit, Some(&current), &shown, None);
+            let note = carried_note(note, &scanned);
             let headline = format!("edited {shown_path}: {occurrences} replacement(s)");
 
             // What the edit produced, not only that it produced something. A count of

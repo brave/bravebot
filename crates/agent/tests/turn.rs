@@ -20263,3 +20263,237 @@ fn planner_retry_costs_do_not_replace_the_last_prompt_measurement() {
         );
     }
 }
+
+/// The value a turn writes into a file, which nothing in the tree held before it.
+///
+/// Forty hex characters with a name beside it that says what it is: no provider stamped a prefix
+/// on a framework key, so the name and the rarity are the whole of what says it is a secret.
+const GENERATED_SECRET: &str = "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7";
+
+/// The one thing this system causes is the one thing nothing checked. A turn asked to set a
+/// project up generates a key, writes it into `.env`, and reports the file written: the value is
+/// then in the tree, read back by every later turn, pushed with any other change, and nobody
+/// decided anything about it.
+///
+/// Refused before the write rather than deleted after it, which is why the assertion is that the
+/// file never existed: a file removed afterwards has still held the secret, and whatever was
+/// watching the directory has still seen it.
+#[test]
+fn a_credential_a_turn_writes_never_reaches_the_tree() {
+    let scratch = Scratch::new("credential-write-refused");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            &format!(r#"{{"path":".env","contents":"SECRET_KEY_BASE={GENERATED_SECRET}\n"}}"#),
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("set the project up");
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        // Approving every write, so the scan is the only thing that can stop this one.
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert!(
+        !scratch.path.join(".env").exists(),
+        "a credential a turn generated was written to the tree"
+    );
+}
+
+/// A finding is a record of where a credential is, so a collection of them is a map of every
+/// secret in the tree. It goes to the person watching, who owns the tree and can act on it, and
+/// not into the context of a model, which is the one place it would be read by something that
+/// could be talked into using it.
+///
+/// The planner is still told the write did not happen, or it retries the same write until the
+/// turn runs out of rounds.
+#[test]
+fn what_the_scan_found_is_told_to_the_person_and_not_to_the_planner() {
+    let scratch = Scratch::new("credential-finding-audience");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            &format!(r#"{{"path":".env","contents":"SECRET_KEY_BASE={GENERATED_SECRET}\n"}}"#),
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("set the project up"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let told = reporter
+        .finished
+        .iter()
+        .filter_map(|activity| activity.note.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        told.contains("a secret assigned by name") && told.contains(".env:1"),
+        "the person was not told what was found or where: {told}"
+    );
+    assert!(
+        !told.contains(GENERATED_SECRET),
+        "the value itself was put on the screen: {told}"
+    );
+
+    // What the tool answered, rather than the whole request: the planner's own call is echoed
+    // back in the history, so the body holds the value it proposed writing whatever the tool
+    // says. What this system decides is what goes into the *result*.
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    let answered = tool_results(&second);
+    assert!(
+        answered.contains("refused") && answered.contains(".env"),
+        "the planner was not told its write did not happen: {answered}"
+    );
+    assert!(
+        !answered.contains(GENERATED_SECRET),
+        "the value reached the planner's context: {answered}"
+    );
+    assert!(
+        !answered.contains("a secret assigned by name"),
+        "a finding reached the planner's context: {answered}"
+    );
+}
+
+/// Everything the tools answered in one request, joined.
+///
+/// The planner's own words are in that request too, so an assertion over the whole body cannot
+/// tell what this system disclosed from what the model itself proposed.
+fn tool_results(request: &str) -> String {
+    let parsed: serde_json::Value = serde_json::from_str(request).expect("a request");
+    parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .map(|message| message["content"].to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Attribution is what lets this refuse where the scan at startup can only inform. A turn that
+/// reformats or moves a file already holding a key produces a change carrying that key without
+/// having written it, and refusing there would refuse ordinary work over somebody else's secret.
+///
+/// The person is still told, because a secret in their tree is worth knowing about whoever put it
+/// there.
+#[test]
+fn a_credential_the_file_already_held_does_not_refuse_the_change_carrying_it() {
+    let scratch = Scratch::new("credential-carried");
+    let before = format!("SECRET_KEY_BASE={GENERATED_SECRET}\n");
+    std::fs::write(scratch.path.join(".env"), &before).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let after = format!("PORT=8080\nSECRET_KEY_BASE={GENERATED_SECRET}\n");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            &format!(
+                r#"{{"path":".env","contents":"{}"}}"#,
+                after.replace('\n', "\\n")
+            ),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("add a port to .env"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        after,
+        "a change carrying a credential that was already there was refused"
+    );
+    let told = reporter
+        .finished
+        .iter()
+        .filter_map(|activity| activity.note.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        told.contains("already there") && told.contains("a secret assigned by name"),
+        "the person was not told the change carries a credential: {told}"
+    );
+}
+
+/// An edit is a write of the file with one passage swapped, so a secret pasted into a passage
+/// lands in the tree exactly as one written whole does. A scan on the whole-file write alone
+/// would leave the tool a turn reaches for most often uncovered.
+#[test]
+fn a_credential_pasted_by_an_edit_leaves_the_file_as_it_was() {
+    let scratch = Scratch::new("credential-edit-refused");
+    let before = "SECRET_KEY_BASE=changeme\n";
+    std::fs::write(scratch.path.join(".env"), before).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "edit_file",
+            &format!(r#"{{"path":".env","old_text":"changeme","new_text":"{GENERATED_SECRET}"}}"#),
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("fill in the key"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        before,
+        "a credential an edit pasted in was written to the tree"
+    );
+}
