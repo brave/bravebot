@@ -167,8 +167,10 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
                     "pattern": {
                         "type": "string",
                         "description": "Optional glob, e.g. \"*.rs\" for Rust files at any \
-                                        depth, or \"src/**/*.rs\" to anchor it. Supports \
-                                        *, ? and **; brace groups are not supported."
+                                        depth, \"src/**/*.rs\" to anchor it, or \
+                                        \"**/*.{rs,toml}\" for either extension. Supports *, ?, \
+                                        ** and brace groups. Character classes and extended \
+                                        globs are not supported."
                     },
                     "depth": {
                         "type": "integer",
@@ -5556,6 +5558,51 @@ mod tests {
                 "{pattern} was flagged"
             );
         }
+    }
+
+    /// A tool schema is the whole of what the planner is told about the matcher, so syntax
+    /// denied there is syntax nothing ever sends: the brace expansion the matcher performs
+    /// before the walk is reachable only by a planner willing to try what it was told does not
+    /// work. `list_files` and `search` run one matcher between them, so one account of it is
+    /// what they owe the planner, and a second account that disagrees is how a group the matcher
+    /// expands came to be advertised as missing on one of them.
+    #[test]
+    fn both_glob_arguments_describe_the_matcher_the_same_way() {
+        let offered = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 });
+        // The part of a description that is about the matcher rather than about the argument.
+        let syntax = |tool: &str, property: &str| -> String {
+            let described = offered
+                .iter()
+                .find(|t| t.function.name == tool)
+                .unwrap_or_else(|| panic!("{tool} is offered"))
+                .function
+                .parameters["properties"][property]["description"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{tool}.{property} is described"))
+                .to_string();
+            let at = described.find("Supports").unwrap_or_else(|| {
+                panic!("{tool}.{property} does not say what it supports: {described}")
+            });
+            described[at..].to_string()
+        };
+
+        let mut expanded = crate::glob::expand("**/*.{rs,toml}");
+        expanded.sort();
+        assert_eq!(
+            expanded,
+            ["**/*.rs", "**/*.toml"],
+            "the matcher no longer expands a brace group, so neither schema may offer one"
+        );
+        let listing = syntax("list_files", "pattern");
+        assert!(
+            listing.contains("** and brace groups"),
+            "list_files withholds the brace groups the matcher expands: {listing}"
+        );
+        assert_eq!(
+            listing,
+            syntax("search", "include"),
+            "two arguments over one matcher advertise different syntax"
+        );
     }
 
     /// A model that namespaces a tool by the group it was offered in means the tool. Answering
