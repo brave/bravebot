@@ -195,6 +195,7 @@ at the last one and know that it is the last.
 `verified-by: bravebot_tui::state::the_session_is_not_a_step_in_a_delegates_own_view`
 `verified-by: bravebot_tui::state::coming_back_from_a_delegate_puts_the_turns_view_where_it_was_left`
 `verified-by: bravebot_tui::state::the_turns_view_is_not_dragged_by_reading_through_a_delegate`
+`verified-by: bravebot_tui::state::an_aside_answered_while_the_view_is_open_keeps_the_turns_own_place`
 `verified-by: bravebot_tui::render::a_delegates_view_draws_its_own_lines_and_not_the_turns`
 `verified-by: bravebot_tui::render::a_finished_delegates_view_ends_on_what_the_turn_was_told`
 `verified-by: bravebot_tui::render::a_delegates_view_ends_on_what_it_reported`
@@ -469,6 +470,7 @@ which this mode does not draw. An answer left behind a key they have not been to
 answer.
 
 `verified-by: bravebot_tui::state::answering_a_question_beside_the_work_opens_the_view_on_it`
+`verified-by: bravebot_tui::state::an_aside_answered_while_the_view_is_open_keeps_the_turns_own_place`
 
 <a id="WATCH-20"></a>
 ### WATCH-20: an answer the record cannot hold is said to be on the screen only

@@ -1928,12 +1928,19 @@ impl Session {
     /// Keep a question asked beside the work, and open the view on it.
     ///
     /// Opened rather than left behind a key, because the person asked a question and an answer
-    /// they are not shown is not an answer. Nothing moves under a reader doing it: the press that
-    /// asked came from the input box, which this mode does not draw.
+    /// they are not shown is not an answer.
+    ///
+    /// The turn's own place is taken only where the view was closed. A question is asked mid-turn
+    /// and answered later, so the view can be opened in between, and then `scroll` is the position
+    /// inside the row somebody is reading while the turn's own is already held from when the view
+    /// opened. Taking it again is what leaves the transcript, once the mode closes, at an offset
+    /// measured inside that row.
     pub fn asked_aside(&mut self, aside: Aside) {
         self.asides.push(aside);
         let at = self.asides.len() - 1;
-        self.held_view = Some(self.scroll);
+        if self.watching.is_none() {
+            self.held_view = Some(self.scroll);
+        }
         self.scroll = 0;
         self.watching = Some(Watching {
             at,
@@ -6851,6 +6858,41 @@ mod tests {
 
             session.stop_watching();
             assert_eq!(session.scroll, 7, "coming out lost the turn's own view");
+        }
+
+        /// A question asked mid-turn is answered later, and the view can be opened in between: the
+        /// person is reading a delegate's own lines when the answer arrives. That position is the
+        /// delegate's, and taken for the turn's it puts the transcript, when the mode closes, at an
+        /// offset measured inside a run the person has finished with.
+        #[test]
+        fn an_aside_answered_while_the_view_is_open_keeps_the_turns_own_place() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.scroll = 12;
+            session.watch();
+            session.scroll_up(9);
+            assert_eq!(
+                session.scroll, 9,
+                "reading back through the delegate moved nothing"
+            );
+
+            asked(
+                &mut session,
+                "what model is this?",
+                "the default one",
+                false,
+            );
+            assert_eq!(
+                session.watched_aside().map(|aside| aside.question.as_str()),
+                Some("what model is this?"),
+                "the answer was not what the view was left on"
+            );
+
+            session.stop_watching();
+            assert_eq!(
+                session.scroll, 12,
+                "the turn's view came back at a place inside the delegate's lines"
+            );
         }
 
         /// Asides come first because they are the only rows that outlive the session that made
