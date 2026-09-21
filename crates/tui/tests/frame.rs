@@ -234,6 +234,96 @@ fn a_failed_turn_is_called_failed_rather_than_stopped() {
     );
 }
 
+/// The row reporting the turn, which is where its figures would be drawn.
+///
+/// One row rather than the whole screen: a cost drawn anywhere else is a different claim, and the
+/// screen run together would not say which row a figure was on. Exactly one row reports the turn,
+/// so a second would mean the row under test is not the one being read.
+fn the_row_reporting_the_turn(session: &Session) -> String {
+    let screen = drawn(session, 150, 48);
+    let rows: Vec<&str> = screen
+        .lines()
+        .filter(|row| row.contains("turn 1"))
+        .collect();
+    assert_eq!(rows.len(), 1, "one row reports the turn:\n{screen}");
+    rows[0].trim().to_string()
+}
+
+/// A turn in flight that has already spent tokens.
+///
+/// The spend is what makes the assertions mean anything: a turn that cost nothing would draw no
+/// figure however the row was written.
+fn a_turn_that_has_spent(session: &mut Session) {
+    session.paste("check the tests pass");
+    session.submit().expect("the line was taken");
+    session.progressed(bravebot_agent::Spent {
+        tokens: 4_200,
+        ..Default::default()
+    });
+}
+
+/// The figures on the row are the price of an answer, and a turn that failed produced none. A
+/// number beside it reads as what the answer cost, which is a question about a turn that ended
+/// without one.
+#[test]
+fn a_failed_turn_reports_no_cost_and_no_duration() {
+    let mut session = Session::new("none");
+    a_turn_that_has_spent(&mut session);
+    stop_the_turn(&mut session, "the service answered HTTP 503");
+
+    assert_eq!(
+        session.finished.expect("a finished turn").tokens,
+        4_200,
+        "the fixture spent nothing, so a row carrying no figure would prove nothing"
+    );
+    assert_eq!(
+        session.tokens, 4_200,
+        "the session stopped counting what the abandoned turn spent"
+    );
+    let row = the_row_reporting_the_turn(&session);
+    assert!(row.contains("failed"), "not the row that reports it: {row}");
+    assert!(
+        !row.contains("4.2k"),
+        "what an abandoned turn spent was drawn as what it cost: {row}"
+    );
+    assert!(
+        !row.contains('('),
+        "a turn that produced no answer was priced: {row}"
+    );
+}
+
+/// Cancelling buys no answer either, so the row says as little about cost as a failure's does.
+/// Stated separately because nothing about the two endings is shared beyond the row they use.
+#[test]
+fn a_cancelled_turn_reports_no_cost_and_no_duration() {
+    let mut session = Session::new("none");
+    a_turn_that_has_spent(&mut session);
+    session.stopped(Some(1));
+
+    assert_eq!(
+        session.finished.expect("a finished turn").tokens,
+        4_200,
+        "the fixture spent nothing, so a row carrying no figure would prove nothing"
+    );
+    assert_eq!(
+        session.tokens, 4_200,
+        "the session stopped counting what the abandoned turn spent"
+    );
+    let row = the_row_reporting_the_turn(&session);
+    assert!(
+        row.contains("cancelled"),
+        "not the row that reports it: {row}"
+    );
+    assert!(
+        !row.contains("4.2k"),
+        "what an abandoned turn spent was drawn as what it cost: {row}"
+    );
+    assert!(
+        !row.contains('('),
+        "a turn that produced no answer was priced: {row}"
+    );
+}
+
 /// A turn that succeeds after one failed reports its own outcome. The indicator describes the
 /// last turn, not the worst one.
 #[test]

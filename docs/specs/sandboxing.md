@@ -427,3 +427,5 @@ output trusted.
 - Windows has published binaries and no backend, and [SANDBOX-1](#SANDBOX-1) refuses to run a
   process it cannot confine, so confinement there refuses every program until that platform has one
   (issue #88). Running unconfined where no backend exists is the degradation that clause forbids.
+  Windows is a platform this project supports, so this is a defect being carried rather than the
+  price of a platform nobody ships to.

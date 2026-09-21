@@ -18,8 +18,9 @@ as read in one place is read in one place, that nothing has been implemented on
 `Labelled` that would let a caller read a label's content without asking, that the constructor which
 is how a value gets a better label than its inputs had is pinned somewhere, that every workflow step
 names a commit rather than a tag its owner can move, that every container image this tree runs names a
-digest rather than a tag its publisher can move, and that no job holding a credential installs or runs
-a dependency beside it. A rule that can be written as one of these belongs here rather than in a
+digest rather than a tag its publisher can move, that no job holding a credential installs or runs a
+dependency beside it, and that a checkout of this tree names a kind of ref rather than a bare name a
+branch and a tag can share. A rule that can be written as one of these belongs here rather than in a
 reviewer's head.
 """
 
@@ -926,6 +927,92 @@ def workflow_jobs(lines):
     return jobs
 
 
+# The other half of pinning a `uses:` step: which ref the step is pointed at when the step is this
+# repository checking itself out. Handed a ref that names no kind, `actions/checkout` looks for a
+# remote branch of that name and takes a tag of it only when there is none (`src/ref-helper.ts`,
+# `getCheckoutInfo`), so a name a branch and a tag can both carry resolves to whichever exists,
+# decided by what has been pushed rather than by anything in this tree. `publish-npm.yml` takes
+# that name from a dispatch input and publishes the tree the checkout produced.
+CHECKOUT = re.compile(r"^[\w.-]+/checkout(?:@|$)")
+REF = re.compile(r"^\s*ref:\s*(.*?)\s*$")
+STEP_START = re.compile(r"^(\s*)-\s+\S")
+COMMIT = re.compile(r"^[0-9a-f]{40}$")
+# A ref written as an expression cannot be read here, so it is read by name. Anything with `sha` in
+# it is taken for a commit, which is not a ref at all and so never reaches the branch-before-tag
+# resolution. The cost is an input actually called `sha` passing; the other direction, reporting
+# every workflow that rebuilds `github.sha`, would be noise nobody could act on.
+NAMES_A_COMMIT = re.compile(r"sha\b", re.IGNORECASE)
+
+
+def enclosing_step(lines, number):
+    """The lines of the sequence entry a line sits in, or nothing where it is in none.
+
+    A step is a `-` entry under `steps:`, so the entry begins at the nearest `-` above this line
+    indented less than it, and ends at the next line indented no further than that `-`. Walking up
+    rather than tracking `steps:` downwards is what makes the order of a step's keys irrelevant: a
+    `with:` written above its `uses:` is the same block either way.
+    """
+    column = indented(lines[number])
+    for index in range(number - 1, -1, -1):
+        raw = lines[index]
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        found = STEP_START.match(raw)
+        if found and len(found.group(1)) < column:
+            return [raw] + nested(lines, index, base=len(found.group(1)))
+        if indented(raw) == 0:
+            break
+    return []
+
+
+def check_checkout_ref_is_qualified():
+    """A checkout of this tree names a kind of ref, not a name a branch and a tag can share.
+
+    `refs/tags/v0.9.0` is one object. `v0.9.0` is whichever of a branch and a tag of that name
+    exists, and where both do it is the branch, because that is the order the action resolves in.
+    The workflow that publishes to npm is handed that name by whoever dispatches it, and every
+    refusal after the checkout reads either the checked out tree or the GitHub release of the tag,
+    so a branch of the version's name satisfies all of them and the registry gets a tree nobody
+    reviewed under a version somebody released.
+
+    A step with no `ref:` is not read: it takes the commit that triggered the run, which is a
+    commit rather than a name. What this cannot read is a `ref:` inside an inline mapping, since
+    the rest of this half is line-oriented too; no workflow here writes one.
+    """
+    if not WORKFLOWS.is_dir():
+        return
+    for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
+        lines = path.read_text(encoding="utf-8").split("\n")
+        for number, raw in enumerate(lines):
+            found = REF.match(raw)
+            if not found:
+                continue
+            step = [USES.match(line) for line in enclosing_step(lines, number)]
+            if not any(one and CHECKOUT.match(unquoted(one.group(1))) for one in step):
+                continue
+            value = unquoted(found.group(1))
+            if value.startswith("refs/") or COMMIT.match(value) or NAMES_A_COMMIT.search(value):
+                continue
+            yield finding(
+                ERROR,
+                "unqualified-checkout-ref",
+                f"{path.name} checks out `{value}`, a name a branch and a tag can share, so a "
+                "branch decides what this run reads",
+                f"`{path}` checks out `{value}`, which names no kind of ref, and `actions/checkout` "
+                "prefers a remote branch of that name over a tag of it, so what the run reads is "
+                "whichever of the two has been pushed",
+                "infrastructure",
+                "high",
+                evidence=[f"{path}:{number + 1} {raw.strip()[:120]}"],
+                fix="write the kind: `refs/tags/` for a release, `refs/heads/` for a branch. A "
+                "qualified ref fetches that one ref, so a dispatch naming a tag that does not "
+                "exist fails the run rather than resolving to something else",
+                gain="whoever can push a branch to this repository chooses the tree a dispatch of "
+                "the tag of that name reads, and in the publish workflow that tree is what reaches "
+                "the registry under the released version",
+            )
+
+
 def dependency_commands(body):
     """The commands in a `run` that install something from the lockfile or execute what it installed.
 
@@ -1494,6 +1581,7 @@ def main():
     findings += list(check_pinned_actions())
     findings += list(check_pinned_images())
     findings += list(check_privileged_job_runs_only_its_own_code())
+    findings += list(check_checkout_ref_is_qualified())
     findings += list(check_guarantee_specs_exist())
     findings += list(check_unpinned_guarantee_clauses(specs))
 

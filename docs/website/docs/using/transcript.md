@@ -45,12 +45,13 @@ the turn, so one ending on `now let me look at the dispatch code` would otherwis
 the last thing on screen.
 
 **Succeeding, failing and being cancelled each get their own label**, so a turn you stopped does not
-read as one that broke. A turn that failed carries no cost and says why, below its row and again in
-its transcript entry: fixed wording, plus whatever the model service reported and how many requests
-went out. The reason stays where you can read it with the audit trail open or shut, after the
-terminal is resized, and while you are reading older scrollback, and it wraps rather than being cut.
-A reason is drawn inert, so control characters in it cannot paint anything. A turn that succeeds
-after a failure reports its own outcome and takes none of the colour of the one before it.
+read as one that broke. A turn that failed or one you cancelled carries neither the cost nor the
+time, and a failed one says why, below its row and again in its transcript entry: fixed wording,
+plus whatever the model service reported and how many requests went out. The reason stays where you
+can read it with the audit trail open or shut, after the terminal is resized, and while you are
+reading older scrollback, and it wraps rather than being cut. A reason is drawn inert, so control
+characters in it cannot paint anything. A turn that succeeds after a failure reports its own outcome
+and takes none of the colour of the one before it.
 
 **A turn that changed files and ran nothing says so.** Where a run was possible, files changed and no
 program was run, the end of the turn tells you plainly that nothing was built or tested. Nothing else
