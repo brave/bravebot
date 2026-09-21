@@ -413,16 +413,16 @@ fn list_lines(picker: &Picker, area: Rect) -> Vec<Line<'static>> {
 /// as long as the real one is off screen.
 fn window<'a>(rows: &[Row<'a>], cursor: usize, visible: usize) -> (Option<&'a str>, usize, usize) {
     let first = start(rows.len(), cursor, visible);
-    // Nothing to hold a heading over on a list two rows tall: the row under the cursor is what a
-    // person is there to read, and a heading that displaced it would leave the panel saying only
-    // whose models these are and never which.
-    if visible <= 2 {
+    // A list one row tall is the only one with nothing to hold a heading over: the row under the
+    // cursor is what a person is there to read, and a heading that displaced it would leave the
+    // panel saying only whose models these are and never which. Two rows fit both.
+    if visible <= 1 {
         return (None, first, visible);
     }
 
     // Holding one costs a row, so the window it leaves is a row shorter and begins a row further
     // down than the window drawn without it.
-    let shown = visible.saturating_sub(1).max(1);
+    let shown = visible.saturating_sub(1);
     let held_from = start(rows.len(), cursor, shown);
 
     let heading = rows[..=cursor.min(rows.len().saturating_sub(1))]
@@ -614,6 +614,21 @@ mod tests {
             served_by("OpenRouter", "openrouter/llama-70b", "llama-70b"),
             served_by("OpenRouter", "openrouter/llama-405b", "llama-405b"),
         ]
+    }
+
+    /// A gateway's roster, longer than the panel at the heights these tests draw at. That is what a
+    /// held heading exists for: a cursor scrolled into this section has left the section's own
+    /// heading far above the window.
+    fn a_roster_longer_than_the_panel() -> Vec<Model> {
+        let mut roster = vec![Model::automatic()];
+        for index in 0..40 {
+            roster.push(served_by(
+                "OpenRouter",
+                &format!("openrouter/model-{index}"),
+                &format!("model-{index}"),
+            ));
+        }
+        roster
     }
 
     fn typing(picker: &mut Picker, text: &str) {
@@ -892,15 +907,7 @@ mod tests {
     /// are, or the heading is only ever visible for the models at the top of a service.
     #[test]
     fn a_heading_stays_above_the_rows_when_the_list_is_scrolled() {
-        let mut roster = vec![Model::automatic()];
-        for index in 0..40 {
-            roster.push(served_by(
-                "OpenRouter",
-                &format!("openrouter/model-{index}"),
-                &format!("model-{index}"),
-            ));
-        }
-        let mut picker = Picker::new(roster, None);
+        let mut picker = Picker::new(a_roster_longer_than_the_panel(), None);
         for _ in 0..30 {
             handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
         }
@@ -921,15 +928,7 @@ mod tests {
     /// offset saw nothing.
     #[test]
     fn a_service_is_never_given_two_headings_at_once() {
-        let mut roster = vec![Model::automatic()];
-        for index in 0..40 {
-            roster.push(served_by(
-                "OpenRouter",
-                &format!("openrouter/model-{index}"),
-                &format!("model-{index}"),
-            ));
-        }
-        let mut picker = Picker::new(roster, None);
+        let mut picker = Picker::new(a_roster_longer_than_the_panel(), None);
 
         // From the first press, which puts the cursor in the gateway's own section, to well past
         // the offset where the list has started scrolling under it.
@@ -942,6 +941,59 @@ mod tests {
                 "after {presses} presses the roster has {headings} headings:\n{output}"
             );
         }
+    }
+
+    /// A terminal short enough to leave the list two rows is where the heading is needed most and
+    /// affordable least. Abandoning it there draws two model rows with nothing on the panel saying
+    /// what would answer either, which is the whole of what sections are drawn for.
+    #[test]
+    fn a_heading_is_held_where_the_list_has_room_for_two_rows() {
+        let mut picker = Picker::new(a_roster_longer_than_the_panel(), None);
+        for _ in 0..30 {
+            handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+        }
+
+        // Ten rows leave the list two: one for the held heading, one for the row under the cursor.
+        let output = rendered_at(&picker, 60, 10);
+        let under_the_cursor = picker.chosen().expect("a model").display_name.clone();
+        assert!(
+            output.contains("OpenRouter"),
+            "no service heading: {output}"
+        );
+        assert!(
+            output.contains(&under_the_cursor),
+            "the cursor is off screen: {output}"
+        );
+        // The row above the cursor's is the one the heading was held in place of, so seeing it means
+        // the list was taller than two rows and this is not the case the fix is about.
+        assert!(
+            !output.contains("model-28"),
+            "the list is taller than two rows: {output}"
+        );
+    }
+
+    /// One row cannot carry both, and the model is the half a person opened the picker for: a panel
+    /// saying only whose models these are and never which answers nothing.
+    #[test]
+    fn a_list_with_room_for_one_row_keeps_the_row_under_the_cursor() {
+        let mut picker = Picker::new(a_roster_longer_than_the_panel(), None);
+        for _ in 0..30 {
+            handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+        }
+
+        // Nine rows leave the list one.
+        let output = rendered_at(&picker, 60, 9);
+        let under_the_cursor = picker.chosen().expect("a model").display_name.clone();
+        assert!(
+            output.contains(&under_the_cursor),
+            "the cursor is off screen: {output}"
+        );
+        // A heading on screen here would have to be standing where the cursor's row goes, which pins
+        // the height: a list of two rows or more has room for both.
+        assert!(
+            !output.contains("OpenRouter"),
+            "the list is taller than one row: {output}"
+        );
     }
 
     /// Nothing on screen and no word for it reads as a picker that has broken, rather than as a

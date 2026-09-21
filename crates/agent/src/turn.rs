@@ -623,6 +623,17 @@ pub struct Task {
     /// caller's business. Empty by default, which is a session that behaves as it did before a
     /// settings file could say anything.
     pub permissions: Permissions,
+    /// What the settings say a commit message and a pull request this turn writes may carry.
+    ///
+    /// Empty by default, which is a caller that read no settings file: neither destination is
+    /// decided and the planner is told nothing about either, exactly as it was before the block
+    /// existed. Supplied per turn for the reason `permissions` is: which files it was resolved
+    /// from is the caller's business, and a turn should not differ from the same turn elsewhere
+    /// for reasons the task does not state.
+    ///
+    /// Nothing here writes a commit message. What this decides is what the planner is told
+    /// (BACKEND-30), which is where the answer has to be for it to survive a long turn.
+    pub attribution: bravebot_config::Attribution,
     /// How much this turn asks before it acts.
     ///
     /// Carried by the task because the planner has to be told about one of them: plan mode refuses
@@ -737,6 +748,9 @@ impl Task {
             permission_mode: crate::PermissionMode::default(),
             // Asking too: nobody has said a check's word may stand in for an answer.
             auto_vetting: false,
+            // Nothing said about either destination, which is a caller that read no settings
+            // file. Empty is a value the block can carry and this is not it.
+            attribution: bravebot_config::Attribution::default(),
             delegate: None,
         }
     }
@@ -846,6 +860,12 @@ impl Task {
     /// Apply the rules a person wrote in advance about what to ask them about.
     pub fn with_permissions(mut self, permissions: Permissions) -> Self {
         self.permissions = permissions;
+        self
+    }
+
+    /// State what the settings say a commit message and a pull request may carry.
+    pub fn with_attribution(mut self, attribution: bravebot_config::Attribution) -> Self {
+        self.attribution = attribution;
         self
     }
 
@@ -2088,6 +2108,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         &catalogue,
         task.tick,
         task.working_towards.as_deref(),
+        &task.attribution,
     );
     notices.extend(preamble.notices.iter().cloned());
 
@@ -2836,6 +2857,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 task.profile.as_deref(),
                                 task.model.as_deref(),
                                 task.permission_mode,
+                                &task.attribution,
                                 cancel,
                                 &mut confirmer,
                                 &mut reporter,

@@ -637,6 +637,11 @@ while a key states it once.
 A name no file wrote is unset, which is a different answer from empty: it leaves the decision to
 whoever writes the commit. Anything that is not a string reads as absence.
 
+What you set here is stated to the model in front of every round of every turn, and a destination you
+did not name is not mentioned to it at all. A value is quoted as text to copy rather than written in
+as a sentence addressed to it, since the block resolves through a file in the checkout as well as your
+own.
+
 ### `keybindings`
 
 ```json
