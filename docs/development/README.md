@@ -8,6 +8,20 @@ cargo test
 make check     # fmt, clippy -D warnings, tests, and toolchain age: what CI enforces
 ```
 
+The desktop front end is built from `ui/`, and additionally needs Node 22.12+:
+
+```sh
+cd ui
+npm ci
+npm run dev    # builds bravebot-rpc and bravebot-ui-files, then starts Electron
+```
+
+`cargo build` at the root already compiles those two binaries, as workspace members like
+any other; `npm run dev` builds them through `ui/scripts/build-bridge.sh`, which loads
+backend credentials where a checkout has them. What a built binary holds is
+[configuration.md](configuration.md), and the front end's own commands, packaging and
+tests are [ui/docs/development.md](../../ui/docs/development.md).
+
 | Read | For |
 |---|---|
 | [checks.md](checks.md) | what to run and when, why local clippy is not CI's, and a failure that is not yours |

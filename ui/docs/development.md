@@ -1,6 +1,9 @@
 # Development and packaging
 
-Start with [setup](setup.md), then use these commands from the repository root.
+Start with [setup](setup.md). Run the `npm` commands from `ui/`; this is not an npm
+workspace of the package at the repository root, so nothing there reaches these scripts.
+Run the `cargo` commands from the root, where the workspace the two front-end crates are
+members of lives.
 
 | Command | What it does |
 | --- | --- |
@@ -13,8 +16,9 @@ Start with [setup](setup.md), then use these commands from the repository root.
 | `npm run build` | Build both Rust executables, typecheck, bundle into `out/` |
 | `npm start` | Set up Electron and preview the existing bundle; does not rebuild it |
 | `npm run package` | Build both Rust executables, bundle, package for macOS or Linux; does not typecheck |
-| `cargo test --all` | Test the Rust workspace |
-| `cargo clippy --all-targets --all-features -- -D warnings` | Lint the Rust workspace |
+| `cargo test -p bravebot-ui-bridge -p bravebot-ui-files` | Test the two front-end crates |
+| `cargo test --all` | Test the whole workspace, agent crates included |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Lint the whole workspace |
 | `npm run drive` / `npm run drive:<name>` | Run a named Electron driver; see [testing](testing.md) |
 | `npm run demo -- --record` | Record a walkthrough; see [demo costs and setup](demo.md) |
 
