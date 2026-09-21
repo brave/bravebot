@@ -163,6 +163,17 @@ pub struct RunRequest {
     /// The two are independent. A line can repeat and vary in one session, so a prompt may offer
     /// the key and give the advice together, and the key still covers only the line on screen.
     pub pattern: Option<std::path::PathBuf>,
+    /// The reference whose contents go to the first step's standard input, where the call named one.
+    ///
+    /// Shown because it is routing the planner chose and this prompt is where it is endorsed. The
+    /// plan carries the *label* of those bytes, which is what decides whether the question has to
+    /// be asked at all; it does not carry where they came from, and a person told only that a
+    /// program is being fed something has not been told what.
+    ///
+    /// The reference name, never the bytes. The name is the driver's own, minted when the slot was
+    /// written, so there is nothing of the content in it. What the contents are is
+    /// `read_output`'s question and is asked separately.
+    pub stdin: Option<String>,
 }
 
 impl RunRequest {
@@ -183,6 +194,9 @@ impl RunRequest {
         Self {
             record: None,
             pattern: None,
+            // A pipeline holds the label of what would be fed to its first stage and no reference
+            // to name: this constructor is for shell mode, where the bytes are the user's own.
+            stdin: None,
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),

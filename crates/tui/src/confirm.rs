@@ -629,6 +629,23 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         }
     }
 
+    // What goes into the first program, where the call named a reference for it. Listed like the
+    // write set and for the same reason: it is the half of a plan that the steps above do not show,
+    // and a person told only that something is being fed in has not been told what.
+    if let Some(reference) = &request.stdin {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", t!(run_is_fed)),
+            Style::default().fg(theme::running()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("       {reference}"),
+            Style::default()
+                .fg(theme::text())
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+
     lines.push(Line::raw(""));
 
     // Said every time, because it is true every time and it is the thing a reviewer is most likely
@@ -2054,6 +2071,7 @@ mod tests {
             append: false,
         }];
         RunRequest {
+            stdin: None,
             // A line naming a file to write is asked about however it was answered, so the prompt
             // offers no key that would outlive the session.
             record: None,
@@ -2103,14 +2121,31 @@ mod tests {
         assert!(shown.contains("/home/someone/project/out.txt"), "{shown}");
     }
 
+    /// What goes into the first program is the other half a shell string hides, and a person
+    /// endorsing a release has to be able to read which reference it is: told only that something
+    /// is being fed in, they have been told nothing they could weigh. The reference name and never
+    /// a byte of what it holds; reading that is `read_output`'s own prompt.
+    #[test]
+    fn a_run_prompt_names_the_reference_it_would_be_fed() {
+        let mut request = a_compiled_run();
+        request.stdin = Some("ref:1".to_string());
+        request.plan.stdin = Some(bravebot_core::label::Label::untrusted_public());
+
+        let shown = rendered_run(&request);
+        assert!(shown.contains("it is fed the contents of"), "{shown}");
+        assert!(shown.contains("ref:1"), "{shown}");
+    }
+
     /// A pipeline of argv stages writes nothing and was not spelled as a line, so neither block
     /// appears. A prompt that said "it writes these files" over an empty list would be noise that
-    /// hides the case the line is for.
+    /// hides the case the line is for. The same for what it is fed: a call that named no reference
+    /// has nothing to name.
     #[test]
     fn a_run_prompt_for_argv_stages_shows_neither_a_line_nor_a_write_set() {
         let shown = rendered_run(&a_run(false));
         assert!(!shown.contains("the model wrote"), "{shown}");
         assert!(!shown.contains("it writes these files"), "{shown}");
+        assert!(!shown.contains("it is fed the contents of"), "{shown}");
     }
 
     /// Wide enough that the lines under test are not wrapped by the box, since what is being
@@ -2279,6 +2314,7 @@ mod tests {
             }],
         };
         RunRequest {
+            stdin: None,
             // Private input is asked about every time, so neither standing key is offered.
             record: None,
             pattern: None,
@@ -2356,6 +2392,7 @@ mod tests {
             routes: Vec::new(),
         };
         RunRequest {
+            stdin: None,
             plan: bravebot_core::command::Plan {
                 line: "LD_PRELOAD=./evil.so git log".to_string(),
                 directory: std::path::PathBuf::from("/home/someone/project"),
@@ -2420,6 +2457,7 @@ mod tests {
             }],
         };
         RunRequest {
+            stdin: None,
             plan: bravebot_core::command::Plan {
                 line: "sh check.sh > out.txt".to_string(),
                 directory: std::path::PathBuf::from("/home/someone/project"),
@@ -2477,6 +2515,7 @@ mod tests {
     /// they were not shown.
     fn a_recordable_run() -> RunRequest {
         RunRequest {
+            stdin: None,
             record: Some(std::path::PathBuf::from(
                 "/home/someone/.bravebot/remembered/-home-someone-project.jsonl",
             )),
@@ -2612,6 +2651,7 @@ mod tests {
     /// once the same binary has been put to the person twice.
     fn a_varying_run() -> RunRequest {
         RunRequest {
+            stdin: None,
             pattern: Some(std::path::PathBuf::from(
                 "/home/someone/.bravebot/settings.json",
             )),

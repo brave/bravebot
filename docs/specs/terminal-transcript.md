@@ -274,16 +274,18 @@ list cannot carry, which is why it is the one the row does.
 ### VIEW-13: the end of a turn is said, not left to the indicator disappearing
 
 A finished turn is reported on its own row: which turn it was, what it cost, and how long it took.
-A turn that failed is reported as stopped, without a cost, since the figure is settled as a turn is
-abandoned rather than as it finishes. The row lasts until the next turn starts, and a session that
-has not run one shows nothing.
+A turn that failed and a turn that was cancelled get the same row without the cost and the duration.
+VIEW-22 covers what each of the three endings is called, and the reason a failed one carries. The
+row lasts until the next turn starts, and a session that has not run one shows nothing.
 
 **Why.** The indicator going out was the only thing that said a turn was over, and an announcement
 made by something disappearing is one nobody reads. It matters most for the turn that ends on a
 sentence like `now let me look at the dispatch code`: the model asked for no tool, so the turn ended
 there, and the last thing on the screen was a promise with nothing to distinguish it from a hang.
 The cost is on the row because a turn that spent forty rounds and one that spent a single round look
-identical in scrollback, and the difference is most of the explanation.
+identical in scrollback, and the difference is most of the explanation. Both figures are off the
+other two endings because they price an answer, and a turn abandoned part way produced none. What
+it did spend is counted against the session all the same.
 
 `verified-by: bravebot_tui::render::a_finished_turn_says_so_rather_than_leaving_an_empty_line`
 `verified-by: bravebot_tui::render::a_failed_turn_is_not_drawn_as_a_finished_one`
@@ -293,6 +295,8 @@ identical in scrollback, and the difference is most of the explanation.
 `verified-by: bravebot_tui::state::starting_another_turn_forgets_the_last_one`
 `verified-by: bravebot_tui::state::a_session_that_has_not_run_a_turn_reports_none_finished`
 `verified-by: bravebot_tui::state::clearing_a_session_forgets_the_turn_that_finished`
+`verified-by: bravebot_tui::frame::a_failed_turn_reports_no_cost_and_no_duration`
+`verified-by: bravebot_tui::frame::a_cancelled_turn_reports_no_cost_and_no_duration`
 
 <a id="VIEW-14"></a>
 ### VIEW-14: the model picker narrows as it is typed into

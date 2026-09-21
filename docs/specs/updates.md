@@ -107,15 +107,25 @@ without the margin that marks quarantined content.
 <a id="UPDATE-6"></a>
 ### UPDATE-6: a registry is asked at most once a day
 
-An answer stands for a day. A stamp in the future is asked again rather than waited out.
+An ask stands for a day whether or not it learned a version, so a registry that refuses, that
+cannot be reached, or that answers with something this program will not offer is left alone until
+the day is up. Each registry has a stamp of its own. A stamp in the future is asked again rather
+than waited out.
 
 **Why.** A published version changes on the order of days, so asking on every launch is a request
-to somebody else's registry per session for a number that has not moved. A clock that went
-backwards, or a record somebody else wrote, must not leave this silent until the date catches up
-with the file.
+to somebody else's registry per session for a number that has not moved. Standing the day on an
+answer instead of on the ask exempts every launch that learned nothing, which makes a registry in
+trouble the one asked every session and the launches it refuses the ones that keep coming back. A
+machine that has both installations on it would double that again if one stamp overwrote the
+other. A clock that went backwards, or a record somebody else wrote, must not leave this silent
+until the date catches up with the file.
 
 `verified-by: bravebot_tui::update::a_fresh_answer_is_not_asked_for_again`
 `verified-by: bravebot_tui::update::an_answer_stamped_in_the_future_is_asked_again`
+`verified-by: bravebot_tui::update::an_ask_that_learned_nothing_still_holds_the_next_one_off_for_the_day`
+`verified-by: bravebot_tui::update::recording_one_registrys_ask_keeps_the_others`
+`verified-by: bravebot_tui::update::a_registry_has_one_record_however_often_it_is_asked`
+`verified-by: by-construction (the stamp is written before the request is made, so an ask that is refused, that answers with nothing usable, or that is still out when the session ends is recorded as readily as one that answers)`
 
 <a id="UPDATE-7"></a>
 ### UPDATE-7: a recorded answer belongs to the registry that gave it
@@ -148,12 +158,15 @@ answer is thrown away on arrival.
 ### UPDATE-9: everything that can go wrong here is silence
 
 No home directory, no network, a refused or unreachable registry, an answer of an unexpected
-shape, a record that is not the shape written: each of them says nothing and reports nothing.
+shape, a record that is not the shape written: each of them says nothing, reports nothing, and
+withdraws no version an earlier ask learned.
 
 **Why.** This is an aside on a startup screen. An error from a third party's registry, printed
 where somebody is about to start work, reads as this program being broken, and none of it stops a
-session from doing anything.
+session from doing anything. A registry being unreachable today does not make what it said
+yesterday untrue either, so the line a person was shown this morning is still shown this evening.
 
+`verified-by: bravebot_tui::update::a_version_stands_until_an_ask_learns_another`
 `verified-by: bravebot_tui::update::an_answer_that_is_not_the_shape_expected_is_no_version`
 `verified-by: bravebot_tui::update::a_file_that_is_not_the_shape_written_here_is_no_answer`
 `verified-by: bravebot_tui::update::a_version_that_is_not_three_numbers_is_no_answer`
@@ -178,6 +191,10 @@ while a copy the record does not name is one this program will not offer a comma
 
 - **An answer is up to a day out of date.** A release published this morning is announced
   tomorrow to somebody whose last launch was last night.
+
+- **A version outlives the ask that learned it.** A registry unreachable for a week leaves the
+  line naming what it said before that, since nothing here withdraws a version that was once
+  published. A release taken down is therefore offered until that registry answers again.
 
 - **What names the installation is a word and a path, not proof.** A binary moved out from under
   the record is told nothing, and a process started with the launcher's variable set is offered

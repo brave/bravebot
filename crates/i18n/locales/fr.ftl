@@ -435,6 +435,7 @@ watching-output-more = { $count ->
     }
 run-line-sent = le modèle a écrit :
 run-writes = il écrit ces fichiers :
+run-is-fed = le contenu de ceci lui est fourni :
 run-not-sandboxed =
     ceci n'est pas isolé : l'exécution a les mêmes accès que votre propre shell
 run-releases-private =

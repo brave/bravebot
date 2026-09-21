@@ -1839,7 +1839,7 @@ fn doctor() -> ExitCode {
     // Any of the three is a statement about this machine that the program is not honouring,
     // which is what a report exits non-zero over: nothing is trusted, a named path holds nothing, or
     // a proxy was named that requests are not taking.
-    if transport.trust_problem().is_some() || transport.unusable_proxy().is_some() {
+    if !transport.trust_problems().is_empty() || transport.unusable_proxy().is_some() {
         ok = false;
     }
 
@@ -2287,8 +2287,10 @@ fn network(transport: &Transport) -> Vec<String> {
     ];
 
     // A path that yielded nothing is named even where another one did, because the set in force is
-    // then not the set that was asked for, and nothing else would say so.
-    if let Some(problem) = transport.trust_problem() {
+    // then not the set that was asked for, and nothing else would say so. One line each: the two
+    // variables are set by two decisions, and a reader who fixed the only path named would run this
+    // again to be told about the other.
+    for problem in transport.trust_problems() {
         lines.push(aligned(
             t!(doctor_trust_roots_unusable),
             problem.to_string(),
@@ -2460,6 +2462,31 @@ mod tests {
         assert!(transport.trusts_nothing());
         assert!(report.contains("/etc/corp/absent.pem"), "{report}");
         assert!(report.contains("fail"), "{report}");
+    }
+
+    /// Both variables failing is one machine with two paths to fix. Naming only the first would have
+    /// whoever fixed it run this again to be told about the second, and the roots line says nothing
+    /// is trusted without saying which path was asked for.
+    #[test]
+    fn the_network_section_names_every_path_that_yielded_nothing() {
+        let transport = Transport::stated(
+            TrustRoots::Named {
+                file: Some(PathBuf::from("/etc/corp/absent.pem")),
+                directory: Some(PathBuf::from("/etc/corp/absent-dir")),
+            },
+            None,
+            None,
+        );
+
+        let lines = network(&transport);
+
+        let named: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.contains("/etc/corp/"))
+            .collect();
+        assert_eq!(named.len(), 2, "one line each: {lines:?}");
+        assert!(named[0].contains("/etc/corp/absent.pem"), "{lines:?}");
+        assert!(named[1].contains("/etc/corp/absent-dir"), "{lines:?}");
     }
 
     /// A protocol this build cannot connect through is not the route requests take, so naming it as

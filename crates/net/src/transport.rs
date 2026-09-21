@@ -106,8 +106,8 @@ pub struct Transport {
     roots: TrustRoots,
     /// The certificates [`TrustRoots::Named`] resolved to, empty where nothing named any.
     certificates: Vec<Certificate<'static>>,
-    /// The first named path that could not be used, where one could not.
-    trust_problem: Option<TrustError>,
+    /// Every named path that could not be used, in the order the paths are read.
+    trust_problems: Vec<TrustError>,
     /// Only ever a protocol this build can connect through. See [`Transport::resolve`].
     proxy: Option<Proxy>,
     /// The protocol of a proxy that was named and cannot be used.
@@ -157,8 +157,8 @@ impl Transport {
     }
 
     fn resolve(roots: TrustRoots, proxy: Option<Proxy>) -> Self {
-        let (certificates, trust_problem) = match &roots {
-            TrustRoots::Bundled => (Vec::new(), None),
+        let (certificates, trust_problems) = match &roots {
+            TrustRoots::Bundled => (Vec::new(), Vec::new()),
             TrustRoots::Named { file, directory } => load(file.as_deref(), directory.as_deref()),
         };
         // A protocol the build cannot connect through is not a route, and holding one here would
@@ -175,7 +175,7 @@ impl Transport {
         Self {
             roots,
             certificates,
-            trust_problem,
+            trust_problems,
             proxy,
             unusable_proxy,
             no_proxy: None,
@@ -187,10 +187,14 @@ impl Transport {
         &self.roots
     }
 
-    /// Why a named path cannot be used, where one cannot. A second path that worked is still in
-    /// force: see [`load`].
-    pub fn trust_problem(&self) -> Option<&TrustError> {
-        self.trust_problem.as_ref()
+    /// Why each named path that could not be used cannot be, in the order the paths are read. A
+    /// path that worked is still in force whatever the others did: see [`load`].
+    ///
+    /// Every one of them, rather than the first: two variables name the two paths, and a report
+    /// that stopped at one would leave whoever set the other looking at a machine that says nothing
+    /// about it.
+    pub fn trust_problems(&self) -> &[TrustError] {
+        &self.trust_problems
     }
 
     /// Whether every handshake is about to be refused, which is what a named path yielding no
@@ -263,7 +267,7 @@ impl fmt::Debug for Transport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Transport")
             .field("roots", &self.roots)
-            .field("problem", &self.trust_problem)
+            .field("problems", &self.trust_problems)
             .field("proxy", &self.proxy_summary())
             .field("unusable_proxy", &self.unusable_proxy)
             .field("no_proxy", &self.no_proxy)
@@ -271,7 +275,7 @@ impl fmt::Debug for Transport {
     }
 }
 
-/// Every certificate the named paths hold, and the first of them that could not be used.
+/// Every certificate the named paths hold, and every one of them that could not be used.
 ///
 /// The two paths are read independently. A machine that names both and has only one of them is
 /// common enough that discarding the good one would be the worse failure by far: the cost of one
@@ -286,9 +290,9 @@ impl fmt::Debug for Transport {
 fn load(
     file: Option<&Path>,
     directory: Option<&Path>,
-) -> (Vec<Certificate<'static>>, Option<TrustError>) {
+) -> (Vec<Certificate<'static>>, Vec<TrustError>) {
     let mut certificates = Vec::new();
-    let mut problem = None;
+    let mut problems = Vec::new();
 
     for (path, read) in [
         (
@@ -299,13 +303,13 @@ fn load(
     ] {
         let Some(path) = path else { continue };
         match read(path) {
-            Ok(found) if found.is_empty() => problem = problem.or(Some(holds_nothing(path))),
+            Ok(found) if found.is_empty() => problems.push(holds_nothing(path)),
             Ok(found) => certificates.extend(found),
-            Err(error) => problem = problem.or(Some(error)),
+            Err(error) => problems.push(error),
         }
     }
 
-    (certificates, problem)
+    (certificates, problems)
 }
 
 /// Every certificate in one file of them.
@@ -491,7 +495,7 @@ mod tests {
             None,
         );
 
-        assert!(transport.trust_problem().is_none());
+        assert!(transport.trust_problems().is_empty());
         assert!(
             matches!(transport.root_certs(), RootCerts::Specific(certs) if certs.len() == 1),
             "the named file is the whole of what is trusted"
@@ -515,7 +519,12 @@ mod tests {
             None,
         );
 
-        let problem = transport.trust_problem().expect("a problem");
+        let [problem] = transport.trust_problems() else {
+            panic!(
+                "the one named path is reported: {:?}",
+                transport.trust_problems()
+            )
+        };
         assert_eq!(problem.path, missing);
         assert!(
             matches!(transport.root_certs(), RootCerts::Specific(certs) if certs.is_empty()),
@@ -540,7 +549,12 @@ mod tests {
             None,
         );
 
-        let problem = transport.trust_problem().expect("a problem");
+        let [problem] = transport.trust_problems() else {
+            panic!(
+                "the one named path is reported: {:?}",
+                transport.trust_problems()
+            )
+        };
         assert_eq!(problem.path, file);
         assert!(problem.detail.contains("no certificate"));
     }
@@ -563,7 +577,7 @@ mod tests {
             None,
         );
 
-        assert!(transport.trust_problem().is_none());
+        assert!(transport.trust_problems().is_empty());
         assert!(
             matches!(transport.root_certs(), RootCerts::Specific(certs) if certs.len() == 1),
             "the certificate is trusted and the revocation list is not one"
@@ -586,7 +600,13 @@ mod tests {
             None,
         );
 
-        assert_eq!(transport.trust_problem().expect("a problem").path, dir);
+        let [problem] = transport.trust_problems() else {
+            panic!(
+                "the one named path is reported: {:?}",
+                transport.trust_problems()
+            )
+        };
+        assert_eq!(problem.path, dir);
     }
 
     /// A proxy uri carries a username and password on the networks that require one. Reporting the
@@ -669,10 +689,46 @@ mod tests {
             matches!(transport.root_certs(), RootCerts::Specific(certs) if certs.len() == 1),
             "the readable path is still in force"
         );
+        let [problem] = transport.trust_problems() else {
+            panic!(
+                "only the path that failed is reported: {:?}",
+                transport.trust_problems()
+            )
+        };
         assert_eq!(
-            transport.trust_problem().expect("a problem").path,
-            absent,
+            problem.path, absent,
             "and the one that failed is still named"
+        );
+    }
+
+    /// Two variables name the two paths, and a machine that has neither has set both wrongly. A
+    /// report that named one of them would have whoever set the other fixing a path the program had
+    /// nothing to say about, and every connection would go on failing.
+    #[test]
+    fn every_named_path_that_yields_nothing_is_reported_rather_than_the_first() {
+        let dir = scratch("net-trust-roots-neither-of-two");
+        let absent_file = dir.join("no-such-bundle.pem");
+        let absent_directory = dir.join("no-such-directory");
+
+        let transport = Transport::stated(
+            TrustRoots::Named {
+                file: Some(absent_file.clone()),
+                directory: Some(absent_directory.clone()),
+            },
+            None,
+            None,
+        );
+
+        assert!(transport.trusts_nothing());
+        let paths: Vec<&Path> = transport
+            .trust_problems()
+            .iter()
+            .map(|problem| problem.path.as_path())
+            .collect();
+        assert_eq!(
+            paths,
+            [absent_file.as_path(), absent_directory.as_path()],
+            "both paths are named, in the order they are read"
         );
     }
 
