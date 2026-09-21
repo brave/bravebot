@@ -32,9 +32,13 @@ jobs:
     if: github.repository == 'brave/bravebot'
     runs-on: ubuntu-latest
     steps:
+      # refs/tags/ rather than the bare name: handed an unqualified ref, this action
+      # looks for a remote branch of that name before a tag of it, so a branch called
+      # v0.9.0 is what a dispatch of v0.9.0 would lint. Qualified, the fetch is for the
+      # tag alone and a tag that does not exist fails the run.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag }}
+          ref: refs/tags/${{ inputs.tag }}
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -58,9 +62,12 @@ jobs:
       contents: read
       id-token: write
     steps:
+      # Qualified for the reason above, and here it is what pins the published bytes
+      # to the tag: every gate below reads either this checkout or the GitHub release,
+      # so a branch supplying the tree passes both and npm gets an unreviewed one.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag }}
+          ref: refs/tags/${{ inputs.tag }}
 
       - name: Refuse a tag that does not match the tree
         env:
