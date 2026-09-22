@@ -1939,7 +1939,7 @@ fn highlight(lines: &mut [Line<'static>], needle: &str) -> Vec<usize> {
 /// This runs over every line of the transcript on every frame the scroller is open, so it does
 /// not copy the text to count it. A line that fits is one row and is answered from its width
 /// alone, which is nearly all of them.
-fn rows_of(line: &Line<'_>, width: u16) -> u16 {
+pub(crate) fn rows_of(line: &Line<'_>, width: u16) -> u16 {
     let width = width.max(1);
     if line.width() <= width as usize {
         return 1;

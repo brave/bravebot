@@ -29,6 +29,8 @@ display.
 
 `verified-by: bravebot_core::ask::a_shaped_question_carries_the_tag_it_is_shown_under`
 `verified-by: bravebot_core::ask::a_question_with_no_options_is_still_a_question`
+`verified-by: bravebot_tui::ask::options_whose_labels_wrap_are_fitted_by_the_rows_they_draw`
+`verified-by: bravebot_tui::ask::a_wrapping_list_scrolls_to_the_option_under_the_cursor`
 
 <a id="ASK-2"></a>
 ### ASK-2: one to four questions, refused whole rather than trimmed
