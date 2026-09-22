@@ -1266,13 +1266,24 @@ impl Workspace {
 
     #[cfg(test)]
     fn interrupt_after_write(&self) -> Result<(), WorkspaceError> {
-        let interruption = self.after_write.lock().unwrap().take();
+        let synchronization_failed = |detail: &str| WorkspaceError::Io {
+            path: "test write interruption".into(),
+            detail: detail.into(),
+        };
+        let interruption = self
+            .after_write
+            .lock()
+            .map_err(|_| synchronization_failed("interruption lock poisoned"))?
+            .take();
         if let Some(interruption) = interruption {
-            interruption.entered.send(()).unwrap();
+            interruption
+                .entered
+                .send(())
+                .map_err(|_| synchronization_failed("effect observer disconnected"))?;
             if interruption
                 .resume
                 .recv_timeout(Duration::from_secs(5))
-                .unwrap()
+                .map_err(|_| synchronization_failed("write was not released"))?
             {
                 return Err(WorkspaceError::Io {
                     path: "fixture".into(),
@@ -2344,8 +2355,9 @@ mod tests {
         use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
         use std::sync::mpsc;
         for fail in [false, true] {
-            let root = std::env::temp_dir().join(format!("bravebot-write-publication-{fail}"));
-            std::fs::create_dir_all(&root).unwrap();
+            let root = crate::testutil::scratch_dir(&format!("bravebot-write-publication-{fail}"));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).expect("create scratch");
             std::fs::write(root.join("shared.txt"), "original trusted text").unwrap();
             let workspace = Workspace::new(&root).unwrap();
             let mut trust = TrustStore::new(workspace.root());
@@ -2421,6 +2433,13 @@ mod tests {
                 fail,
                 "the requested failure actually occurred"
             );
+            if fail {
+                assert!(
+                    matches!(&result, Err(WorkspaceError::Io { path, detail })
+                        if path == "fixture" && detail == "failure after replacement"),
+                    "synchronization failed instead of injecting the write failure: {result:?}"
+                );
+            }
             assert!(!authority.snapshot().is_trusted("shared.txt"));
             assert_eq!(
                 std::fs::read_to_string(root.join("shared.txt")).unwrap(),
