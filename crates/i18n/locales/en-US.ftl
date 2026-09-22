@@ -223,6 +223,12 @@ doctor-settings-overridden = { $name } from { $path }
 doctor-settings-ignored = ignored
 doctor-settings-vetting-ignored =
     vetting.auto in { $path } is not obeyed: it is read from ~/.bravebot/settings.json only
+# An allow rule a layer that may not grant one wrote. Named one at a time and with its file, for
+# the reason the vetting line gives: a rule that looks like configuration and does nothing is the
+# one worth saying out loud.
+doctor-settings-allow-ignored =
+    the allow rule { $rule } in { $path } is not granted: an allow rule answers a prompt, so it is
+    read from ~/.bravebot/settings.json only
 # The machine-level layer, above everything a person can set. The names rather than the values, for
 # the reason the settings lines give, and the path because a pin somebody wants lifted is lifted by
 # whoever can write that file.
@@ -998,6 +1004,12 @@ session-directory-changed = now working in { $directory }, and trusting it for t
 session-directory-closed = closed { $directory }; open it again with /add-dir { $directory }
 session-directory-not-changed = could not move to { $directory }: { $problem }
 session-permission-rule-ignored = ignoring a permission rule in settings.json: { $problem }
+# An allow rule written in a checkout's settings file. It answers an approval prompt, which is a
+# capability rather than a narrowing, so it is read from the person's own file only. Named rather
+# than counted: whoever wrote it is looking for their own line.
+session-permission-allow-ignored =
+    not granting the allow rule { $rule } from { $path }: an allow rule answers a prompt, so it is
+    read from ~/.bravebot/settings.json only
 # Said once, at the top of a session the flag was given for. A person who did not mean to pass it
 # should find out before the first write rather than after it, and the words name the flag so they
 # can tell what to take off the command line. The line under the box says so for as long as it holds;

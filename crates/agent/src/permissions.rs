@@ -310,6 +310,61 @@ mod tests {
         }
     }
 
+    /// PERM-14 at the boundary that turns lists into rules: a `Bash` allow rule a checkout wrote
+    /// decides nothing, and the same rule in the person's own file decides. Both directions in one
+    /// test, because a fix that dropped every allow rule would pass the first assertion alone.
+    ///
+    /// Here rather than only in `bravebot-config` because the lists cross a crate boundary before
+    /// anything acts on them, and this is the call every interactive session makes. The three
+    /// families share these rules, so an entry that never reaches `Permissions::parse` reaches no
+    /// gate: what each gate then does with an `Allow` ruling is pinned where that gate is.
+    #[test]
+    fn a_checkout_cannot_write_a_rule_that_answers_a_prompt() {
+        let block = r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#;
+        let checkout = layered_settings("checkout-allow", Some(block), None);
+        let (permissions, rejected) = from_settings(&checkout, Some(&PathBuf::from("/home/x")));
+        assert!(rejected.is_empty(), "{rejected:?}");
+        assert_eq!(
+            permissions.for_command("bash scripts/check.sh"),
+            Decision::Unmatched,
+            "a checkout's allow rule answered the run prompt"
+        );
+
+        let own = layered_settings("own-allow", None, Some(block));
+        let (permissions, rejected) = from_settings(&own, Some(&PathBuf::from("/home/x")));
+        assert!(rejected.is_empty(), "{rejected:?}");
+        assert_eq!(
+            permissions.for_command("bash scripts/check.sh"),
+            Decision::Ruled(Ruling::Allow),
+            "the person's own allow rule stopped deciding"
+        );
+    }
+
+    /// A scratch home and working directory with the layers the arguments name, read the way a
+    /// session reads them.
+    ///
+    /// Settings written to files rather than parsed from text, because which file a rule was in is
+    /// the whole of what this test turns on and [`bravebot_config::Settings::parse`] has no layers.
+    fn layered_settings(
+        name: &str,
+        project: Option<&str>,
+        home: Option<&str>,
+    ) -> bravebot_config::Settings {
+        let root = crate::testutil::scratch_dir(&format!("bravebot-permission-layers-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let home_dir = root.join("home");
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&home_dir).expect("scratch home");
+        std::fs::create_dir_all(cwd.join(".bravebot")).expect("scratch project");
+        if let Some(text) = project {
+            std::fs::write(cwd.join(".bravebot").join("settings.json"), text).expect("project");
+        }
+        if let Some(text) = home {
+            std::fs::write(home_dir.join("settings.json"), text).expect("home");
+        }
+        bravebot_config::Settings::layered(Some(home_dir), Some(&cwd), None)
+    }
+
     /// A single leading slash is anchored at the settings file's own directory, which is the
     /// documented behaviour and the one somebody is most likely to get wrong.
     #[test]
