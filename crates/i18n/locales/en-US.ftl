@@ -340,6 +340,7 @@ trust-directory-regardless =
 trust-directory-yes = trust it
 trust-directory-no = ask me about every write
 quit = quit
+trust-quit-again = again
 
 
 ## Opening a directory a settings file named, asked once for each when a session starts

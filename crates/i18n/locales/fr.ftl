@@ -297,6 +297,7 @@ trust-directory-regardless =
 trust-directory-yes = lui faire confiance
 trust-directory-no = me demander à chaque écriture
 quit = quitter
+trust-quit-again = encore
 
 
 ## Ouvrir les répertoires qu'un fichier de réglages nomme, demandés une fois chacun au démarrage

@@ -239,14 +239,20 @@ on the screen, and a person still has to press it with the bytes in front of the
 ### PROMPT-7: declining is not cancelling
 
 Saying no to a write does not stop the turn; Ctrl-C refuses it and does. Leaving at a question a
-session opens with ends the session and opens nothing, and only Ctrl-C leaves.
+session opens with ends the session and opens nothing, and only Ctrl-C leaves. **It takes two presses
+there**, and neither from a key that arrived with others: leaving before a session begins is the one
+outcome nothing undoes, and an interrupt is a single byte another program can write into the terminal,
+which an editor activating a virtualenv does ahead of the line it types
+([INPUT-4](terminal-input.md#INPUT-4) keeps the same rule for the same reason).
 
 **Why.** A refusal the agent can carry on past is how a person steers without starting over.
 
 `verified-by: bravebot_tui::confirm::saying_no_does_not_stop_the_turn`
 `verified-by: bravebot_tui::confirm::ctrl_c_refuses_the_write_and_stops_the_turn`
 `verified-by: bravebot_tui::confirm::only_the_interrupt_stops_the_turn_at_a_run_prompt`
-`verified-by: bravebot_tui::trust_prompt::ctrl_c_leaves_rather_than_answering_the_question`
+`verified-by: bravebot_tui::trust_prompt::ctrl_c_leaves_on_the_second_press`
+`verified-by: bravebot_tui::trust_prompt::one_interrupt_another_program_wrote_closes_nothing`
+`verified-by: bravebot_tui::trust_prompt::two_interrupts_that_arrived_together_close_nothing`
 `verified-by: bravebot_tui::trust_prompt::only_ctrl_c_leaves`
 `verified-by: bravebot_tui::trust_prompt::leaving_starts_no_session`
 `verified-by: bravebot_tui::trust_prompt::leaving_at_one_of_the_questions_opens_nothing`

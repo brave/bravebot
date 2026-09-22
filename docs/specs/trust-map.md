@@ -204,7 +204,9 @@ more specific record.
 `verified-by: bravebot_tui::trust_prompt::only_y_trusts_and_enter_answers_nothing`
 `verified-by: bravebot_tui::trust_prompt::declining_trusts_nothing`
 `verified-by: bravebot_tui::trust_prompt::leaving_starts_no_session`
-`verified-by: bravebot_tui::trust_prompt::ctrl_c_leaves_rather_than_answering_the_question`
+`verified-by: bravebot_tui::trust_prompt::ctrl_c_leaves_on_the_second_press`
+`verified-by: bravebot_tui::trust_prompt::one_interrupt_another_program_wrote_closes_nothing`
+`verified-by: bravebot_tui::trust_prompt::two_interrupts_that_arrived_together_close_nothing`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
 `verified-by: bravebot_tui::app::a_resume_keeps_its_own_map_even_where_the_mode_would_answer`
