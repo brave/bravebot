@@ -35,13 +35,13 @@ include!(concat!(env!("OUT_DIR"), "/baked.rs"));
 /// The server treats an unrecognised model as [`DEFAULT_MODEL`], so that is also our default rather
 /// than pinning a name that may silently stop existing.
 ///
-/// Brave-bot's own triage entry. Leo uses `automatic` for a different routing policy; requests from
-/// this product identify themselves with `Brave-Product: brave-bot` so the listing and completions
+/// Bravebot's own triage entry. Leo uses `automatic` for a different routing policy; requests from
+/// this product identify themselves with `Brave-Product: bravebot` so the listing and completions
 /// endpoints offer this name instead.
-pub const DEFAULT_MODEL: &str = "automatic-brave-bot";
+pub const DEFAULT_MODEL: &str = "automatic-bravebot";
 
 /// The automatic routing name Leo uses. Remembered choices and configuration may still say it from
-/// before brave-bot had its own entry; [`normalize_model`] rewrites those to [`DEFAULT_MODEL`].
+/// before bravebot had its own entry; [`normalize_model`] rewrites those to [`DEFAULT_MODEL`].
 const LEGACY_AUTOMATIC: &str = "automatic";
 
 /// Rewrite a model name from an older choice or configuration to what this product sends now.
@@ -757,7 +757,7 @@ impl Config {
     ///
     /// The free host, always: the listing reports which models are premium rather than differing
     /// between the two, and asking the premium host would spend a subscription credential to learn
-    /// something the free one says for nothing. Callers send `Brave-Product: brave-bot` so the
+    /// something the free one says for nothing. Callers send `Brave-Product: bravebot` so the
     /// roster is the one curated for this agent rather than Leo's.
     pub fn models_url(&self) -> String {
         format!("{}/v1/models", self.endpoint)
@@ -1904,7 +1904,7 @@ mod tests {
         );
     }
 
-    /// Leo's automatic routing name is rewritten to brave-bot's own entry.
+    /// Leo's automatic routing name is rewritten to bravebot's own entry.
     #[test]
     fn the_legacy_automatic_name_becomes_the_brave_bot_default() {
         let config = Config::from_lookup(|key| match key {

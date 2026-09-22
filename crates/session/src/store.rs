@@ -327,7 +327,7 @@ pub fn parse_model(contents: &str) -> Option<String> {
     Some(normalize_saved_model(name))
 }
 
-/// Rewrite Leo's automatic routing name to brave-bot's.
+/// Rewrite Leo's automatic routing name to bravebot's.
 fn normalize_saved_model(name: &str) -> String {
     bravebot_config::normalize_model(name).to_string()
 }
@@ -720,7 +720,7 @@ and this?
         );
     }
 
-    /// Leo's automatic routing name is rewritten to brave-bot's own entry.
+    /// Leo's automatic routing name is rewritten to bravebot's own entry.
     #[test]
     fn the_legacy_automatic_name_is_rewritten_on_read() {
         assert_eq!(
