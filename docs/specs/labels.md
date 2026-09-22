@@ -29,7 +29,7 @@ guards:
       - crates/agent/src/aside.rs: 2
       - crates/agent/src/manifest.rs: 4
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 25
+      - crates/agent/src/tools.rs: 26
       - crates/agent/src/turn.rs: 4
       - crates/agent/src/vet.rs: 1
       - crates/agent/src/workspace.rs: 2
@@ -266,6 +266,12 @@ settled.
 `verified-by: bravebot_core::policy::a_private_argument_is_refused_rather_than_read`
 `verified-by: bravebot_agent::tools::an_edit_from_a_trusted_context_replaces_the_passage`
 `verified-by: bravebot_agent::tools::an_edit_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::a_command_line_and_a_directory_are_read_from_a_trusted_context`
+`verified-by: bravebot_agent::tools::a_command_line_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::a_url_is_read_from_a_trusted_context`
+`verified-by: bravebot_agent::tools::a_url_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::a_job_name_is_read_from_a_trusted_context`
+`verified-by: bravebot_agent::tools::a_job_name_is_refused_once_the_context_has_met_something_untrusted`
 
 <a id="LABEL-6"></a>
 ### LABEL-6: minting a witness is not permission to inspect
