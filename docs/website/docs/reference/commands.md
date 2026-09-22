@@ -517,7 +517,8 @@ than by doing nothing quietly.
 
 **In shell mode the line is a command line, not a command.** `! /usr/bin/env` runs a program. Nothing
 is offered for completion there either, since `/usr/bin/env` is a path, and a turn running changes
-none of that.
+none of that: the line waits behind its `!` and is run when the turn ends, rather than being answered
+as a command or sent to the model. [Shell mode](../using/shell-mode.md) is the rest of it.
 
 **A command is never sent as a prompt.** A line that is a command is acted on and does not reach the
 model. A session asked to shorten itself must not answer by talking about shortening itself.
