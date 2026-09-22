@@ -1,4 +1,51 @@
-# Labelling an issue
+# Filing an issue
+
+## The title
+
+The backlog is read as a list. A title is what somebody decides to open an issue from, and what
+somebody searching months later matches against, so the title carries the whole of the issue or
+the issue is invisible.
+
+**A title names the whole of the work, never one aspect of it.** A title that gives a consequence of
+the change, or the one part of it that was hardest to settle, makes a new subsystem read as a
+refinement to an existing one, and whoever is picking work up passes it over. "Add agents support"
+says what is not there today. "A delegate kind is one a person wrote down" is true of the same issue
+and says nothing about its size.
+
+**The verb first where something is missing, the finding where something is wrong.** A capability
+that does not exist yet names itself and starts with the verb: `Add persistent memory system`, `Fold
+brave-experiments/brave-bot-ui into bravebot`, `Enable Search tool`. An issue reporting something
+wrong states what is wrong instead, because the defect is the whole of the ask and stating it is what
+makes the list readable without opening anything.
+
+**Say the cost in the title wherever one sentence holds both.** `The aichat endpoint discards
+reasoning_effort, so /effort does nothing on Brave-served models` gives the defect and what it costs,
+and a reader who knew neither can order it against everything else. This is why titles here run long,
+and running long is not the defect: losing the end is. Titles in this backlog have been cut off
+mid-sentence by what filed them, and the end is where the cost was, so put the claim in the first
+clause and let the cost follow it.
+
+**No prefix for anything a label already says.** The area is `area/delegation`, and a label is
+queryable where a prefix is not: `is:open label:area/delegation` finds the issue, and a prefix spends
+the characters before the first useful word on something the sidebar is already showing. The same
+holds for the kind, since `bug:` says what the `bug` label says.
+
+**A clause id may lead a title, because nothing else records it.** `CRED-15:`, `LABEL-5:` and
+`DROP-4/DROP-6:` name the clause the issue is against, there is no label for a clause id, and the id
+is how somebody holding the spec finds the issue. Name every clause the issue is against, not the
+first one.
+
+**Use the word somebody would search for**, spelled the way the tree spells it. An issue about
+`.bravebot/agents` says "agents", an issue about the credential scan says "credential" rather than
+"secret", and an issue against a clause says the id. A title built out of general words is a title
+nobody finds twice.
+
+A title that diverges from this is not on its own worth a retitle, because a retitle reaches
+everybody subscribed and an awkward title costs less than that. The
+[triage-issues skill](../../agents/skills/triage-issues/SKILL.md) brings one into line when it is
+already editing the issue for another reason.
+
+## The kind, and the three axes
 
 The kind labels say what an issue **is**: `bug`, `security`, `spec-mismatch`, `spec-coverage`,
 `spec-bug`, `parity`, `enhancement`. The three axes say what to **do** about it, and every open
