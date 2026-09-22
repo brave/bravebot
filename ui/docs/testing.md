@@ -30,9 +30,12 @@ advice, and write approvals show the processor's remark beside the diff.
   Uses an isolated agent home; no paid inference or real credentials.
 - `npm run build`: bridge and secure-file helper builds, TypeScript, and Electron bundles.
 - After building, `node --test scripts/*.test.mjs`: renderer state, models, file access,
-  memory retention, avatar motion and traits. File tests use the actual secure-file helper.
-  `marking.test.mjs` needs no build: it renders the transcript's own components through
-  `react-dom/server` and asserts on the markup, which is what pins the three properties
+  memory retention, bot grounding, avatar motion and traits. File tests use the actual
+  secure-file helper, the grounding tests included: they assert that a briefing names the
+  memory file and quotes no byte of it, and that a link at the memory path or at the
+  briefing path is refused or displaced rather than followed. `marking.test.mjs` needs no
+  build: it renders the transcript's own components through `react-dom/server` and asserts
+  on the markup, which is what pins the three properties
   [LAYER-5](../../docs/specs/layering.md#LAYER-5) states for this surface.
 - After building, `node scripts/drive-turn-details.mjs`: notices, completed-turn usage,
   live and unavailable audits, background delivery, disclosure persistence, cancellation,

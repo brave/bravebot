@@ -28,6 +28,11 @@ do not themselves send the contents to a model. File attachments require a nativ
 picker, a session-bound grant, validation at send time, and an explicit Send action.
 The main process strips raw `files` and `dropped` lists from renderer turn requests
 and composes authorized paths itself. Bot briefings are also composed by the main process.
+Both lists are admitted as trusted context, so the only path a bot contributes is the
+briefing, whose every byte the main process wrote from what somebody typed. A bot's memory
+is neither named nor quoted in it: the briefing says where the memory is and the model reads
+it under whatever the trust map says about that path. See
+[how a purpose reaches the model](interface.md#how-a-purpose-reaches-the-model).
 
 ## Decisions and refusal
 
