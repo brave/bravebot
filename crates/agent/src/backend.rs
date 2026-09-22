@@ -638,7 +638,7 @@ fn gateway_client<'a>(
 fn gateway_token(
     provider: &bravebot_config::provider::Provider,
     lookup: impl Fn(&str) -> Option<String>,
-) -> Result<Option<String>, BackendError> {
+) -> Result<Option<bravebot_config::Secret>, BackendError> {
     match provider.credential(lookup) {
         Credential::Token(token) => Ok(Some(token)),
         Credential::NotNeeded => Ok(None),
@@ -968,10 +968,10 @@ mod tests {
             .provider_for("qwen3-coder-oc:latest")
             .expect("offered");
 
-        assert_eq!(
+        assert!(
             gateway_token(provider, |_| Some("in-the-environment".to_string()))
-                .expect("not refused"),
-            None,
+                .expect("not refused")
+                .is_none(),
             "a gateway that names no credential was given one anyway"
         );
         assert!(

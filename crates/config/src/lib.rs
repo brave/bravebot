@@ -167,6 +167,10 @@ const _: () = assert!(DEFAULT_CONTEXT_BUDGET < SMALLEST_USEFUL_WINDOW);
 /// use bravebot_config::Secret;
 /// let _ = Secret::new("a") == Secret::new("a");
 /// ```
+///
+/// Dropping one overwrites its buffer, so a credential is not handed back to the allocator
+/// intact ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)). Cloning makes a
+/// second buffer that is cleared the same way when it goes.
 #[derive(Clone)]
 pub struct Secret(String);
 
@@ -183,6 +187,39 @@ impl Secret {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+}
+
+/// Clear the buffer rather than return it to the allocator holding a credential.
+///
+/// What this reaches is the buffer this type owns, which is what
+/// [CRED-23](../../../docs/specs/credential-protection.md#CRED-23) promises and all it promises.
+/// A value that was copied on its way in, by an allocator growing a `String` or by a library
+/// between here and a socket, left a copy nothing here holds a pointer to.
+impl Drop for Secret {
+    fn drop(&mut self) {
+        scrub(&mut self.0);
+    }
+}
+
+/// Overwrite a string's bytes where they lie, leaving the buffer as many zero bytes long as the
+/// value was.
+///
+/// `clear` is not this and is the mistake it exists to avoid: it sets the length to nothing and
+/// leaves every byte where it was, so the credential is still in the allocation when the
+/// allocator hands it to whoever asks next. Clearing and then pushing the replacement back writes
+/// over the original bytes in place, because `clear` keeps the capacity and the replacement is
+/// exactly as long as what it replaces, so nothing reallocates.
+///
+/// The write is held down by handing the bytes to [`std::hint::black_box`]. Nothing reads them
+/// back, and a compiler that can see the whole life of the buffer is entitled to delete a store
+/// no one observes; an opaque use of the bytes is how safe code says otherwise. It is a barrier
+/// rather than a guarantee the language makes, which is the price of doing this in a crate that
+/// forbids `unsafe` and so cannot write the bytes volatile.
+pub(crate) fn scrub(value: &mut String) {
+    let length = value.len();
+    value.clear();
+    value.extend(std::iter::repeat_n('\0', length));
+    std::hint::black_box(value.as_bytes());
 }
 
 impl fmt::Debug for Secret {
@@ -1056,10 +1093,10 @@ mod tests {
             let (provider, model) = config.provider_for(&config.default_model).expect("gateway");
             assert_eq!(model, "z-ai/glm-4.6");
             assert_eq!(provider.base_url, "https://openrouter.ai/api/v1");
-            assert_eq!(
+            assert!(matches!(
                 provider.credential(|_| None),
-                provider::Credential::Token("test-token".to_string())
-            );
+                provider::Credential::Token(token) if token.expose() == "test-token"
+            ));
             assert!(provider.models.is_empty());
         }
     }
@@ -1074,15 +1111,18 @@ mod tests {
         let config = Config::from_lookup_with_providers(|_| None, settings.providers().to_vec())
             .expect("gateway configured before its token is resolved");
         let provider = &config.providers[0];
-        assert_eq!(
+        assert!(matches!(
             provider.credential(|name| match name {
                 "OPENROUTER_API_KEY" => Some("environment-token".into()),
                 _ => None,
             }),
-            provider::Credential::Token("environment-token".to_string())
-        );
+            provider::Credential::Token(token) if token.expose() == "environment-token"
+        ));
         // Missing gateway tokens are reported by the gateway client, not as missing Brave keys.
-        assert_eq!(provider.credential(|_| None), provider::Credential::Absent);
+        assert!(matches!(
+            provider.credential(|_| None),
+            provider::Credential::Absent
+        ));
         assert!(!config.serves_aichat());
     }
 
@@ -2013,6 +2053,57 @@ mod tests {
         assert_eq!(format!("{secret:?}"), "Secret(<redacted>)");
         assert_eq!(format!("{secret}"), "<redacted>");
         assert!(!format!("{secret:?}").contains("live-credential"));
+    }
+
+    /// The credential has to be gone from the allocation, not just from the length.
+    ///
+    /// Both halves matter and neither alone says it. A buffer of zeros at a fresh address leaves
+    /// the original bytes where the allocator can hand them on, and an unmoved buffer still
+    /// holding the value is what `String::clear` produces: the length reads zero and every byte
+    /// is still there.
+    #[test]
+    fn scrubbing_overwrites_the_bytes_where_they_lie() {
+        let mut value = String::from("sk-live-0123456789abcdef");
+        let length = value.len();
+        let address = value.as_ptr();
+
+        scrub(&mut value);
+
+        assert_eq!(
+            value.as_ptr(),
+            address,
+            "the buffer moved, so the credential is still in the one that was left behind"
+        );
+        assert_eq!(
+            value.as_bytes(),
+            vec![0u8; length],
+            "the buffer the credential was in still holds bytes of it"
+        );
+    }
+
+    /// Bytes rather than characters, because a value that is not ASCII has more of the first
+    /// than the second and the tail of it is what a count of characters would leave behind.
+    ///
+    /// A passphrase is where this arrives: nothing stops one holding a character that takes
+    /// three bytes, and a scrub measured in characters would write one zero for it and leave
+    /// the other two readable.
+    #[test]
+    fn scrubbing_counts_the_bytes_rather_than_the_characters() {
+        let mut value = String::from("pass-phrase-\u{4e16}\u{754c}");
+        let length = value.len();
+        assert!(length > value.chars().count(), "the fixture is not ASCII");
+
+        scrub(&mut value);
+
+        assert_eq!(
+            value.len(),
+            length,
+            "the buffer is as long as the value was"
+        );
+        assert!(
+            value.bytes().all(|byte| byte == 0),
+            "a byte of the value survived the scrub"
+        );
     }
 
     /// An explicit variable must win, so a released binary can be pointed at a local

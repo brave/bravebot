@@ -10,6 +10,7 @@
 //! that says neither names no credential and is asked without one, which is what a local Ollama
 //! wants.
 
+use crate::Secret;
 use std::fmt;
 
 /// The endpoints known by the name a provider block gives them.
@@ -79,7 +80,10 @@ impl Model {
 }
 
 /// One gateway, and the models it was configured to offer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Not comparable, because one field is a credential and `Secret` refuses equality: an operator
+/// answering a question about a token's bytes recovers them a guess at a time.
+#[derive(Debug, Clone)]
 pub struct Provider {
     /// The key this provider had in the block, which is what a picker row names it by.
     ///
@@ -97,7 +101,11 @@ pub struct Provider {
     /// Supported because it is opencode's field, not because it is a good idea: a long-lived
     /// credential in a file is a credential in a file people paste into issues. Naming a variable in
     /// `env` keeps it wherever the person already keeps secrets.
-    pub api_key: Option<String>,
+    ///
+    /// A [`Secret`] rather than a `String` so that the value is redacted wherever this block is
+    /// printed, and so that the buffer holding it is cleared when the block goes
+    /// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
+    pub api_key: Option<Secret>,
     /// The models this provider offers, in the order the file listed them.
     ///
     /// Possibly empty, because opencode does not require `models`. A provider offering nothing is
@@ -158,7 +166,9 @@ impl Provider {
             name: string(entry.get("name")),
             base_url: base_url.trim_end_matches('/').to_string(),
             env: names(entry.get("env")),
-            api_key: options.and_then(|options| string(options.get("apiKey"))),
+            api_key: options
+                .and_then(|options| string(options.get("apiKey")))
+                .map(Secret::new),
             models: models(entry.get("models")),
             bedrock: None,
         })
@@ -241,8 +251,14 @@ impl Provider {
         self.env
             .iter()
             .filter_map(|name| lookup(name))
-            .map(|value| value.trim().to_string())
-            .find(|value| !value.is_empty())
+            .find_map(|mut value| {
+                let token = Secret::new(value.trim());
+                // The lookup handed over a `String` of its own and the trimmed token is a second
+                // copy, so the first is cleared here rather than returned to the allocator holding
+                // the token. A buffer that lived for two statements is still one this program owns.
+                crate::scrub(&mut value);
+                (!token.is_empty()).then_some(token)
+            })
             .or_else(|| self.api_key.clone())
             .map_or(Credential::Absent, Credential::Token)
     }
@@ -264,10 +280,11 @@ impl Provider {
 /// different remedy: a request, a roster, and a diagnostic. Read as a bare `Option`, the second
 /// situation is indistinguishable from the first, and every caller reports a gateway that needs
 /// nothing as one somebody has to go and configure.
-#[derive(Clone, PartialEq, Eq)]
+/// Not comparable, for the reason [`Provider`] is not: the token it carries is a [`Secret`].
+#[derive(Clone)]
 pub enum Credential {
     /// The token to attach, from the first variable that held one or from the file.
-    Token(String),
+    Token(Secret),
     /// The block names where a token lives and nothing there holds one.
     Absent,
     /// The block names nowhere for a token to live, so its requests carry none.
@@ -387,6 +404,17 @@ mod tests {
             panic!("not an object");
         };
         Provider::all(&root)
+    }
+
+    /// The token a credential carries, for an assertion that has to say which one it is.
+    ///
+    /// A `Secret` answers no comparison, which is the point of it, so a test says what it wanted
+    /// by reading the value out here rather than by putting an operator on the type.
+    fn token(credential: &Credential) -> Option<&str> {
+        match credential {
+            Credential::Token(token) => Some(token.expose()),
+            Credential::Absent | Credential::NotNeeded => None,
+        }
     }
 
     fn one(text: &str) -> Provider {
@@ -661,10 +689,7 @@ mod tests {
                 "options": {"apiKey": "a-token"}
             }}}"#);
         assert_eq!(provider.base_url, "https://openrouter.ai/api/v1");
-        assert_eq!(
-            provider.credential(|_| None),
-            Credential::Token("a-token".to_string())
-        );
+        assert_eq!(token(&provider.credential(|_| None)), Some("a-token"));
     }
 
     /// A known name pointed somewhere else reaches where it was pointed. Otherwise the table would
@@ -701,10 +726,7 @@ mod tests {
             "PRESENT_ONE" => Some("from-the-environment".to_string()),
             _ => None,
         });
-        assert_eq!(
-            credential,
-            Credential::Token("from-the-environment".to_string())
-        );
+        assert_eq!(token(&credential), Some("from-the-environment"));
     }
 
     /// Supported because it is opencode's field. A copied block that authenticates this way has to
@@ -714,9 +736,28 @@ mod tests {
         let provider = one(r#"{"provider": {"gw": {
                 "options": {"baseURL": "https://example.invalid/v1", "apiKey": "in-the-file"}
             }}}"#);
-        assert_eq!(
-            provider.credential(|_| None),
-            Credential::Token("in-the-file".to_string())
+        assert_eq!(token(&provider.credential(|_| None)), Some("in-the-file"));
+    }
+
+    /// A block reaches a person's screen whenever a diagnostic prints one or an assertion about
+    /// one fails, and a token somebody wrote into their settings file is a live credential. It
+    /// went out in plain text while this field was a `String`, since the derived `Debug` prints
+    /// whatever a field holds.
+    #[test]
+    fn printing_a_block_does_not_print_the_token_written_into_it() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://example.invalid/v1", "apiKey": "in-the-file"}
+            }}}"#);
+
+        let printed = format!("{provider:?}");
+
+        assert!(
+            !printed.contains("in-the-file"),
+            "the token is in what was printed: {printed}"
+        );
+        assert!(
+            printed.contains("<redacted>"),
+            "the field is not there at all, so nothing says a token was withheld: {printed}"
         );
     }
 
@@ -727,11 +768,11 @@ mod tests {
                 "env": ["ABSENT_ONE"],
                 "options": {"baseURL": "https://example.invalid/v1"}
             }}}"#);
-        assert_eq!(provider.credential(|_| None), Credential::Absent);
-        assert_eq!(
+        assert!(matches!(provider.credential(|_| None), Credential::Absent));
+        assert!(matches!(
             provider.credential(|_| Some("   ".to_string())),
             Credential::Absent
-        );
+        ));
     }
 
     /// The block a local Ollama is configured with in the tool this shape is borrowed from: an
@@ -746,12 +787,15 @@ mod tests {
                 "name": "Ollama (local)",
                 "options": {"baseURL": "http://localhost:11434/v1"}
             }}}"#);
-        assert_eq!(provider.credential(|_| None), Credential::NotNeeded);
+        assert!(matches!(
+            provider.credential(|_| None),
+            Credential::NotNeeded
+        ));
         // Nothing is named, so nothing in the environment is consulted to decide it either.
-        assert_eq!(
+        assert!(matches!(
             provider.credential(|_| Some("in-the-environment".to_string())),
             Credential::NotNeeded
-        );
+        ));
     }
 
     /// Two gateways are ordinary. The block being a map is what makes a duplicate id

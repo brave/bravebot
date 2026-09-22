@@ -3252,7 +3252,8 @@ fn fetch_gateway_models(
     )
     .map_err(|denial| denial.to_string())
     .and_then(|mut policy| {
-        bravebot_aichat::models::list_from_gateway(&mut policy, provider, token.as_deref(), &egress)
+        let token = token.as_ref().map(bravebot_config::Secret::expose);
+        bravebot_aichat::models::list_from_gateway(&mut policy, provider, token, &egress)
             .map_err(|error| error.to_string())
     })
 }

@@ -5,6 +5,7 @@ status: proposed
 governs:
   - crates/config/src/lib.rs
   - crates/config/src/env_var.rs
+  - crates/config/src/provider.rs
   - crates/bedrock/src/credentials.rs
   - crates/core/src/credentials.rs
 guards:
@@ -586,7 +587,31 @@ program does not own and cannot clear, so what is promised is the buffers it doe
 defend against a debugger attached to a live process, which is the same account and is answered by
 the authority holding the value instead.
 
-`verified-by: none`
+**What holds today.** The buffers a `Secret` owns. Every credential the backend configuration
+resolves is kept in one, the gateway token in a settings file included.
+
+**What does not, and why.** Four things.
+
+The crash artifacts. Nothing turns off the core dump a crash leaves behind.
+
+The pages are not kept off swap. Locking the buffers themselves needs the allocator that hands
+them out, which this program does not own, and the process-wide form, `mlockall` with
+`MCL_FUTURE`, is worse than the thing it prevents: where the memory lock limit allows it at all,
+every later allocation becomes unswappable, so an agent asked to read a large file fails to
+allocate rather than being paged out. Doing this properly means an allocator for credential
+buffers, which is a decision rather than an omission.
+
+The single-use credentials of an imported subscription are plain strings. They live in
+`bravebot-skus`, which [LAYER-1](layering.md#LAYER-1) gives no dependency on any other crate here,
+so reaching `Secret` from there is a layering change rather than a line.
+
+A token read out of a settings file is in the parsed document before it is in a `Secret`, and that
+copy goes back to the allocator intact. The value the program then holds for the run is cleared;
+the one the parse produced on the way to it is not.
+
+`verified-by: bravebot_config::lib::scrubbing_overwrites_the_bytes_where_they_lie`
+`verified-by: bravebot_config::lib::scrubbing_counts_the_bytes_rather_than_the_characters`
+`verified-by: by-construction (the buffer a Secret owns is unreachable once the Secret is gone, so what a test can run is the scrub rather than the drop; the drop body is one call to the scrub the two tests above pin and does nothing else)`
 
 <a id="CRED-24"></a>
 ### CRED-24: a credential never travels as a command-line argument
