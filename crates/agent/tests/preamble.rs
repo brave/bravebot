@@ -425,6 +425,7 @@ fn the_environment_is_stated_even_with_no_instructions_to_read() {
     for fact in [
         "Working directory:",
         "Is a git repository:",
+        "GitHub CLI (gh) on PATH:",
         "Platform:",
         "OS version:",
         "Shell:",
@@ -436,6 +437,48 @@ fn the_environment_is_stated_even_with_no_instructions_to_read() {
             preamble.text
         );
     }
+}
+
+/// A delegate's prompt carries this block word for word, and a delegate is offered no `fetch_url`
+/// and, without `ShellExec`, no `run`. So what routes between those two is kept out of the block and
+/// handed over separately, on the same probe: a machine whose `$PATH` holds the CLI has both, and one
+/// without it has neither.
+///
+/// Both halves read the machine the code reads, so where `gh` is not installed there is nothing for
+/// either to say and this observes nothing. What holds on any host is in the unit tests, over the
+/// paragraph and over the fact line with the probe's answer passed in.
+#[test]
+fn the_road_a_github_url_takes_is_not_in_the_block_a_delegate_reads() {
+    let scratch = Scratch::new("github-road-preamble");
+    let project = scratch.directory("project");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    assert!(
+        !preamble.text.contains("gh pr view"),
+        "a delegate was told to run a command it was not offered: {}",
+        preamble.text
+    );
+    assert_eq!(
+        preamble.text.contains("GitHub CLI (gh) on PATH: true"),
+        preamble.for_a_person.contains("gh pr view"),
+        "the fact and what it is for disagree about this machine: {} / {}",
+        preamble.text,
+        preamble.for_a_person
+    );
 }
 
 /// Said from the tree rather than assumed. A planner told a checkout is not a repository would
@@ -687,6 +730,8 @@ fn an_empty_attribution_tells_the_planner_to_carry_nothing_on_a_commit() {
         )
     };
 
+    // The destination as this block names it, not the two words: the prompt says "pull request"
+    // elsewhere for its own reasons, and only this phrase is the block answering for that name.
     assert!(
         preamble
             .text
@@ -695,7 +740,7 @@ fn an_empty_attribution_tells_the_planner_to_carry_nothing_on_a_commit() {
         preamble.text
     );
     assert!(
-        !preamble.text.contains("pull request"),
+        !preamble.text.contains("pull request you open"),
         "a name the file never wrote was answered for anyway: {}",
         preamble.text
     );

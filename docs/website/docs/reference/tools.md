@@ -807,6 +807,10 @@ Fetches an `http` or `https` URL. **You approve every fetch, unless a rule names
 |---|---|
 | `url` | the one URL to fetch |
 
+**Not the tool for a GitHub pull request or issue where `gh` is installed.** The description says so
+and the system prompt names the commands that are, which is
+[The GitHub CLI](../customize/instructions.md#the-github-cli).
+
 **What comes back is quarantined however you answer.** The body is a reference: the planner may hand
 it to [`spawn_processor`](#spawn_processor) or write it to a file with
 [`write_file`](#write_file), and it cannot read it or be told what it says. A page saying "ignore

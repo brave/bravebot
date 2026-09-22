@@ -173,12 +173,23 @@ exactly that.
 <a id="INSTR-9"></a>
 ### INSTR-9: where the planner is working is stated, and is not read through the trust gate
 
-The system prompt says the working directory, whether the tree is a git repository, the platform,
-the OS version, the shell, today's date, and the directory this session has to itself
-([trust-map.md](trust-map.md)) where it has one, with what that directory is for and the name a
-program started from a command line reads its path from. A session that has none has nothing said
-about one. These are facts about the machine, and the prompt says so: they are not instructions and
-nothing is asked of the planner on their account.
+The system prompt says the working directory, whether the tree is a git repository, whether the
+GitHub CLI is on the path, the platform, the OS version, the shell, today's date, and the directory
+this session has to itself ([trust-map.md](trust-map.md)) where it has one, with what that directory
+is for and the name a program started from a command line reads its path from. A session that has
+none has nothing said about one. These are facts about the machine, and the prompt says so.
+
+One of them carries an imperative, and those are the terms on which one is admitted here: gated on
+what the probe found, and naming the one case rather than stating a preference. The session's own
+directory is stated with what to put in it. The rest are facts alone and nothing is asked of the
+planner on their account.
+
+What an installed GitHub CLI is for is said on the same terms, and to the turn a person is watching
+rather than in this block: the commands that read a pull request or an issue, with fetching the URL
+named as the fallback for a CLI nobody has logged in with. A delegate reads this block word for word
+and is offered neither road, no `fetch_url` at all and no `run` without the capability for it
+([DELEGATE-4](delegation.md#DELEGATE-4)), so an imperative choosing between them is stated where
+those tools are.
 
 They do not pass `read_trusted_content`, and that is the difference between them and every other
 source here. There is no file behind any of them. The root is where the user pointed the session,
@@ -202,6 +213,21 @@ part of the project and writes one into the project instead, which is the file a
 a reviewer each have to deal with. Saying nothing where there is no such directory is the same
 argument the other way: a path to a directory that is not there costs a turn the run that finds out.
 
+The GitHub CLI is the one whose fact would change nothing on its own, which is why the imperative
+goes with it. A URL arrives, there is a tool for URLs, and taking it fetches a whole page to read a
+fraction of it. The saving is the bytes and not the round: unvouched `run` output is `(U,priv)` just
+as a fetched body is ([labels.md](labels.md)), so either road spends the round that reads it back
+out, and what the page adds is its own size. The `.diff` address adds a hop the approval does not
+cover, which [FETCH-4](tools/fetch-url.md#FETCH-4) refuses unless a rule names the host it lands on.
+Naming the commands is what makes the fact worth its line, and naming GitHub rather than local tools
+in general is what makes it decide anything: a preference that holds for every service is a line on
+every turn that settles no case.
+
+The fact is still stated to a delegate, because whether a program is installed is true of the machine
+whoever is asking, and a delegate that may run one can use it. What is withheld there is only the
+sentence choosing between two tools, one of which a delegate never has: a delegate told to fall back
+to `fetch_url` spends a round on a name that resolves to nothing.
+
 `verified-by: bravebot_agent::preamble::the_working_directory_is_stated_so_nothing_has_to_run_pwd`
 `verified-by: bravebot_agent::preamble::the_environment_is_stated_even_with_no_instructions_to_read`
 `verified-by: bravebot_agent::preamble::whether_the_tree_is_a_git_repository_is_said_either_way`
@@ -209,6 +235,11 @@ argument the other way: a path to a directory that is not there costs a turn the
 `verified-by: bravebot_agent::preamble::the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it`
 `verified-by: bravebot_agent::preamble::a_session_with_no_directory_of_its_own_is_told_of_none`
 `verified-by: bravebot_agent::preamble::a_windows_version_is_the_three_numbers_a_build_is_named_by`
+`verified-by: bravebot_agent::preamble::whether_the_github_cli_is_installed_is_said_either_way`
+`verified-by: bravebot_agent::preamble::a_github_url_is_sent_to_the_cli_only_where_the_probe_found_one`
+`verified-by: bravebot_agent::preamble::an_installed_github_cli_still_names_fetch_url_as_the_fallback`
+`verified-by: bravebot_agent::preamble::the_road_a_github_url_takes_is_not_in_the_block_a_delegate_reads`
+`verified-by: bravebot_agent::turn::the_road_for_a_github_url_goes_out_with_the_fact_it_rests_on`
 
 ## Known costs
 
@@ -217,6 +248,16 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
 - **Resolution costs a directory listing and up to three file reads every turn.** Cheap next to the
   model call it precedes, and the alternative is a cache that has to be invalidated by something,
   which is a second thing to be wrong about how the filesystem looks.
+- **Looking for the GitHub CLI walks `$PATH` every turn**, for the same reason and against the same
+  alternative: the block is composed per turn, so a value read once would be the one that goes stale
+  when something is installed mid-session. The machine that pays most is the one without the CLI,
+  which walks every entry to the end to say so, and it is still a handful of directory reads in front
+  of a network round trip.
+- **On the path is not logged in.** Whether the CLI can reach GitHub cannot be told without a
+  request, and before the first turn is the wrong place to make one, so the imperative carries its
+  own fallback rather than resting on a stronger probe. A machine holding a CLI nobody has logged in
+  with spends one run finding that out, which is the trade: one run against every fetch of a page
+  for the part of it being read.
 - **A pointer that points at a pointer is not followed twice.** A chain is a mistake in the project
   rather than a layout to support, and the second read is where a cycle would become a hang.
 - **The date is UTC, not local.** The offset is not knowable without a timezone database, and a
