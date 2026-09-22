@@ -11994,6 +11994,150 @@ fn with_auto_vetting_a_check_that_could_not_be_made_still_asks() {
     );
 }
 
+/// Bypassing draws no prompt, so `vet_content` makes no check: the one exemption
+/// `docs/specs/vetting.md` CHECK-10 admits, stated from the other side by
+/// `docs/specs/permission-modes.md` MODE-4. A check here would send a whole quarantined slot to a
+/// second model to produce a word nobody would read, and the run would pay for it.
+///
+/// The mode is given to both halves, as a caller must: the task carries it and the confirmer is
+/// wrapped in it. The script answers a check with a safe verdict, so a check that did run would be
+/// answered rather than failing on an unscripted request and reading as a different fault.
+#[test]
+fn bypassing_makes_no_check_before_promoting_content() {
+    let scratch = Scratch::new("vet-content-bypass");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut shown = ShownAfterAVet::new(false);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut shown, bravebot_agent::PermissionMode::Bypass);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    assert!(
+        !sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "a check was made for a prompt that is not drawn"
+    );
+    assert!(
+        !sent
+            .iter()
+            .any(|body| body.contains(A_CHECK_ASKING) && body.contains("SENTINEL-XYZZY")),
+        "quarantined content was sent to a second model in the mode that reads no verdict"
+    );
+    assert!(
+        sent.last()
+            .is_some_and(|last| last.contains("SENTINEL-XYZZY")),
+        "the mode answered the prompt yes and the content still did not reach the planner"
+    );
+}
+
+/// The verdict filled in where no check was made claims nothing, so nothing downstream reads it as
+/// a check having found something. The reading that proves it is the trail: a `safe` filled in here
+/// would meet auto-vetting and record that a check found nothing, crediting a call that was never
+/// placed.
+///
+/// Auto-vetting on is what makes the difference reach a record. With it off both verdicts fall
+/// through to the same prompt, which this mode answers yes either way, and the two are
+/// indistinguishable from outside.
+#[test]
+fn bypassing_records_no_verdict_a_check_never_gave() {
+    let scratch = Scratch::new("vet-content-bypass-auto");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut shown = ShownAfterAVet::new(false);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut shown, bravebot_agent::PermissionMode::Bypass);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out")
+            .with_auto_vetting(true)
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let promotions: Vec<&String> = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "vet_content",
+                detail,
+            } => Some(detail),
+            _ => None,
+        })
+        .collect();
+    let promoted = promotions
+        .first()
+        .expect("the promotion was not recorded in the trail");
+    assert!(
+        !promoted.contains("the check found nothing"),
+        "the trail credits a check that was never made: {promoted}"
+    );
+    assert!(
+        promoted.contains("the user read it and vouched for it"),
+        "the trail does not say who answered: {promoted}"
+    );
+}
+
 /// The mode covers both routes that promote one slot's bytes on somebody's say-so, so a check that
 /// finds nothing answers the output prompt in the person's place too. The grant is the same shape
 /// as the other route's: one slot, once, with no trust rule written.

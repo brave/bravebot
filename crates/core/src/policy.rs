@@ -2898,27 +2898,37 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             message: format!("{slot}: {e}"),
         })?;
 
-        // The driver's own record of where the bytes came from, never the bytes. A command is
-        // said as what it printed, since that is what a person is being asked about rather than
-        // the line itself; everything else is the sentence the driver wrote when it quarantined
-        // the bytes, or the path a deferred read was reserved against. A slot from neither has
-        // only its own name to offer, which is a poor thing to put in front of somebody and is
-        // better than inventing one.
-        //
-        // A path is where it came from even where a quarantined listing is what named the file,
-        // which is the same address `Policy::before_vetting_a_path` already says on the vouch
-        // offer for a read through such a reference. It goes on a screen and into the check's
-        // metadata and is decided from nowhere.
-        let origin = match (
+        let origin = self.where_a_slot_came_from(slot, slots);
+
+        Ok(self.fix_check(content, slot.to_string(), origin, expects))
+    }
+
+    /// The driver's own record of where a slot's bytes came from, never the bytes.
+    ///
+    /// A command is said as what it printed, since that is what a person is being asked about
+    /// rather than the line itself; everything else is the sentence the driver wrote when it
+    /// quarantined the bytes, or the path a deferred read was reserved against. A slot from
+    /// neither has only its own name to offer, which is a poor thing to put in front of somebody
+    /// and is better than inventing one.
+    ///
+    /// A path is where it came from even where a quarantined listing is what named the file,
+    /// which is the same address [`Policy::before_vetting_a_path`] already says on the vouch
+    /// offer for a read through such a reference. It goes on a screen and into a check's
+    /// metadata and is decided from nowhere.
+    ///
+    /// Answered on its own as well as inside [`Policy::before_vetting`], because the prompt is
+    /// built whether or not a check was made: bypassing mode makes none and still has a request
+    /// to fill in, and a second copy of this match in the caller would be a second answer to
+    /// where a slot came from.
+    pub fn where_a_slot_came_from(&self, slot: &SlotId, slots: &crate::slot::SlotStore) -> String {
+        match (
             slots.command_of(slot),
             slots.origin_of(slot, &PathAuthority::mint()),
         ) {
             (Some(command), _) => format!("what {command} printed"),
             (None, Some(origin)) => origin.to_string(),
             (None, None) => slot.to_string(),
-        };
-
-        Ok(self.fix_check(content, slot.to_string(), origin, expects))
+        }
     }
 
     /// Fix a check over a file's contents, before anybody is asked to vouch for its path.

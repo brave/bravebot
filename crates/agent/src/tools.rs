@@ -3847,21 +3847,46 @@ fn vet_content<S: Sink, C: Confirmer>(
         return problem(refusal);
     }
 
-    let spec = match policy.before_vetting(&slot, Some(&expects), tools.slots) {
-        Ok(spec) => spec,
-        Err(denial) => return problem(format!("refused: {denial}")),
+    // The second opinion, before the question rather than after it.
+    //
+    // Not made in the one mode that draws no prompt: bypassing answers this question yes without
+    // showing anybody anything, so a check there is a model call whose word nobody reads. A
+    // verdict is still filled in, and it is the one that claims nothing. The same gate reading
+    // `read_output` and the vouch offer in `read_file` carry, and the exemption
+    // `docs/specs/permission-modes.md` MODE-4 states from the other side.
+    let spec = match tools.permission_mode == crate::PermissionMode::Bypass {
+        true => None,
+        false => match policy.before_vetting(&slot, Some(&expects), tools.slots) {
+            Ok(spec) => Some(spec),
+            Err(denial) => return problem(format!("refused: {denial}")),
+        },
     };
 
-    let asked_at = std::time::Instant::now();
-    let checked = crate::vet::run(policy, &mut tools.chat, &spec);
-    let waited = Some(crate::timing::Interval::since(asked_at));
+    let mut spent = Usage::default();
+    let mut waited = None;
+    let mut said = None;
+    let verdict = match &spec {
+        None => Verdict::Inconclusive("the check was not made"),
+        Some(spec) => {
+            let asked_at = std::time::Instant::now();
+            let checked = crate::vet::run(policy, &mut tools.chat, spec);
+            spent = checked.usage;
+            waited = Some(crate::timing::Interval::since(asked_at));
+            said = checked.reason;
+            checked.verdict
+        }
+    };
+
+    // How many lines the planner is told it got: the check's count where one was made, and what
+    // the prompt was built over where none was. The two are the same slot and agree.
+    let mut counted = spec.as_ref().map_or(0, |spec| spec.lines());
 
     // The one branch on a verdict that decides more than which sentence a person reads first, and
     // it is reachable only where somebody turned auto-vetting on. `Safe` is the only word that
     // answers here: unsafe, and every way a check can fail to complete, fall through to the prompt
     // with the banner they would have carried anyway. Written down as the third known cost in
     // `docs/specs/labels.md`.
-    let endorsed = match tools.auto_vetting && checked.verdict.is_safe() {
+    let endorsed = match tools.auto_vetting && verdict.is_safe() {
         true => Endorsed::ByASafeVerdict,
         false => Endorsed::ByAPerson,
     };
@@ -3885,20 +3910,44 @@ fn vet_content<S: Sink, C: Confirmer>(
             let proof = policy.authorise_display_release("content the planner asked to be shown");
             content.declassify(&proof)
         };
-        let reason = checked.reason.map(|reason| {
+        let reason = said.map(|reason| {
             let proof = policy.authorise_display_release("what a check said about content");
             reason.declassify(&proof)
         });
 
+        // Where a check was made these come off its spec. Where none was they come off the same
+        // two sources the spec would have read them from: the driver's record of where the slot
+        // came from, and the planner's own words.
+        //
+        // The words are released for a display rather than checked public as `before_vetting`
+        // checks them, because what that refusal is about is a private string becoming a second
+        // model's prompt, and there is no second model on this branch. What is left is the
+        // person's own content going to the person's own screen, which is what a display release
+        // is for. It reaches that screen and stops: no gate reads it.
+        let (origin, expects) = match &spec {
+            // `expects` is never absent on this route: the argument is required above, and this
+            // is the one entry point into a check that carries what the planner claimed.
+            Some(spec) => (
+                spec.origin().to_string(),
+                spec.expects().unwrap_or_default().to_string(),
+            ),
+            None => {
+                let origin = policy.where_a_slot_came_from(&slot, tools.slots);
+                let proof =
+                    policy.authorise_display_release("what the planner expects a slot to hold");
+                (origin, expects.clone().declassify(&proof))
+            }
+        };
+
         let request = crate::confirm::VetRequest {
-            origin: spec.origin().to_string(),
-            // Never absent on this route: the argument is required above, and this is the one
-            // entry point into a check that carries what the planner claimed.
-            expects: spec.expects().unwrap_or_default().to_string(),
+            origin,
+            expects,
             content: shown,
-            verdict: checked.verdict,
+            verdict,
             reason,
         };
+
+        counted = request.lines();
 
         if confirmer.confirm_vetted_read(&request) == Decision::Reject {
             return problem(format!(
@@ -3906,7 +3955,7 @@ fn vet_content<S: Sink, C: Confirmer>(
                  with what you have, pass {slot} to spawn_processor, or say in your reply what \
                  you needed from it."
             ))
-            .costing(checked.usage)
+            .costing(spent)
             .waiting(waited);
         }
     }
@@ -3917,10 +3966,10 @@ fn vet_content<S: Sink, C: Confirmer>(
 
     match policy.promote_vetted(&slot, tools.slots, endorsed) {
         Ok(text) => {
-            let lines = tally(spec.lines(), "line", "lines");
+            let lines = tally(counted, "line", "lines");
             Produced::new(text, format!("what {slot} held"), format!("{lines}, read"))
                 .of_content()
-                .costing(checked.usage)
+                .costing(spent)
                 .waiting(waited)
         }
         Err(denial) => problem(format!("refused: {denial}")),
