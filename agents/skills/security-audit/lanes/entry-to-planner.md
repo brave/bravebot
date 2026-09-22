@@ -34,6 +34,27 @@ Two soft spots are documented and worth the time:
   today. It is compiled and unreached. Where it is wired in, tool names get namespaced and the
   routing and content split has to survive that. Report what would break, not that it is unused.
 
+  Three things in that crate are worth the walk before it is wired, because a clause written now is
+  cheaper than an audit later:
+
+  - **A result is labelled and a descriptor is not.** `call_tool` returns `Labelled<String>` on
+    both transports. `list_tools` returns a bare `Vec<ToolDescriptor>`, and a descriptor carries
+    `name`, `description` and `input_schema`. `protocol.rs` says the schema is passed to the model
+    unchanged. MCP-1 pins what a server *returns*; ask which clause pins what a server *claims to
+    offer*, and whether a description a server chose is untrusted content arriving in the planner's
+    tool list.
+  - **Only one transport checks the id it asked about.** `StdioServer::send_request` compares a
+    reply's id against the request's and skips a line that does not match. `HttpServer::send`
+    increments the same counter, sends it, and never compares it. Ask whether the transport
+    guarantees what the check would, and what MCP-7's "the last SSE payload wins" selects when a
+    stream carries two payloads whose ids differ. A difference between the two roads is worth
+    reporting even where neither is wrong alone, for the reason `supply-chain` gives: the one a
+    person read is not the one that runs.
+  - **A name the server chose becoming a routing field.** Once descriptors are namespaced, ask what
+    a tool name decides, and whether two servers can claim one name. CLAUDE.md's test for a new
+    tool is whether a person could approve its routing field alone, and a name the peer supplies is
+    a field they did not.
+
 Where a road ends somewhere legitimate, say where. The interesting answers are a road with no gate, a
 gate that labels the bytes and a later path that reads them anyway, and a value derived from untrusted
 bytes that ends up in a string handed to the model. That last one is the rule failing, and a message

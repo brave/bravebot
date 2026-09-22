@@ -32,6 +32,27 @@ message to draw is worth reporting. A branch that picks **which file is written,
 reached, which command runs, or what goes into the planner's context** is the rule failing, because
 those are the effects a person approved a specific version of.
 
+Then ask the second half of that sentence, which is not about a branch at all: **is the version that
+runs the version somebody approved?** Most of this is settled and you should not re-derive it. `run`
+is the tool where it was worked out: RUN-5 and RUN-19 in `docs/specs/tools/run.md` say what a line
+remembered past the session covers, and the tests beside them pin what it does not: a line that
+reads a file, one that writes, one carrying an environment assignment, and one running outside the
+root are each refused a remembered answer however the person answered. `crates/agent/src/remembered.rs`
+is the file and `bravebot_core::remembered` is what an entry means. Report none of that.
+
+The residue is parity and rewriting:
+
+- **The other prompts.** `run` has those clauses and those tests. Ask whether writing, editing and
+  fetching bind an approval as narrowly, and against what. A grant keyed to something coarser than
+  the bytes or the argument list a person read at the prompt covers an effect they did not see.
+- **What compaction is allowed to move.** `compaction.md` rewrites a turn's history. Ask what an
+  approval is recorded against and whether that survives the rewrite: one keyed to a position in a
+  transcript, or to a tool call's index, is keyed to something compaction may move.
+
+A candidate here is an approved effect reached with an argument, a destination or a count the person
+answering did not see, or one approval satisfying two effects. Name the prompt and the second
+effect, and say why RUN-5 does not already cover it.
+
 **{release_count} release sites in non-test code:**
 
 {release_sites}
