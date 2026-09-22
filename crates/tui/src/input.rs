@@ -6,8 +6,9 @@
 //! the one place that asks it, and it asks by timing, which is the only evidence there is.
 //!
 //! What a program writing a command line produces is a burst: every character of it available in
-//! the same instant, because it was written in one call. A person cannot do that. So a run of keys
-//! that were all waiting together is not typing, and this module reports such a run as
+//! the same instant, because it was written in one call. A person at a keyboard on the other end of
+//! the same pty does not, so a run of keys that were all waiting together is not typing, and this
+//! module reports such a run as
 //! [`Input::TypedIn`] rather than as keys. [`crate::app::handle_typed_in`] then puts it in the box
 //! where a person can read it, and INPUT-35 is what stops it being sent from there.
 //!
@@ -16,8 +17,13 @@
 //! - A burst never sends. Its own trailing newline becomes a newline in the box, and the mark it
 //!   leaves on the line means a later Enter does not send it either, however that Enter arrived.
 //! - A burst never answers. Every prompt in this crate answers a key and discards everything else,
-//!   so a run cannot press `y` at a trust question or `a` at a run prompt. Those two questions do
-//!   not take a single key at all (PROMPT-11), which is the stronger half of the same point.
+//!   so a run spelling words cannot press `y` at a trust question or `a` at a run prompt.
+//!
+//! Neither holds for a run that spells nothing. [`characters`] counts text, so a run of control keys
+//! is delivered key by key however long it is, which is what key autorepeat behind a slow redraw has
+//! to be: folding a burst of `Down` into a paste of nothing would eat the scrolling. One write of an
+//! arrow and a return is therefore two keystrokes as far as anything above here can tell, and this
+//! module does not pretend otherwise.
 //!
 //! A write does not always arrive as one read, so a run is not always the whole of what was
 //! written. The line VS Code sends crosses the extension host and the pty host on its way to the
@@ -35,6 +41,18 @@
 //! which do not rest on timing at all. The guarantee that keeps untrusted content out of the
 //! driver's decisions is none of this, and does not rest on it.
 //!
+//! **And what it costs, which is a person's own typing read as a program's.** The claim that a run
+//! arrived together is a claim about one read, and what lands in one read is decided by everything
+//! between the keyboard and here. tmux, screen, ssh and mosh coalesce keystrokes, and the gap this
+//! measures is really how long the reader was away rather than how fast anybody typed: a frame takes
+//! `FRAME` and a long transcript takes longer to draw, so two characters typed at ordinary speed
+//! during one can be waiting together. What that costs is the line, since text read this way does not
+//! send until somebody touches it, and each further piece arms the window again. A terminal that does
+//! not mark a paste costs the same: a genuine clipboard paste arrives as bare keys there and is read
+//! as a program's, so the statement that a paste is unaffected holds only where bracketed paste does.
+//! Neither is measured by anything here, and a test that measured them would have to measure a
+//! terminal rather than this function.
+//!
 //! Every reader in this crate goes through [`read`] and [`poll`] rather than calling crossterm
 //! directly, because a run can only be recognised where the whole run is visible. A prompt that
 //! read the terminal itself would see the first key of a burst with nothing behind it and answer
@@ -45,6 +63,7 @@ use ratatui::crossterm::event::{
 };
 use std::collections::VecDeque;
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -107,7 +126,7 @@ const MOST_IN_A_RUN: usize = 8192;
 /// decide about it.
 const CONTINUATION: Duration = Duration::from_millis(100);
 
-/// Events taken from the terminal and not yet handed out.
+/// Events taken from the terminal and not yet handed out, each with the run it came from.
 ///
 /// A run has to be read in full before it can be classified, and a run that turns out to be
 /// typing has to be handed out key by key, so the reader buffers. Shared rather than per thread
@@ -118,12 +137,31 @@ const CONTINUATION: Duration = Duration::from_millis(100);
 /// once: a thread that panicked while holding this left a queue of terminal events, which is a
 /// `VecDeque` whose invariants a panic elsewhere cannot have broken. Reading on is right, and the
 /// alternative is an interface that stops accepting keys because something unrelated failed.
-fn pending() -> MutexGuard<'static, VecDeque<Input>> {
-    static PENDING: OnceLock<Mutex<VecDeque<Input>>> = OnceLock::new();
+fn pending() -> MutexGuard<'static, VecDeque<(Input, bool)>> {
+    static PENDING: OnceLock<Mutex<VecDeque<(Input, bool)>>> = OnceLock::new();
     PENDING
         .get_or_init(|| Mutex::new(VecDeque::new()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Whether the event [`read`] last returned arrived on its own.
+///
+/// A run is one read of the terminal, so everything in it was available at the same instant and no
+/// part of it is evidence separate from the rest. `\x03\x03` in one write is two key events and not
+/// two presses, so a gesture asking for a second press has to be able to tell the difference.
+fn alone() -> &'static AtomicBool {
+    static ALONE: AtomicBool = AtomicBool::new(true);
+    &ALONE
+}
+
+/// Whether the last event handed out was the whole of the run it came from.
+///
+/// What a caller asks before treating a press as separate evidence from the one before it. `true` for
+/// a key a person pressed at a terminal this program reads directly, since nothing fills the buffer
+/// between one read and the next. See the module's note on what an intermediary changes.
+pub fn the_last_event_arrived_alone() -> bool {
+    alone().load(Ordering::Relaxed)
 }
 
 /// When words another program typed were last handed out, if the stream has not moved on since.
@@ -161,7 +199,8 @@ pub fn read() -> io::Result<Input> {
     // A loop because a run can resolve to nothing: a key a program wrote that carries no text is
     // dropped rather than delivered, and the caller is still waiting for something.
     loop {
-        if let Some(event) = pending().pop_front() {
+        if let Some((event, on_its_own)) = pending().pop_front() {
+            alone().store(on_its_own, Ordering::Relaxed);
             return Ok(event);
         }
         gather()?;
@@ -179,19 +218,21 @@ fn gather() -> io::Result<()> {
     // clipboard and goes through as itself.
     let TermEvent::Key(first) = first else {
         *typed_in_at() = None;
-        pending().push_back(Input::Terminal(first));
+        pending().push_back((Input::Terminal(first), true));
         return Ok(());
     };
 
     let mut run = vec![first];
+    // Held rather than queued where it arrives. It came after every key in the run, so queueing it
+    // here would hand it out in front of them and break the order [`read`] promises.
+    let mut ended_by = None;
     while run.len() < MOST_IN_A_RUN && event::poll(Duration::ZERO)? {
         match event::read()? {
             TermEvent::Key(key) => run.push(key),
             // Ends the run and keeps its place. A bracketed paste in the middle of one is already
-            // a paste and is passed through as itself rather than folded into the run, and the
-            // queue is drained before the terminal is read again, so it stays where it was.
+            // a paste and is passed through as itself rather than folded into the run.
             other => {
-                pending().push_back(Input::Terminal(other));
+                ended_by = Some(other);
                 break;
             }
         }
@@ -209,9 +250,18 @@ fn gather() -> io::Result<()> {
     }
     drop(mark);
 
+    // One event from this run means it was the whole of what was waiting, which is what a person
+    // pressing a key looks like. Two or more means they were available together, so neither is
+    // evidence separate from the other.
+    let on_its_own = resolved.len() + usize::from(ended_by.is_some()) == 1;
+
     let mut queue = pending();
     for event in resolved {
-        queue.push_back(event);
+        queue.push_back((event, on_its_own));
+    }
+    // After the run, which is where it arrived.
+    if let Some(other) = ended_by {
+        queue.push_back((Input::Terminal(other), on_its_own));
     }
     Ok(())
 }
@@ -240,10 +290,18 @@ pub(crate) fn resolve(run: Vec<KeyEvent>, continuing: bool) -> Vec<Input> {
     // character, and in the reported case it is the carriage return that ended the line.
     if continuing {
         let carried: String = run.iter().filter_map(text_of).collect();
-        // Nothing in it spells anything, so there is nothing to carry. Dropped for the reason a
-        // chord inside a burst is: a key a program wrote decides nothing.
+        // Delivered rather than dropped where it spells nothing. Dropping it was wrong twice: a
+        // caller that had just been told by [`poll`] that an event was waiting got nothing back, so
+        // [`read`] went round and blocked in the terminal, stalling every loop shaped
+        // `while poll(ZERO) { read() }`; and the keys that vanished were the person's own Escape or
+        // Backspace pressed within the window, which went without a word against the rule that a
+        // refusal is said. A run of control keys is delivered anyway when nothing precedes it, so
+        // dropping only the ones behind a burst bought no protection for the inconsistency.
         if carried.is_empty() {
-            return Vec::new();
+            return run
+                .into_iter()
+                .map(|key| Input::Terminal(TermEvent::Key(key)))
+                .collect();
         }
         return vec![Input::TypedIn(carried)];
     }
@@ -440,19 +498,47 @@ mod tests {
         );
     }
 
-    /// A piece carrying nothing that spells anything has nothing to add to the line, and obeying it
-    /// is what let a written Escape or interrupt reach a prompt. Dropped for the reason a chord
-    /// inside a burst is.
+    /// A piece carrying nothing is delivered rather than dropped, and this pins why. Dropping it
+    /// left [`read`] with nothing to hand back after [`poll`] had said an event was waiting, so the
+    /// loops shaped `while poll(ZERO) { read() }` blocked in the terminal until the next input, and
+    /// the keys that vanished were a person's own Escape or Backspace pressed inside the window.
     #[test]
-    fn a_continuation_that_spells_nothing_is_dropped() {
-        assert!(resolve(vec![key(KeyCode::Esc)], true).is_empty());
+    fn a_continuation_that_spells_nothing_is_still_delivered() {
+        assert_eq!(
+            resolve(vec![key(KeyCode::Esc)], true),
+            vec![Input::Terminal(TermEvent::Key(key(KeyCode::Esc)))],
+            "a person's Escape inside the window went nowhere"
+        );
         assert!(
-            resolve(
+            !resolve(
                 vec![KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)],
                 true
             )
-            .is_empty()
+            .is_empty(),
+            "a run resolving to nothing leaves read() with nothing to return"
         );
+    }
+
+    /// Every run resolves to something, which is what [`read`] needs to be able to promise: it is
+    /// called only after [`poll`] has said an event is waiting, and a run that added nothing would
+    /// send it back to block in the terminal.
+    #[test]
+    fn no_run_resolves_to_nothing() {
+        let runs = [
+            vec![key(KeyCode::Esc)],
+            vec![key(KeyCode::Down); 5],
+            typed("y"),
+            typed("no"),
+            vec![KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)],
+        ];
+        for run in runs {
+            for continuing in [false, true] {
+                assert!(
+                    !resolve(run.clone(), continuing).is_empty(),
+                    "a run of {run:?} resolved to nothing, continuing={continuing}"
+                );
+            }
+        }
     }
 
     /// The limit of it, said out loud. Past the window a lone character is a keystroke, because that

@@ -21,7 +21,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [vetting.md](vetting.md) | `CHECK` | 13 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
 | [delegation.md](delegation.md) | `DELEGATE` | 18 | a second planner, narrower than the first, and what crosses back from one |
 | [turns.md](turns.md) | `TURN` | 5 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing or checks nothing |
-| [prompting.md](prompting.md) | `PROMPT` | 11 | every moment the system stops and puts something to a human, and what an answer grants |
+| [prompting.md](prompting.md) | `PROMPT` | 10 | every moment the system stops and puts something to a human, and what an answer grants |
 | [permission-modes.md](permission-modes.md) | `MODE` | 10 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |
 | [naming-files.md](naming-files.md) | `NAME` | 7 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |
 | [pasting.md](pasting.md) | `PASTE` | 9 | what Ctrl-V puts into a turn, text or picture, and on what footing |

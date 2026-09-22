@@ -340,8 +340,6 @@ trust-directory-regardless =
 trust-directory-yes = trust it
 trust-directory-no = ask me about every write
 quit = quit
-# Both questions a session opens with offer the same keys, so they share one line.
-trust-question-keys = ↑↓ choose  ·  Enter confirm
 
 
 ## Opening a directory a settings file named, asked once for each when a session starts

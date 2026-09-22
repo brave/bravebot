@@ -109,6 +109,19 @@ to the shell. Every rung above the last one stops something a person asked for a
 the first press, because those are recoverable and leaving is not. Ctrl-D is held to the same rule
 for the same reason, being one byte that leaves an empty box.
 
+**And neither half of that gesture is taken from a key that did not arrive on its own.** Asking for a
+second press buys nothing against a writer that sends two, and two bytes in one write are no harder
+to send than one: `\x03\x03` would otherwise arm the offer and take it. A run is one read of the
+terminal, so everything in it was available at the same instant and no part of it is evidence separate
+from the rest ([INPUT-34](#INPUT-34) is where a run is defined). A key that arrived with others
+therefore reaches the rungs that stop something, which are recoverable, and not the rung that leaves.
+This costs a person nothing, since the run a program sent has ended before they press anything.
+
+**The offer is withdrawn by any input that is not one of the two keys that leave**, a mouse report, a
+resize and words another program typed among them, not only by another key. It answers the press just
+made, and one left standing through ten minutes of scrolling would let a byte written at the end of
+them take it.
+
 Escape only ever stops, and never leaves. A summary is the one exception to the table: it is a
 single request with no round for a stop to land between, so nothing there can stop it and Ctrl-C
 leaves once it comes back. An aside is such a request too, and so is the check a goal is judged by,
@@ -172,6 +185,10 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::app::ctrl_c_quits_on_the_second_press`
 `verified-by: bravebot_tui::app::one_interrupt_another_program_wrote_does_not_end_the_session`
 `verified-by: bravebot_tui::app::any_other_key_withdraws_the_offer_to_leave`
+`verified-by: bravebot_tui::app::input_that_is_not_a_key_withdraws_the_offer_to_leave`
+`verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
+`verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
+`verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
 `verified-by: bravebot_tui::app::an_interrupt_still_stops_a_turn_on_the_first_press`
 `verified-by: bravebot_tui::app::ctrl_c_stops_a_turn_rather_than_leaving`
 `verified-by: bravebot_tui::app::ctrl_c_clears_the_line_before_it_leaves`
@@ -1538,10 +1555,8 @@ instruction inside text is one nobody gave.
 **Such a run is not an answer to anything.** Every question this program puts up, the one at startup
 about the working directory and every prompt in [prompting.md](prompting.md), is answered by a key
 and discards everything else, so a run cannot press `y` at a trust question or `a` at a run prompt.
-The two questions a session opens with do not take a single key at all
-([PROMPT-11](prompting.md#PROMPT-11)), which does not rest on this test. Nothing is said when a run
-is discarded at a question: a question that has not been answered is a question still on the screen,
-which is what the person sees.
+Nothing is said when a run is discarded at a question: a question that has not been answered is a
+question still on the screen, which is what the person sees.
 
 Two runs that are not pastes, whatever their length. A run carrying no characters at all, which is
 what key autorepeat looks like behind a slow redraw, is delivered key by key; reading it as a paste
@@ -1582,12 +1597,29 @@ character delivered on its own past the window is a keystroke, because a person 
 that and there is nothing to tell the two apart. What these buy together is the write that arrives at
 once and the write that arrives in pieces, which is the shape every writer doing this today has and
 the one that was reported. **Neither buys the writer that paces itself a character at a time**: its
-first character arrives alone with no run behind it, so it is a key, and each one after it is too. The
-clauses that do not rest on timing, [INPUT-35](#INPUT-35) and
-[PROMPT-11](prompting.md#PROMPT-11), are what carry that case, and what they leave is a question
-dismissed to its own safe default rather than an answer granting anything. The guarantee this
-repository exists for does not rest on any of them, since the terminal is a person's own channel and
-not a route untrusted content travels.
+first character arrives alone with no run behind it, so it is a key, and each one after it is too.
+
+**What it costs is a person's own typing read as a program's, and nothing here measures that.** The
+claim that a run arrived together is a claim about one read, and what lands in one read is decided by
+everything between the keyboard and this program. tmux, screen, ssh and mosh coalesce keystrokes, and
+the gap this measures is really how long the reader was away rather than how fast anybody typed: a
+frame takes its frame time and a long transcript takes longer to draw, so two characters typed at an
+ordinary speed during one can be waiting together. The cost of being wrong that way is the line, since
+text read as a program's does not send until somebody touches it, and each further piece arms the
+window again. A terminal that does not mark a paste costs the same: a genuine clipboard paste arrives
+there as bare keys and is read as a program's, so what this says about a paste holds only where
+bracketed paste does (INPUT-33 asks for it and does not get it everywhere).
+
+**Nor does either buy a run whose keys carry no text.** The count above is of characters, so a run
+spelling nothing is delivered key by key however long it is, which is what key autorepeat behind a
+slow redraw has to be. A program writing control bytes is therefore not caught by this at all: one
+write of an arrow and a return is two keys, and a reader deciding on either of them decides on what a
+program wrote. What keeps that from granting something is the shape of the question rather than
+anything here, since a prompt answered by a bare letter is answered by a bare letter whoever wrote
+it, which is why [INPUT-35](#INPUT-35) is stated as a property of the box and not of the reader, and why
+the rung that ends a session asks for two presses that did not arrive together
+([INPUT-4](#INPUT-4)). The guarantee this repository exists for does not rest on any of it, since the
+terminal is a person's own channel and not a route untrusted content travels.
 
 `verified-by: bravebot_tui::input::a_line_that_arrived_all_at_once_is_a_paste`
 `verified-by: bravebot_tui::input::a_run_carrying_two_characters_reaches_nothing_that_reads_keys`
@@ -1599,7 +1631,8 @@ not a route untrusted content travels.
 `verified-by: bravebot_tui::input::a_burst_keeps_the_newlines_and_tabs_it_carried`
 `verified-by: bravebot_tui::input::the_return_a_fragmented_write_leaves_on_its_own_is_not_a_keypress`
 `verified-by: bravebot_tui::input::a_letter_a_fragmented_write_leaves_on_its_own_is_not_a_keypress`
-`verified-by: bravebot_tui::input::a_continuation_that_spells_nothing_is_dropped`
+`verified-by: bravebot_tui::input::a_continuation_that_spells_nothing_is_still_delivered`
+`verified-by: bravebot_tui::input::no_run_resolves_to_nothing`
 `verified-by: bravebot_tui::input::past_the_window_a_lone_character_is_a_keypress_again`
 `verified-by: bravebot_tui::trust_prompt::a_command_line_another_program_typed_in_answers_nothing`
 `verified-by: bravebot_tui::confirm::a_line_another_program_typed_in_endorses_nothing`

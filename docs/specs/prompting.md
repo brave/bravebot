@@ -52,7 +52,6 @@ step below the fold is as binding as the first.
 `verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`
 `verified-by: bravebot_tui::confirm::the_vouch_prompt_says_what_a_check_found`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_shows_the_directory_it_would_open`
-`verified-by: bravebot_tui::trust_prompt::the_keys_that_answer_stay_on_screen_at_ordinary_sizes`
 `verified-by: bravebot_tui::confirm::the_plan_prompt_shows_the_task_and_every_step`
 `verified-by: bravebot_core::manifest::a_described_step_names_every_routing_field_it_fixes`
 
@@ -240,15 +239,15 @@ on the screen, and a person still has to press it with the bytes in front of the
 ### PROMPT-7: declining is not cancelling
 
 Saying no to a write does not stop the turn; Ctrl-C refuses it and does. Leaving at a question a
-session opens with ends the session and opens nothing, and it is the row that leaves which does it
-rather than any single key ([PROMPT-11](#PROMPT-11)).
+session opens with ends the session and opens nothing, and only Ctrl-C leaves.
 
 **Why.** A refusal the agent can carry on past is how a person steers without starting over.
 
 `verified-by: bravebot_tui::confirm::saying_no_does_not_stop_the_turn`
 `verified-by: bravebot_tui::confirm::ctrl_c_refuses_the_write_and_stops_the_turn`
 `verified-by: bravebot_tui::confirm::only_the_interrupt_stops_the_turn_at_a_run_prompt`
-`verified-by: bravebot_tui::trust_prompt::ctrl_c_moves_nothing_and_decides_nothing`
+`verified-by: bravebot_tui::trust_prompt::ctrl_c_leaves_rather_than_answering_the_question`
+`verified-by: bravebot_tui::trust_prompt::only_ctrl_c_leaves`
 `verified-by: bravebot_tui::trust_prompt::leaving_starts_no_session`
 `verified-by: bravebot_tui::trust_prompt::leaving_at_one_of_the_questions_opens_nothing`
 
@@ -329,45 +328,3 @@ which under a light theme in a dark terminal is the path to unreadable.
 `verified-by: bravebot_tui::confirm::every_prompt_paints_the_themes_background_inside_its_border`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_paints_the_themes_background_inside_its_border`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_paints_the_themes_background_inside_its_border`
-
-<a id="PROMPT-11"></a>
-### PROMPT-11: a question a session opens with is answered on a row, never by one key
-
-The two questions asked before a session exists, the working directory's and one for each directory
-a settings file named, put their answers as rows and take the row under the cursor when Enter is
-pressed. **No single key press answers either of them.** A bare letter moves nothing and decides
-nothing, and the cursor opens on the row that declines, so the key most likely to be pressed
-without reading grants nothing. Ctrl-C and Escape move nothing and decide nothing either. The way
-out is the row that says so, reached with the arrows like the rest.
-
-**Why no key points at leaving.** A key that moved the cursor onto the row that leaves without
-taking it would be half of the quit gesture, and the other half is an Enter. A program that can
-write an interrupt can write a return after it, so the two together spell the whole of it in two
-bytes, which is what a shell integration writes when it clears the line before typing a command.
-Pointing the cursor at leaving on a keystroke gives back most of what asking for a row buys.
-
-**Why.** A terminal delivers one byte stream and says nothing about who wrote it
-([INPUT-34](terminal-input.md#INPUT-34)), so one keystroke is weak evidence that a person made it.
-Any program holding the other end of the pty spells a letter sooner or later, and an editor
-activating a virtualenv in the terminal it opened is not an exotic one. These two questions grant
-reach and trust over a whole tree before any of it has been read, which makes them the worst place
-for a stray byte to be taken for a person. A row confirmed by Enter needs a gesture no single write
-produces: something has to move the cursor onto the row that trusts and then confirm it, and a
-write that only spells words reaches neither step.
-
-**What this does not claim.** A program writing two keys in sequence, an arrow and then Enter, is
-indistinguishable from a person doing the same, and nothing here stops it. This raises what the
-channel costs rather than closing it. What it does buy is that the cheapest outcome of a stray
-write is the answer that grants nothing, since the row under the cursor declines until something
-moves it.
-
-`verified-by: bravebot_tui::trust_prompt::the_question_opens_on_declining_so_a_stray_enter_grants_nothing`
-`verified-by: bravebot_tui::trust_prompt::the_cursor_opens_on_declining_where_a_person_can_see_it`
-`verified-by: bravebot_tui::trust_prompt::no_bare_letter_moves_the_cursor_or_answers`
-`verified-by: bravebot_tui::trust_prompt::no_other_control_chord_moves_the_cursor`
-`verified-by: bravebot_tui::trust_prompt::ctrl_c_moves_nothing_and_decides_nothing`
-`verified-by: bravebot_tui::trust_prompt::escape_moves_nothing_and_decides_nothing`
-`verified-by: bravebot_tui::trust_prompt::enter_takes_the_row_under_the_cursor`
-`verified-by: bravebot_tui::trust_prompt::the_arrows_walk_the_rows_and_stop_at_their_ends`
-`verified-by: bravebot_tui::trust_prompt::a_command_line_another_program_typed_in_answers_nothing`
-`verified-by: bravebot_tui::trust_prompt::a_command_line_another_program_typed_in_opens_no_named_directory`

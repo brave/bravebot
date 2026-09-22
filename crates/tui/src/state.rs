@@ -1077,6 +1077,13 @@ pub struct Session {
     /// press is what reads it. Cleared by any key that is not itself an interrupt, so a person who
     /// went off and did something else is asked again rather than leaving on one press later.
     pub offered_to_leave: bool,
+    /// Whether the key being answered arrived on its own rather than in a run with others.
+    ///
+    /// Set from the reader before each key is dispatched, and `true` on a session nobody has read
+    /// input into yet, which is what a test constructing one by hand gets. Only the rung that ends
+    /// the session asks: a run of two or more events was available in the same instant, so `\x03\x03`
+    /// in one write is two key events rather than the two presses that gesture asks for.
+    pub key_arrived_alone: bool,
     /// Whether there was a picture on the clipboard when it was last looked at.
     ///
     /// Only ever a hint on screen, so a stale answer costs a line that is briefly wrong and nothing
@@ -1349,6 +1356,7 @@ impl Session {
             finished: None,
             cleared_by_interrupt: false,
             offered_to_leave: false,
+            key_arrived_alone: true,
             image_on_clipboard: false,
             written: 0,
             progress: Default::default(),

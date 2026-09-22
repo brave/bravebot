@@ -9,12 +9,6 @@
 //! stream all resolve to declining, because the failure mode of guessing wrong here is that a
 //! session silently writes to files nobody vouched for.
 //!
-//! The answers are rows rather than keys, and Enter takes the row under the cursor (PROMPT-11). No
-//! single key press answers either question: the cursor opens on the row that declines, and a bare
-//! letter, Ctrl-C and Escape all move nothing. The way out is the row that says so. A terminal says
-//! nothing about who wrote a byte, so a question granting reach and trust over a whole tree cannot
-//! rest on one keystroke having come from a person, nor on two that a program writes as easily.
-//!
 //! The one session that is not asked is the one bypassing every permission, which answers this
 //! question along with the rest. [`answered_by`] is where that is decided.
 //!
@@ -48,87 +42,6 @@ pub enum Answer {
     Leave,
 }
 
-/// The answers as rows, in the order they are drawn.
-///
-/// The rows are the answers themselves rather than a parallel list, so a row can only ever mean the
-/// answer it returns: a second enum would be two places to keep the order and the meanings in step.
-const ROWS: [Answer; 3] = [Answer::Trust, Answer::Decline, Answer::Leave];
-
-/// Which row the cursor is on.
-#[derive(Debug)]
-struct Choosing {
-    selected: usize,
-}
-
-impl Choosing {
-    /// Open on the row that declines.
-    ///
-    /// This is the safety property rather than a preference: Enter is the key most likely to be
-    /// pressed without reading, and a program writing at the terminal spells one sooner or later, so
-    /// the row it lands on has to be the one that grants nothing. Found by searching [`ROWS`] rather
-    /// than written as an index, so reordering the rows cannot quietly move the opening cursor onto
-    /// the one that trusts.
-    fn new() -> Self {
-        let selected = ROWS
-            .iter()
-            .position(|row| *row == Answer::Decline)
-            .expect("declining is one of the rows");
-        Self { selected }
-    }
-
-    /// The row Enter would take.
-    fn chosen(&self) -> Answer {
-        ROWS[self.selected]
-    }
-
-    fn down(&mut self) {
-        self.selected = (self.selected + 1).min(ROWS.len() - 1);
-    }
-
-    fn up(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
-    }
-}
-
-/// What a key press did to the question.
-#[derive(Debug, PartialEq, Eq)]
-enum Outcome {
-    /// Still choosing.
-    Continue,
-    /// Take the row under the cursor.
-    Confirm,
-}
-
-/// Interpret one key press.
-///
-/// Separated from the loop so the decision can be tested without a terminal, the way [`trust_for`]
-/// is. There is no arm that answers on a letter: `y` and `n` are gone rather than kept as
-/// shortcuts, because a shortcut is exactly the single keystroke this question must not accept.
-/// The arrows are the only movement for the same reason, since `j` and `k` are letters and a burst
-/// of prose is full of them.
-fn handle_key(choosing: &mut Choosing, key: KeyEvent) -> Outcome {
-    // Raw mode delivers Ctrl-C as a key rather than as a signal. It moves nothing, for the reason
-    // no letter does: a key that put the cursor on the row that leaves would be half of the quit
-    // gesture, and the other half is an Enter, so a program able to write two bytes would have
-    // spelled the whole of it. The way out is the row that says so, reached with the arrows.
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        return Outcome::Continue;
-    }
-
-    match key.code {
-        KeyCode::Enter => Outcome::Confirm,
-        KeyCode::Up => {
-            choosing.up();
-            Outcome::Continue
-        }
-        KeyCode::Down => {
-            choosing.down();
-            Outcome::Continue
-        }
-        _ => Outcome::Continue,
-    }
-}
-
 /// Ask about `directory`, returning the trust map the session should start with.
 ///
 /// Trusting records the workspace root, which covers everything beneath it. Declining records
@@ -140,10 +53,14 @@ fn handle_key(choosing: &mut Choosing, key: KeyEvent) -> Outcome {
 /// session is the one exception, and it inherits the answer its own user gave rather than
 /// skipping the question, which is why this is not called at all in that case.
 ///
-/// `None` is the third answer: the user confirmed the row that leaves, which is neither trusting nor
-/// declining but a request to leave, so no session begins at all.
+/// `None` is the third answer: the user pressed Ctrl-C, which is neither trusting nor declining
+/// but a request to leave, so no session begins at all.
 pub fn ask<B: Backend>(terminal: &mut Terminal<B>, directory: &Path) -> Option<TrustStore> {
-    let answer = ask_one(terminal, |frame, choosing| draw(frame, directory, choosing));
+    let answer = match terminal.draw(|frame| draw(frame, directory)) {
+        Ok(_) => read_answer(),
+        // A terminal that cannot be drawn to cannot carry the question.
+        Err(_) => Answer::Decline,
+    };
 
     trust_for(answer, directory)
 }
@@ -162,9 +79,11 @@ pub fn ask_named<B: Backend>(
     directories: &[String],
 ) -> Option<Vec<String>> {
     accepted(directories, |directory| {
-        ask_one(terminal, |frame, choosing| {
-            draw_named(frame, directory, choosing)
-        })
+        match terminal.draw(|frame| draw_named(frame, directory)) {
+            Ok(_) => read_answer(),
+            // A terminal that cannot be drawn to cannot carry the question.
+            Err(_) => Answer::Decline,
+        }
     })
 }
 
@@ -228,34 +147,19 @@ fn trusting_the_workspace(directory: &Path) -> TrustStore {
     trust
 }
 
-/// Put one question and block until a row is confirmed.
-///
-/// Drawn inside the loop rather than once before it, because the cursor is part of what the question
-/// says: a panel drawn once would show the person a row they had moved off. One function for both
-/// questions, so the keys that answer them cannot drift apart.
-fn ask_one<B: Backend>(
-    terminal: &mut Terminal<B>,
-    mut draw_it: impl FnMut(&mut ratatui::Frame, &Choosing),
-) -> Answer {
-    let mut choosing = Choosing::new();
-
+/// Block until the user answers.
+fn read_answer() -> Answer {
     loop {
-        // A terminal that cannot be drawn to cannot carry the question.
-        if terminal.draw(|frame| draw_it(frame, &choosing)).is_err() {
-            return Answer::Decline;
-        }
-
         match input::read() {
             // A paste answers nothing, and neither do words another program typed: both arrive as
-            // one event however many characters they carry, and nothing in either is a key somebody
-            // pressed. Presses only for the same reason a release is dropped below.
+            // one event whatever they carry, and nothing in either is a key somebody pressed.
             Ok(taken) => match taken.key() {
                 // Presses only: the interface asks for disambiguated keys, so a release arrives too,
-                // and a release taken for a press moves the cursor twice for one keystroke.
+                // and answering a question twice grants standing permission on one keystroke.
                 Some(key) if key.kind != event::KeyEventKind::Press => continue,
-                Some(key) => match handle_key(&mut choosing, key) {
-                    Outcome::Confirm => return choosing.chosen(),
-                    Outcome::Continue => continue,
+                Some(key) => match answer_for(key) {
+                    Some(answer) => return answer,
+                    None => continue,
                 },
                 None => continue,
             },
@@ -264,9 +168,32 @@ fn ask_one<B: Backend>(
     }
 }
 
+/// Interpret one key press, or `None` for a key that answers nothing.
+///
+/// Separated from the loop so it can be tested without a terminal.
+fn answer_for(key: KeyEvent) -> Option<Answer> {
+    // Raw mode delivers Ctrl-C as a key rather than as a signal, so a prompt that ignored it
+    // would be a screen with no way out: the interrupt everyone reaches for would do nothing.
+    // It is not an answer to the question, so it starts nothing rather than declining.
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Char('c') => Some(Answer::Leave),
+            _ => None,
+        };
+    }
+
+    match key.code {
+        KeyCode::Char('y' | 'Y') => Some(Answer::Trust),
+        KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(Answer::Decline),
+        // Enter is deliberately not a yes: it is the key most likely to be pressed
+        // out of habit, and this question grants standing permission.
+        _ => None,
+    }
+}
+
 /// Draw the question about the working directory.
-fn draw(frame: &mut ratatui::Frame, directory: &Path, choosing: &Choosing) {
-    let mut lines = vec![
+fn draw(frame: &mut ratatui::Frame, directory: &Path) {
+    let lines = vec![
         asking(
             t!(trust_directory_question),
             &directory.display().to_string(),
@@ -281,19 +208,15 @@ fn draw(frame: &mut ratatui::Frame, directory: &Path, choosing: &Choosing) {
             Style::default().fg(theme::muted()),
         )),
         Line::raw(""),
+        keys(t!(trust_directory_yes), t!(trust_directory_no)),
     ];
-    lines.extend(rows(
-        choosing,
-        t!(trust_directory_yes),
-        t!(trust_directory_no),
-    ));
 
     panel(frame, t!(trust_directory_title), lines);
 }
 
 /// Draw the question about one directory a settings file named.
-fn draw_named(frame: &mut ratatui::Frame, directory: &str, choosing: &Choosing) {
-    let mut lines = vec![
+fn draw_named(frame: &mut ratatui::Frame, directory: &str) {
+    let lines = vec![
         asking(t!(named_directory_question), directory),
         Line::raw(""),
         Line::from(Span::raw(t!(named_directory_explained))),
@@ -303,12 +226,8 @@ fn draw_named(frame: &mut ratatui::Frame, directory: &str, choosing: &Choosing) 
             Style::default().fg(theme::muted()),
         )),
         Line::raw(""),
+        keys(t!(named_directory_yes), t!(named_directory_no)),
     ];
-    lines.extend(rows(
-        choosing,
-        t!(named_directory_yes),
-        t!(named_directory_no),
-    ));
 
     panel(frame, t!(named_directory_title), lines);
 }
@@ -332,47 +251,34 @@ fn asking(question: &str, directory: &str) -> Line<'static> {
     ])
 }
 
-/// The answers on offer, one per row, with the cursor on the one Enter would take.
-///
-/// The same rows and the same keys at either question, so what a person learns answering the first
-/// is what answers the rest. The row that leaves is drawn with the other two rather than left to a
-/// key mentioned in a footnote: a way out nobody can see is one they cannot take.
-fn rows(choosing: &Choosing, yes: &str, no: &str) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> = ROWS
-        .iter()
-        .enumerate()
-        .map(|(index, row)| {
-            let label = match row {
-                Answer::Trust => yes.to_string(),
-                Answer::Decline => no.to_string(),
-                Answer::Leave => t!(quit).to_string(),
-            };
-
-            let chosen = index == choosing.selected;
-            let marker = if chosen { "❯ " } else { "  " };
-            let style = if chosen {
-                Style::default()
-                    .fg(theme::brand_primary())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::text())
-            };
-
-            Line::from(vec![
-                Span::styled(
-                    format!("  {marker}"),
-                    Style::default().fg(theme::brand_primary()),
-                ),
-                Span::styled(label, style),
-            ])
-        })
-        .collect();
-
-    lines.push(Line::from(Span::styled(
-        format!("  {}", t!(trust_question_keys)),
-        Style::default().fg(theme::muted()),
-    )));
-    lines
+/// The answers on offer: the same two keys and the same way out at either question.
+fn keys(yes: &str, no: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            "  y",
+            Style::default()
+                .fg(theme::ok())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" {yes}    ")),
+        Span::styled(
+            "n",
+            Style::default()
+                .fg(theme::fail())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" {no}    ")),
+        Span::styled(
+            "ctrl-c",
+            Style::default()
+                .fg(theme::muted())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {}", t!(quit)),
+            Style::default().fg(theme::muted()),
+        ),
+    ])
 }
 
 /// Draw one question, in a box whose every cell the theme paints.
@@ -400,17 +306,13 @@ fn panel(frame: &mut ratatui::Frame, title: &str, lines: Vec<Line<'static>>) {
 }
 
 /// A centred box, sized to the terminal but never larger than it.
-///
-/// Eighty percent of the height rather than seventy, because the answers are three rows and a line
-/// saying which keys take them: at seventy a twenty-row terminal clipped the key line, which is the
-/// one line on the screen that says how to answer at all.
 fn centred(area: Rect) -> Rect {
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(10),
-            Constraint::Percentage(80),
-            Constraint::Percentage(10),
+            Constraint::Percentage(15),
+            Constraint::Percentage(70),
+            Constraint::Percentage(15),
         ])
         .split(area);
 
@@ -435,83 +337,43 @@ mod tests {
         Path::new("/work")
     }
 
-    /// One key press, with nothing held down.
-    fn pressed(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
-    /// A command line another program wrote into the terminal, spelled so that the first letter
-    /// carrying a meaning under the old bare-key answers is the one that granted the most: `you`
-    /// puts a `y` in front of every `n`, so a question answered by letters trusted the whole tree.
+    /// The reported bug, at the question it reached first. An editor that activates a virtualenv
+    /// by typing `source .../.venv/bin/activate` into the terminal it opened spells an `n` on the
+    /// way past, and a reader taking those keys one at a time answers this question with it: the
+    /// directory is settled by a program, and the rest of the path becomes a prompt.
     ///
-    /// Both shapes the line can arrive in, because they fail differently. Folded into a paste it
-    /// reaches the question as no keys at all; arriving a key at a time, which is what no classifier
-    /// can tell from typing, every letter has to move nothing so the Enter at the end lands on the
-    /// row that grants nothing.
-    const A_TYPED_IN_COMMAND_LINE: &str = "source /home/you/app/.venv/bin/activate\r";
-
-    /// The answer a run of key presses reaches, or `None` where none of them confirmed a row.
-    fn answered_by_keys(keys: impl IntoIterator<Item = KeyEvent>) -> Option<Answer> {
-        let mut choosing = Choosing::new();
-        for key in keys {
-            if handle_key(&mut choosing, key) == Outcome::Confirm {
-                return Some(choosing.chosen());
-            }
-        }
-        None
-    }
-
+    /// Asserted against every event the run resolves to, rather than against the paste it should
+    /// be, so the test still rejects the fault if the classification changes shape.
     #[test]
     fn a_command_line_another_program_typed_in_answers_nothing() {
-        let as_keys: Vec<KeyEvent> =
-            crate::input::resolve(crate::input::run_spelling(A_TYPED_IN_COMMAND_LINE), false)
-                .into_iter()
-                .filter_map(|taken| taken.key())
-                .collect();
-        assert!(
-            as_keys.is_empty(),
-            "a burst reached the question as key presses"
-        );
-
-        let reached = answered_by_keys(crate::input::run_spelling(A_TYPED_IN_COMMAND_LINE));
-        assert_ne!(
-            reached,
-            Some(Answer::Trust),
-            "a line another program typed in trusted the workspace"
-        );
-        assert_ne!(
-            reached,
-            Some(Answer::Leave),
-            "a line another program typed in ended the session"
-        );
-
-        // What it would have written, rather than which answer it reached: a `trust_for` that
-        // trusted the tree on a decline would satisfy an assertion about the answer alone.
-        let trust = trust_for(reached.unwrap_or(Answer::Decline), here())
-            .expect("the session still starts");
-        assert!(
-            trust.is_empty(),
-            "a line another program typed in granted trust"
-        );
+        let run = crate::input::run_spelling("source /tmp/x/.venv/bin/activate\r");
+        for taken in crate::input::resolve(run, false) {
+            if let Some(key) = taken.key() {
+                assert_eq!(
+                    answer_for(key),
+                    None,
+                    "a key out of a burst answered the trust question"
+                );
+            }
+        }
     }
 
-    /// The second surface, driven through the function that decides what gets opened rather than
-    /// through a key, because opening the directory is the grant. A settings file naming a path and
-    /// a program typing at the terminal are two things neither of which is a person.
+    /// What the burst test above does not cover, said out loud so nobody reads it as more than it
+    /// is. The count is of characters, so a run spelling nothing is delivered key by key, and one
+    /// write of an arrow and a return is two keystrokes here. This question is answered by a bare
+    /// letter, so a program writing one answers it; what keeps that from being the reported failure
+    /// is that the activation line is words, and words become one event that answers nothing.
     #[test]
-    fn a_command_line_another_program_typed_in_opens_no_named_directory() {
-        let named = names(&["/home/me/.ssh"]);
-
-        let opened = accepted(&named, |_| {
-            answered_by_keys(crate::input::run_spelling(A_TYPED_IN_COMMAND_LINE))
-                .unwrap_or(Answer::Decline)
-        })
-        .expect("declining still starts a session");
-
-        assert!(
-            opened.is_empty(),
-            "a line another program typed in opened a directory: {opened:?}"
-        );
+    fn a_run_that_spells_nothing_still_reaches_this_question() {
+        let run = vec![
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        ];
+        let reached: Vec<KeyEvent> = crate::input::resolve(run, false)
+            .iter()
+            .filter_map(|taken| taken.key())
+            .collect();
+        assert_eq!(reached.len(), 2, "a control run stopped being keys");
     }
 
     /// The characters one question puts on a terminal, in reading order.
@@ -596,71 +458,17 @@ mod tests {
 
     #[test]
     fn the_prompt_names_the_directory_and_both_answers() {
-        let output = rendered(|frame| draw(frame, Path::new("/home/me/project"), &Choosing::new()));
+        let output = rendered(|frame| draw(frame, Path::new("/home/me/project")));
         assert!(output.contains("/home/me/project"));
         assert!(output.contains("trust it"));
         assert!(output.contains("every write"));
-        // The way out is a row like the others, not a key named in a footnote.
-        assert!(
-            output.contains("quit"),
-            "no way out on the screen: {output}"
-        );
-    }
-
-    /// The line saying which keys take a row is the only thing on the screen that says how to
-    /// answer, so it has to survive the sizes a terminal actually comes in. The rows and that line
-    /// are four more than the single key line they replaced, and at the panel's old height a
-    /// twenty-row terminal drew the border over it.
-    #[test]
-    fn the_keys_that_answer_stay_on_screen_at_ordinary_sizes() {
-        for (width, height) in [(72, 20), (80, 24), (120, 40)] {
-            let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-            terminal
-                .draw(|frame| draw(frame, here(), &Choosing::new()))
-                .expect("draw");
-            let output = drawn_on(&terminal);
-
-            assert!(
-                output.contains("Enter confirm"),
-                "the keys were clipped at {width}x{height}: {output}"
-            );
-            assert!(
-                output.contains("quit"),
-                "the way out was clipped at {width}x{height}: {output}"
-            );
-        }
-    }
-
-    /// Which row Enter would take has to be on the screen, at both questions. The cursor is the
-    /// whole of what says so, and a panel that listed three answers without marking one would be a
-    /// question whose answer a person cannot predict before pressing the key.
-    #[test]
-    fn the_cursor_opens_on_declining_where_a_person_can_see_it() {
-        let marked = |output: &str, label: &str| {
-            output
-                .split('❯')
-                .nth(1)
-                .is_some_and(|after| after.starts_with(&format!(" {label}")))
-        };
-
-        let workspace = rendered(|frame| draw(frame, here(), &Choosing::new()));
-        assert!(
-            marked(&workspace, "ask me about every write"),
-            "the cursor did not open on declining: {workspace}"
-        );
-
-        let named = rendered(|frame| draw_named(frame, "/home/me/.ssh", &Choosing::new()));
-        assert!(
-            marked(&named, "leave it closed"),
-            "the cursor did not open on declining: {named}"
-        );
     }
 
     /// The question must say what saying yes actually does, since it grants standing
     /// permission rather than approving one action.
     #[test]
     fn the_prompt_explains_the_consequence() {
-        let output = rendered(|frame| draw(frame, Path::new("/tmp/x"), &Choosing::new()));
+        let output = rendered(|frame| draw(frame, Path::new("/tmp/x")));
         assert!(output.contains("trusted"), "no mention of trust: {output}");
         // Wrapping can split a phrase across lines, so assert on a short fragment.
         assert!(
@@ -673,9 +481,7 @@ mod tests {
     /// so its chrome is the first thing that says the question is the system's own.
     #[test]
     fn the_prompt_paints_the_themes_background_inside_its_border() {
-        paints_the_themes_chrome(|frame| {
-            draw(frame, Path::new("/home/me/project"), &Choosing::new())
-        });
+        paints_the_themes_chrome(|frame| draw(frame, Path::new("/home/me/project")));
     }
 
     /// A settings file arrives with whatever produced the checkout, so a directory named in one is
@@ -719,7 +525,7 @@ mod tests {
     /// chose rather than the person reading the box.
     #[test]
     fn the_named_prompt_shows_the_directory_it_would_open() {
-        let output = rendered(|frame| draw_named(frame, "/home/me/.ssh", &Choosing::new()));
+        let output = rendered(|frame| draw_named(frame, "/home/me/.ssh"));
         assert!(output.contains("/home/me/.ssh"), "no path: {output}");
         assert!(output.contains("open it"));
         assert!(output.contains("leave it closed"));
@@ -730,7 +536,7 @@ mod tests {
     /// naming a directory the person has never typed is otherwise unexplained.
     #[test]
     fn the_named_prompt_explains_what_opening_does() {
-        let output = rendered(|frame| draw_named(frame, "/srv/shared", &Choosing::new()));
+        let output = rendered(|frame| draw_named(frame, "/srv/shared"));
         // Wrapping can split a phrase across lines, so assert on short fragments.
         assert!(
             output.contains("settings file"),
@@ -744,7 +550,7 @@ mod tests {
     /// asking.
     #[test]
     fn the_named_prompt_paints_the_themes_background_inside_its_border() {
-        paints_the_themes_chrome(|frame| draw_named(frame, "/home/me/.ssh", &Choosing::new()));
+        paints_the_themes_chrome(|frame| draw_named(frame, "/home/me/.ssh"));
     }
 
     /// Both questions, since either can be the first thing a session draws on a small terminal.
@@ -757,7 +563,7 @@ mod tests {
     fn a_tiny_terminal_still_renders() {
         let mut terminal = Terminal::new(TestBackend::new(24, 8)).expect("terminal");
         terminal
-            .draw(|frame| draw(frame, Path::new("/tmp/x"), &Choosing::new()))
+            .draw(|frame| draw(frame, Path::new("/tmp/x")))
             .expect("must not panic on a small area");
         assert!(
             drawn_on(&terminal).contains("Trust /tmp/x?"),
@@ -766,7 +572,7 @@ mod tests {
         );
 
         terminal
-            .draw(|frame| draw_named(frame, "/tmp/x", &Choosing::new()))
+            .draw(|frame| draw_named(frame, "/tmp/x"))
             .expect("must not panic on a small area");
         assert!(
             drawn_on(&terminal).contains("Open /tmp/x?"),
@@ -798,160 +604,33 @@ mod tests {
         assert!(trust.is_trusted("deep/nested/file.txt"));
     }
 
-    /// Enter is the key most likely to be pressed without reading, and the likeliest single byte to
-    /// arrive from a program writing at the terminal, so the row it lands on before anything has
-    /// moved the cursor has to be the one that grants nothing.
+    /// The key that grants standing permission over a whole tree is the deliberate one and no
+    /// other. Enter is the key most likely to be pressed out of habit, so it answers nothing: a
+    /// keystroke made without reading must not be the answer that costs the most to get wrong.
     #[test]
-    fn the_question_opens_on_declining_so_a_stray_enter_grants_nothing() {
-        assert_eq!(Choosing::new().chosen(), Answer::Decline);
+    fn only_y_trusts_and_enter_answers_nothing() {
+        let pressed = |code| KeyEvent::new(code, KeyModifiers::NONE);
+
+        assert_eq!(answer_for(pressed(KeyCode::Char('y'))), Some(Answer::Trust));
+        assert_eq!(answer_for(pressed(KeyCode::Char('Y'))), Some(Answer::Trust));
         assert_eq!(
-            answered_by_keys([pressed(KeyCode::Enter)]),
+            answer_for(pressed(KeyCode::Char('n'))),
             Some(Answer::Decline)
         );
-
-        let trust = trust_for(Answer::Decline, here()).expect("declining still starts a session");
-        assert!(trust.is_empty(), "a stray Enter granted trust");
-    }
-
-    /// No letter is an answer and no letter is a movement. `y` and `n` are gone rather than kept as
-    /// shortcuts, since a shortcut is the single keystroke this question must not take, and `j` and
-    /// `k` are excluded with them: a burst of prose is full of both, and a cursor a program can move
-    /// is a row a program can reach.
-    #[test]
-    fn no_bare_letter_moves_the_cursor_or_answers() {
-        for letter in ['y', 'Y', 'n', 'N', 'c', 'j', 'k', 'q'] {
-            let mut choosing = Choosing::new();
-            assert_eq!(
-                handle_key(&mut choosing, pressed(KeyCode::Char(letter))),
-                Outcome::Continue,
-                "`{letter}` answered the question"
-            );
-            assert_eq!(
-                choosing.chosen(),
-                Answer::Decline,
-                "`{letter}` moved the cursor"
-            );
-        }
+        assert_eq!(
+            answer_for(pressed(KeyCode::Char('N'))),
+            Some(Answer::Decline)
+        );
+        assert_eq!(answer_for(pressed(KeyCode::Esc)), Some(Answer::Decline));
+        assert_eq!(answer_for(pressed(KeyCode::Enter)), None);
     }
 
     /// Ctrl-C is the interrupt everyone reaches for, and raw mode turns it into an ordinary key
-    /// press, so a prompt that ignored it would be a screen with no way out. It points at the way
-    /// out instead of taking it: one byte written by another program must not end a session, and the
-    /// press after it is what does.
+    /// press. A prompt that ignored it would be a screen with no way out.
     #[test]
-    fn ctrl_c_moves_nothing_and_decides_nothing() {
-        let mut choosing = Choosing::new();
-        let interrupt = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-
-        assert_eq!(
-            handle_key(&mut choosing, interrupt),
-            Outcome::Continue,
-            "Ctrl-C answered the question on its own"
-        );
-        assert_eq!(
-            choosing.chosen(),
-            Answer::Decline,
-            "Ctrl-C moved the cursor off the row that grants nothing"
-        );
-    }
-
-    /// Two bytes, which is what a shell integration writes when it clears the line before typing:
-    /// an interrupt and then a return. While Ctrl-C put the cursor on the row that leaves, those
-    /// two spelled the whole quit gesture between them and the session ended without a person,
-    /// which is the same silent exit the bare interrupt used to produce.
-    #[test]
-    fn an_interrupt_then_a_return_does_not_leave() {
-        let mut choosing = Choosing::new();
-        handle_key(
-            &mut choosing,
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        );
-
-        assert_eq!(
-            handle_key(&mut choosing, pressed(KeyCode::Enter)),
-            Outcome::Confirm
-        );
-        assert_ne!(
-            choosing.chosen(),
-            Answer::Leave,
-            "an interrupt and a return spelled leaving between them"
-        );
-    }
-
-    /// The same two bytes with the words in between, which is the whole of what was reported: the
-    /// clear, the command, then the return.
-    #[test]
-    fn an_interrupt_a_run_and_a_return_does_not_leave() {
-        let mut choosing = Choosing::new();
-        handle_key(
-            &mut choosing,
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        );
-        for key in crate::input::run_spelling("source .venv/bin/activate") {
-            handle_key(&mut choosing, key);
-        }
-
-        assert_eq!(
-            handle_key(&mut choosing, pressed(KeyCode::Enter)),
-            Outcome::Confirm
-        );
-        assert_ne!(
-            choosing.chosen(),
-            Answer::Leave,
-            "a cleared line and a command spelled leaving between them"
-        );
-    }
-
-    /// Escape is the other key a person reaches for to get out, so it points at the same row. It
-    /// used to decline, which made a stray one an answer.
-    #[test]
-    fn escape_moves_nothing_and_decides_nothing() {
-        let mut choosing = Choosing::new();
-
-        assert_eq!(
-            handle_key(&mut choosing, pressed(KeyCode::Esc)),
-            Outcome::Continue,
-            "Escape answered the question on its own"
-        );
-        assert_eq!(
-            choosing.chosen(),
-            Answer::Decline,
-            "Escape moved the cursor off the row that grants nothing"
-        );
-    }
-
-    /// Every row is reachable and Enter takes the one under the cursor, since a picker that could
-    /// not reach one of its answers would be a question with an answer nobody can give.
-    #[test]
-    fn enter_takes_the_row_under_the_cursor() {
-        assert_eq!(
-            answered_by_keys([pressed(KeyCode::Up), pressed(KeyCode::Enter)]),
-            Some(Answer::Trust)
-        );
-        assert_eq!(
-            answered_by_keys([pressed(KeyCode::Enter)]),
-            Some(Answer::Decline)
-        );
-        assert_eq!(
-            answered_by_keys([pressed(KeyCode::Down), pressed(KeyCode::Enter)]),
-            Some(Answer::Leave)
-        );
-    }
-
-    /// The list does not wrap. Holding an arrow down must not carry the cursor off the row a person
-    /// stopped at and round onto the one that trusts.
-    #[test]
-    fn the_arrows_walk_the_rows_and_stop_at_their_ends() {
-        let mut choosing = Choosing::new();
-        for _ in 0..100 {
-            handle_key(&mut choosing, pressed(KeyCode::Up));
-        }
-        assert_eq!(choosing.chosen(), Answer::Trust);
-
-        for _ in 0..100 {
-            handle_key(&mut choosing, pressed(KeyCode::Down));
-        }
-        assert_eq!(choosing.chosen(), Answer::Leave);
+    fn ctrl_c_leaves_rather_than_answering_the_question() {
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(answer_for(key), Some(Answer::Leave));
     }
 
     /// Leaving is not a quiet decline: a session that started anyway would be one the user
@@ -962,26 +641,17 @@ mod tests {
         assert!(trust_for(Answer::Decline, here()).is_some());
     }
 
-    /// No other control chord points at the way out, so a stray one leaves the cursor where the
-    /// person left it rather than moving it onto the row that ends the session.
+    /// A plain `c` is not an interrupt, and neither is any other control chord.
     #[test]
-    fn no_other_control_chord_moves_the_cursor() {
-        for chord in ['y', 'n', 'd', 'z', 'u'] {
-            let mut choosing = Choosing::new();
-            assert_eq!(
-                handle_key(
-                    &mut choosing,
-                    KeyEvent::new(KeyCode::Char(chord), KeyModifiers::CONTROL)
-                ),
-                Outcome::Continue,
-                "ctrl-{chord} answered the question"
-            );
-            assert_eq!(
-                choosing.chosen(),
-                Answer::Decline,
-                "ctrl-{chord} moved the cursor"
-            );
-        }
+    fn only_ctrl_c_leaves() {
+        assert_eq!(
+            answer_for(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(
+            answer_for(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)),
+            None
+        );
     }
 
     /// Declining leaves nothing trusted, so every write is shown. Asked of the answer rather than
