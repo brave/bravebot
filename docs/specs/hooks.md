@@ -6,6 +6,7 @@ governs:
   - crates/config/src/hooks.rs
   - crates/agent/src/hooks.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/delegate.rs
 documented-by: docs/website/docs/customize/hooks.md
 ---
 
@@ -180,9 +181,11 @@ decision is taken from something a person wrote rather than from something a pro
 A hook that could not be started, that ended badly, or that was still running after 30 seconds and
 was stopped, is said to the person, naming the moment and the program. It reaches a live display as
 it happens and the turn's own account of itself as well, so a run with nowhere to draw says it too.
-The turn carries on in every case. A hooks file that is missing, unparseable, larger than 64 KB, or that holds an
-entry this build cannot use, is that much of it not applying and never a session that will not
-start.
+A moment inside a delegate is a moment of the turn that spawned it and reaches that turn's account,
+a delegate keeping none anybody reads, and it reaches it whether or not the delegate went on to
+answer. The turn carries on in every case. A hooks file that is missing, unparseable, larger than
+64 KB, or that holds an entry this build cannot use, is that much of it not applying and never a
+session that will not start.
 
 **Why.** A hook holds the turn open while it runs, and a person watching cannot tell a slow hook
 from a slow model, so one that does not finish is stopped rather than waited on. Nothing a hook
@@ -195,6 +198,8 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_agent::hooks::a_hook_that_ends_badly_is_reported`
 `verified-by: bravebot_agent::hooks::a_hook_whose_program_is_not_there_is_reported`
 `verified-by: bravebot_agent::hooks::a_hook_that_outstays_the_bound_is_stopped`
+`verified-by: bravebot_agent::turn::a_hook_that_went_wrong_on_a_delegate_s_call_reaches_the_turn_s_notices`
+`verified-by: bravebot_agent::turn::a_delegate_that_did_not_finish_still_tells_the_turn_what_its_hooks_said`
 `verified-by: bravebot_agent::hooks::a_file_that_declared_nothing_fires_nothing`
 `verified-by: bravebot_config::hooks::an_unusable_entry_leaves_the_others_firing`
 `verified-by: bravebot_config::hooks::an_unparseable_file_declares_no_hooks`
