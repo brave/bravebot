@@ -207,6 +207,7 @@ longer attached, and the only way to find that out is to keep pressing.
 
 `verified-by: bravebot_tui::state::one_backspace_takes_the_whole_marker`
 `verified-by: bravebot_tui::state::backspace_on_a_covered_marker_takes_the_marker`
+`verified-by: bravebot_tui::state::backspace_on_a_marker_at_the_start_of_the_line_takes_the_marker`
 `verified-by: bravebot_tui::state::one_backspace_takes_the_whole_folded_paste`
 `verified-by: bravebot_tui::state::delete_forward_takes_the_whole_marker`
 `verified-by: bravebot_tui::state::text_that_merely_looks_like_a_marker_is_deleted_one_character_at_a_time`
