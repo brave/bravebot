@@ -1,6 +1,6 @@
 //! Configuration inspection uses the linked agent, never a separately installed CLI.
 use crate::protocol::{ErrorCode, Failure};
-use bravebot_config::{Config, Managed, Settings};
+use bravebot_config::{Config, Managed, NotADocument, Settings};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -24,14 +24,14 @@ pub fn validate(path: &Path) -> Result<(), Failure> {
             "Choose a JSON settings file no larger than 64 KB.",
         ));
     }
-    let text = std::fs::read_to_string(path)
-        .map_err(|_| Failure::bad_request("The settings file cannot be read."))?;
-    let value: Value = serde_json::from_str(&text)
-        .map_err(|_| Failure::bad_request("The settings file is not valid JSON."))?;
-    if !value.is_object() {
-        return Err(Failure::bad_request("Settings must be a JSON object."));
-    }
-    Ok(())
+    // Through the agent's own reader rather than a parse here. The file may state a gateway token,
+    // and a parse that is dropped rather than cleared leaves the token for the allocator, which is
+    // what CRED-23 in docs/specs/credential-protection.md is about.
+    bravebot_config::check_document(path).map_err(|reason| match reason {
+        NotADocument::Unreadable => Failure::bad_request("The settings file cannot be read."),
+        NotADocument::NotJson => Failure::bad_request("The settings file is not valid JSON."),
+        NotADocument::NotAnObject => Failure::bad_request("Settings must be a JSON object."),
+    })
 }
 
 pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
