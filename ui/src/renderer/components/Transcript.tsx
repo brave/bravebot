@@ -2,7 +2,7 @@ import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
-import type { AskAnswer, AskPrompt, Phase, Shown, TodoRow } from '../../shared/protocol'
+import { isConfined, type AskAnswer, type AskPrompt, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
@@ -981,7 +981,7 @@ export function Row({
           ) : (
             <span className="note">{activity.note}</span>
           )}
-          {landing && landing !== 'context' && (
+          {landing && isConfined(landing) && (
             <span className="confined" title={landingHint(landing)}>
               {landing === 'quarantined' ? 'quarantined' : 'name only'}
             </span>

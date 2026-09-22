@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Fold } from './Fold'
 import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
-import type { Activity, Phase, Shown, TodoRow } from '../../shared/protocol'
+import { isConfined, type Activity, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import type { Entry } from '../transcript'
 
 interface Live {
@@ -283,7 +283,7 @@ function touched(entries: Entry[]): { target: string; confined: boolean }[] {
     // A file the turn wrote is not a file it read. It has its own panel, and naming it
     // here as well told the reader the model had seen contents it never opened.
     if (isWrite(entry.activity)) continue
-    const confined = entry.landing !== null && entry.landing !== 'context'
+    const confined = entry.landing !== null && isConfined(entry.landing)
     // Once confined, always shown as confined: a file read into quarantine and later
     // named again should not lose the mark.
     seen.set(entry.activity.target, (seen.get(entry.activity.target) ?? false) || confined)

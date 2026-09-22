@@ -12,6 +12,8 @@
  * first reply. See `docs/phase-0-rpc-protocol.md` §7.1.
  */
 
+import { isProjectPath } from './recents'
+
 /** One session, durably: an id is unique only within the project it ran in. */
 export interface SessionRef {
   directory: string
@@ -51,10 +53,6 @@ export const FORKS_MAX = 500
  */
 export function isSessionId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && !value.includes('/') && !value.includes('\0')
-}
-
-function isProjectPath(value: unknown): value is string {
-  return typeof value === 'string' && value.startsWith('/') && !value.includes('\0')
 }
 
 function parseRef(value: unknown): SessionRef | null {
