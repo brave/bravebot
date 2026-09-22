@@ -8,15 +8,19 @@
 //! person wants the session and nothing else.
 //!
 //! Engaging this says so once, at startup, and every place that would write to the user's own
-//! directory declines instead.
+//! directory declines instead, apart from the file an imported subscription lives in: a credential
+//! the session spends is recorded as spent there, and a batch that runs out is renewed there, since
+//! a credential is single use and one left looking unspent would be offered again in the next
+//! session and lost.
 //!
 //! # Reading is not writing
 //!
 //! An incognito session still reads. It loads the settings, the chosen model, the theme, and the
 //! credentials that let it reach a backend at all, because a mode that could not authenticate
-//! would not be a private session but a broken one. What it does not do is add to any of that.
-//! This is the same shape as a browser's private window, and for the same reason: the promise is
-//! about what survives the session, not about what the session may know.
+//! would not be a private session but a broken one. What it does not do is add to any of that,
+//! beyond the imported credentials it spends. This is the same shape as a browser's private window,
+//! and for the same reason: the promise is about what survives the session, not about what the
+//! session may know.
 //!
 //! # One way
 //!

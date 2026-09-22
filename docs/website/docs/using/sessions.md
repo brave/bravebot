@@ -332,12 +332,12 @@ inside a round, so a call is never separated from its results.
 bravebot --incognito
 ```
 
-An incognito session runs like any other and adds nothing to `~/.bravebot`. No prompt reaches the
-history, no session record and no title are written, no audit trail is kept, and a model, theme or
-effort level chosen inside it applies for that session without being recorded. The sessions directory
-is not created either, since an empty one still says that a session ran, in this project, at this
-time. Nothing is written, so nothing is resumable. An incognito session does not appear in the
-picker, including to itself.
+An incognito session runs like any other and adds nothing to `~/.bravebot`, apart from the one file
+[below](#what-it-does-not-cover). No prompt reaches the history, no session record and no title are
+written, no audit trail is kept, and a model, theme or effort level chosen inside it applies for
+that session without being recorded. The sessions directory is not created either, since an empty
+one still says that a session ran, in this project, at this time. No record is written, so nothing
+is resumable. An incognito session does not appear in the picker, including to itself.
 
 A history and records that were already there are left exactly as they were, and an ordinary session
 from before stays resumable. It stops being updated for as long as the incognito one runs.
@@ -353,7 +353,7 @@ bare invocation alike. It cannot be turned off once the session has started.
 
 ### What it does not cover
 
-Four things still reach the filesystem:
+Five things still reach the filesystem:
 
 - **Your project.** `write_file` and `edit_file` go on editing it. Those edits are the work rather
   than a trace of it.
@@ -368,6 +368,14 @@ Four things still reach the filesystem:
   directory on the same terms as the editor's file and goes with the session. Its name says which
   program made it and nothing about which project or which session, so an empty one records only that
   this program ran at this time.
+- **A credential you spent.** With a [Leo Premium](../customize/premium.md) subscription imported,
+  the session spends credentials from it as any session does, and records which ones it spent in the
+  file the import created under `~/.bravebot`. A credential is single use and presenting it to the
+  service spends it there, so one left looking unspent would be offered again in your next session,
+  wasting a credential you paid for. If the batch runs out while you are working, a new one is
+  fetched for the same subscription and written to the same file, rather than thrown away when you
+  exit. What ends up in the file is credentials for a subscription you imported before the session
+  and which of them are spent, and nothing about the project or what you asked.
 
 [`import-leo-creds`](../customize/premium.md) is refused rather than quietly skipped, since a
 credential that did not outlive the session would not be an import. `--forget` still works, because
