@@ -357,14 +357,23 @@ abbreviation of a long option is not that option: deciding what `--recursi` abbr
 parsing this road exists to avoid. An option that takes a value says so, and its value is skipped
 wherever it is written, so it is never counted as an operand.
 
-A stage whose line named a path rather than a program is not read-proven, and neither is one
-carrying an environment assignment or opening a file for a stream. The table's entries are claims
-about the programs a system provides under those names and are matched on the name a program
-resolved to, so a line naming a path would let a file called `wc` in the directory the line runs in
-answer as the audited one. An assignment decides what a program loads and reads before its own
-arguments are looked at, and a redirection opens a file the argv does not name, so neither is
-covered by an audit of an option surface. Joining standard error to standard output renames a
-descriptor and opens nothing, so it is not a redirection for this purpose.
+A stage whose program resolves to a file inside the workspace is not read-proven, and neither is one
+whose line named a path rather than a program, one carrying an environment assignment, or one opening
+a file for a stream. The table's entries are claims about the programs a system provides under those
+names and are matched on the name a program resolved to, which identifies no file: so a file called
+`wc` in the tree being inspected would answer as the audited one, and it reaches that answer whether
+the line pointed at it or a name did. `$PATH` decides what a name means, so a project directory on it
+is enough for a file a contributor added to be what an audited name runs, and `PATH_add bin` in a
+project's own `.envrc` puts one there. The workspace test is therefore made against the path the
+driver resolved and will execute rather than against the spelling that reached it: those are two
+values, and only the first says where the file is. An assignment decides what a program loads and
+reads before its own arguments are looked at, and a redirection opens a file the argv does not name,
+so neither is covered by an audit of an option surface. Joining standard error to standard output
+renames a descriptor and opens nothing, so it is not a redirection for this purpose.
+
+A `$PATH` directory outside the workspace is honoured whatever the trust map holds about it, since
+the audited utilities live in one: Homebrew installs to its own prefix and Nix to a store path, and
+neither is a directory anybody wrote a rule about.
 
 A plan running in any directory other than the one the trust map's rules are written against is not
 read-proven, since its operands and the map's rules would be spelled relative to different places.
@@ -446,6 +455,7 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::policy::an_environment_assignment_leaves_a_step_unproven`
 `verified-by: bravebot_core::policy::a_redirection_leaves_a_step_unproven_and_a_descriptor_rename_does_not`
 `verified-by: bravebot_core::policy::a_program_named_by_path_is_not_proven`
+`verified-by: bravebot_core::policy::a_program_resolving_inside_the_project_is_not_proven`
 `verified-by: bravebot_core::policy::a_line_running_outside_the_project_root_is_not_proven`
 `verified-by: bravebot_core::policy::a_plan_with_no_steps_proves_nothing`
 `verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
@@ -471,9 +481,10 @@ prompt; it does not overrule a rule a person wrote.
 
 **Why this clause is the risky one.** It is the only place in this spec where a proof stops a human
 from being asked, and if the table is wrong somewhere then something ran that nobody saw. The
-mitigations are that the table is small, hand-audited per program against its full option list,
-matched against the file name a program resolved to and only where the line named a program rather
-than a path, and fails closed on any argv it does not fully recognise.
+mitigations are that the table is small, hand-audited per program against its full option list, and
+fails closed on any argv it does not fully recognise. A file name match is not one of them and is not
+sufficient on its own: a name is not a program, so the file the name resolved to has to lie outside
+the workspace as well, and only where the line named a program rather than a path.
 [CMDLINE-8](#CMDLINE-8) stands on its own without this clause and still removes the second round
 trip; what this clause adds is the first prompt, not the readable output.
 
@@ -491,6 +502,7 @@ trip; what this clause adds is the first prompt, not the readable output.
 `verified-by: bravebot_core::policy::one_step_nothing_can_account_for_makes_the_whole_line_opaque`
 `verified-by: bravebot_core::policy::an_environment_assignment_leaves_a_step_unproven`
 `verified-by: bravebot_core::policy::a_program_named_by_path_is_not_proven`
+`verified-by: bravebot_core::policy::a_program_resolving_inside_the_project_is_not_proven`
 `verified-by: bravebot_core::policy::a_line_running_outside_the_project_root_is_not_proven`
 
 <a id="CMDLINE-10"></a>
@@ -720,6 +732,16 @@ nothing until you have opened that file.
   calls that use it rather than accepting them, and only the options both the GNU and the BSD
   spelling agree on can be listed at all. The cost is a prompt for a call that would have been fine,
   which is the right direction and is still work.
+- **A name is refused where it lands in the workspace, and no name is ever positively identified.**
+  The audited utilities are supplied by the operating system and differ by platform, distribution and
+  package manager, so no hash or signature can be pinned for one: an entry is a claim about a program
+  under a name, checked against one implementation's option surface, and what runs is whatever
+  `$PATH` reached. Refusing a resolution inside the workspace closes the route a file in the tree
+  takes to an entry. It leaves the case with no attacker in it: where `grep` means `ugrep`, an
+  implementation with a far larger option surface, the entry describes a different program than the
+  one that runs and an option the two read differently is proven against the wrong audit. Refusing
+  every `$PATH` directory the trust map is silent about would cover more of the category and would
+  also refuse the genuine utilities under the layouts above, which is a prompt on every audited call.
 - **A proof is about paths, and the trust map answers about names.** A symlink inside a vouched-for
   directory pointing at a file outside it is a name the map covers and bytes it never saw, so a
   read-proven line reading through one comes back trusted. The table refuses the recursion flag that
