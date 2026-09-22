@@ -7,6 +7,9 @@ governs:
   - crates/*/src/lib.rs
   - crates/*/src/main.rs
   - crates/*/build.rs
+  - ui/src/renderer/components/Transcript.tsx
+  - ui/src/renderer/components/Markdown.tsx
+  - ui/scripts/marking.test.mjs
 documented-by: none (internal: which crate may depend on what is how the repository is built, not something a reader acts on)
 ---
 
@@ -110,17 +113,49 @@ the terminal and says nothing about the screen most people are looking at. Writt
 it is a rule a second front end can be held to, which is the most this document can do about one it
 does not compile.
 
+**The desktop renderer is such a surface, and it is in this repository.** `ui/` is a React front
+end over [LABEL-10](labels.md#LABEL-10)'s transport, built by `npm` rather than by this workspace,
+so no row of LAYER-1's table reaches it and no Rust test renders it. Markup gives content two
+escapes a terminal does not have, so the marking rule reaches it as three properties rather than
+one:
+
+- **Released content is marked by a container the renderer draws, and cannot produce a second
+  one.** A quarantined preview sits inside a block whose head says `confined` and names the origin
+  and whose foot states the reach; an untrusted write is marked on the card. Content reaches the
+  tree as a text child rather than as markup, so its own spelling of that chrome is drawn as the
+  characters it is: neutralised rather than dropped, for the reason the terminal neutralises an
+  escape rather than removing it.
+- **Content reaches no raw markup.** No plugin turning HTML in released content into elements is
+  installed, and `dangerouslySetInnerHTML` appears nowhere in the front end. That is what makes
+  the property above a property of the renderer rather than of what the content happens to hold.
+- **Nothing content renders makes the app fetch.** An image in released content is never an
+  `<img>`, and no element the renderer draws around such content carries an attribute a browser
+  resolves without being asked: no `src`, no `srcset`, no `url(` inside a style. So nothing
+  leaves the machine unless the person picks it, and what they may pick is bounded as well.
+  Following a link leaves the app only where a URL parser reads its scheme as `http:`, `https:` or
+  `mailto:`, and a relative path is not a link out at all: it becomes a preview inside this window,
+  and only where the path stays within the project. This is the question a terminal never had to
+  answer, and the answer is a capability rather than a decoration: the main process answers a
+  window-open by handing the URL to the operating system.
+
+Formatting is part of the marking rather than beside it. Markdown is applied to the assistant
+bubble and to nothing else, so a heading or a bold run is itself a statement that these words came
+from the planner. Giving quarantined content that vocabulary would hand it the signals the reader
+is meant to trust, an inch above them.
+
 `verified-by: bravebot_cli::layering::every_presentation_crate_is_named_by_the_clause_that_marks_content`
-`verified-by: by-construction (a surface this workspace compiles is one of its crates, and the test above holds the clause naming them to every row of the table whose constraint opens on presentation, in both directions; a surface this workspace does not compile has no run to check, which is the known cost below)`
+`verified-by: by-construction (a surface this workspace compiles is one of its crates, and the test above holds the clause naming them to every row of the table whose constraint opens on presentation, in both directions; the desktop renderer is not one of its crates and is pinned instead by ui/scripts/marking.test.mjs, which renders the real components through react-dom and asserts the three properties above on the markup that comes out, for every card of the transcript that shows released content, and which the Front end CI job runs, while the governs list above holds the file's existence to make check-spec; a surface in neither place has no run to check, which is the known cost below)`
 
 ## Open questions
 
-- **How the reach of the clause above is closed for a surface this workspace does not compile.** A
-  surface built as a member lands inside the paths this spec governs, so it has to gain a row and a
-  test before it compiles; a published interface with a specified transport supplies instead the
-  compatibility promise the pin does not, and keeps the two release cadences apart. Both answer the
-  clause and they differ in everything else, and what decides between them is who maintains what
-  rather than anything here.
+- **How the reach of the clause above is closed for a surface in another repository.** The desktop
+  renderer answers it for one in this repository and the answer does not travel: it lands inside the
+  paths this spec governs, so a diff under it is read against this clause, and it carries a test
+  runner of its own, so a CI job decides it. For a surface elsewhere, one built as a workspace
+  member lands inside those paths too and has to gain a row and a test before it compiles; a
+  published interface with a specified transport supplies instead the compatibility promise the pin
+  does not, and keeps the two release cadences apart. Both answer the clause and they differ in
+  everything else, and what decides between them is who maintains what rather than anything here.
 - **Whether the record should hold the types the front end holds in memory.** `bravebot-session`
   declares its own structs for what it writes, which is what lets a struct on disk outlive the shape
   of a struct in memory, and several of them are the interface's own live state as well: the
@@ -164,14 +199,19 @@ does not compile.
   depending on `bravebot-net` keeps this crate at no dependencies, which is what makes "auth only"
   checkable by reading its manifest.
 
-- **Nothing here reaches a surface this workspace does not compile.** The clause about marking is
-  addressed to any surface, and the only surfaces checked against it are the crates in this
-  workspace: the table has their rows and the clause names them. A front end elsewhere that links
-  these crates is governed by nothing written down, and whether it marks what it displays is not a
-  thing this repository can state either way. Markup is where that costs most, because its escapes
-  are ones a terminal does not have: content that reaches raw markup, a link or a remote resource
-  can draw its own container and can leave the machine, so a margin is the first of three questions
-  rather than the whole of one.
+- **The desktop renderer's marking is pinned outside `make check`.** The three properties LAYER-5
+  states for it are asserted by `ui/scripts/marking.test.mjs`, which no Makefile target runs: it
+  needs the front end's own dependency tree, so the Front end CI job is what runs it, after an
+  `npm ci` and a build. A renderer change that drops the marking therefore passes every check this
+  repository documents for a commit, and a pull request is the first thing to say so.
+
+- **A front end in another repository reaches nothing here.** The clause about marking is addressed
+  to any surface, and the surfaces checked against it are the crates in this workspace and the
+  renderer beside them. A front end elsewhere that links these crates is governed by nothing
+  written down, and whether it marks what it displays is not a thing this repository can state
+  either way. Markup is where that costs most, because its escapes are ones a terminal does not
+  have: content that reaches raw markup, a link or a remote resource can draw its own container and
+  can leave the machine, so a margin is the first of three questions rather than the whole of one.
 
 - **Reading a session record still links the agent.** `bravebot-session` links no terminal library,
   which is what a second front end wanted from the move, and it is not a leaf: a record holds what a

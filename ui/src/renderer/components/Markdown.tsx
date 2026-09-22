@@ -21,6 +21,11 @@ import { isSubpath } from '../../shared/files'
  * escaped, inert text. That is why there is no sanitizer here: there is nothing to
  * sanitise. `dangerouslySetInnerHTML` appears nowhere in this codebase and must not start
  * here.
+ *
+ * None of the above is left to the comment: `scripts/marking.test.mjs` renders these components
+ * and asserts each of them on the markup, which is what
+ * [LAYER-5](../../../../docs/specs/layering.md#LAYER-5) names as this surface's answer to the
+ * rule that any surface showing released content marks it.
  */
 
 /** Schemes a link may use. Everything else is drawn as text rather than as a link. */
