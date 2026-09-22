@@ -6,8 +6,8 @@
 //! carries the digression for the rest of the session. Asked here, it does not.
 //!
 //! **The conversation is read once and never written to.** What leaves it is [`Question`], which
-//! is one request's messages: the exchange as the planner would be sent it, with the question on
-//! the end. Nothing is pushed, nothing is measured, and no reference is handed out, so the
+//! is one request: the exchange as the planner would be sent it, and the question that goes on the
+//! end of it. Nothing is pushed, nothing is measured, and no reference is handed out, so the
 //! exchange the next turn resumes is the exchange that was there before the question was asked.
 //! Taking the request rather than the conversation is what makes that structural: an aside cannot
 //! push a message to something it does not have.
@@ -33,7 +33,7 @@
 //! answer is on the screen and nowhere else.
 
 use bravebot_aichat::ChatError;
-use bravebot_aichat::protocol::{ChatRequest, Message, Usage};
+use bravebot_aichat::protocol::{ChatRequest, Message, Part, Usage};
 use bravebot_core::event::Sink;
 use bravebot_core::label::Integrity;
 use bravebot_core::policy::{Denial, Policy};
@@ -85,22 +85,31 @@ const INSTRUCTION: &str = "Setting the work aside for a moment, here is my quest
 /// over anyway.
 #[derive(Debug, Clone)]
 pub struct Question {
-    /// The request to send: the exchange with the question's own message on the end.
-    messages: Vec<Message>,
+    /// The exchange as the planner would be sent it, with nothing of the question on the end yet.
+    exchange: Vec<Message>,
+    /// The question, as the person typed it.
+    asked: String,
+    /// The pictures the question named, pasted into the line the question was typed on.
+    pasted: Vec<crate::turn::PastedImage>,
     /// What the exchange had met, which is what decides whether the answer may be written down.
     context: Integrity,
 }
 
 impl Question {
-    /// Fork the exchange and put the question on the end of it.
+    /// Fork the exchange and take the question that will go on the end of it.
     ///
     /// `question` is the line the person typed, which is trusted in the sense a prompt is: it came
-    /// from the keyboard of the user who owns the session.
-    pub fn about(conversation: &Conversation, question: &str) -> Self {
-        let mut messages = conversation.with_system(SYSTEM_PROMPT);
-        messages.push(Message::user(format!("{INSTRUCTION}\n\n{question}")));
+    /// from the keyboard of the user who owns the session. `pasted` is what they pasted into that
+    /// line, which pasting.md PASTE-2 puts on the same footing for the same reason.
+    pub fn about(
+        conversation: &Conversation,
+        question: &str,
+        pasted: Vec<crate::turn::PastedImage>,
+    ) -> Self {
         Self {
-            messages,
+            exchange: conversation.with_system(SYSTEM_PROMPT),
+            asked: question.to_string(),
+            pasted,
             context: conversation.context(),
         }
     }
@@ -108,6 +117,28 @@ impl Question {
     /// What the exchange had met when the question was asked.
     pub fn context(&self) -> Integrity {
         self.context
+    }
+
+    /// Every message the request holds: the exchange, then the question with its pictures in it.
+    ///
+    /// One message for the question and whatever came with it, because that is what the person did:
+    /// they typed a line and pasted a picture into it. Two messages would put the picture somewhere
+    /// other than the sentence asking about it.
+    ///
+    /// The record `pasting.md` PASTE-8 asks for is not taken here. This runs wherever the request is
+    /// assembled and the gate belongs to the policy, so [`ask`] takes it before calling this.
+    fn into_request(self) -> Vec<Message> {
+        let mut messages = self.exchange;
+        let text = format!("{INSTRUCTION}\n\n{}", self.asked);
+        messages.push(match self.pasted.is_empty() {
+            true => Message::user(text),
+            false => Message::user_parts(
+                std::iter::once(Part::Text { text })
+                    .chain(self.pasted.iter().map(crate::turn::PastedImage::part))
+                    .collect(),
+            ),
+        });
+        messages
     }
 }
 
@@ -179,10 +210,17 @@ pub fn ask<S: Sink>(
     // below adds to it. A question that could call a tool would be a turn, and a turn is the
     // thing this exists to avoid being.
     let model = chat.model.unwrap_or(&chat.config.default_model);
+    // Each picture the question carries, one by one, so the trail says what arrived rather than that
+    // something did: pasting.md PASTE-8 accounts for every paste, and a question is one of the three
+    // requests one can travel in. Before the request is built, because building it consumes the
+    // question, and because a record taken after the bytes have gone is a record of nothing.
+    for picture in &question.pasted {
+        policy.admit_pasted_image(picture.media_type, picture.bytes.len());
+    }
     // The exchange is given up once this answers, so nothing asks for a cache of it: a mark would
     // sit on the question at the end of the request, which only a later question repeating those
     // words could read back. The instructions keep their mark, being the same bytes every question.
-    let request = ChatRequest::new(model, question.messages).giving_up_its_conversation();
+    let request = ChatRequest::new(model, question.into_request()).giving_up_its_conversation();
 
     let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
     if let Some(cancel) = chat.cancel {
@@ -247,12 +285,10 @@ mod tests {
     /// answer by proposing an edit, which is what this whole path exists to avoid.
     #[test]
     fn the_question_is_marked_as_one_rather_than_left_on_the_end_of_the_work() {
-        let asking = Question::about(&an_exchange(), "why is the parser recursive?");
+        let asking = Question::about(&an_exchange(), "why is the parser recursive?", Vec::new());
 
-        let last = asking
-            .messages
-            .last()
-            .expect("the question closes the request");
+        let request = asking.into_request();
+        let last = request.last().expect("the question closes the request");
         let text = last.content.text();
         assert!(
             text.starts_with(INSTRUCTION),
@@ -268,10 +304,10 @@ mod tests {
     /// question alone.
     #[test]
     fn the_exchange_goes_out_with_the_question() {
-        let asking = Question::about(&an_exchange(), "why is the parser recursive?");
+        let asking = Question::about(&an_exchange(), "why is the parser recursive?", Vec::new());
 
         let said: Vec<String> = asking
-            .messages
+            .into_request()
             .iter()
             .map(|message| message.content.text())
             .collect();
@@ -292,7 +328,7 @@ mod tests {
         let conversation = an_exchange();
         let before = conversation.len();
 
-        let _ = Question::about(&conversation, "why is the parser recursive?");
+        let _ = Question::about(&conversation, "why is the parser recursive?", Vec::new());
 
         assert_eq!(
             conversation.len(),
@@ -308,13 +344,13 @@ mod tests {
     fn the_question_carries_what_the_exchange_had_met() {
         let mut conversation = an_exchange();
         assert_eq!(
-            Question::about(&conversation, "why?").context(),
+            Question::about(&conversation, "why?", Vec::new()).context(),
             Integrity::Trusted
         );
 
         conversation.observed(Integrity::Untrusted);
         assert_eq!(
-            Question::about(&conversation, "why?").context(),
+            Question::about(&conversation, "why?", Vec::new()).context(),
             Integrity::Untrusted
         );
     }

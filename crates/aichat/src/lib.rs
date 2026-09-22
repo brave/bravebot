@@ -19,7 +19,7 @@
 pub mod models;
 pub mod protocol;
 
-use bravebot_config::Config;
+use bravebot_config::{Config, Secret};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
@@ -202,7 +202,7 @@ struct Gateway<'a> {
     /// qualified by the provider's own id to say which service was meant, and that qualified form is
     /// one the gateway has never heard of.
     model: String,
-    token: Option<String>,
+    token: Option<Secret>,
 }
 
 impl<'a> AichatClient<'a> {
@@ -260,7 +260,7 @@ impl<'a> AichatClient<'a> {
         mut self,
         provider: &'a bravebot_config::provider::Provider,
         model: impl Into<String>,
-        token: Option<String>,
+        token: Option<Secret>,
     ) -> Self {
         self.gateway = Some(Gateway {
             provider,
@@ -435,7 +435,7 @@ impl<'a> AichatClient<'a> {
             }
             let mut http = Request::post(gateway.provider.chat_completions_url(), encode(&body)?)
                 .header("content-type", "application/json");
-            if let Some(token) = gateway.token.as_deref() {
+            if let Some(token) = gateway.token.as_ref().map(Secret::expose) {
                 http = http.header("authorization", format!("Bearer {token}"));
             }
             return Ok(http);
@@ -1063,7 +1063,7 @@ mod tests {
         let egress = Egress::new();
         let provider = provider(r#"{"z-ai/glm-4.6": {}}"#);
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "z-ai/glm-4.6", Some("a-token".to_string()))
+            .for_gateway(&provider, "z-ai/glm-4.6", Some(Secret::new("a-token")))
             .prepare(&request("openrouter/z-ai/glm-4.6"))
             .expect("prepared");
 
@@ -1083,7 +1083,7 @@ mod tests {
             r#"{"z-ai/glm-4.6": {"options": {"provider": {"order": ["amazon-bedrock"]}}}}"#,
         );
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "z-ai/glm-4.6", Some("a-token".to_string()))
+            .for_gateway(&provider, "z-ai/glm-4.6", Some(Secret::new("a-token")))
             .prepare(&request("openrouter/z-ai/glm-4.6"))
             .expect("prepared");
 
@@ -1101,7 +1101,7 @@ mod tests {
         let egress = Egress::new();
         let provider = provider(r#"{"z-ai/glm-4.6": {}}"#);
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "z-ai/glm-4.6", Some("a-token".to_string()))
+            .for_gateway(&provider, "z-ai/glm-4.6", Some(Secret::new("a-token")))
             .prepare(&request("z-ai/glm-4.6"))
             .expect("prepared");
 
@@ -1205,7 +1205,7 @@ mod tests {
             .for_gateway(
                 &provider,
                 "anthropic/claude-sonnet-4.5",
-                Some("a-token".to_string()),
+                Some(Secret::new("a-token")),
             )
             .prepare(&request("anthropic/claude-sonnet-4.5"))
             .expect("prepared");
@@ -1232,7 +1232,7 @@ mod tests {
             r#"{"m": {"options": {"model": "something/else", "messages": [], "stream": true}}}"#,
         );
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "m", Some("a-token".to_string()))
+            .for_gateway(&provider, "m", Some(Secret::new("a-token")))
             .prepare(&request("m"))
             .expect("prepared");
 
@@ -1255,7 +1255,7 @@ mod tests {
         let provider =
             provider(r#"{"z-ai/glm-4.6": {"limit": {"context": 131072, "output": 8192}}}"#);
         let http = AichatClient::new(&config, &egress)
-            .for_gateway(&provider, "z-ai/glm-4.6", Some("a-token".to_string()))
+            .for_gateway(&provider, "z-ai/glm-4.6", Some(Secret::new("a-token")))
             .prepare(&request("z-ai/glm-4.6"))
             .expect("prepared");
 

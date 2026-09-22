@@ -23,8 +23,11 @@ MSRV_IMAGE = rust:1.88-slim@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce279
 # runs a second time over the finished assets.
 STABLE_IMAGE = rust:1.98-slim@sha256:f47a8de237dcbb0b0ce1099901e60a89728e3d51f24e664b40e947171538ade7
 ZIGBUILD_IMAGE = ghcr.io/rust-cross/cargo-zigbuild:0.23.0@sha256:b8364c2c60cdcc9b95c402d17654bff517410926a35678bd89dd924b8158d6ae
-# Every file that states the version, which is what a bump rewrites and commits.
-VERSION_FILES = Cargo.toml Cargo.lock package.json package-lock.json
+# Every file that states the version, which is what a bump rewrites and commits. The two under
+# ui/ are the desktop application's: it is packaged from its own manifest, so a version left
+# behind there is an app bundle naming a release that does not exist.
+VERSION_FILES = Cargo.toml Cargo.lock package.json package-lock.json \
+                ui/package.json ui/package-lock.json
 
 # Forwarded into the cross-build container, which does not inherit the host environment.
 BUILD_ENV = SERVICES_KEY_AICHAT BRAVE_SERVICES_KEY_ID BRAVE_AI_CHAT_ENDPOINT \
@@ -44,6 +47,7 @@ help:
 	@echo "  make check-spec            Check docs/specs against the implementation"
 	@echo "  make check-security        The security audit's deterministic half"
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
+	@echo "  make check-versions        Whether every file stating the version states the same one"
 	@echo "  make check-docs            Build the documentation website under docs/website"
 	@echo "  make docs-changes          What has landed in the specs since the site was updated"
 	@echo "  make docs-updated-to-sha   The commit the documentation site is current as of"
@@ -124,7 +128,18 @@ check:
 	cargo fmt --all -- --check
 	cargo clippy --all-targets --all-features -- -D warnings
 	cargo test --all --locked
+	@python3 contrib/check-versions.py
 	@python3 contrib/check-toolchain.py
+
+# Whether every file that states the version states the same one: the workspace manifest, the
+# published wrapper and its lockfile, and the desktop application and its lockfile. The tagging
+# path refuses a disagreement too, but that is release day, and the front end sat at 0.1.0
+# against a 0.9.0 workspace from the day it was folded in with nothing to say so. Run by `check`
+# and by CI, so the pull request that causes one is where it is reported.
+.PHONY: check-versions
+check-versions:
+	@python3 contrib/check-versions.py --selftest
+	@python3 contrib/check-versions.py
 
 # Whether clippy here knows the lints CI will fail on. Run by `check`; on its own it costs
 # nothing and answers immediately.
@@ -288,7 +303,7 @@ docs-updated-to-sha:
 # container builds and a scan -- so `check` stays the inner loop and this is the
 # before-you-push pass.
 .PHONY: check-all
-check-all: check check-spec check-security check-locales check-docs check-npm check-deps check-msrv check-windows check-reviewdog
+check-all: check check-spec check-security check-locales check-versions check-docs check-npm check-deps check-msrv check-windows check-reviewdog
 
 # What each catalog has of the reference, and what it is missing. The build says so too, in a
 # warning, but a warning is only printed when the build script actually runs, so a translator
@@ -404,9 +419,20 @@ checksums:
 	done
 	@echo "wrote dist/SHA256SUMS"
 
-# Edits the four files that state the version and commits exactly those, so no lockfile is
+# Edits the six files that state the version and commits exactly those, so no lockfile is
 # left behind still naming the old one. It stops there: nothing is pushed and nothing is
 # tagged, and the commit is still reviewed before `github-release` will tag it.
+#
+# The four JSON files are written by contrib/check-versions.py, which is also what reads them, so
+# the bump and the check cannot disagree about where a version is stated. It replaced a node
+# program embedded in this recipe that could not run at all: a recipe's line continuations are
+# literal backslashes inside the single quotes holding the program, so node was handed a source
+# beginning with one and refused it. The npm install after it re-derives the wrapper's lockfile
+# from the manifest, as it did before. Nothing runs npm under ui/: an install there re-resolves
+# Electron's tree against the registry, which is a dependency change and not a version stamp.
+#
+# check-versions then runs as a check, so a bump that missed a file fails here rather than at the
+# tag.
 .PHONY: bump-version
 bump-version:
 	@if [ "$(BUMP)" != "bugfix" ] && [ "$(BUMP)" != "minor" ] && [ "$(BUMP)" != "major" ]; then \
@@ -444,13 +470,9 @@ bump-version:
 		exit 1; \
 	fi; \
 	cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace >/dev/null; \
-	V="$$next" node -e ' \
-const fs = require("node:fs"); \
-const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")); \
-if (!process.env.V) { throw new Error("version not passed through"); } \
-pkg.version = process.env.V; \
-fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");'; \
+	python3 contrib/check-versions.py --set "$$next"; \
 	BRAVEBOT_INSTALL_SKIP_DOWNLOAD=1 npm install --package-lock-only --ignore-scripts >/dev/null; \
+	python3 contrib/check-versions.py; \
 	git commit -q -m "Bump version to $$next" -- $(VERSION_FILES); \
 	echo "committed: bumped $$current -> $$next ($(VERSION_FILES))"; \
 	echo "review it, land it on main, then run: make github-release"
@@ -469,8 +491,8 @@ github-release:
 		echo "error: unable to read version from Cargo.toml"; \
 		exit 1; \
 	fi; \
-	if [ "$$(node -p 'require("./package.json").version')" != "$(VERSION)" ]; then \
-		echo "error: package.json version does not match Cargo.toml ($(VERSION)); run make bump-version"; \
+	if ! python3 contrib/check-versions.py; then \
+		echo "error: the files that state the version disagree; run make bump-version"; \
 		exit 1; \
 	fi; \
 	if ! git diff --quiet || ! git diff --cached --quiet; then \

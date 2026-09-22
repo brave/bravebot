@@ -318,6 +318,11 @@ impl Bedrock {
     /// The strongest configured tier. A default that reached for the cheapest would quietly answer
     /// a hard question with the weakest model available, and the person who configured three tiers
     /// asked for the best of them by naming it.
+    ///
+    /// An account a `provider` block configured has no tiers to rank, its entries being model ids,
+    /// so this is the first entry it holds rather than the strongest of them. What it guarantees
+    /// there is only that the name is one the account offers, which is what a caller needing
+    /// something reachable is asking for.
     pub fn default_model(&self) -> Option<&str> {
         self.models.first().map(|entry| entry.id.as_str())
     }

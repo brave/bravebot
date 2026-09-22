@@ -690,6 +690,7 @@ mod tests {
         watches
             .arm(
                 "notes/plan.md".to_string(),
+                std::path::PathBuf::from("/work"),
                 3,
                 watch::Looked::Saw("first".to_string()),
                 std::time::Instant::now(),
@@ -779,7 +780,7 @@ mod tests {
         let mut running = crate::loops::Running::begin(
             crate::loops::parse("5m check the deploy").expect("a request"),
         );
-        running.dispatched();
+        running.dispatching();
         running.ended(None, std::time::Instant::now());
 
         let mut facts = facts(&config, &trust);

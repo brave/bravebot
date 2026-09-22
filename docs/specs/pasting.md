@@ -119,13 +119,35 @@ The marker is written where the caret is and the picture goes wherever that text
 the marker unsends it. A prompt recalled from the history carries no pictures and names none: the
 marker is not what gets remembered, because it stands for a screenshot only the session that
 pasted it holds, and the words around it are what the person meant. A picture is refused in shell
-mode rather than written into the command. Anything over 10 MB is refused rather than sent, and
-says so with its size.
+mode rather than written into the command. A command whose argument reaches a model carries the
+picture with it: `/btw` sends a question and `/manifest` plans from a task, and either one about a
+screenshot, answered without the screenshot, is answered about nothing. Waiting changes nothing about
+that, so one the queue reaches when a turn ends carries it too. `/loop` carries it on the first tick,
+which is the turn the person pasted into, and every tick after that sends the same line with the
+marker put back to words, because the picture went with the tick that took it and a loop sends the
+same line however long it runs. A command the driver carries out itself has no turn for a picture to
+travel in, so a marker in one is put back to words, whether the command is dispatched at rest or the
+queue reaches it when the turn ends. Those words say a picture was pasted and cannot be shown, which
+is what a picture on a line queued mid-turn becomes ([dropping.md](dropping.md#DROP-8)), and the
+person is told it did not go. Anything over 10 MB is refused rather than sent, and says so with its
+size.
 
 `verified-by: bravebot_tui::app::a_picture_is_refused_in_shell_mode_rather_than_written_into_the_command`
+`verified-by: bravebot_tui::app::a_picture_pasted_into_a_question_goes_with_it`
+`verified-by: bravebot_tui::app::a_picture_pasted_into_a_task_goes_with_the_plan`
+`verified-by: bravebot_tui::app::a_picture_pasted_into_a_loop_goes_with_its_first_tick`
+`verified-by: bravebot_tui::app::a_picture_named_on_a_question_that_waited_still_goes_with_it`
+`verified-by: bravebot_tui::app::a_picture_a_command_line_named_is_carried_out_as_words_rather_than_as_its_marker`
+`verified-by: bravebot_tui::app::a_picture_named_on_a_command_that_waited_is_words_by_the_time_it_is_carried_out`
+`verified-by: bravebot_tui::app::a_command_line_whose_marker_was_deleted_says_nothing_about_a_picture`
 `verified-by: bravebot_tui::app::a_picture_too_large_to_send_says_so_with_its_size`
+`verified-by: bravebot_tui::state::the_first_tick_of_a_loop_carries_the_picture_pasted_into_it`
+`verified-by: bravebot_tui::state::a_later_tick_of_a_loop_says_the_picture_went_with_the_first`
+`verified-by: bravebot_tui::loops::a_pasted_picture_goes_to_one_tick_and_the_settled_line_to_every_other`
 `verified-by: bravebot_tui::state::a_recalled_prompt_does_not_name_a_picture_that_went_with_the_line`
 `verified-by: bravebot_tui::state::settling_a_marker_for_the_history_does_not_take_the_picture_off_the_turn`
+`verified-by: bravebot_agent::turn::a_picture_pasted_into_a_question_reaches_the_model_with_it`
+`verified-by: bravebot_agent::manifest::a_picture_pasted_into_the_task_reaches_the_planner`
 
 
 <a id="PASTE-7"></a>
@@ -157,9 +179,14 @@ On macOS this reads the pasteboard through `osascript`. On Linux it needs `wl-pa
 <a id="PASTE-8"></a>
 ### PASTE-8: every paste is named in the audit trail
 
-With its type and size, so `--trace` and Ctrl-T account for the pictures as well as the words.
+With its type and size, so `--trace` and Ctrl-T account for the pictures as well as the words. Each
+of the three requests a picture can travel in takes the record where it holds the policy: a turn's
+prompt, a question asked beside the work, and the task a plan is made from.
 
 `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail`
+`verified-by: bravebot_agent::turn::a_pasted_image_is_named_in_the_audit_trail`
+`verified-by: bravebot_agent::turn::a_picture_pasted_into_a_question_is_named_in_the_audit_trail`
+`verified-by: bravebot_agent::manifest::a_picture_pasted_into_the_task_is_named_in_the_audit_trail`
 
 <a id="PASTE-9"></a>
 ### PASTE-9: a pasted picture is kept with the session and comes back on resume

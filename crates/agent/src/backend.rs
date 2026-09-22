@@ -373,12 +373,17 @@ impl<'a> Backend<'a> {
     /// to type into it. A caller shows them, because they are the flow rather than a report of it.
     /// Never called where no sign-in is needed, which is every turn but the first of a day, so this
     /// is cheap enough to ask before each one.
+    ///
+    /// Which account that is comes from [`Config::bedrock_for`], the question [`Backend::select`]
+    /// asks: an account named by a `provider` block serves a request as readily as one the tier
+    /// variables named, so a sign-in it needs is due here rather than on the request path, where the
+    /// URL and the code go to a worker thread with nothing to draw on.
     pub fn sign_in_if_needed(
         config: &Config,
         model: &str,
         say: impl FnMut(String),
     ) -> Result<(), BackendError> {
-        let Some(bedrock) = config.bedrock.as_ref().filter(|it| it.offers(model)) else {
+        let Some(bedrock) = config.bedrock_for(model) else {
             return Ok(());
         };
         bravebot_bedrock::credentials::sign_in_if_needed(bedrock.profile.as_deref(), say)
@@ -426,13 +431,9 @@ impl<'a> Backend<'a> {
     /// having the sign-in report back, because what it would return is "nothing happened", and a
     /// caller that has already dismantled its display to find that out has paid the whole cost.
     pub fn needs_sign_in(config: &Config, model: &str) -> bool {
-        config
-            .bedrock
-            .as_ref()
-            .filter(|it| it.offers(model))
-            .is_some_and(|bedrock| {
-                !bravebot_bedrock::credentials::is_signed_in(bedrock.profile.as_deref())
-            })
+        config.bedrock_for(model).is_some_and(|bedrock| {
+            !bravebot_bedrock::credentials::is_signed_in(bedrock.profile.as_deref())
+        })
     }
 
     /// Whether an imported subscription would be spent on this backend's requests.
@@ -638,7 +639,7 @@ fn gateway_client<'a>(
 fn gateway_token(
     provider: &bravebot_config::provider::Provider,
     lookup: impl Fn(&str) -> Option<String>,
-) -> Result<Option<String>, BackendError> {
+) -> Result<Option<bravebot_config::Secret>, BackendError> {
     match provider.credential(lookup) {
         Credential::Token(token) => Ok(Some(token)),
         Credential::NotNeeded => Ok(None),
@@ -743,6 +744,34 @@ mod tests {
                 "options": {"baseURL": "https://openrouter.example.invalid/api/v1"},
                 "models": {"z-ai/glm-4.6": {}}
             }}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        config.providers = bravebot_config::provider::Provider::all(&root);
+        config
+    }
+
+    /// An AWS account named by a `provider` block with the tier variables unset, and a gateway
+    /// beside it, which is what a settings file copied out of another tool configures: nothing in
+    /// `config.bedrock`, and a model that still reaches Bedrock.
+    ///
+    /// The profile is a name no machine has, so whether that account has a session is a property of
+    /// this configuration rather than of whoever is running the tests.
+    fn an_aws_block_and_a_gateway() -> Config {
+        let mut config = braves_endpoint_without_premium();
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {
+                "amazon-bedrock": {
+                    "options": {"region": "us-west-2", "profile": "a-profile-no-machine-has"},
+                    "models": {"openai.gpt-5.6-sol": {}}
+                },
+                "openrouter": {
+                    "env": ["A_TOKEN_VARIABLE"],
+                    "options": {"baseURL": "https://openrouter.example.invalid/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            }}"#,
         )
         .expect("json") else {
             panic!("not an object");
@@ -968,10 +997,10 @@ mod tests {
             .provider_for("qwen3-coder-oc:latest")
             .expect("offered");
 
-        assert_eq!(
+        assert!(
             gateway_token(provider, |_| Some("in-the-environment".to_string()))
-                .expect("not refused"),
-            None,
+                .expect("not refused")
+                .is_none(),
             "a gateway that names no credential was given one anyway"
         );
         assert!(
@@ -1037,6 +1066,52 @@ mod tests {
                 .is_ok()
         );
         assert!(said.is_empty(), "{said:?}");
+    }
+
+    /// A sign-in is due for the account that will serve the next request, and a `provider` block
+    /// naming AWS is the second way to be that account. Answered from the tier variables alone, the
+    /// sign-in is left to the request path, where a worker thread runs it with nowhere to show the
+    /// URL and the code, and the turn fails on a credential nobody was asked for.
+    #[test]
+    fn a_model_an_aws_block_named_needs_a_sign_in_of_its_own() {
+        let config = an_aws_block_and_a_gateway();
+        assert!(
+            config.bedrock.is_none(),
+            "the tier variables named an account, so this is not the case being tested"
+        );
+        assert!(Backend::needs_sign_in(&config, "openai.gpt-5.6-sol"));
+    }
+
+    /// And the sign-in is attempted rather than reported as unnecessary. Told there is nothing to do,
+    /// an interface starts work on a request it cannot sign, and the only remedy left runs where
+    /// nobody is being asked anything.
+    #[test]
+    fn signing_in_for_a_model_an_aws_block_named_reaches_that_account() {
+        let failure =
+            Backend::sign_in_if_needed(&an_aws_block_and_a_gateway(), "openai.gpt-5.6-sol", |_| {})
+                .expect_err("the sign-in was not attempted at all");
+        assert!(
+            matches!(failure, BackendError::Bedrock(BedrockError::Credentials(_))),
+            "{failure:?}"
+        );
+    }
+
+    /// A block naming AWS takes nothing from the rosters beside it: a Brave model and a gateway model
+    /// still need no AWS session. Deciding from "an AWS account is configured" rather than from the
+    /// model would run the CLI, and on the interactive path hand a person's screen to a sign-in,
+    /// before a turn that never touches AWS.
+    #[test]
+    fn an_aws_block_leaves_the_other_rosters_needing_no_sign_in() {
+        let config = an_aws_block_and_a_gateway();
+        for model in [DEFAULT_MODEL, "z-ai/glm-4.6"] {
+            assert!(
+                !Backend::needs_sign_in(&config, model),
+                "{model} asked for a sign-in"
+            );
+            let mut said = Vec::new();
+            assert!(Backend::sign_in_if_needed(&config, model, |line| said.push(line)).is_ok());
+            assert!(said.is_empty(), "{model}: {said:?}");
+        }
     }
 
     /// The aichat endpoint lists concrete models and answers with one of them, so a name that comes

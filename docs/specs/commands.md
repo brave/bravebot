@@ -97,14 +97,30 @@ stay a question. Prefix matching would have made `/add-dirs are useful` open a d
 
 With the `!` mode armed, `/status` is a program somebody may have and is run as one. Nothing is
 offered for completion there either, since `/usr/bin/env` is a path. A turn running changes none of
-that: the line is still a command line, so nothing about it is answered as a command.
+that: the line is still a command line, so nothing about it is answered as a command and nothing
+about it is sent as a prompt. It waits for the turn the way a command waits (CMD-8), drawn under the
+box behind the `!` the scrollback echoes one behind, and when the queue reaches it, it is run. The
+mode is left behind as the line is taken, since the mode lasts one command line whether that line
+ran at once or waited.
 
 **Why.** The mode is how a person says which of the two they meant, and it is the more specific
 statement of the two. Completing in it would rewrite the line under somebody typing a path.
 
+A turn begins with no press behind it, from a loop's tick or a watch firing, so the mode is armed
+mid-turn over a line that was typed at rest to be run. What the press may never do there is hand
+that line to the turn: `echo pwned` reaching the planner as a sentence somebody said is the one
+reading of the keystroke nobody asked for.
+
 `verified-by: bravebot_tui::app::a_slash_command_in_shell_mode_is_a_command_line`
 `verified-by: bravebot_tui::app::shell_mode_offers_no_completions`
 `verified-by: bravebot_tui::app::a_shell_line_is_not_taken_for_a_command_while_a_turn_runs`
+`verified-by: bravebot_tui::app::a_command_line_is_not_sent_to_the_running_turn`
+`verified-by: bravebot_tui::app::the_command_line_queued_while_a_turn_ran_is_run_when_the_turn_ends`
+`verified-by: bravebot_tui::app::queueing_a_command_line_leaves_shell_mode`
+`verified-by: bravebot_tui::app::a_queued_command_line_is_not_what_the_turn_took`
+`verified-by: bravebot_tui::app::a_prompt_queued_behind_a_command_line_is_sent_once_it_has_run`
+`verified-by: bravebot_tui::app::a_queued_command_line_comes_back_to_the_box`
+`verified-by: bravebot_tui::shell_mode::a_waiting_command_line_is_drawn_behind_the_marker`
 
 ## What a command does to the line
 
@@ -146,6 +162,12 @@ else done to it. A leading `~` is expanded only as a whole first segment, so a d
 name begins with a tilde is not a home-relative path. Nothing shortens it, splits it, or asks the
 planner what it meant.
 
+A pasted picture in it is the exception, and only on a command the driver carries out itself: the
+marker standing for the picture is put back to words before the argument is taken
+([pasting.md](pasting.md#PASTE-6)), because such a command has nowhere to carry what it stands for.
+Where the argument is sent, which is `/btw`, `/manifest` and `/loop`, the marker stays in it as it
+was typed and the picture goes with it, which is this rule rather than an exception to it.
+
 **Why.** The argument is what the command acts on: a directory that becomes trusted, a name a
 session is stored under. A person is taken to have endorsed exactly the characters they typed, so
 exactly those characters have to arrive.
@@ -156,6 +178,8 @@ exactly those characters have to arrive.
 `verified-by: bravebot_tui::app::the_btw_command_carries_its_question`
 `verified-by: bravebot_tui::app::a_session_can_ask_for_a_manifest_run`
 `verified-by: bravebot_tui::app::a_tilde_is_expanded_only_as_a_whole_first_segment`
+`verified-by: bravebot_tui::app::a_picture_pasted_into_a_question_goes_with_it`
+`verified-by: bravebot_tui::app::a_picture_a_command_line_named_is_carried_out_as_words_rather_than_as_its_marker`
 
 
 <a id="CMD-6"></a>

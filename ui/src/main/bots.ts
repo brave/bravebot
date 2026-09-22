@@ -1,4 +1,4 @@
-import { readProjectText } from './project-files'
+import { readProjectText, seedProjectMemory } from './project-files'
 /**
  * Where a bot's definition is kept, and where the two files it speaks through are made.
  *
@@ -15,16 +15,20 @@ import { readProjectText } from './project-files'
  * it is to give it something to read. Two candidates exist and this uses both, for different
  * halves of the job:
  *
- * - **The ground file**, `<userData>/bots/<slug>/ground.md`, is composed here from the bot's name,
- *   its purpose, and whatever its memory currently says. It is handed to a turn as `dropped`,
- *   which is the read that is deliberately *not* confined to the workspace. It lives outside the
- *   checkout precisely so the planner cannot rewrite the thing that defines it: the agent may
- *   write inside the workspace and nowhere else, and this is nowhere else.
+ * - **The ground file**, `<userData>/bots/<slug>/ground.md`, is composed here from the bot's name
+ *   and its purpose. It is handed to a turn as `dropped`, which is the read that is deliberately
+ *   *not* confined to the workspace. It lives outside the checkout precisely so the planner cannot
+ *   rewrite the thing that defines it: the agent may write inside the workspace and nowhere else,
+ *   and this is nowhere else.
  * - **The memory file**, `<directory>/.bravebot-ui/bots/<slug>.md`, is inside the checkout because
  *   that is the only place the agent can write. That is the whole mechanism by which memory is
  *   appended: the bot is told where its memory is and asked to keep it current, and it edits the
  *   file with its ordinary write tool. Nothing here parses what a model said; the change the agent
  *   applied is the record. What that write is *gated* on is below, and is not what it looks like.
+ *
+ * Only the ground file is handed over, and it quotes no byte of the memory. `ground` below says
+ * why: a path this app names is a path the agent records as vouched for, so the only ones it may
+ * name are ones whose every byte it wrote.
  *
  * ## What a memory write is actually gated on
  *
@@ -35,15 +39,20 @@ import { readProjectText } from './project-files'
  * trust by it.
  *
  * Both halves are true of a bot's memory in the ordinary case. The destination is trusted because
- * this app *names* the file, and naming it is what `policy.vouch_for_named_path` does; a turn that
- * only read the checkout has observed nothing untrusted. So a bot exploring its project and writing
- * down what it found does so silently, and the record of it is the `Update` line in the transcript
- * and the row in the Writes panel rather than a card somebody pressed.
+ * the person vouched for the checkout the memory sits in, and a turn that only read that checkout
+ * has observed nothing untrusted. So a bot exploring its project and writing down what it found
+ * does so silently, and the record of it is the `Update` line in the transcript and the row in the
+ * Writes panel rather than a card somebody pressed.
  *
  * The prompt appears exactly where it matters: a turn that *has* touched untrusted content — a
  * fetched page, a command's output, a quarantined file — is asked before it may write to memory,
  * because that write would turn a trusted path untrusted. The gate is on prompt injection reaching
  * the memory, not on the memory changing.
+ *
+ * And the path stays untrusted afterwards, which is the half this app used to undo: it named the
+ * memory on every grounded turn, and naming is what `policy.vouch_for_named_path` records, so the
+ * rule the write had written was overwritten by a grant nobody was asked for. It no longer names
+ * it. See `ground`.
  *
  * This was written the other way round first, and the briefing handed to the model said every edit
  * would be shown as a diff before it happened. That was false, and a false promise in a briefing is
@@ -76,23 +85,29 @@ import { readProjectText } from './project-files'
  * checking would mean parsing what it said, and the one rule this file has is that the change the
  * agent applied is the record.
  *
- * One file goes to the turn rather than two, and that is not tidiness. Every attached file is
- * pushed into the conversation as its own user message, and the agent's compaction keeps only the
- * last two of those verbatim — so handing over two would mean the window a compaction preserves is
- * spent entirely on this app's own injections. The memory is therefore *copied into* the ground
- * file rather than attached beside it.
+ * One file goes to the turn rather than two, and the trust argument in `ground` is not the only
+ * reason. Every attached file is pushed into the conversation as its own user message, and the
+ * agent's compaction keeps only the last two of those verbatim — so handing over two would mean
+ * the window a compaction preserves is spent entirely on this app's own injections. The memory is
+ * read by the bot instead, which costs a call and spends none of that window.
  *
  * ## Why the files are re-made before every turn
  *
- * A file a turn names and cannot read does not degrade: the read is a `?` all the way out to a
- * failed turn. A memory file removed by a `git clean`, a checkout switched to a branch that never
- * had one, an editor saving over it with something that is not text — each of those would brick
- * the bot rather than cost it a paragraph. So `ground` runs on the way into every send and repairs
- * what is missing, rather than once when the bot was made.
+ * A memory file removed by a `git clean`, or a checkout switched to a branch that never had one,
+ * leaves the bot with nothing where its memory should be. So `ground` runs on the way into every
+ * send and makes the missing file, rather than once when the bot was made, and the making is the
+ * helper's rather than this process's: see `seedProjectMemory`.
+ *
+ * Only the missing file. A memory that is there is left exactly as it is, including one an editor
+ * saved over with bytes that are not text: that used to fail the turn, because the memory was a
+ * path the turn *named* and a named file that cannot be read is a `?` all the way out, and now it
+ * is a read the bot makes and a paragraph it does without. Replacing somebody's file to save a
+ * paragraph is not a trade worth making.
  */
 
 import { app } from 'electron'
-import { mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Bot, botOf, CONSOLIDATION_MARK, isSlug, withBot } from '../shared/bots'
 import { putBots, readState } from './state'
@@ -101,12 +116,12 @@ import { putBots, readState } from './state'
 const HOME = '.bravebot-ui'
 
 /**
- * The largest memory this will copy into a ground file.
+ * The largest memory this will read into the window.
  *
- * A cap rather than trust, because the memory is the one part of the ground file the planner
- * wrote, and a runaway one would be re-read at the top of every re-grounded turn — paid for in
- * context, forever, by the person whose session it is. Well past any memory worth keeping, and far
- * short of anything that could crowd out a conversation.
+ * A cap rather than trust: the memory is the planner's own writing, and a runaway one would be a
+ * panel this process built out of however much somebody's model chose to write. Well past any
+ * memory worth keeping. Nothing copies it into a briefing any more, so this is the preview's bound
+ * and not a turn's.
  */
 const MEMORY_MAX = 64 * 1024
 
@@ -222,7 +237,10 @@ function memoryFile(directory: string, slug: string): string {
  */
 function memoryStamp(bot: Bot): number {
   try {
-    return statSync(memoryFile(bot.directory, bot.slug)).mtimeMs
+    // `lstat`, so a link at the memory path reports on itself rather than on whatever it aims at.
+    // Nothing here would act on the answer, but a figure about a file outside the checkout has no
+    // business being read at all, and the difference is one letter.
+    return lstatSync(memoryFile(bot.directory, bot.slug)).mtimeMs
   } catch {
     return 0
   }
@@ -303,10 +321,19 @@ export const AFTER_COMPACTION =
   'Your conversation has just been summarised, and the detail behind that summary is now the only' +
   ' thing your memory can still be written from.'
 
+/**
+ * The longest a bot's name may be inside a file this composes.
+ *
+ * The form takes free text of any length, and the seed the helper writes is bounded at 64 KB, so
+ * without this a name nobody would type is a bot whose every turn is refused. Far past a name and
+ * far short of the bound.
+ */
+const NAME_MAX = 200
+
 /** What a memory file says before anything has been remembered in it. */
 function emptyMemory(bot: Bot): string {
   return [
-    `# ${bot.name} — memory`,
+    `# ${bot.name.slice(0, NAME_MAX)} — memory`,
     '',
     'Written by the bot itself, and shown in the transcript each time it changes. Anything here',
     'is carried into every conversation it has; anything not here is forgotten when the',
@@ -325,7 +352,7 @@ function emptyMemory(bot: Bot): string {
  * this is read as a document somebody handed over — which is the strongest framing available
  * without changing the agent, and an honest one: it *is* a document somebody handed over.
  */
-function groundText(bot: Bot, memory: string, nudge: boolean): string {
+function groundText(bot: Bot, nudge: boolean, fresh: boolean): string {
   return [
     `# ${bot.name}`,
     '',
@@ -343,6 +370,24 @@ function groundText(bot: Bot, memory: string, nudge: boolean): string {
     'the same turn you learnt it, rather than waiting to be asked. Keep it short enough to stay',
     'worth reading: prune what has stopped being true rather than only appending.',
     '',
+    // What this document deliberately does not do is quote the memory. The words in it are the
+    // model's own writing, and a copy of them inside a file the app vouches for would be the app
+    // answering, on the user's behalf and without asking, a question the agent is there to decide.
+    // So the file is read rather than quoted, and what the read comes back as is the trust map's
+    // answer about that path.
+    //
+    // `fresh` is the one case where there is nothing to read: the file was made a moment ago by
+    // the walk that prepared this briefing, so sending the model to open a template it would
+    // learn nothing from costs a call for no answer.
+    ...(fresh
+      ? ['It is new and holds nothing yet, so there is nothing to read back.']
+      : [
+          'Read that file now, before anything else. It is not quoted here: what is in it is your',
+          'own writing rather than anything this window wrote, so you read it on the same terms as',
+          'any other file in this checkout. If it comes back withheld, say so and carry on without',
+          'it rather than guessing at what it used to say.',
+        ]),
+    '',
     // Said plainly because it is true, where the sentence this replaced — that every edit would be
     // shown as a diff first — was not. The write gate is about integrity rather than about which
     // file it is, so an ordinary memory write goes through without a card. A briefing that tells a
@@ -358,12 +403,6 @@ function groundText(bot: Bot, memory: string, nudge: boolean): string {
         ]
       : []),
     '',
-    'It currently says:',
-    '',
-    '---',
-    '',
-    memory.trim(),
-    '',
   ].join('\n')
 }
 
@@ -375,53 +414,77 @@ const GITIGNORE = [
   '',
 ].join('\n')
 
-/** Whether a path is a file this process can read as text, which is what a turn will need of it. */
-function readable(path: string): string | null {
-  try {
-    if (!statSync(path).isFile()) return null
-    const text = readFileSync(path, 'utf8')
-    // A file whose bytes are not text comes back with replacement characters rather than an error,
-    // and the agent would refuse it where this did not. Cheaper to notice here, where the answer
-    // is to write a fresh one, than to spend a turn finding out.
-    return text.includes('�') ? null : text
-  } catch {
-    return null
-  }
-}
-
-/** Both paths a grounded turn names, with both files known to exist and to be readable. */
+/**
+ * The one path a grounded turn names, with the file behind it known to exist.
+ *
+ * One path and not two. The memory file is deliberately absent: see `ground` below.
+ */
 export interface Grounding {
   /** The ground file, absolute, for `dropped`. */
   ground: string
-  /** The memory file, relative to the checkout, for `files`. */
-  memory: string
 }
 
 /**
- * Make a bot's files current, and say where they are.
+ * Make a bot's files current, and say where the one a turn may name is.
  *
- * Returns `null` when the checkout cannot be written to at all — a volume that is not mounted, a
- * directory somebody deleted. That is a refusal rather than a repair: sending the turn anyway
- * would fail inside the agent with a message about a path, where this can say the bot's checkout
- * is gone.
+ * Returns `null` when the checkout cannot be prepared: a volume that is not mounted, a directory
+ * somebody deleted, or a link where the memory file belongs. That is a refusal rather than a
+ * repair: sending the turn anyway would fail inside the agent with a message about a path, where
+ * this can say the bot's checkout is gone.
+ *
+ * ## What this hands over, and what it refuses to
+ *
+ * The briefing, and nothing else. `turn.send` admits every path it is given as *trusted* context,
+ * which is the agent recording that a person named the file in their own line, so the only paths
+ * this may name are ones whose every byte this process wrote. The briefing is one: it is
+ * composed from the bot's name and purpose, which somebody typed into this window, and from the
+ * memory's *path*, which is a string this file builds out of a slug it judged.
+ *
+ * The memory is not one, and it was handed over twice. It was named in `files`, and its body was
+ * copied into the briefing, a fresh path under this app's own data directory that the trust map
+ * has never heard of and that a copy therefore laundered. Both of those vouched, on a
+ * person's behalf and without asking them, for text the model itself wrote. That undid the gate
+ * the write went through: a turn that has touched untrusted content is asked before it may write
+ * to the memory *because that write leaves the path untrusted*, and the next grounded turn
+ * vouched for it again regardless, so a fetched page's bytes came back as trusted context and
+ * stayed there.
+ *
+ * So the memory reaches a turn the way any other file in the checkout does: the briefing says
+ * where it is, and the model reads it with its ordinary read tool, under whatever the agent's
+ * trust map says about that path. A memory a write left untrusted comes back quarantined, which is
+ * the outcome the gate was for. Whether it may be trusted is the agent's question, and this is how
+ * it gets asked.
  */
 export function ground(bot: Bot, nudge = false): Grounding | null {
-  const memory = memoryFile(bot.directory, bot.slug)
   try {
-    mkdirSync(join(bot.directory, HOME, 'bots'), { recursive: true })
-    if (readable(join(bot.directory, HOME, '.gitignore')) === null) {
-      writeFileSync(join(bot.directory, HOME, '.gitignore'), GITIGNORE, 'utf8')
-    }
-    let held = readable(memory)
-    if (held === null) {
-      held = emptyMemory(bot)
-      writeFileSync(memory, held, 'utf8')
-    }
+    // Through the confined helper rather than `node:fs`. A concatenated path handed to `node:fs`
+    // follows a link at every component, so a link at the memory file was read through and
+    // written through; the helper opens each component relative to a pinned directory and follows
+    // nothing. It answers only whether it wrote, because what the memory *says* has no business
+    // in a file this process composes.
+    const fresh = seedProjectMemory(bot.directory, memoryPath(bot.slug), emptyMemory(bot), GITIGNORE)
 
     const ground = join(ownDirectory(bot.slug), 'ground.md')
     mkdirSync(ownDirectory(bot.slug), { recursive: true })
-    writeFileSync(ground, groundText(bot, held.slice(0, MEMORY_MAX), nudge), 'utf8')
-    return { ground, memory: memoryPath(bot.slug) }
+    // Written to a name of its own and renamed into place, never opened by the name the turn will
+    // name. `writeFileSync` on the briefing's own path follows a link sitting there and writes the
+    // target instead; a rename replaces whatever is at the name, so a link there is displaced
+    // rather than written through, and what the turn reads is what this process wrote.
+    // A name nothing else will pick, so two sends for one bot cannot collide, and an exclusive
+    // create so a link left at that name is refused rather than written through. `rm` first
+    // because `wx` on a leftover of our own, from a process that died between the write and the
+    // rename, would otherwise refuse this bot's turns for good; it unlinks a name and never
+    // follows one.
+    const pending = `${ground}.${randomUUID()}.tmp`
+    rmSync(pending, { force: true })
+    writeFileSync(pending, groundText(bot, nudge, fresh), { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    try {
+      renameSync(pending, ground)
+    } catch (error) {
+      rmSync(pending, { force: true })
+      throw error
+    }
+    return { ground }
   } catch {
     return null
   }

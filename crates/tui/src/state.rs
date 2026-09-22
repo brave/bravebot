@@ -376,14 +376,62 @@ pub struct Queued {
     attached: Vec<Attached>,
     /// Pictures it named, settled at the same moment and for the same reason.
     pasted: Vec<AttachedImage>,
-    /// Whether the line is a command, and so waits to be carried out rather than to be sent.
+    /// What the line is waiting to become.
     ///
-    /// Decided by the caller, since which words are commands is the input box's to know and not
-    /// this type's. What it changes is where the line may go: a command is never offered to the
-    /// turn in flight, because the only thing that could do with it there is the planner, and a
-    /// command is not something the planner is asked.
-    command: bool,
+    /// Decided by the caller, since which words are commands and which mode the box was in are
+    /// the input box's to know and not this type's.
+    waiting: Waiting,
     recall: crate::history::Ticket,
+}
+
+impl Queued {
+    /// Whether the line is a command line for a shell rather than anything for this program or
+    /// the planner.
+    ///
+    /// What the row under the box reads from, since a command line drawn as a waiting prompt
+    /// would say the words were on their way to the model.
+    pub fn is_a_command_line(&self) -> bool {
+        self.waiting == Waiting::Shell
+    }
+}
+
+/// What a queued line is waiting to become when the turn in flight ends.
+///
+/// Two of the three are never offered to the turn, because the only thing that could do with a
+/// line there is the planner, and neither a command nor a command line is something the planner is
+/// asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Waiting {
+    /// A prompt: offered to the turn in flight as an interjection, and a turn of its own if the
+    /// turn ends before it is taken.
+    Prompt,
+    /// A command: carried out when the queue reaches it, exactly as Enter on it at rest would
+    /// have carried it out.
+    Command,
+    /// A command line, typed with shell mode armed: run through the shell when the queue reaches
+    /// it, exactly as Enter on it at rest would have run it.
+    Shell,
+}
+
+impl Waiting {
+    /// Whether the line is one the planner may be given.
+    fn is_sent(self) -> bool {
+        self == Waiting::Prompt
+    }
+}
+
+/// A command line on its way to being carried out, and the pictures it named.
+///
+/// The two travel together because what becomes of a picture depends on the command: three of them
+/// hand their argument to a planner and a picture goes with it, and for the rest there is nowhere
+/// for one to go. Which is which is the caller's to know, so the box hands over both and says
+/// nothing about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Commanded {
+    /// The line, exactly as it was typed, markers and all.
+    pub line: String,
+    /// The pictures pasted into it, in the order the markers number them.
+    pub pasted: Vec<AttachedImage>,
 }
 
 /// What the session is doing.
@@ -545,6 +593,37 @@ pub struct AttachedImage {
     pub marker: String,
     pub media_type: &'static str,
     pub bytes: Vec<u8>,
+}
+
+impl AttachedImage {
+    /// What stands in the line where the picture cannot travel with it.
+    ///
+    /// Not from the catalog, and deliberately: the planner reads this, so it is part of what the
+    /// model is given rather than something a person is being told. Same reasoning as the marker
+    /// in [`Session::attach`], and the catalog says so at the top of itself.
+    ///
+    /// Why it cannot travel is the caller's to say, because a picture misses a turn already running
+    /// for one reason and a command for another, and the one thing this must not do is guess.
+    fn in_words(&self, why: &str) -> String {
+        format!(
+            "({} was pasted here, but it cannot be shown to you: {why}. Ask for it again if you \
+             need to see it.)",
+            self.marker
+        )
+    }
+}
+
+/// A line with every marker in it standing for one of `carried` replaced by what it says instead.
+///
+/// One place, because a picture misses a request for more than one reason and the sentence that
+/// takes its place reads the same however it was missed. `why` is the reason, which is the caller's:
+/// see [`AttachedImage::in_words`].
+fn put_back_to_words(line: &str, carried: &[AttachedImage], why: &str) -> String {
+    let mut settled = line.to_string();
+    for picture in carried {
+        settled = settled.replace(&picture.marker, &picture.in_words(why));
+    }
+    settled
 }
 
 /// A paragraph pasted into the line, standing behind the marker written in its place.
@@ -4418,23 +4497,31 @@ impl Session {
     /// A marker the caret is covering goes first, before anything in front of it. The covering is
     /// visible: the whole of that marker is drawn under the caret, and a press that took the
     /// character beside it instead would take something the user could see was not selected.
+    ///
+    /// Nothing where there is nothing to delete, as [`Session::delete_word_before`] does at the
+    /// same caret: the press leaves the line, the history it is being browsed from, and any
+    /// selection standing over it exactly as they were.
     pub fn backspace(&mut self) {
+        // Read before anything is touched, because whether this press deletes at all is the
+        // question the guard below asks: a marker at the first column is under a caret there, and
+        // that press takes it.
+        let marker = self
+            .marker_at_caret()
+            .or_else(|| self.marker_before_caret());
+        // Nothing before the caret is where the marker appears to be, so this is the press that
+        // deletes it. Whatever follows stays and becomes an ordinary prompt: the mode is what was
+        // deleted, not the words. Leaving shell mode is not an edit of the line, so the offsets a
+        // selection is held as stay valid across it and the stretch stays on the screen.
+        if marker.is_none() && self.caret == 0 {
+            self.shell = false;
+            return;
+        }
         self.abandon_the_selection();
         self.history.leave();
-        if let Some((start, end)) = self
-            .marker_at_caret()
-            .or_else(|| self.marker_before_caret())
-        {
+        if let Some((start, end)) = marker {
             self.input.replace_range(start..end, "");
             self.caret = start;
             self.completion = 0;
-            return;
-        }
-        // Nothing before the caret is where the marker appears to be, so this is the press that
-        // deletes it. Whatever follows stays and becomes an ordinary prompt: the mode is what was
-        // deleted, not the words.
-        if self.caret == 0 {
-            self.shell = false;
             return;
         }
         self.move_left();
@@ -4468,8 +4555,19 @@ impl Session {
         // Un-sent whole only where nothing was recorded after the prompt, nothing is waiting
         // behind it, and the box is free to take it. The first two mean there is something to have
         // second thoughts about; the third is the only place the line can go.
-        let something_was_recorded =
-            !matches!(self.transcript.last(), Some(entry) if entry.speaker == Speaker::User);
+        //
+        // Measured from where this turn's own prompt sits, because the speaker of the last entry
+        // cannot tell that prompt from one interjected mid-turn: both are `User` entries, and a
+        // stop just after the turn took an interjection would read as nothing recorded. That
+        // un-sends the interjection, which the planner has read and the conversation carries on
+        // with, and hands the opening prompt back to the box while its own entry stays above as
+        // sent, leaving one prompt in two places and the stop in neither.
+        //
+        // [`Session::begin_turn`] keeps the length from before it pushed the prompt, so nothing is
+        // recorded exactly when that prompt is the whole of what this turn added. Any other length
+        // leaves it sent, which is also the safe answer where the transcript has been rewound from
+        // under the figure: the entry popped below is then not the prompt.
+        let something_was_recorded = self.transcript.len() != self.turn_start.transcript_len + 1;
         let waiting = !self.queued.is_empty();
         let the_box_is_taken = !self.input.trim().is_empty();
         if something_was_recorded || waiting || the_box_is_taken {
@@ -4731,6 +4829,49 @@ impl Session {
         Some(self.begin_turn(prompt, taken, Some(recall)))
     }
 
+    /// Take the current line as a command to carry out now.
+    ///
+    /// The line comes off the box with the pictures it named, the way [`Session::submit`] takes a
+    /// prompt: the box is about to be empty, and a picture left staged behind an empty box is one no
+    /// line can name again. What becomes of them is the caller's, since the caller is what knows
+    /// which command this is.
+    ///
+    /// A folded paste is put back to its words here, unlike a picture. That marker is a handle on
+    /// text only the session holding it can undo, so it goes no further than the box whatever the
+    /// command does with its argument.
+    pub fn take_command(&mut self) -> Commanded {
+        let typed = self.input.clone();
+        let pasted = self.pasted_named(&typed);
+        let line = self.unfolded(&typed);
+        self.pasted.clear();
+        self.clear_input();
+        Commanded { line, pasted }
+    }
+
+    /// The same command with the pictures it named put back to words.
+    ///
+    /// What a command that has nowhere to put one is carried out as. It is carried out rather than
+    /// sent, so unless its argument goes to a planner there is no request for a picture to travel in:
+    /// a marker left in the line would name a screenshot nothing came with, which is the same thing
+    /// [`Session::resolved`] keeps a queued prompt from doing. What a command does with its argument
+    /// is not something the box knows, so which commands those are is the caller's to say.
+    ///
+    /// The person is told, because the picture they pasted did not go where they put it.
+    pub fn without_pictures(&mut self, commanded: Commanded) -> Commanded {
+        if commanded.pasted.is_empty() {
+            return commanded;
+        }
+        self.note(t!(paste_not_with_a_command));
+        Commanded {
+            line: put_back_to_words(
+                &commanded.line,
+                &commanded.pasted,
+                "a picture cannot join that command",
+            ),
+            pasted: Vec::new(),
+        }
+    }
+
     /// Take the current line as a prompt to send when the turn in flight has finished.
     ///
     /// The line leaves the box exactly as it would on sending, and is remembered in the history
@@ -4740,7 +4881,7 @@ impl Session {
     /// Only while a turn is running. With none there is nothing to wait for and
     /// [`Session::submit`] is what Enter means.
     pub fn queue(&mut self) -> bool {
-        self.queue_line(false)
+        self.queue_line(Waiting::Prompt)
     }
 
     /// Take the current line as a command to carry out when the turn in flight has finished.
@@ -4754,10 +4895,32 @@ impl Session {
     /// spared: it is never put where the running turn can reach it, so nothing about it is sent
     /// anywhere, and nothing about it is in the conversation while it waits.
     pub fn queue_command(&mut self) -> bool {
-        self.queue_line(true)
+        self.queue_line(Waiting::Command)
     }
 
-    fn queue_line(&mut self, command: bool) -> bool {
+    /// Take the current line as a command line to run when the turn in flight has finished.
+    ///
+    /// The same wait the other two get, for the same reason, and what is different is again at the
+    /// far end: this line is run through the shell, which is what pressing Enter on it at rest
+    /// would have done with it.
+    ///
+    /// Shell mode is how a person said the line was for a shell, and a turn running changes
+    /// nothing about that: a turn can begin without anybody pressing anything, from a loop's tick
+    /// or a watch firing, so the mode is armed mid-turn over a line that was typed to be run. What
+    /// this may never do is hand it to the turn, since the planner would then be sent a command
+    /// line as a sentence somebody said.
+    ///
+    /// Leaves shell mode, exactly as running one at rest does: the mode lasts one command, and one
+    /// still armed over an emptied box would claim whatever is typed next.
+    pub fn queue_shell(&mut self) -> bool {
+        if !self.shell || !self.queue_line(Waiting::Shell) {
+            return false;
+        }
+        self.shell = false;
+        true
+    }
+
+    fn queue_line(&mut self, waiting: Waiting) -> bool {
         if self.status != Status::Working {
             return false;
         }
@@ -4779,17 +4942,18 @@ impl Session {
         // that is what the screen and the history are for, and a second copy of the resolved line
         // would be one for the two to disagree over.
         //
-        // Never for a command. That buffer is the one thing that reaches the planner from here, and
-        // handing it a command is how one used to be answered as a question about itself. A command
-        // waits in the queue below and nowhere else.
-        if !command {
+        // A prompt and nothing else. That buffer is the one thing that reaches the planner from
+        // here, and handing it a command is how one used to be answered as a question about
+        // itself, while handing it a command line is how `echo pwned` used to reach the planner as
+        // something a person had said. Both wait in the queue below and nowhere else.
+        if waiting.is_sent() {
             self.pending.push(resolved);
         }
         self.queued.push(Queued {
             prompt,
             attached,
             pasted,
-            command,
+            waiting,
             recall,
         });
         self.scroll = 0;
@@ -4824,20 +4988,11 @@ impl Session {
         for attached in self.named_in(line) {
             resolved = resolved.replace(&attached.marker, &attached.name);
         }
-        // Not from the catalog, and deliberately: the planner reads this, so it is part of what the
-        // model is given rather than something a person is being told. Same reasoning as the marker
-        // in [`Session::attach`], and the catalog says so at the top of itself.
-        for pasted in self.pasted_named(line) {
-            resolved = resolved.replace(
-                &pasted.marker,
-                &format!(
-                    "({} was pasted here, but it cannot be shown to you: a picture cannot join a \
-                     turn already running. Ask for it again if you need to see it.)",
-                    pasted.marker
-                ),
-            );
-        }
-        resolved
+        put_back_to_words(
+            &resolved,
+            &self.pasted_named(line),
+            "a picture cannot join a turn already running",
+        )
     }
 
     /// Record that the prompt queued longest ago has reached the planner mid-turn.
@@ -4847,11 +5002,11 @@ impl Session {
     /// where a waiting prompt is drawn. This is the moment it becomes part of the conversation, so
     /// this is the moment it joins the transcript, which reads in the order things happened.
     ///
-    /// The oldest prompt rather than the oldest line, because a command was never offered to the
-    /// turn: what the turn just took is the oldest line that had a copy in the buffer, and a command
-    /// queued ahead of it has one waiting there still.
+    /// The oldest prompt rather than the oldest line, because neither a command nor a command line
+    /// was ever offered to the turn: what the turn just took is the oldest line that had a copy in
+    /// the buffer, and either of those queued ahead of it has one waiting there still.
     pub fn interjected(&mut self) {
-        let Some(taken) = self.queued.iter().position(|waiting| !waiting.command) else {
+        let Some(taken) = self.queued.iter().position(|line| line.waiting.is_sent()) else {
             return;
         };
         let gone = self.queued.remove(taken);
@@ -4869,10 +5024,16 @@ impl Session {
     /// precommitted from it, and the files and pictures it named carried with it. That is why one
     /// left over is better off here than interjected, and why nothing tries to hurry it.
     ///
-    /// A command at the head of the queue stops this, rather than being sent: the queue is drained in
-    /// the order it was typed, and [`Session::take_queued_command`] is what takes that one.
+    /// A command or a command line at the head of the queue stops this, rather than being sent: the
+    /// queue is drained in the order it was typed, and [`Session::take_queued_command`] and
+    /// [`Session::take_queued_shell`] are what take those.
     pub fn send_queued(&mut self) -> Option<String> {
-        if self.status != Status::Idle || self.queued.first().is_none_or(|next| next.command) {
+        if self.status != Status::Idle
+            || self
+                .queued
+                .first()
+                .is_none_or(|next| !next.waiting.is_sent())
+        {
             return None;
         }
         let next = self.queued.remove(0);
@@ -4885,18 +5046,43 @@ impl Session {
 
     /// Take the command waiting longest, if the session is free to carry one out.
     ///
-    /// The line as it was typed, for the caller to dispatch exactly as it dispatches one typed at
-    /// rest. Nothing here decides what any command does, and nothing here puts anything in the
-    /// transcript: a command is not part of the conversation, and it was not while it waited either.
+    /// The line as it was typed, with the pictures it named, for the caller to dispatch exactly as it
+    /// dispatches one typed at rest: waiting changes nothing about what a command can carry, so the
+    /// same caller settles the same pictures for the same commands. Nothing here decides what any
+    /// command does and nothing here is written down: a command is not part of the conversation, and
+    /// it was not while it waited either.
     ///
     /// Only from the head of the queue, so the order somebody typed things in is the order they
     /// happen in: a command behind a prompt waits for that prompt's turn, the same way the prompt
     /// waited for the turn that was running when it was typed.
-    pub fn take_queued_command(&mut self) -> Option<String> {
-        if self.status != Status::Idle || !self.queued.first()?.command {
+    pub fn take_queued_command(&mut self) -> Option<Commanded> {
+        if self.status != Status::Idle || self.queued.first()?.waiting != Waiting::Command {
             return None;
         }
-        Some(self.queued.remove(0).prompt)
+        let taken = self.queued.remove(0);
+        Some(Commanded {
+            line: taken.prompt,
+            pasted: taken.pasted,
+        })
+    }
+
+    /// Take the command line waiting longest, if the session is free to run one.
+    ///
+    /// The line as it was typed, for the caller to run exactly as it runs one typed at rest. It
+    /// joins the transcript here, the way one submitted at rest joins it as it is submitted: this
+    /// is the moment it stops waiting and starts being run, and nothing about it was in the
+    /// transcript while it waited.
+    ///
+    /// Only from the head of the queue, for the reason [`Session::take_queued_command`] takes only
+    /// from there: what somebody typed first happens first.
+    pub fn take_queued_shell(&mut self) -> Option<String> {
+        if self.status != Status::Idle || self.queued.first()?.waiting != Waiting::Shell {
+            return None;
+        }
+        let line = self.queued.remove(0).prompt;
+        self.transcript.push(Entry::shell(line.clone()));
+        self.scroll = 0;
+        Some(line)
     }
 
     /// The loop repeating a prompt, where one is running.
@@ -4910,9 +5096,18 @@ impl Session {
     /// something every five minutes wants to see it happen, and a loop whose first sign of life
     /// is five minutes of nothing is one nobody can tell is running.
     ///
+    /// `pasted` is what the person pasted into the line they typed `/loop` on, and it goes with the
+    /// first tick: that tick is the turn the picture was pasted into, and it is a turn like any
+    /// other. Every tick after it sends the same words with the marker put back, because the picture
+    /// went with the tick that took it and a loop sends the same line however long it runs.
+    ///
     /// `None` where the session is not free to start a turn, since the first tick is a turn like
     /// any other and there is nowhere to put it.
-    pub fn start_loop(&mut self, request: crate::loops::Request) -> Option<String> {
+    pub fn start_loop(
+        &mut self,
+        request: crate::loops::Request,
+        pasted: Vec<AttachedImage>,
+    ) -> Option<String> {
         if self.status != Status::Idle {
             self.note(t!(loop_busy));
             return None;
@@ -4946,7 +5141,20 @@ impl Session {
             crate::loops::Pacing::SelfPaced => self.note(t!(loop_started_self_paced)),
         }
 
-        self.looping = Some(crate::loops::Running::begin(request));
+        // Said before the first tick goes, because it is about every tick after it: somebody who
+        // pasted a screenshot into a loop is owed the difference between the turn that sees it and
+        // the ones that read a sentence in its place.
+        let mut running = crate::loops::Running::begin(request);
+        if !pasted.is_empty() {
+            self.note(t!(paste_with_the_first_tick));
+            let settled = put_back_to_words(
+                running.prompt(),
+                &pasted,
+                "a picture goes with the first tick of a loop, and this is a later one",
+            );
+            running = running.carrying(pasted, settled);
+        }
+        self.looping = Some(running);
         self.dispatch_tick()
     }
 
@@ -5124,7 +5332,18 @@ impl Session {
     /// asks a second time. What is decided here is what only the session can decide: whether it
     /// is already doing something that happens without anybody typing, whether it has room, and
     /// what the first look at the path saw.
-    pub fn arm_watch(&mut self, path: &str, first: watch::Looked) {
+    ///
+    /// `under` is the working directory the first look was taken in, and it travels with the
+    /// watch so that every later look is taken against the same directory. Taken from the caller
+    /// that took the look rather than from this session's own record of where it is working: one
+    /// fact read twice is two answers waiting to differ, and the one that matters is the
+    /// workspace's.
+    pub fn arm_watch(
+        &mut self,
+        path: &str,
+        under: impl Into<std::path::PathBuf>,
+        first: watch::Looked,
+    ) {
         if self.looping.is_some() {
             self.note(t!(watch_not_armed_under_a_loop));
             return;
@@ -5133,10 +5352,13 @@ impl Session {
             self.note(t!(watch_not_armed_under_a_goal));
             return;
         }
-        match self
-            .watches
-            .arm(path.to_string(), self.turns, first, Instant::now())
-        {
+        match self.watches.arm(
+            path.to_string(),
+            under.into(),
+            self.turns,
+            first,
+            Instant::now(),
+        ) {
             Ok(number) => self.note(t!(watch_armed, number = number, path = path)),
             Err(watch::Refused::Full) => {
                 self.note(t!(watch_not_armed_full, count = watch::MAX_LIVE))
@@ -5158,13 +5380,15 @@ impl Session {
     /// session.
     ///
     /// `look` is the caller's, because what this session may still reach is the workspace's
-    /// question rather than this one's. `now` is the caller's for the same reason the registry
+    /// question rather than this one's, and it is handed the working directory each watch was
+    /// armed under along with the path: a relative path is the file it was armed on only while
+    /// that is still the working directory. `now` is the caller's for the same reason the registry
     /// takes one: the interval between two looks is five seconds, and a test that had to wait
     /// them out would be a test nobody runs.
     pub fn watch_fired(
         &mut self,
         now: Instant,
-        look: impl FnMut(&str) -> watch::Looked,
+        look: impl FnMut(&str, &std::path::Path) -> watch::Looked,
     ) -> Option<String> {
         for (number, why) in self.watches.look(now, look) {
             match why {
@@ -5230,6 +5454,20 @@ impl Session {
             self.note(t!(watches_stopped, count = stopped));
         }
         stopped > 0
+    }
+
+    /// End every watch the working directory moving has closed the answer for, and say so.
+    ///
+    /// A watch is armed on the path as the turn wrote it, which for the tool that arms one is a
+    /// relative path, and a relative path means the working directory. So a move leaves it naming
+    /// a file in the new directory that nobody armed a watch on, and the answer that allowed it
+    /// was about the directory that has just closed. Said one watch at a time, as the closed
+    /// directories are, because each one is something the session was going to tell the person
+    /// about and now will not.
+    pub fn end_watches_left_behind(&mut self, root: &std::path::Path) {
+        for number in self.watches.stop_moved(root) {
+            self.note(t!(watch_out_of_reach, number = number));
+        }
     }
 
     /// End every live watch because the session is about to do one of the other two things that
@@ -5310,21 +5548,22 @@ impl Session {
 
     /// Send a tick, announcing which one it is.
     ///
-    /// The line is the loop's own, taken from what the person typed, and it carries no files or
-    /// pictures: what was staged in the box belonged to the line it was staged in. A `@path` in
-    /// the prompt is read back out of it every tick, the way it is for any other prompt.
+    /// The line is the loop's own, taken from what the person typed, and it carries no files: one
+    /// staged in the box belonged to the line it was staged in. A picture is the exception the loop
+    /// itself makes, and only once: [`crate::loops::Running::dispatching`] hands it to the first tick
+    /// and has nothing to hand any tick after that. A `@path` in the prompt is read back out of it
+    /// every tick, the way it is for any other prompt.
     fn dispatch_tick(&mut self) -> Option<String> {
         let running = self.looping.as_mut()?;
-        running.dispatched();
+        let (prompt, pasted) = running.dispatching();
         let count = running.ticks();
         let quiet = running.quiet();
-        let prompt = running.prompt().to_string();
         if quiet > 0 {
             self.note(t!(loop_tick_quiet, count = count, quiet = quiet));
         } else {
             self.note(t!(loop_tick, count = count));
         }
-        Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), None))
+        Some(self.begin_turn(prompt, (Vec::new(), pasted), None))
     }
 
     /// Take every waiting prompt back out of the queue and into the box.
@@ -5350,12 +5589,13 @@ impl Session {
         // Before anything is disturbed, so that finding nothing left to take leaves the box exactly
         // as it was rather than half rewritten.
         //
-        // A command comes back whatever the turn has reached, because there is nothing to take back
-        // from: it was never offered to the turn, so no copy of it is anywhere for the planner to
-        // have been given. What makes a prompt unreclaimable is that it has already gone.
+        // A command and a command line come back whatever the turn has reached, because there is
+        // nothing to take back from: neither was ever offered to the turn, so no copy of either is
+        // anywhere for the planner to have been given. What makes a prompt unreclaimable is that it
+        // has already gone.
         let mut reclaimed = Vec::new();
-        while let Some(command) = self.queued.last().map(|waiting| waiting.command) {
-            if !command && !self.pending.forget_last() {
+        while let Some(waiting) = self.queued.last().map(|line| line.waiting) {
+            if waiting.is_sent() && !self.pending.forget_last() {
                 break;
             }
             reclaimed.push(self.queued.pop().expect("the queue was not empty"));
@@ -7956,6 +8196,32 @@ mod tests {
         );
     }
 
+    /// A marker at the first column is covered by a caret there just as one further along the line
+    /// is, so that press takes it. Nothing ordinary is before that caret, and answering the column
+    /// alone would leave the marker standing under a press that looked like it had done nothing.
+    #[test]
+    fn backspace_on_a_marker_at_the_start_of_the_line_takes_the_marker() {
+        let mut s = session();
+        s.attach(picture(b"pixels"));
+        for c in "xyz".chars() {
+            s.type_char(c);
+        }
+        // Back over the three characters and then over the marker, which is crossed whole and
+        // leaves the caret at the first column with the marker under it.
+        for _ in 0.."xyz".len() + 1 {
+            s.move_left();
+        }
+        assert_eq!(s.caret(), 0, "the caret did not reach the first column");
+
+        s.backspace();
+
+        assert_eq!(s.input, "xyz");
+        assert!(
+            s.pasted_named(&s.input).is_empty(),
+            "the picture outlived its marker"
+        );
+    }
+
     /// A marker for folded words goes whole for the same reason a picture's does, and taking it
     /// takes the words behind it rather than leaving them to arrive unannounced.
     #[test]
@@ -8578,7 +8844,10 @@ mod tests {
         let mut s = session();
         let request = crate::loops::parse("5m check the deploy").expect("a request");
 
-        assert_eq!(s.start_loop(request).as_deref(), Some("check the deploy"));
+        assert_eq!(
+            s.start_loop(request, Vec::new()).as_deref(),
+            Some("check the deploy")
+        );
         assert_eq!(s.status, Status::Working);
         assert_eq!(
             s.transcript
@@ -8586,6 +8855,71 @@ mod tests {
                 .filter(|entry| entry.speaker == Speaker::User)
                 .count(),
             1
+        );
+    }
+
+    /// Somebody pasting a screenshot into `/loop` is asking about that screenshot, so the tick they
+    /// wait for carries it. Settling it here instead would leave the loop running forever on a
+    /// sentence saying a picture was meant, which is the answer to nothing.
+    #[test]
+    fn the_first_tick_of_a_loop_carries_the_picture_pasted_into_it() {
+        let mut s = session();
+        for c in "/loop 15m look at ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        let commanded = s.take_command();
+        assert_eq!(commanded.line, "/loop 15m look at [Image #1]");
+
+        let sent = s.start_loop(
+            crate::loops::parse("15m look at [Image #1]").expect("a request"),
+            commanded.pasted,
+        );
+
+        assert_eq!(sent.as_deref(), Some("look at [Image #1]"));
+        assert_eq!(
+            s.sent_pasted().len(),
+            1,
+            "the first tick went without the picture"
+        );
+        assert_eq!(s.sent_pasted()[0].bytes, b"pixels".to_vec());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(paste_with_the_first_tick)),
+            "nothing said which tick the picture goes with"
+        );
+    }
+
+    /// Every tick after it sends the marker put back to words. Sending the picture each time would
+    /// pay for the same screenshot every interval for as long as the loop runs, and sending the
+    /// marker with nothing behind it would point at something that tick was never given.
+    #[test]
+    fn a_later_tick_of_a_loop_says_the_picture_went_with_the_first() {
+        let mut s = session();
+        for c in "/loop 15m look at ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        let commanded = s.take_command();
+        s.start_loop(
+            crate::loops::parse("15m look at [Image #1]").expect("a request"),
+            commanded.pasted,
+        );
+        s.complete("the first answer", Vec::new(), 0);
+        s.loop_turn_ended(None);
+
+        assert_eq!(
+            s.dispatch_tick().as_deref(),
+            Some(
+                "look at ([Image #1] was pasted here, but it cannot be shown to you: a picture \
+                 goes with the first tick of a loop, and this is a later one. Ask for it again if \
+                 you need to see it.)"
+            )
+        );
+        assert!(
+            s.sent_pasted().is_empty(),
+            "a later tick carried the picture again"
         );
     }
 
@@ -8642,7 +8976,7 @@ mod tests {
             ("8d watch", t!(loop_interval_capped, every = "7d")),
         ] {
             let mut s = session();
-            s.start_loop(crate::loops::parse(typed).expect("a request"));
+            s.start_loop(crate::loops::parse(typed).expect("a request"), Vec::new());
 
             assert!(
                 s.transcript.iter().any(|entry| entry.text == said),
@@ -8662,7 +8996,10 @@ mod tests {
         let mut s = session();
         let request = crate::loops::parse("5m /status").expect("a request");
 
-        assert_eq!(s.start_loop(request).as_deref(), Some("/status"));
+        assert_eq!(
+            s.start_loop(request, Vec::new()).as_deref(),
+            Some("/status")
+        );
         assert_eq!(s.looping().expect("a loop").prompt(), "/status");
     }
 
@@ -8672,16 +9009,21 @@ mod tests {
         watch::Looked::Saw(token.to_string())
     }
 
+    /// The working directory the watches below are armed under. What it is does not matter here:
+    /// whether a later look is still taken in it is the workspace's question, and the looks in
+    /// these tests are stubs.
+    const ARMED_IN: &str = "/work";
+
     /// The whole of what this feature is for. Nothing is running, nobody typed anything, and a
     /// file that moved still begins a turn.
     #[test]
     fn a_change_begins_a_turn_with_no_turn_running_to_notice_it() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
 
         let later = Instant::now() + Duration::from_secs(6);
         let prompt = s
-            .watch_fired(later, |_| saw("second"))
+            .watch_fired(later, |_, _| saw("second"))
             .expect("a change with nothing running did not begin a turn");
 
         assert!(prompt.contains("notes.md"), "{prompt}");
@@ -8694,10 +9036,10 @@ mod tests {
     #[test]
     fn a_fires_prompt_carries_the_watch_and_the_path_and_nothing_else() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
 
         let later = Instant::now() + Duration::from_secs(6);
-        let prompt = s.watch_fired(later, |_| saw("second")).expect("a fire");
+        let prompt = s.watch_fired(later, |_, _| saw("second")).expect("a fire");
 
         assert_eq!(prompt, watch::fired(1, "notes.md"));
         let sent = s
@@ -8713,7 +9055,7 @@ mod tests {
     #[test]
     fn a_fire_waits_for_the_turn_in_flight_and_for_what_is_queued() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
         let later = Instant::now() + Duration::from_secs(6);
 
         for c in "their own question".chars() {
@@ -8721,7 +9063,7 @@ mod tests {
         }
         s.submit();
         assert!(
-            s.watch_fired(later, |_| saw("second")).is_none(),
+            s.watch_fired(later, |_, _| saw("second")).is_none(),
             "a fire interrupted a running turn"
         );
 
@@ -8731,7 +9073,7 @@ mod tests {
         s.queue();
         s.complete("done", Vec::new(), 0);
         assert!(
-            s.watch_fired(later, |_| saw("second")).is_none(),
+            s.watch_fired(later, |_, _| saw("second")).is_none(),
             "a fire jumped the queue"
         );
     }
@@ -8741,8 +9083,11 @@ mod tests {
     #[test]
     fn a_watch_asked_for_under_a_loop_or_a_goal_is_refused_and_says_why() {
         let mut under_a_loop = session();
-        under_a_loop.start_loop(crate::loops::parse("5m watch").expect("a request"));
-        under_a_loop.arm_watch("notes.md", saw("first"));
+        under_a_loop.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
+        under_a_loop.arm_watch("notes.md", ARMED_IN, saw("first"));
         assert!(under_a_loop.watches().is_empty());
         assert!(
             under_a_loop
@@ -8754,7 +9099,7 @@ mod tests {
 
         let mut under_a_goal = session();
         under_a_goal.start_goal("cargo test exits 0".to_string());
-        under_a_goal.arm_watch("notes.md", saw("first"));
+        under_a_goal.arm_watch("notes.md", ARMED_IN, saw("first"));
         assert!(under_a_goal.watches().is_empty());
         assert!(
             under_a_goal
@@ -8772,12 +9117,15 @@ mod tests {
     fn a_person_starting_a_loop_or_a_goal_is_told_the_watches_have_ended() {
         for start in [
             &mut (|s: &mut Session| {
-                s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+                s.start_loop(
+                    crate::loops::parse("5m watch").expect("a request"),
+                    Vec::new(),
+                );
             }) as &mut dyn FnMut(&mut Session),
             &mut |s: &mut Session| s.start_goal("cargo test exits 0".to_string()),
         ] {
             let mut s = session();
-            s.arm_watch("notes.md", saw("first"));
+            s.arm_watch("notes.md", ARMED_IN, saw("first"));
             assert_eq!(s.watches().len(), 1);
 
             start(&mut s);
@@ -8797,7 +9145,7 @@ mod tests {
     #[test]
     fn a_later_look_a_turn_asked_for_is_refused_while_a_watch_is_live() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
         s.watch_again(
             "tell me when notes.md changes",
             crate::loops::Wakeup::asked(900, false),
@@ -8822,11 +9170,14 @@ mod tests {
         let mut s = session();
         assert_eq!(s.arming(), Arming::Allowed { free: 8 });
 
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
         assert_eq!(s.arming(), Arming::Allowed { free: 7 });
 
         let mut looping = session();
-        looping.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        looping.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         assert_eq!(looping.arming(), Arming::UnderALoop);
 
         let mut goal = session();
@@ -8842,11 +9193,11 @@ mod tests {
 
         let mut s = session();
         for n in 0..watch::MAX_LIVE {
-            s.arm_watch(&format!("{n}.md"), saw("first"));
+            s.arm_watch(&format!("{n}.md"), ARMED_IN, saw("first"));
         }
         assert_eq!(s.arming(), Arming::Full);
 
-        s.arm_watch("ninth.md", saw("first"));
+        s.arm_watch("ninth.md", ARMED_IN, saw("first"));
         assert_eq!(s.watches().len(), watch::MAX_LIVE);
         assert!(
             s.transcript
@@ -8861,7 +9212,7 @@ mod tests {
     #[test]
     fn a_path_that_cannot_be_looked_at_is_refused_and_said_so() {
         let mut s = session();
-        s.arm_watch("gone.md", watch::Looked::Absent);
+        s.arm_watch("gone.md", ARMED_IN, watch::Looked::Absent);
         assert!(s.watches().is_empty());
         assert!(
             s.transcript
@@ -8876,7 +9227,7 @@ mod tests {
     #[test]
     fn clearing_a_session_ends_every_watch() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
         s.clear();
         assert!(s.watches().is_empty());
     }
@@ -8885,8 +9236,8 @@ mod tests {
     #[test]
     fn a_watch_is_ended_by_the_number_the_report_gave_it() {
         let mut s = session();
-        s.arm_watch("a.md", saw("first"));
-        s.arm_watch("b.md", saw("first"));
+        s.arm_watch("a.md", ARMED_IN, saw("first"));
+        s.arm_watch("b.md", ARMED_IN, saw("first"));
 
         assert!(s.stop_watch(1));
         assert_eq!(
@@ -8907,9 +9258,11 @@ mod tests {
     #[test]
     fn stopping_a_fires_turn_ends_the_watch_that_fired() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
-        s.watch_fired(Instant::now() + Duration::from_secs(6), |_| saw("second"))
-            .expect("a fire");
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
+        s.watch_fired(Instant::now() + Duration::from_secs(6), |_, _| {
+            saw("second")
+        })
+        .expect("a fire");
 
         assert!(s.watch_is_firing());
         assert!(s.stop_firing_watch());
@@ -8920,7 +9273,7 @@ mod tests {
     #[test]
     fn stopping_a_turn_that_was_not_a_fire_ends_no_watch() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
         s.set_input("their own question".to_string());
         s.submit();
 
@@ -8935,10 +9288,10 @@ mod tests {
     #[test]
     fn a_watch_that_ends_itself_says_which_of_the_two_endings_it_was() {
         let mut aged = session();
-        aged.arm_watch("notes.md", saw("first"));
+        aged.arm_watch("notes.md", ARMED_IN, saw("first"));
         aged.watch_fired(
             Instant::now() + Duration::from_secs(8 * 24 * 60 * 60),
-            |_| saw("first"),
+            |_, _| saw("first"),
         );
         assert!(aged.watches().is_empty());
         assert!(
@@ -8948,8 +9301,8 @@ mod tests {
         );
 
         let mut gone = session();
-        gone.arm_watch("notes.md", saw("first"));
-        gone.watch_fired(Instant::now() + Duration::from_secs(6), |_| {
+        gone.arm_watch("notes.md", ARMED_IN, saw("first"));
+        gone.watch_fired(Instant::now() + Duration::from_secs(6), |_, _| {
             watch::Looked::OutOfReach
         });
         assert!(gone.watches().is_empty());
@@ -8978,7 +9331,10 @@ mod tests {
     #[test]
     fn a_tick_waits_for_the_turn_in_flight_and_for_what_is_queued() {
         let mut s = session();
-        s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        s.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         s.complete("done", Vec::new(), 0);
 
         // Due, but the person has started something of their own.
@@ -9001,7 +9357,7 @@ mod tests {
     #[test]
     fn a_prompt_typed_during_a_loop_is_not_a_tick_of_it() {
         let mut s = session();
-        s.start_loop(crate::loops::parse("watch").expect("a request"));
+        s.start_loop(crate::loops::parse("watch").expect("a request"), Vec::new());
         assert!(s.looping().expect("a loop").ticking());
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(120, false)));
@@ -9024,7 +9380,10 @@ mod tests {
     #[test]
     fn a_tick_that_says_when_to_wake_arms_the_next_one() {
         let mut s = session();
-        s.start_loop(crate::loops::parse("watch the build").expect("a request"));
+        s.start_loop(
+            crate::loops::parse("watch the build").expect("a request"),
+            Vec::new(),
+        );
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(900, false)));
 
@@ -9043,7 +9402,10 @@ mod tests {
     #[test]
     fn clearing_the_session_ends_the_loop() {
         let mut s = session();
-        s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        s.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         s.clear();
         assert!(s.looping().is_none());
     }
@@ -9054,7 +9416,10 @@ mod tests {
         assert!(!s.stop_loop());
         assert!(s.transcript.is_empty());
 
-        s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        s.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         assert!(s.stop_loop());
         assert!(s.looping().is_none());
     }
@@ -9103,14 +9468,20 @@ mod tests {
     #[test]
     fn a_goal_and_a_loop_are_never_both_running() {
         let mut s = session();
-        s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        s.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         s.start_goal("cargo test exits 0".to_string());
         assert!(s.looping().is_none(), "the loop outlived the goal");
         assert!(s.goal().is_some());
 
         let mut s = session();
         s.start_goal("cargo test exits 0".to_string());
-        s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        s.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         assert!(s.goal().is_none(), "the goal outlived the loop");
         assert!(s.looping().is_some());
     }
@@ -10303,6 +10674,44 @@ mod tests {
         s.restore("first");
 
         assert_eq!(s.input(), "first");
+    }
+
+    /// An interjection the turn took is in the conversation the planner was given, so it is work
+    /// on the screen like any other: lifting it back out would leave the transcript reading in an
+    /// order that never happened, and handing the opening prompt back to the box would put one
+    /// prompt in two places while its own entry stayed in the transcript as sent.
+    #[test]
+    fn a_stopped_turn_that_took_an_interjection_leaves_both_prompts_where_they_are() {
+        let mut s = session();
+        for c in "first".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        for c in "second".chars() {
+            s.type_char(c);
+        }
+        s.queue();
+        s.interjected();
+        assert!(s.queued.is_empty(), "the turn did not take the prompt");
+
+        s.restore("first");
+
+        assert_eq!(s.input(), "", "the stopped prompt went back into the box");
+        assert_eq!(
+            s.transcript
+                .iter()
+                .filter(|entry| entry.speaker == Speaker::User)
+                .map(|entry| entry.text.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"],
+            "the interjection was lifted back out of the transcript"
+        );
+        assert!(
+            s.transcript
+                .last()
+                .is_some_and(|entry| entry.speaker == Speaker::Stopped),
+            "nothing recorded that it stopped"
+        );
     }
 
     /// A stop is aimed at the turn in flight. The prompts behind it are ones the person typed and
@@ -12824,7 +13233,10 @@ mod tests {
     /// nothing at all to the line it was pressed over.
     #[test]
     fn a_press_that_changes_nothing_leaves_the_selection() {
-        let presses: [(&str, &str, usize, Press); 4] = [
+        let presses: [(&str, &str, usize, Press); 5] = [
+            ("Backspace at the start of the line", "hello", 0, |s| {
+                s.backspace()
+            }),
             ("Ctrl-U at the start of the line", "hello", 0, |s| {
                 s.delete_to_line_start()
             }),

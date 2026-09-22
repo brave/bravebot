@@ -30,13 +30,31 @@ impl Drop for Scratch {
     }
 }
 
+/// Held while a program is written, and again while one is started.
+///
+/// A test that writes a program races every other test in this binary: between a sibling thread's
+/// fork and its exec the child holds a copy of every descriptor this process had open, including
+/// the one the script was written through, and `execve` answers `ETXTBSY` for a file anyone holds
+/// open for writing. Writing under this and forking under this means no fork ever happens while a
+/// write descriptor is open, so no child ever inherits one. Waiting the race out instead would mean
+/// running a moment's hooks a second time, which a test counting what they did cannot survive.
+static STARTING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A test that panicked while holding it left nothing behind to protect: what this guards is a
+/// descriptor's lifetime, not state.
+fn starting() -> std::sync::MutexGuard<'static, ()> {
+    STARTING.lock().unwrap_or_else(|held| held.into_inner())
+}
+
 /// Write an executable script and answer with its path.
 fn script(at: &Path, name: &str, body: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let path = at.join(name);
+    let held = starting();
     std::fs::write(&path, body).expect("write the script");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
         .expect("make it executable");
+    drop(held);
     path.canonicalize().expect("canonicalize")
 }
 
@@ -49,12 +67,7 @@ fn declaring(moment: &str, run: &[&str]) -> Hooks {
     ))
 }
 
-/// Fire the hooks, waiting out a program this process is itself still holding open.
-///
-/// A test that writes a program and then runs it races every other test in this binary: between a
-/// sibling thread's fork and its exec the child holds a copy of every descriptor this process had
-/// open, including the one the script was written through, and `execve` answers `ETXTBSY` while
-/// that is so. There is nothing to synchronise on, only to wait out.
+/// Fire the hooks, under the gate [`STARTING`] describes.
 fn fire(hooks: &Hooks, moment: Moment, tool: Option<&str>, at: &Path) -> Vec<Fired> {
     fire_within(hooks, moment, tool, at, Duration::from_secs(30))
 }
@@ -66,20 +79,8 @@ fn fire_within(
     at: &Path,
     limit: Duration,
 ) -> Vec<Fired> {
-    // `ETXTBSY`, 26 on both Linux and macOS, compared as the message the operating system gives it
-    // because that string is all the trouble carries.
-    let busy = std::io::Error::from_raw_os_error(26).to_string();
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let fired = hooks::fire_within(hooks, moment, tool, at, limit);
-        let held_open = fired.iter().any(
-            |one| matches!(&one.trouble, Some(Trouble::NotStarted(detail)) if *detail == busy),
-        );
-        if !held_open || std::time::Instant::now() >= deadline {
-            return fired;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let _held = starting();
+    hooks::fire_within(hooks, moment, tool, at, limit)
 }
 
 /// HOOK-4: a hook attached to a moment runs when the moment comes.

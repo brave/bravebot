@@ -7,6 +7,7 @@ governs:
   - crates/agent/src/outcome.rs
   - crates/agent/src/subscription.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/plain.rs
   - crates/bedrock/src/credentials.rs
   - crates/tui/src/app.rs
   - crates/tui/src/status.rs
@@ -201,6 +202,9 @@ another it will never call.
 `verified-by: bravebot_agent::backend::without_bedrock_configured_nothing_needs_a_sign_in`
 `verified-by: bravebot_agent::backend::signing_in_for_a_model_no_aws_account_serves_does_nothing`
 `verified-by: bravebot_agent::backend::a_gateway_model_never_needs_an_aws_sign_in`
+`verified-by: bravebot_agent::backend::a_model_an_aws_block_named_needs_a_sign_in_of_its_own`
+`verified-by: bravebot_agent::backend::signing_in_for_a_model_an_aws_block_named_reaches_that_account`
+`verified-by: bravebot_agent::backend::an_aws_block_leaves_the_other_rosters_needing_no_sign_in`
 
 <a id="BACKEND-10"></a>
 ### BACKEND-10: asking whether a session is good costs nothing once it is known to be
@@ -282,6 +286,9 @@ is that the service owns those names, and a renamed one is reset by the endpoint
 `verified-by: bravebot_config::lib::a_tier_alias_without_bedrock_resolves_against_the_brave_roster`
 `verified-by: bravebot_config::lib::an_alias_for_an_unconfigured_tier_falls_through_to_brave`
 `verified-by: bravebot_config::lib::without_brave_credentials_an_unconfigured_tier_stays_on_aws`
+`verified-by: bravebot_config::lib::a_tier_word_resolves_against_an_aws_account_a_provider_block_named`
+`verified-by: bravebot_config::lib::a_tier_word_resolves_to_a_model_the_block_actually_offers`
+`verified-by: bravebot_config::lib::with_brave_credentials_a_tier_word_still_falls_through_to_brave`
 `verified-by: bravebot_config::lib::a_model_that_is_not_a_tier_alias_is_used_as_written`
 `verified-by: bravebot_config::bedrock::every_tier_names_a_brave_model`
 `verified-by: bravebot_config::bedrock::the_tiers_name_different_brave_models`
@@ -632,6 +639,9 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_aichat::models::a_row_whose_service_refused_a_level_reads_none_however_silent_the_roster`
 `verified-by: bravebot_aichat::models::a_gateway_model_that_does_not_take_the_effort_parameter_says_so`
 `verified-by: bravebot_aichat::models::a_gateway_that_states_no_parameters_is_not_taken_to_read_no_level`
+`verified-by: bravebot_cli::running::a_run_withholds_a_level_the_roster_says_the_model_does_not_read`
+`verified-by: bravebot_cli::running::a_run_sends_a_level_the_roster_says_the_model_reads`
+`verified-by: bravebot_cli::running::a_session_in_lines_withholds_a_level_the_roster_says_the_model_does_not_read`
 `verified-by: bravebot_tui::app::a_level_is_withheld_from_a_model_that_reads_none`
 `verified-by: bravebot_tui::app::a_level_a_model_cannot_use_is_kept_rather_than_forgotten`
 `verified-by: bravebot_tui::app::asking_for_a_level_a_model_cannot_use_says_so`
@@ -1443,6 +1453,8 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::running::a_configured_gateway_is_not_refused`
 `verified-by: bravebot_cli::running::a_service_configured_with_no_model_of_its_own_named_says_to_name_one`
 `verified-by: bravebot_cli::running::a_model_named_on_the_command_line_is_not_refused`
+`verified-by: bravebot_cli::running::a_session_in_lines_with_no_service_configured_says_how_to_configure_one`
+`verified-by: bravebot_cli::running::a_session_in_lines_with_a_configured_gateway_opens`
 
 <a id="BACKEND-40"></a>
 ### BACKEND-40: completed replies keep reported usage even when their content is unusable

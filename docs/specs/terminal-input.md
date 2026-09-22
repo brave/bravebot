@@ -207,6 +207,7 @@ longer attached, and the only way to find that out is to keep pressing.
 
 `verified-by: bravebot_tui::state::one_backspace_takes_the_whole_marker`
 `verified-by: bravebot_tui::state::backspace_on_a_covered_marker_takes_the_marker`
+`verified-by: bravebot_tui::state::backspace_on_a_marker_at_the_start_of_the_line_takes_the_marker`
 `verified-by: bravebot_tui::state::one_backspace_takes_the_whole_folded_paste`
 `verified-by: bravebot_tui::state::delete_forward_takes_the_whole_marker`
 `verified-by: bravebot_tui::state::text_that_merely_looks_like_a_marker_is_deleted_one_character_at_a_time`
@@ -366,6 +367,11 @@ order it happened, and a prompt lifted back out of it while the two typed after 
 running is in neither place: gone from the transcript, and sitting in a box that is about to be
 wanted for the next thing.
 
+An interjection this turn already took keeps it sent too, although taking it left nothing waiting.
+It is in the conversation the turn carries on with and it is in the transcript where it was said, so
+neither prompt moves: handing the opening one back to the box would leave its own entry above as
+sent, and lifting the interjection out to make room would take back a line the planner has read.
+
 Shift-Enter still starts a line rather than sending it, so a paragraph can be written mid-turn and
 is not sent half-finished.
 
@@ -391,6 +397,8 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::state::stopping_a_turn_keeps_what_was_waiting_behind_it`
 `verified-by: bravebot_tui::state::a_stopped_prompt_stays_sent_where_others_are_waiting`
 `verified-by: bravebot_tui::state::a_stopped_prompt_comes_back_where_nothing_is_waiting`
+`verified-by: bravebot_tui::state::a_stopped_turn_that_took_an_interjection_leaves_both_prompts_where_they_are`
+`verified-by: bravebot_tui::app::stopping_a_turn_that_took_a_prompt_mid_turn_hands_nothing_back`
 `verified-by: bravebot_tui::state::a_waiting_prompt_is_in_the_history_already`
 `verified-by: bravebot_tui::state::there_is_nothing_to_queue_when_the_line_is_blank_or_nothing_is_running`
 `verified-by: bravebot_tui::render::a_waiting_prompt_is_shown_as_waiting`

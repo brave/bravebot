@@ -715,6 +715,27 @@ pub struct PastedImage {
     pub bytes: Vec<u8>,
 }
 
+impl PastedImage {
+    /// The part of a message that carries the picture.
+    ///
+    /// One place, because three requests carry a paste now: a turn's prompt, a question asked
+    /// beside the work, and the task a manifest run is planned from. The encoding happens here
+    /// rather than in the interface because a data URI is the wire's business, and holding raw
+    /// bytes until this point keeps the size the trail reports honest.
+    ///
+    /// The record `pasting.md` PASTE-8 asks for is the caller's, and each of the three takes it
+    /// where it has the policy: [`Policy::admit_pasted_image`] is not on this path because a part
+    /// can be built on a thread that holds no policy at all.
+    pub(crate) fn part(&self) -> Part {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&self.bytes);
+        Part::ImageUrl {
+            image_url: ImageUrl {
+                url: format!("data:{};base64,{}", self.media_type, encoded),
+            },
+        }
+    }
+}
+
 impl Task {
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
@@ -1120,6 +1141,8 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         // The session owns the policy's record here: it is handed back in the [`Outcome`], and a
         // caller of `resume` keeps it across turns.
         None,
+        // A turn a person asked for reads what its hooks said off the [`Outcome`].
+        None,
     )
 }
 
@@ -1159,6 +1182,8 @@ pub fn run_cancellable<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         None,
         cancel,
         None,
+        // A turn a person asked for reads what its hooks said off the [`Outcome`].
+        None,
     )
 }
 
@@ -1184,6 +1209,10 @@ pub(crate) fn delegated(
     programs: TrustedPrograms,
     cancel: &Cancel,
     vouched: &mut bravebot_core::policy::Vouched,
+    // What its hooks had to say, written whether or not the rounds produced an outcome. The
+    // delegate's outcome dies at the boundary, so this is the only copy the parent can fold into
+    // the account of itself a run with nowhere to draw reads (HOOK-7).
+    notices: &mut Vec<String>,
 ) -> Result<Outcome, TurnError> {
     if task.delegate.is_none() {
         return Err(TurnError::Precommit(
@@ -1207,6 +1236,7 @@ pub(crate) fn delegated(
         None,
         cancel,
         Some(vouched),
+        Some(notices),
     )
 }
 
@@ -1238,6 +1268,8 @@ pub fn run_with_trust<S: Sink + Send, C: Confirmer + Send>(
         // One turn is the whole session here, so the set the turn owns is the session's.
         None,
         &Cancel::new(),
+        None,
+        // A turn a person asked for reads what its hooks said off the [`Outcome`].
         None,
     )
 }
@@ -1595,6 +1627,10 @@ fn collect_delegates<S: Sink, R: Reporter>(
     wait: bool,
     waits: &mut crate::timing::DelegateWait,
     spent: &mut crate::timing::Elapsed,
+    // Where a hook that went wrong inside one of them is written down, which is this turn's own
+    // list: a delegate is a run inside this turn, and the account of itself this turn hands back
+    // is the only one that reaches a caller with nowhere to draw (HOOK-7).
+    notices: &mut Vec<String>,
 ) -> Result<usize, TurnError> {
     let mut collected = 0;
     while let Some(at) = delegates
@@ -1622,6 +1658,10 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 // question (DELEGATE-11): taking the record back only from a delegate that
                 // reported would leave the next run asking.
                 policy.adopt_from_delegate(&working.seeded, &ended.vouched);
+                // Also on both of the ways a run can end, and for a reason of the same shape:
+                // the person whose formatter would not start is owed the sentence whether or not
+                // the delegate that fired it went on to report.
+                notices.extend(ended.notices);
                 (ended.delegated, partial, requests)
             }
             // A thread that panicked is a delegate that stopped, which is all anybody can be
@@ -1931,6 +1971,11 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // round leaves it alone, which is right: the caller seeds it with the copy the run started
     // from, and nothing that vouches for a path or a command has run yet.
     vouched: Option<&mut bravebot_core::policy::Vouched>,
+    // What the hooks had to say, written whether or not the rounds produced an outcome, and for
+    // the same reason the record above is. Only a delegate's caller passes one: a turn a person
+    // asked for hands these back on its [`Outcome`], and a delegate's outcome dies at the
+    // boundary while the hooks it fired are still the person's own to hear about (HOOK-7).
+    said_about_hooks: Option<&mut Vec<String>>,
 ) -> Result<Outcome, TurnError> {
     // Read once, here, rather than at each moment. What the file says is a property of the machine
     // and not of a round, and a turn whose hooks changed halfway through would be the harder thing
@@ -1952,6 +1997,11 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         false => Vec::new(),
     };
 
+    // Where the rounds' own hook sentences land. Held here rather than inside the rounds so that
+    // a turn which failed part way through still has them: the outcome that would have carried
+    // them is the thing that did not arrive.
+    let mut fired: Vec<String> = Vec::new();
+
     let mut outcome = one_turn(
         config,
         egress,
@@ -1967,6 +2017,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         cancel,
         &hooks,
         vouched,
+        &mut fired,
     );
 
     let ended = match own {
@@ -1980,11 +2031,18 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         false => Vec::new(),
     };
 
+    // The rounds' sentences alone, for the caller that asked: the two ends of the turn never fire
+    // for a delegate, so a call it made is the whole of what one has to hand back.
+    if let Some(collected) = said_about_hooks {
+        collected.clone_from(&fired);
+    }
+
     // In the order the moments came, which is not the order the turn produced them: what it found
     // on the way in is already in there, and the two ends of the turn go around it.
     if let Ok(outcome) = &mut outcome {
         let mut said = began;
         said.append(&mut outcome.notices);
+        said.append(&mut fired);
         said.extend(ended);
         outcome.notices = said;
     }
@@ -2008,6 +2066,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     cancel: &Cancel,
     hooks: &bravebot_config::hooks::Hooks,
     vouched: Option<&mut bravebot_core::policy::Vouched>,
+    // Every sentence a hook that went wrong produced, this turn's own and its delegates'.
+    // Written as the rounds go rather than gathered from the outcome, so that a turn which ends
+    // in an error has still said what it found (HOOK-7).
+    hook_notices: &mut Vec<String>,
 ) -> Result<Outcome, TurnError> {
     // First thing in the turn, so the wall figure covers the work that happens before the first
     // request goes out. Skill discovery and the preamble read files, and a turn in a large tree can
@@ -2261,18 +2323,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // footing of the prompt it landed in, and there is no path to look up and nothing to
         // quarantine. What is left is the record, which is what `admit_pasted_image` is.
         //
-        // Recorded one by one, so the trail says what arrived rather than that something did. The
-        // encoding happens here and not in the interface because a data URI is the wire's
-        // business, and holding raw bytes until this point keeps the size that is reported honest.
+        // Recorded one by one, so the trail says what arrived rather than that something did.
         for image in &task.images {
             policy.admit_pasted_image(image.media_type, image.bytes.len());
-
-            let encoded = base64::engine::general_purpose::STANDARD.encode(&image.bytes);
-            parts.push(Part::ImageUrl {
-                image_url: ImageUrl {
-                    url: format!("data:{};base64,{}", image.media_type, encoded),
-                },
-            });
+            parts.push(image.part());
         }
 
         conversation.push(Message::user_parts(parts));
@@ -2361,9 +2415,6 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // whatever is still going, which is what keeps a background job from outliving the turn that
     // started it and becoming an effect nobody is watching.
     let mut jobs = crate::tools::Jobs::new();
-    // Kept beside the turn's own notices rather than in them: those are what the turn found before
-    // it started, and a hook that would not run is news from the middle of it.
-    let mut hook_notices: Vec<String> = Vec::new();
     // Where the next command line runs, absent one naming its own directory (CMDLINE-12).
     //
     // Per turn rather than per session, which is short of what the clause asks for: it says a line
@@ -2404,6 +2455,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     false,
                     &mut waits,
                     &mut spent,
+                    hook_notices,
                 )?;
 
                 reporter.spent(crate::outcome::Spent {
@@ -2624,6 +2676,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         true,
                         &mut waits,
                         &mut spent,
+                        hook_notices,
                     )?;
                     break completion;
                 }
@@ -2646,6 +2699,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             true,
                             &mut waits,
                             &mut spent,
+                            hook_notices,
                         )?;
                         // A round the planner spent waiting is still a round, and the wait is when a
                         // person watching a turn go somewhere they did not ask for is most likely to
@@ -3405,6 +3459,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 true,
                 &mut waits,
                 &mut spent,
+                hook_notices,
             );
         }
         result
@@ -3500,11 +3555,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         timing: spent.finish(),
         clean: policy.finish(),
         display,
-        notices: notices
-            .into_iter()
-            .map(|n| n.message)
-            .chain(hook_notices)
-            .collect(),
+        // The turn's own, and only those: what a hook had to say is the caller's to place, since
+        // it belongs to the moments around this turn as much as to the rounds inside it.
+        notices: notices.into_iter().map(|n| n.message).collect(),
         attempt: None,
     })
 }
@@ -3560,6 +3613,7 @@ mod tests {
                     crate::delegate::Ended {
                         delegated: Err(TurnError::Cancelled { attempts: None }),
                         vouched: seeded_for_worker,
+                        notices: Vec::new(),
                     },
                     crate::outcome::Spent {
                         tokens: 17,
@@ -3597,6 +3651,7 @@ mod tests {
                     true,
                     &mut waits,
                     &mut spent,
+                    &mut Vec::new(),
                 )
                 .unwrap(),
                 1

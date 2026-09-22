@@ -879,7 +879,14 @@ function describe(prompt: AskPrompt, answer: AskAnswer | undefined): string {
     .join(', ')
 }
 
-function Row({
+/**
+ * One transcript entry, drawn.
+ *
+ * Exported because this is where the marking rule lands: which entries are formatted and which
+ * are shown inside a container of their own is decided here rather than in the components below,
+ * so `scripts/marking.test.mjs` renders this to assert it.
+ */
+export function Row({
   entry,
   onRecover,
   onChooseModel,

@@ -16,6 +16,11 @@ use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 
 fn main() {
+    // First of all, and for the reason the terminal entry point does it first: a credential is in
+    // this process's memory from the first turn, and a crash after this writes no image of it.
+    // See CRED-23.
+    let _ = bravebot_agent::crash::disable_core_dumps();
+
     // Not a security decision. The only argument is `--settings <path>`, which names a
     // settings file for a developer driving this by hand, and what that file may then grant
     // is decided by the policy layer rather than here. Nothing is authorised by an argument.

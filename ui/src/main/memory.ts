@@ -32,12 +32,18 @@ function recordMemory(slug: string, text: string, source: MemoryRevision['source
   writeFileSync(historyFile(slug), JSON.stringify(history.slice(-30)), { mode: 0o600 })
 }
 
-/** Delete only app-owned copies; never remove the project's memory file or session store. */
+/**
+ * Delete only app-owned copies; never remove the project's memory file or session store.
+ *
+ * The whole directory rather than the two files in it by name. Everything under it is this app's:
+ * the revision history, the cached briefing, and a briefing half-written by a process that died
+ * before it could rename one into place. Naming the files left that last one behind, holding the
+ * bot's name and purpose after the bot was deleted.
+ */
 export function removeMemoryHistory(slug: unknown): void {
   const held = bot(slug)
   if (!held) return
-  rmSync(historyFile(held.slug), { force: true })
-  rmSync(join(app.getPath('userData'), 'bots', held.slug, 'ground.md'), { force: true })
+  rmSync(join(app.getPath('userData'), 'bots', held.slug), { recursive: true, force: true })
 }
 
 /** Compare before replacing, so a memory edit cannot overwrite a concurrent agent update. */

@@ -228,10 +228,10 @@ charter poured into somebody's recall is not a feature.
 So a bot is handed a **file to read**, and there are two of them:
 
 - **The briefing**, `<userData>/bots/<slug>/ground.md`, composed by the main process from the bot's
-  name, its purpose, and whatever its memory currently says. It goes to a turn as `dropped`, which
-  is the read deliberately *not* confined to the workspace. It lives outside the checkout precisely
-  so the planner cannot rewrite what defines it — the agent may write inside the workspace and
-  nowhere else, and this is nowhere else.
+  name and its purpose. It goes to a turn as `dropped`, which is the read deliberately *not*
+  confined to the workspace. It lives outside the checkout precisely so the planner cannot rewrite
+  what defines it — the agent may write inside the workspace and nowhere else, and this is nowhere
+  else.
 - **The memory**, `<checkout>/.bravebot-ui/bots/<slug>.md`, which is inside the checkout because
   that is the only place the agent *can* write. That is the whole mechanism: the bot is told where
   its memory is and asked to keep it current, and it edits the file with its ordinary write tool.
@@ -239,10 +239,25 @@ So a bot is handed a **file to read**, and there are two of them:
   itself, so it never becomes a change nobody made. What that write is *gated* on is below, and is
   not what it looks like.
 
-Only one file is attached, and the memory is copied *into* the briefing rather than sent beside it.
-Every attached file becomes its own user message, and the agent's compaction keeps only the last
-two of those verbatim — two attachments would mean the window a compaction preserves is spent
-entirely on this app's own injections.
+**Only the briefing is handed over, and the memory is neither attached nor quoted in it.** `files`
+and `dropped` are both admitted as *trusted* context, which is the agent recording that a person
+named the path in their own line, so the only path the app may name is one whose every byte the app
+wrote. The briefing is one: the name and the purpose were typed into this window, and the memory's
+path is a string composed from a slug. The memory is not one: its words are the model's own. The
+briefing therefore says where the memory is and asks the bot to read it first, and what that read
+comes back as is the trust map's answer about that path, the same as for any other file in the
+checkout. A memory that an earlier write left untrusted comes back quarantined.
+
+A memory the grounding walk has just created is the one case the briefing does not ask for: it
+holds a template and nothing more, so the briefing says as much rather than spending a call on it.
+A memory that is there is never replaced, whatever is in it: one whose bytes are not text now
+costs the bot a paragraph, where under the old arrangement it would have failed the turn, so
+there is nothing to be gained by a seed that overwrites what it cannot read.
+
+Reading it costs one tool call at the top of a grounded turn, and buys back the attachment it used
+to spend: every attached file becomes its own user message, and the agent's compaction keeps only
+the last two of those verbatim, so an injection of the app's own is expensive in the one window
+that matters.
 
 #### When it is said again
 
@@ -301,11 +316,11 @@ Not on it being the memory. A memory write goes through the agent's ordinary wri
 is: *trusted data to a trusted path is written without a prompt*, because for data to be trusted the
 turn must have observed nothing untrusted, and the destination only gains trust by it.
 
-Both halves are true of a bot's memory in the ordinary case. The destination is trusted because this
-app *names* the file — naming is what vouches for it — and a turn that has only read its own
-checkout has seen nothing untrusted. So a bot exploring its project and writing down what it found
-**does so without asking**, and the record is the `Update` line in the transcript and the row in the
-Writes panel rather than a card somebody pressed.
+Both halves are true of a bot's memory in the ordinary case. The destination is trusted because the
+person vouched for the checkout it is in, and a turn that has only read its own checkout has seen
+nothing untrusted. So a bot exploring its project and writing down what it found **does so without
+asking**, and the record is the `Update` line in the transcript and the row in the Writes panel
+rather than a card somebody pressed.
 
 The prompt appears exactly where it matters. A turn that *has* touched untrusted content — a fetched
 page, a command's output, a quarantined file — is asked before it may write to the memory, because
@@ -325,17 +340,22 @@ Two more things are honestly imperfect and worth knowing:
 - **The turn compaction happens in runs without the briefing.** It can fire on the first round.
   Nothing can inject mid-turn, so the summary the agent writes is what carries the gist through;
   the mitigation is keeping a purpose short enough that re-reading it is cheap.
-- **Memory the model wrote is re-admitted as trusted context.** Naming a file vouches for it, so
-  what the bot wrote about itself last week is trusted this week. Combined with the gate above, a
-  bot that has only ever read its own checkout accumulates memory nobody was asked about — visible
-  in the transcript every time, but not consented to each time.
+- **A bot whose memory was poisoned loses it rather than reading it back.** The memory arrives under
+  whatever the trust map says about its path, so a write that turned the path untrusted means the
+  next read is quarantined and the bot carries on without what it knew. That is the gate doing its
+  job, and it is the honest failure: the app once vouched for that path on every grounded turn,
+  which undid the prompt the write had asked for and let a fetched page's bytes back in as trusted
+  context. Recovering the memory is a person's decision, taken by vouching for the path.
+- **A memory in a checkout nobody vouched for is quarantined too.** Declining the project at
+  startup means declining its files, and the bot's memory is one of them.
 
 #### What the window cannot do
 
 The bridge protocol accepts `files` and `dropped` paths, both admitted as trusted
 context. The main process strips those raw lists from renderer requests. User
 attachments instead use native-picker grants bound to the session and revalidated
-when sending; bot briefings are composed by the main process from a bot definition.
+when sending; bot briefings are composed by the main process from a bot definition,
+and are the only path a bot contributes.
 
 The preload does carry file contents for previews and memory editing. These are
 bounded, explicit operations rather than unrestricted filesystem access, and previews

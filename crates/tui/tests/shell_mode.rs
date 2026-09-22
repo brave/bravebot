@@ -178,3 +178,31 @@ fn a_running_command_shows_that_it_is_running() {
     );
     assert!(drawn.contains("esc to stop"), "no way to stop it:\n{drawn}");
 }
+
+/// A command line waiting for a turn to end is going somewhere different from a prompt waiting
+/// beside it, and the row under the box is the only place that says which. Drawn without the
+/// marker, `echo pwned` there reads as words on their way to the model.
+#[test]
+fn a_waiting_command_line_is_drawn_behind_the_marker() {
+    let mut session = Session::new("kernel-enforced");
+    session.type_char('a');
+    session.submit();
+
+    session.shell = true;
+    for c in "echo pwned".chars() {
+        session.type_char(c);
+    }
+    assert!(session.queue_shell(), "the command line was not queued");
+
+    let drawn = rows(&session, 80, 24);
+    assert!(
+        drawn.iter().any(|row| row.contains("! echo pwned")),
+        "the waiting command line was not drawn behind the marker:\n{}",
+        drawn.join("\n")
+    );
+    assert!(
+        drawn.iter().any(|row| row.contains("QUEUED")),
+        "nothing said it was waiting:\n{}",
+        drawn.join("\n")
+    );
+}

@@ -14,6 +14,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod crash;
 #[cfg(target_os = "linux")]
 pub mod linux;
 // Compiled under test on any Unix as well as on the platform it confines, so what this

@@ -1054,6 +1054,11 @@ paste-arrived-empty =
     ce collage est arrivé vide : le terminal ne transmet que du texte, une image demande
     donc { $chord }
 paste-not-a-command = une image n'est pas une commande : quittez le mode shell pour en coller une
+paste-not-with-a-command =
+    une image ne part pas avec cette commande : envoyez-la dans une invite pour qu'elle soit vue
+paste-with-the-first-tick =
+    cette image part avec le premier passage de cette boucle ; les suivants disent qu'elle a été
+    collée
 paste-too-large = cette image fait { $size }, et un collage en porte au plus { $limit }
 paste-nothing-on-clipboard = il n'y a rien à coller dans le presse-papiers
 paste-folded = { $lines ->

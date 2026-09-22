@@ -1049,7 +1049,7 @@ impl Workspace {
         Some(modified.elapsed().unwrap_or_default())
     }
 
-    /// Take the one look a standing watch takes at a path.
+    /// Take the one look a standing watch takes at a path, armed under `under`.
     ///
     /// The two facts a read hands the planner back as a change token, hashed the same way, so a
     /// watch and a read answer the same question about the same file. Nothing derived from the
@@ -1058,7 +1058,20 @@ impl Workspace {
     /// The reach question is asked on every look rather than only when the watch was armed. A path
     /// this workspace no longer resolves is one the answer that allowed the watch has stopped
     /// holding for, and the caller ends the watch on it.
-    pub fn look(&self, relative: &str) -> crate::watch::Looked {
+    ///
+    /// It is asked against the working directory the watch was armed under, which is what `under`
+    /// is, and that is the whole of why it is a parameter. A relative path means the primary root
+    /// ([`Workspace::resolve`]), so once the root has moved the same string names a file in the
+    /// new directory: [`Workspace::change_root`] closed the old one, so the promotion or the rule
+    /// that allowed the watch has stopped holding, while `resolve` would answer happily about a
+    /// file nobody armed a watch on. An absolute path is not asked, because it does not mean the
+    /// root: it is legal only inside a directory added by name, so whether it is still reachable
+    /// is exactly what resolving it answers, and a directory that survived the move survives with
+    /// its watch.
+    pub fn look(&self, relative: &str, under: &Path) -> crate::watch::Looked {
+        if !crate::watch::names_the_same_file(relative, under, &self.root) {
+            return crate::watch::Looked::OutOfReach;
+        }
         let Ok(resolved) = self.resolve(relative) else {
             return crate::watch::Looked::OutOfReach;
         };

@@ -61,6 +61,11 @@ bundles, then `scripts/package.mjs` uses `@electron/packager` to create
 The platform and architecture follow the Node process. Rust uses its configured toolchain target; for a native
 bundle, use matching Node and Rust architectures.
 
+The bundle's version is `package.json`'s, and that is the repository's version rather than one
+of the front end's own: the app ships an agent build, so the two are one release.
+`make bump-version` at the root rewrites this manifest and its lockfile along with the workspace's,
+and `make check-versions` fails a tree where they disagree. Neither is edited by hand.
+
 Both `bravebot-rpc` and `bravebot-ui-files` are copied into the app's Resources.
 Packaged builds use those copies; development builds use the workspace `../target/debug/`.
 The script currently packages debug Rust executables, and performs no app signing

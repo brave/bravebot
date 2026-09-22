@@ -66,6 +66,13 @@ eleven messages came to ship untranslated. `make locales` is the same count as a
 gap makes fail, and is the one to read while translating. Run the check before a commit that touches
 `crates/i18n/locales`.
 
+`make check-versions` holds every file that states the version to the workspace manifest: the
+published wrapper and its lockfile, and the desktop application and its lockfile, each of which
+states it in its own header and, for a lockfile, in the entry for the package it locks. `make
+check` runs it and so does CI, because the tagging path's own refusal fires on release day, which
+is long after the pull request that moved one file and not the others. It carries a `--selftest`,
+which `make check-versions` runs first.
+
 `make check-npm` installs from the lockfile and lints it, as CI does. `make check-deps` decides
 `deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
 build compiles at two versions without a recorded reason, and a dependency from anywhere but

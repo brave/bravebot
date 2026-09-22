@@ -30,7 +30,13 @@ advice, and write approvals show the processor's remark beside the diff.
   Uses an isolated agent home; no paid inference or real credentials.
 - `npm run build`: bridge and secure-file helper builds, TypeScript, and Electron bundles.
 - After building, `node --test scripts/*.test.mjs`: renderer state, models, file access,
-  memory retention, avatar motion and traits. File tests use the actual secure-file helper.
+  memory retention, bot grounding, avatar motion and traits. File tests use the actual
+  secure-file helper, the grounding tests included: they assert that a briefing names the
+  memory file and quotes no byte of it, and that a link at the memory path or at the
+  briefing path is refused or displaced rather than followed. `marking.test.mjs` needs no
+  build: it renders the transcript's own components through `react-dom/server` and asserts
+  on the markup, which is what pins the three properties
+  [LAYER-5](../../docs/specs/layering.md#LAYER-5) states for this surface.
 - After building, `node scripts/drive-turn-details.mjs`: notices, completed-turn usage,
   live and unavailable audits, background delivery, disclosure persistence, cancellation,
   focus restoration and the narrow context drawer, using an isolated profile and synthetic events.
@@ -166,7 +172,9 @@ table above. Two jobs:
 - **Lint and test the bridge** is the repository's own `check` job, which runs
   `cargo clippy --all-targets --all-features -- -D warnings` and `cargo test --all --locked`
   over every workspace member. The `Front end` job adds the desktop build, Node regression tests, and
-  the real manual walkthrough under Xvfb with a local model fixture.
+  the real manual walkthrough under Xvfb with a local model fixture. That job is the only thing
+  that runs `marking.test.mjs`, so it is the gate on the marking rule: no Makefile target reaches
+  it, because it needs this package's dependency tree.
 
 The workflow does not run the other Electron drivers, packaged-app checks, or the
 upstream agent's full test suite. Run the applicable local checks above.
