@@ -82,6 +82,28 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         }
     };
 
+    // Before the session opens, which is where the other three ways of starting one ask it: a
+    // transcript that began with nothing configured to answer reads as the agent rather than as
+    // the configuration, and this is the one moment somebody is looking for what to do next
+    // (BACKEND-39).
+    //
+    // Asked of the model this session will request, which is the recorded one or the configured
+    // default: no model can be named on the command line here, since the flag composes with
+    // everything except this one.
+    if let bravebot_agent::backend::Serving::NothingConfigured {
+        subscription,
+        a_service_is_configured,
+    } = bravebot_agent::backend::serving(
+        &config,
+        &bravebot_net::Egress::new(),
+        &crate::model_for_this_run(None, &config),
+    ) {
+        return fail(
+            Ending::Configuration,
+            crate::how_to_configure_a_model(subscription.as_deref(), a_service_is_configured),
+        );
+    }
+
     let settings = bravebot_config::Settings::load();
     let mut workspace = match crate::current_workspace(&settings) {
         Ok(workspace) => workspace,
