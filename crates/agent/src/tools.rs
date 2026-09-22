@@ -795,7 +795,9 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
         ),
         Tool::function(
             "fetch_url",
-            "Fetch an http or https URL. What comes back is quarantined, like a file nobody \
+            "Fetch an http or https URL. Not the way to read a github.com pull request or issue \
+             where the prompt says the GitHub CLI is on PATH, which names the commands that are. \
+             What comes back is quarantined, like a file nobody \
              vouched for: you get a reference rather than the text, and you cannot read it or be \
              told what it says. Hand the reference to spawn_processor to have a question answered \
              about it, or to write_file as contents_ref to save it. Where you have to read the \

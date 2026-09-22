@@ -103,6 +103,7 @@ run a command to learn them:
 |---|---|
 | Working directory | The absolute path of the workspace root |
 | Is a git repository | Whether this tree or a directory above it holds a `.git` |
+| GitHub CLI (gh) on PATH | Whether `gh` is installed, looked up on `$PATH` the way a `run` would |
 | Platform | `macos`, `linux`, or whatever this build runs on |
 | OS version | The kernel release string on Unix, as `uname` reports it. On Windows, the three numbers a build is named by |
 | Shell | `$SHELL`, or `/bin/sh` when that is unset or empty |
@@ -118,8 +119,10 @@ Nothing else about your machine is added. No environment variables beyond `$SHEL
 username on its own, no file contents, no directory listing.
 :::
 
-They are labelled as facts about the machine rather than as instructions, and nothing is asked of the
-planner on their account.
+They are labelled as facts about the machine rather than as instructions. One of them asks something
+of the planner as well, and only because a probe found what the request names: the scratch directory
+is stated with what to put in it. Nothing is asked on the account of the rest. What an installed `gh`
+is for is said too, just outside this block, and [below](#the-github-cli) is what it says.
 
 The date is stated because a model's sense of it comes from its training and is wrong by however long
 ago that was. The rest is stated because discovering any of it otherwise costs a `run`, and a run
@@ -149,6 +152,26 @@ planner never told of it puts an intermediate file in the project instead. Reach
 A file there is read and written by its absolute path, but it prompts exactly when a file in the
 workspace would, and neither `/add-dir` nor `/cd` will take it. See
 [Trusted directories](../security/trust.md).
+
+### The GitHub CLI
+
+Where `gh` is on your `$PATH`, the block says so and adds the commands that read a GitHub URL:
+`gh pr view`, `gh pr diff` and `gh issue view`, through [`run`](../reference/tools.md#run), with
+`--comments` for what a review said. Paste the URL of a pull request and that is one approval for
+exactly the diff, where [`fetch_url`](../reference/tools.md#fetch_url) fetches the page around it.
+Both come back quarantined, so either way a processor reads the answer out; the difference is that
+one of them carried the page to say it. The `.diff` address of a pull request is worse than that: it
+redirects to another host, and an approval for `github.com` does not carry to wherever a fetch went
+next, so it is refused unless a
+[rule](../customize/configuration.md#permissions) names that host too.
+
+Whether `gh` is installed is all this looks at. Whether you have logged in with it cannot be told
+without a request, and none is made before your first turn, so the paragraph names `fetch_url` as
+what to fall back to when `gh` fails for that reason.
+
+A [delegate](../reference/tools.md#spawn_agent) is told the fact and not this paragraph. It has no
+`fetch_url` at all, and `run` only if its kind reaches programs, so a sentence choosing between the
+two would send it after a tool it was not given.
 
 ## Trust
 

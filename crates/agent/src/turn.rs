@@ -2203,7 +2203,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             crate::delegate::prompt_for(spec.kind()),
             preamble.text
         ),
-        None => format!("{OPENING}{PLANNING}{FOR_A_PERSON}{}{mode}", preamble.text),
+        // `for_a_person` names tools only this side is offered, so it sits with the rest of what
+        // only this side reads and ahead of `text`: the user's own instructions end that string and
+        // have the last word over anything this program says about a machine.
+        None => format!(
+            "{OPENING}{PLANNING}{FOR_A_PERSON}{}{}{mode}",
+            preamble.for_a_person, preamble.text
+        ),
     };
 
     // Read context files. Paths come from precommitted routing, so a path is trusted by

@@ -8773,6 +8773,41 @@ fn a_trusted_workspace_agents_file_reaches_the_system_prompt() {
     );
 }
 
+/// The environment block states whether the GitHub CLI is installed, and what to do about it is a
+/// separate piece the person's own prompt carries. Composed and never appended is the way that goes
+/// wrong silently, so what is asserted is that the two agree: a machine whose probe found the CLI
+/// sends the road with the fact, and one that found none sends neither. Only a host that has `gh`
+/// observes the appending at all; the block and the paragraph are each pinned on any host by the
+/// unit tests in `preamble.rs`.
+#[test]
+fn the_road_for_a_github_url_goes_out_with_the_fact_it_rests_on() {
+    let scratch = Scratch::new("github-road");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read a pull request"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert_eq!(
+        body.contains("GitHub CLI (gh) on PATH: true"),
+        body.contains("The GitHub CLI is installed"),
+        "the fact and what it is for did not go out together: {body}"
+    );
+}
+
 /// A planner that lists a tree and then asks four delegates to list it again has paid for the
 /// answer twice and put it in the context it was delegating to keep clear. Nothing it read
 /// crosses to a delegate, so the reading has to happen there or not at all.

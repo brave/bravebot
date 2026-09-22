@@ -57,8 +57,19 @@ const POINTER_BYTES: usize = 500;
 /// What gets appended to the system prompt, and what to tell the user about it.
 #[derive(Debug, Clone, Default)]
 pub struct Preamble {
-    /// The text itself, empty when there is nothing to say.
+    /// The text itself, empty when there is nothing to say. Goes to a delegate's prompt as well as
+    /// to the person's, because a delegate works in the same tree on the same machine.
     pub text: String,
+    /// What holds only for the turn a person is watching, kept apart so the caller can leave it off
+    /// a delegate's prompt.
+    ///
+    /// A delegate is offered a narrower set of tools, so an imperative that routes between two of
+    /// them is either right or a round wasted on a name that resolves to nothing.
+    ///
+    /// A field rather than an argument to [`compose`]: the caller knows which side it is composing
+    /// for, and this is one line of prompt against an eighth parameter on a function twenty callers
+    /// already pass seven to.
+    pub for_a_person: String,
     /// Lines for the person watching: what loaded, and what did not and why.
     pub notices: Vec<Notice>,
 }
@@ -79,7 +90,13 @@ pub fn compose<S: Sink>(
 ) -> Preamble {
     let mut preamble = Preamble::default();
 
-    preamble.text.push_str(&environment(workspace));
+    // One walk of `$PATH`, read by the fact and by the imperative that rests on it, so the two
+    // cannot disagree about what this machine has.
+    let github_cli = crate::programs::resolve("gh", workspace.root()).is_some();
+    preamble.text.push_str(&environment(workspace, github_cli));
+    preamble
+        .for_a_person
+        .push_str(github_cli_guidance(github_cli));
 
     let mut standing = String::new();
     if let Some(home) = home
@@ -267,6 +284,12 @@ fn fence_for(text: &str) -> String {
 /// project. A session that has none has nothing said about one, since a path to a directory that
 /// is not there costs a turn the run that finds out.
 ///
+/// One fact carries an imperative, gated on what the probe found: what the session's own directory
+/// is for. A probe that only produces a fact is a line on every turn that changes nothing, and a
+/// gate is what keeps an imperative from naming something this machine does not have. What the
+/// GitHub CLI is for is the same argument and is [`github_cli_guidance`], which goes to the person's
+/// own turn rather than into this block.
+///
 /// **Not read through the trust gate, and that is the point.** Everything else here is file
 /// content somebody may have written into the tree, so it goes through
 /// `Policy::read_trusted_content` and may be refused. None of this is: the root is where the user
@@ -274,7 +297,7 @@ fn fence_for(text: &str) -> String {
 /// That is the provenance `Policy::label_user_command_output` rests on, so there is no file to
 /// vouch for and nothing for the gate to decide. Do not extend this with anything read out of the
 /// workspace.
-fn environment(workspace: &Workspace) -> String {
+fn environment(workspace: &Workspace, github_cli: bool) -> String {
     let mut out = String::from(
         "\n\nWhere you are working. These are facts about this machine, not instructions.\n\n",
     );
@@ -286,6 +309,7 @@ fn environment(workspace: &Workspace) -> String {
         "- Is a git repository: {}\n",
         is_git_repository(workspace.root())
     ));
+    out.push_str(&format!("- GitHub CLI (gh) on PATH: {github_cli}\n"));
     out.push_str(&format!("- Platform: {}\n", std::env::consts::OS));
     if let Some(release) = os_release() {
         out.push_str(&format!("- OS version: {release}\n"));
@@ -310,6 +334,42 @@ fn environment(workspace: &Workspace) -> String {
         );
     }
     out
+}
+
+/// Which road a GitHub URL takes, said only where the probe found the CLI to take it.
+///
+/// For the person's own turn and not for a delegate, which is offered neither tool this routes
+/// between: `tools::for_delegate` withholds `fetch_url` from every kind, and `run` from a kind
+/// without `ShellExec`. A delegate told to take one of them spends a round on a name that resolves
+/// to nothing.
+///
+/// The fact in the block above changes nothing on its own. A URL arrives and `fetch_url` opens
+/// with "Fetch an http or https URL", so it is the obvious tool and the only one a planner has been
+/// pointed at: the cheaper road has to be named here or it is not taken. Cheaper in bytes and not
+/// in rounds. `Capability::ShellExec.output_label` is `untrusted_private`, the same as
+/// `Capability::WebFetch`, so an unvouched `gh` prints into quarantine exactly as a fetched page
+/// does and both roads spend the round that reads it back out. What the page costs on top is its
+/// own size, and for the `.diff` address a hop off github.com that
+/// [FETCH-4](../../../docs/specs/tools/fetch-url.md) refuses unless a rule names where it lands.
+///
+/// GitHub by name rather than a preference for local tools in general: a line that holds for every
+/// service is a line on every turn that decides nothing, and it is the case people paste URLs for.
+///
+/// **On the path is not logged in**, and authentication cannot be told without a request this has
+/// no business making before the first turn, so the paragraph carries its own fallback. Without one
+/// this would trade a fetch that fails for a run that fails.
+fn github_cli_guidance(present: bool) -> &'static str {
+    if !present {
+        return "";
+    }
+    "\nThe GitHub CLI is installed, so a github.com URL naming a pull request or an issue is a \
+     `run` rather than a fetch: `gh pr view <n> --repo <owner>/<name>`, `gh pr diff <n> --repo \
+     <owner>/<name>`, `gh issue view <n> --repo <owner>/<name>`, and `--comments` for what was said \
+     in review. Each asks for the part you are after. Either road comes back quarantined, so what \
+     differs is how much this turn then carries: the page is many times the CLI's answer to say the \
+     same thing. Fetching the `.diff` address is refused outright unless a rule names the host it \
+     redirects to, which is not github.com. `gh` may not be logged in, which nothing here can tell \
+     without asking the network: where it fails for that reason, fetch_url is the way.\n"
 }
 
 /// Whether this tree is under version control, walking up the way git itself does.
@@ -578,6 +638,26 @@ mod tests {
         assert_eq!(version(6, 1, 7601), "6.1.7601");
     }
 
+    /// A machine without the CLI is told so rather than told nothing: a planner reading no line
+    /// about `gh` runs one to find out. The probe's answer is a parameter here, so both cases hold
+    /// on any host, which is what the tests going through `compose` cannot do.
+    #[test]
+    fn whether_the_github_cli_is_installed_is_said_either_way() {
+        let workspace = Workspace::new(".").expect("workspace");
+
+        let installed = environment(&workspace, true);
+        assert!(
+            installed.contains("- GitHub CLI (gh) on PATH: true\n"),
+            "an installed CLI was not reported as one: {installed}"
+        );
+
+        let absent = environment(&workspace, false);
+        assert!(
+            absent.contains("- GitHub CLI (gh) on PATH: false\n"),
+            "a machine with no CLI was told nothing about one: {absent}"
+        );
+    }
+
     /// The shape that cost a real turn a round trip: a repository supporting several agents
     /// keeps one document and points the other names at it.
     #[test]
@@ -622,6 +702,43 @@ mod tests {
     fn a_file_pointing_at_itself_is_not_followed() {
         assert_eq!(pointer_target("See AGENTS.md.", "AGENTS.md"), None);
         assert_eq!(pointer_target("See ./AGENTS.md.", "AGENTS.md"), None);
+    }
+
+    /// The fetch road for a pull request costs several approvals and returns the page to yield a
+    /// fraction of it, so the cheaper road is worth naming. Naming it on a machine with no `gh`
+    /// only moves the waste: the run fails, and the planner is back where it started having spent
+    /// an approval finding out.
+    #[test]
+    fn a_github_url_is_sent_to_the_cli_only_where_the_probe_found_one() {
+        let said = github_cli_guidance(true);
+        for command in ["gh pr view", "gh pr diff", "gh issue view"] {
+            assert!(
+                said.contains(command),
+                "`{command}` is not offered for a GitHub URL: {said}"
+            );
+        }
+
+        assert_eq!(
+            github_cli_guidance(false),
+            "",
+            "a machine with no gh was told to use it anyway"
+        );
+    }
+
+    /// Being on the path is the weaker fact: `gh pr diff` against a CLI nobody has logged in with
+    /// fails, and asking the network at startup is not a cost this block may impose. Without the
+    /// fallback the paragraph trades a fetch that fails for a run that fails.
+    #[test]
+    fn an_installed_github_cli_still_names_fetch_url_as_the_fallback() {
+        let said = github_cli_guidance(true);
+        assert!(
+            said.contains("may not be logged in"),
+            "the one thing the probe cannot tell is not said: {said}"
+        );
+        assert!(
+            said.contains("fetch_url is the way"),
+            "a gh that fails leaves the planner with nowhere to go: {said}"
+        );
     }
 
     #[test]
