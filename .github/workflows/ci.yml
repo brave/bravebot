@@ -205,6 +205,20 @@ jobs:
       - name: Hold the catalogs to the record of what they are missing
         run: make check-locales
 
+  # Whether every file that states the version states the same one: the workspace manifest, the
+  # published wrapper and its lockfile, and the desktop application and its lockfile. The tagging
+  # path refuses a disagreement as well, but that is release day, and folding the front end in
+  # brought a manifest that had been at 0.1.0 against a 0.9.0 workspace with nothing to say so.
+  # Standard library Python like the three jobs above, so it needs no toolchain.
+  versions:
+    name: Versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check that every file stating the version agrees
+        run: make check-versions
+
   # Builds against the declared minimum toolchain. The pinned cross-build container
   # ships an older Rust than most developers have locally, so without this a feature
   # that only compiles on a newer toolchain reaches the release build unnoticed.
