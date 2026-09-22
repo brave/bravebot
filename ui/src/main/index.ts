@@ -128,6 +128,9 @@ let stopWatchingThemes: (() => void) | null = null
  * of this feature — a window that could name one would be a window that could have the planner read
  * anything on the machine. Both callers hand over a bot; neither hands over a path.
  *
+ * Which paths a bot may contribute is `ground`'s question, and its answer is one: the briefing this
+ * process composed. The bot's memory is not among them, because its words are the model's own.
+ *
  * `grounded` decides how much is attached. `nudge` decides only what the briefing says once it has
  * been decided to attach it, and is meaningless without it.
  */
@@ -165,8 +168,9 @@ async function sendBotTurn(
         },
       }
     }
+    // The briefing alone. `dropped` and `files` are both admitted as trusted context, so the only
+    // path that may go in either is one whose every byte this process wrote: see `ground`.
     params.dropped = [paths.ground]
-    params.files = [paths.memory]
   }
 
   try {
