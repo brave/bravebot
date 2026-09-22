@@ -1186,49 +1186,7 @@ impl Workspace {
         let relative = policy.before_endorsed_destination("file_write", "path", path)?;
         policy.before_action("file_write", "contents", Role::Content, contents)?;
 
-        let resolved = self.resolve(&relative)?;
-        let effect = policy.capture_files(|policy, capture| {
-            if expected_revision
-                .is_some_and(|revision| revision != capture.revision_of(&self.trust_key(&relative)))
-            {
-                return Err(WorkspaceError::Stale {
-                    path: relative.clone(),
-                });
-            }
-            let captured_trust = if policy.read_is_quarantined(&self.trust_key(&relative)) {
-                bravebot_core::label::Integrity::Untrusted
-            } else {
-                bravebot_core::label::Integrity::Trusted
-            };
-            let effect =
-                capture
-                    .begin(&self.trust_key(&relative))
-                    .ok_or_else(|| WorkspaceError::Stale {
-                        path: relative.clone(),
-                    })?;
-            self.record_backup(&resolved, captured_trust);
-            Ok::<_, WorkspaceError>(effect)
-        })?;
-
-        let proof = policy.authorise_content_release("file_write", "contents");
-        let body = contents.clone().declassify(&proof);
-
-        if let Some(parent) = resolved.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| WorkspaceError::Io {
-                path: relative.clone(),
-                detail: e.to_string(),
-            })?;
-        }
-
-        std::fs::write(&resolved, body).map_err(|e| WorkspaceError::Io {
-            path: relative,
-            detail: e.to_string(),
-        })?;
-
-        #[cfg(test)]
-        self.interrupt_after_write()?;
-        effect.complete(contents.label().integrity);
-        Ok(resolved)
+        self.write_after_gates(policy, relative, contents, expected_revision)
     }
 
     /// Write a file. The path is routing; the contents are content.
@@ -1253,19 +1211,33 @@ impl Workspace {
                 reason: "the path was not trusted",
             })?;
 
+        self.write_after_gates(policy, relative, contents, None)
+    }
+
+    /// Reserve the path and capture its backup before releasing bytes to the filesystem.
+    fn write_after_gates<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        relative: String,
+        contents: &Labelled<String>,
+        expected_revision: Option<u64>,
+    ) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve(&relative)?;
         let effect = policy.capture_files(|policy, capture| {
-            let captured_trust = if policy.read_is_quarantined(&self.trust_key(&relative)) {
+            let key = self.trust_key(&relative);
+            if expected_revision.is_some_and(|revision| revision != capture.revision_of(&key)) {
+                return Err(WorkspaceError::Stale {
+                    path: relative.clone(),
+                });
+            }
+            let captured_trust = if policy.read_is_quarantined(&key) {
                 bravebot_core::label::Integrity::Untrusted
             } else {
                 bravebot_core::label::Integrity::Trusted
             };
-            let effect =
-                capture
-                    .begin(&self.trust_key(&relative))
-                    .ok_or_else(|| WorkspaceError::Stale {
-                        path: relative.clone(),
-                    })?;
+            let effect = capture.begin(&key).ok_or_else(|| WorkspaceError::Stale {
+                path: relative.clone(),
+            })?;
             self.record_backup(&resolved, captured_trust);
             Ok::<_, WorkspaceError>(effect)
         })?;
