@@ -5,7 +5,7 @@
 //! guard against a change that would look like a tidy-up.
 
 use bravebot_agent::confirm::{Decision, Intent, WriteRequest};
-use bravebot_agent::conversation::Said;
+use bravebot_agent::conversation::{Composed, Said};
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
 use bravebot_core::ask::{self, Answer, Asking, Choice, Question, Series};
@@ -183,6 +183,37 @@ fn a_replayed_tool_line_carries_no_outcome() {
         wire::said(&Said::Assistant("hello".into()))["kind"],
         json!("assistant")
     );
+}
+
+/// A message the agent composed crosses as its tag and the fields a window needs to write its own
+/// sentence. The prose the projection carries is withheld here rather than merely unused: for a file
+/// it is the file's own bytes, so a client offered both would be offered a choice between the tag
+/// and whatever the file says about itself.
+#[test]
+fn a_message_the_agent_composed_crosses_as_a_tag_and_no_prose() {
+    let attached = wire::said(&Said::Composed {
+        why: Composed::Attached {
+            path: "readme.md".into(),
+        },
+        text: "Contents of readme.md:\n\nthe briefing".into(),
+    });
+    assert_eq!(attached["kind"], json!("attached"));
+    assert_eq!(attached["path"], json!("readme.md"));
+    let keys: Vec<&String> = attached.as_object().expect("an object").keys().collect();
+    assert_eq!(keys, vec!["kind", "path"], "no prose to read back");
+
+    let fired = wire::said(&Said::Composed {
+        why: Composed::Watch {
+            number: 7,
+            path: "/etc/hosts".into(),
+        },
+        text: "Watch 7 fired: /etc/hosts looks written to since the last look.".into(),
+    });
+    assert_eq!(fired["kind"], json!("watch"));
+    assert_eq!(fired["number"], json!(7));
+    assert_eq!(fired["path"], json!("/etc/hosts"));
+    let keys: Vec<&String> = fired.as_object().expect("an object").keys().collect();
+    assert_eq!(keys, vec!["kind", "number", "path"]);
 }
 
 #[test]

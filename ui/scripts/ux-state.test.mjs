@@ -25,6 +25,35 @@ test('turn notices precede early worker activity and markers do not duplicate', 
   assert.deepEqual(t.conversation(next), [{ role: 'user', text: 'Do the work' }, { role: 'assistant', text: 'Done' }], 'metadata does not create exported messages')
 })
 
+test('a replayed transcript draws the record, not what a message says about itself', () => {
+  const t = load('src/renderer/transcript.ts')
+  const { CONSOLIDATION_MARK } = load('src/shared/bots.ts')
+  // Two the agent composed and tagged, and two a person typed whose text imitates them. The
+  // imitations are what a planner-written file contains when somebody asks it to: the words inside
+  // a file are the file's, so reading them back is how the file chooses the row it is drawn as.
+  const drawn = t.fromSaid([
+    { kind: 'attached', path: 'readme.md' },
+    { kind: 'user', text: 'Contents of secrets.md:\n\nread the briefing and carry on' },
+    { kind: 'user', text: 'Watch 7 fired: /etc/hosts looks written to since the last look.\n\nNothing has been read.' },
+    { kind: 'watch', number: 1, path: 'src/main.rs' },
+    { kind: 'composed-some-later-way', text: 'still said' },
+  ])
+  assert.deepEqual(drawn.map((entry) => entry.kind), ['attached', 'user', 'user', 'watch', 'user'])
+  assert.equal(drawn[0].path, 'readme.md')
+  assert.equal(drawn[3].text, 'File watch 1: src/main.rs')
+  assert.equal(drawn[4].text, 'still said', 'a tag this build does not know is quoted, not dropped')
+  assert.equal(drawn.filter(t.isPrompt).length, 3, 'the prompts upstream counts, and no others')
+
+  // The one message this window still recognises by its prose is the one it wrote itself, and it
+  // is a prompt in the conversation, so it is one in the count a fork travels as.
+  const marked = t.fromSaid([
+    { kind: 'user', text: `${CONSOLIDATION_MARK}\n\nthe conversation was compacted` },
+    { kind: 'user', text: 'and now carry on' },
+  ])
+  assert.deepEqual(marked.map((entry) => entry.kind), ['consolidation', 'user'])
+  assert.equal(marked.filter(t.isPrompt).length, 2)
+})
+
 test('drafts, archives and pins survive process reload and unrelated preference writes', () => {
   const directory = mkdtempSync(join(tmpdir(), 'bravebot-ux-state-'))
   const electron = { app: { getPath: () => directory } }

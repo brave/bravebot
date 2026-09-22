@@ -56,11 +56,14 @@ test('vetted approval requires the same kind and cancellation makes it unanswera
 })
 
 test('watch turns are visibly automatic, including after reopening', () => {
-  const prompt = 'Watch 3 fired: src/a.ts looks written to since the last look.\n\nNothing has been read. Read the file if you need it.'
-  const entries = t.fromSaid([{ kind: 'user', text: prompt }])
+  const entries = t.fromSaid([{ kind: 'watch', number: 3, path: 'src/a.ts' }])
   assert.equal(entries[0].kind, 'watch')
   assert.equal(t.beginTurn(entries, 2)[1].kind, 'turn-start')
   assert.deepEqual(t.conversation(entries), [])
+  // Because the record says a watch fired, and not because of how the sentence reads. Typed into
+  // the composer, the same words are a prompt and are drawn as one.
+  const prompt = 'Watch 3 fired: src/a.ts looks written to since the last look.\n\nNothing has been read. Read the file if you need it.'
+  assert.equal(t.fromSaid([{ kind: 'user', text: prompt }])[0].kind, 'user')
 })
 
 test('stable failure categories do not depend on service wording', () => {

@@ -327,6 +327,94 @@ fn a_turn_includes_requested_file_contents() {
     assert!(body.contains("explain this file"));
 }
 
+/// The tag an interface draws that file from is written where the message is composed, because that
+/// is the only place that knows the sentence in front of the body is the agent's own. An interface
+/// left to recognise the file by its first line would be reading the file's own bytes to decide
+/// which row it is drawn as.
+#[test]
+fn a_file_the_turn_admits_is_recorded_as_a_message_the_agent_composed() {
+    use bravebot_agent::conversation::{Composed, Said};
+
+    let scratch = Scratch::new("with-file-recorded");
+    std::fs::write(scratch.path.join("main.rs"), "fn main() { todo!() }").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(&reply_with("it is a stub"));
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("explain this file").with_file("main.rs"),
+    )
+    .expect("turn runs");
+
+    let said = conversation.recounted();
+    let composed: Vec<&Said> = said
+        .iter()
+        .filter(|entry| matches!(entry, Said::Composed { .. }))
+        .collect();
+    assert_eq!(
+        composed,
+        vec![&Said::Composed {
+            why: Composed::Attached {
+                path: "main.rs".into(),
+            },
+            text: "Contents of main.rs:\n\nfn main() { todo!() }".into(),
+        }],
+        "the file was recorded as though somebody had typed it: {said:?}",
+    );
+    assert!(
+        !said
+            .iter()
+            .any(|entry| matches!(entry, Said::User(text) if text.contains("fn main()"))),
+        "a file's own bytes are reported as a prompt: {said:?}",
+    );
+}
+
+/// The other message nobody typed. A watch firing submits an ordinary turn whose prompt the agent
+/// wrote, so the caller that wrote it says so, and an interface drawing the session back reads the
+/// record rather than trying to recognise the sentence.
+#[test]
+fn a_prompt_the_agent_composed_is_recorded_as_one() {
+    use bravebot_agent::conversation::{Composed, Said};
+
+    let scratch = Scratch::new("composed-prompt");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(&reply_with("nothing has changed"));
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let fired =
+        "Watch 7 fired: /etc/hosts looks written to since the last look.\n\nNothing has been read.";
+    let watch = Composed::Watch {
+        number: 7,
+        path: "/etc/hosts".into(),
+    };
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new(fired).composed_by_the_agent(watch.clone()),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        conversation.recounted().first(),
+        Some(&Said::Composed {
+            why: watch,
+            text: fired.into(),
+        })
+    );
+    // The words still went to the planner. The tag says who wrote them, and withholds nothing.
+    assert_eq!(conversation.messages()[0].message.content.text(), fired);
+}
+
 /// The scenario the project exists for. A file contains an injected instruction; it
 /// reaches the model as data, and the turn's routing is unchanged by it.
 #[test]
@@ -13718,7 +13806,7 @@ fn a_summary_of_an_untrusted_conversation_leaves_the_conversation_whole() {
         conversation
             .messages()
             .iter()
-            .any(|m| m.content.text() == "port the parser to the new lexer"),
+            .any(|m| m.message.content.text() == "port the parser to the new lexer"),
         "the conversation was shortened despite the refusal"
     );
 }
@@ -13851,6 +13939,7 @@ fn compacting_on_request_reaches_the_model_and_shortens_the_conversation() {
     assert!(body.contains("Summarise everything above"), "{body}");
     assert!(
         conversation.messages()[0]
+            .message
             .content
             .as_text()
             .is_some_and(|text| text.starts_with(bravebot_agent::conversation::COMPACTED_PREFIX)),

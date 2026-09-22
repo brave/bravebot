@@ -104,35 +104,22 @@ export type Entry = (
 let counter = 0
 const nextId = (): string => `e${++counter}`
 
-/** What a stored session looked like, as entries. */
+/**
+ * What a stored session looked like, as entries.
+ *
+ * A message the agent composed arrives tagged, so no row here is chosen by reading a message's
+ * prose. See `docs/phase-0-rpc-protocol.md` §7.1.
+ */
 export function fromSaid(said: Said[]): Entry[] {
   return said.map((entry) => {
     switch (entry.kind) {
       case 'user': {
-        // A file the *user* named is put into the conversation as a user message, under a line
-        // saying whose contents follow. That is right for the planner and wrong for a person: the
-        // agent filters its own house-keeping messages out of a replayed transcript and does not
-        // filter this one, so a reopened session draws the file as though somebody had typed the
-        // whole of it into the composer.
-        //
-        // Drawn as an attachment instead. Matching on the wording is what this file is otherwise
-        // careful never to do, and it is a poor tool — but the alternative is drawing a lie, and
-        // an attachment shown as a prompt is the kind of lie that matters here: it says a person
-        // said something they did not.
-        const watch = /^Watch (\d+) fired: ([^\n]+) looks written to since the last look\.\n\nNothing has been read\./.exec(entry.text)
-        if (watch) return watchFired(Number(watch[1]), watch[2]!)
-        const named = attached(entry.text)
-        if (named) return { kind: 'attached', id: nextId(), path: named } as const
-        // The same judgement one line up, for the same reason, on a string with none of that
-        // one's difficulty: this app composed it, so the prefix is exact by construction rather
-        // than a guess at somebody else's wording. A consolidation drawn as a prompt would say a
-        // person asked for it, and nobody did.
-        //
-        // It errs in the other direction if somebody types those words into the composer
-        // themselves, which is the same hazard the line above carries and is answered the same
-        // way: the mark is long, dull and bracketed, so typing it is a thing somebody does on
-        // purpose, and what they get for it is their prompt drawn as the house-keeping they were
-        // imitating.
+        // This app composed the mark, so the prefix is exact by construction rather than a guess
+        // at somebody else's wording, and a consolidation drawn as a prompt would say a person
+        // asked for it when nobody did. The residual hazard is somebody typing the mark into the
+        // composer themselves, and what they get for it is their own prompt drawn as the
+        // house-keeping they were imitating: a row about this window, which this window wrote.
+        // Nothing the agent composed is read this way, because the record says which those are.
         if (entry.text.startsWith(CONSOLIDATION_MARK)) {
           return { kind: 'consolidation', id: nextId() } as const
         }
@@ -144,20 +131,39 @@ export function fromSaid(said: Said[]): Entry[] {
         // The record does not store what came of a call, so this must not be drawn as
         // though it had an outcome. See docs/phase-0-rpc-protocol.md §7.1.
         return { kind: 'replayed-tool', id: nextId(), text: entry.text } as const
+      // The two the agent composed. Drawn from the fields rather than from any text, which is the
+      // whole point of the tags: the words of an attached message are the file's own, so a window
+      // that read them back to decide what row to draw would let whoever wrote the file pick.
+      case 'attached':
+        return { kind: 'attached', id: nextId(), path: entry.path } as const
+      case 'watch':
+        return watchFired(entry.number, entry.path)
+      default: {
+        // A tag from a newer agent than this window. Drawn as a plain message and never as one of
+        // the interface's own rows: those rows assert something about the conversation that this
+        // build cannot check, and quoting asserts least. Drawn at all, because a message a
+        // transcript leaves out silently is the failure the tags exist to prevent.
+        const unknown = entry as { text?: string }
+        return { kind: 'user', id: nextId(), text: unknown.text ?? '' } as const
+      }
     }
   })
 }
 
-/** The prefix the agent puts in front of a file it was handed. Its wording, not ours. */
-const CONTENTS = 'Contents of '
-
-/** The path a message is the contents of, or `null` if it is not one. */
-function attached(text: string): string | null {
-  if (!text.startsWith(CONTENTS)) return null
-  const end = text.indexOf(':\n')
-  if (end === -1) return null
-  return text.slice(CONTENTS.length, end)
-}
+/**
+ * Whether a row stands for one of the prompts the conversation counts.
+ *
+ * A fork travels as an ordinal over `Said::User`, so this is the window's side of that list, and
+ * both places that count go through here: one sends the ordinal and the other resolves it back to
+ * a row, and a disagreement between them refuses the fork.
+ *
+ * A consolidation counts. This app composed that prompt and draws it as the house-keeping it is
+ * rather than as a bubble, but it is still a message the conversation holds and the prompts after
+ * it are numbered accordingly. A row for a message the *agent* composed does not count: those are
+ * tagged in the record, and upstream does not report them as prompts either.
+ */
+export const isPrompt = (entry: Entry): boolean =>
+  entry.kind === 'user' || entry.kind === 'consolidation'
 
 export const userSaid = (text: string): Entry => ({ kind: 'user', id: nextId(), text })
 export const consolidating = (): Entry => ({ kind: 'consolidation', id: nextId() })

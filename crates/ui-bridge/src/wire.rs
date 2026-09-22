@@ -22,7 +22,7 @@ use bravebot_agent::confirm::{
     Decision, Intent, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
     WriteRequest,
 };
-use bravebot_agent::conversation::Said;
+use bravebot_agent::conversation::{Composed, Said};
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
 use bravebot_core::ask::{Answer, Asking};
@@ -172,11 +172,25 @@ pub fn row(row: &Row) -> Value {
 /// not store what came of it, so there is no note here and a client must not draw one:
 /// live turns get `tool.finished` with an outcome, replayed ones do not, and inventing
 /// one would be worse than the gap.
+///
+/// A line the agent composed crosses as a tag of its own and the fields the client needs to write
+/// its own row, and its text is dropped here rather than sent. The projection carries it for a
+/// transcript that draws the message plainly, and this client does not draw one: sending both would
+/// offer a choice between a tag and a sentence, and the sentence is the one whose words came out of
+/// a file.
 pub fn said(said: &Said) -> Value {
     match said {
         Said::User(text) => json!({ "kind": "user", "text": text }),
         Said::Assistant(text) => json!({ "kind": "assistant", "text": text }),
         Said::Tool(text) => json!({ "kind": "tool", "text": text }),
+        Said::Composed {
+            why: Composed::Attached { path },
+            ..
+        } => json!({ "kind": "attached", "path": path }),
+        Said::Composed {
+            why: Composed::Watch { number, path },
+            ..
+        } => json!({ "kind": "watch", "number": number, "path": path }),
     }
 }
 

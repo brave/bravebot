@@ -19,7 +19,6 @@ export type Phase = 'planning' | 'thinking' | 'compacting' | 'reconnecting'
 export type Reach = 'not_the_planner' | 'no_model'
 export type Landing = 'context' | 'quarantined' | 'reserved'
 export type TodoStatus = 'pending' | 'active' | 'done'
-export type SaidKind = 'user' | 'assistant' | 'tool'
 
 export type Change =
   | { kind: 'kept'; text: string }
@@ -47,10 +46,20 @@ export interface Shown {
   lines: number
 }
 
-export interface Said {
-  kind: SaidKind
-  text: string
-}
+/**
+ * One thing said, from a conversation nobody watched happen.
+ *
+ * The last two are messages the *agent* composed, and they carry no text on purpose. A window
+ * writes its own sentence from the fields, because the text of one of them is a file's own bytes
+ * and drawing that as anything but a plain message would let whoever wrote the file pick which row
+ * it appears as. Rule 1 above, applied to the one message whose prose is not the agent's.
+ */
+export type Said =
+  | { kind: 'user'; text: string }
+  | { kind: 'assistant'; text: string }
+  | { kind: 'tool'; text: string }
+  | { kind: 'attached'; path: string }
+  | { kind: 'watch'; number: number; path: string }
 
 export interface TodoRow {
   content: string

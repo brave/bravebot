@@ -1018,15 +1018,12 @@ export function App(): React.JSX.Element {
       // Only a prompt. The menu offers this on nothing else, but the id arrives from outside
       // this component and a check here is cheaper than trusting the round trip.
       if (!entry || entry.kind !== 'user') return
-      // Counted over what the *conversation* holds rather than over what this column drew, and the
-      // two are not the same list: a file somebody named is a user message upstream, and is drawn
-      // here as an attachment line instead of as a prompt. The agent resolves this ordinal against
-      // its own messages and checks the text against it, so counting only the bubbles would put
-      // every fork in a session with an attachment one or more places out — refused rather than
-      // taken in the wrong place, which is the right failure and still a broken feature.
-      const prompt = entries
-        .slice(0, at)
-        .filter((before) => before.kind === 'user' || before.kind === 'attached').length
+      // The same list the agent counts, which is why it goes through `isPrompt` rather than
+      // testing a kind here: a message the agent composed is tagged in the record, so neither side
+      // reports one as a prompt and neither has to recognise one by its wording. The agent resolves
+      // this ordinal against its own messages and checks the text against it, so a count that
+      // disagreed would refuse the fork rather than take it in the wrong place.
+      const prompt = entries.slice(0, at).filter(t.isPrompt).length
 
       try {
         const forked = await call<ForkedSession>('session.fork', {

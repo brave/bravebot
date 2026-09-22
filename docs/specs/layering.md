@@ -8,9 +8,14 @@ governs:
   - crates/*/src/main.rs
   - crates/*/build.rs
   - crates/*/examples/*.rs
+  - crates/agent/src/conversation.rs
+  - crates/ui-bridge/src/wire.rs
+  - crates/ui-bridge/src/fork.rs
   - ui/src/renderer/components/Transcript.tsx
   - ui/src/renderer/components/Markdown.tsx
+  - ui/src/renderer/transcript.ts
   - ui/scripts/marking.test.mjs
+  - ui/scripts/ux-state.test.mjs
 documented-by: none (internal: which crate may depend on what is how the repository is built, not something a reader acts on)
 ---
 
@@ -148,9 +153,51 @@ is meant to trust, an inch above them.
 `verified-by: bravebot_cli::layering::every_presentation_crate_is_named_by_the_clause_that_marks_content`
 `verified-by: by-construction (a surface this workspace compiles is one of its crates, and the test above holds the clause naming them to every row of the table whose constraint opens on presentation, in both directions; the desktop renderer is not one of its crates and is pinned instead by ui/scripts/marking.test.mjs, which renders the real components through react-dom and asserts the three properties above on the markup that comes out, for every card of the transcript that shows released content, and which the Front end CI job runs, while the governs list above holds the file's existence to make check-spec; a surface in neither place has no run to check, which is the known cost below)`
 
+<a id="LAYER-6"></a>
+### LAYER-6: what a message is comes from the record, not from its words
+
+A conversation holds messages the agent composed rather than a person typing them: a file somebody
+named, put in front of the planner as a user-role message, and a watch that fired while no turn was
+running to notice it. Each is recorded with a tag saying which it is, the tag rides beside the
+message rather than inside it so that no part of it reaches a backend, and a surface drawing the
+conversation back decides what to draw from the tag. Reading the words to decide instead is a
+violation, even where those words are the agent's own. A surface whose transcript has no row of its
+own for a tag draws the message plainly, which is why the record reports the words beside the tag;
+what crosses to a surface in another process is the tag alone, since a client offered both is offered
+the choice this removes.
+
+**Why.** The words of an attached message are a line the agent wrote followed by the file's own
+bytes. A surface recognising the message by that line hands whoever wrote the file the choice of
+which row it appears as, the rows the interface draws about itself included, which reopens one level
+up the escape [LAYER-5](#LAYER-5) closes for chrome. It decides a count as well: the places a
+conversation may be cut are the prompts a person typed, so a surface taking a composed message for a
+prompt, or a typed prompt for a composed one, numbers them differently from the agent and cuts in the
+wrong place or refuses a cut that was asked for. A tag the composer writes leaves the choice with the
+composer, which is the discipline [labels.md](labels.md)'s transport already follows everywhere else:
+what crosses is the discriminant, never prose for a reader to parse.
+
+A record written before the tag existed holds a bare message where this holds a message and a tag,
+and reads as a message nobody composed, which is what it was. A tag a surface draws no row of its own
+for, because the build does not recognise it or because that transcript has no such row, is drawn as
+a plain message and never as a row the interface writes itself, since such a row asserts something
+about the conversation that the build cannot check; drawn rather than dropped, since a message a
+transcript leaves out silently is the failure the tags exist to prevent, and for a file read into a
+turn it is the context that turn worked from.
+
+`verified-by: bravebot_agent::turn::a_file_the_turn_admits_is_recorded_as_a_message_the_agent_composed`
+`verified-by: bravebot_agent::turn::a_prompt_the_agent_composed_is_recorded_as_one`
+`verified-by: bravebot_agent::conversation::a_message_the_agent_composed_is_recorded_as_one`
+`verified-by: bravebot_agent::conversation::the_tag_is_not_part_of_what_the_planner_is_sent`
+`verified-by: bravebot_agent::conversation::a_record_written_before_the_tag_still_reads`
+`verified-by: bravebot_ui_bridge::wire::a_message_the_agent_composed_crosses_as_a_tag_and_no_prose`
+`verified-by: bravebot_tui::state::a_replayed_composed_message_is_drawn_as_the_message_it_was`
+`verified-by: bravebot_ui_bridge::fork::a_file_the_agent_put_in_front_of_the_planner_is_not_a_prompt`
+`verified-by: bravebot_ui_bridge::fork::a_prompt_that_reads_like_a_composed_message_is_still_where_the_cut_lands`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which loads the real transcript module and asserts that a tagged message is drawn from its fields, that a typed prompt imitating one is drawn as the prompt somebody typed, that a tag the build does not know is quoted rather than dropped, and that the two places counting prompts count the same list; the Front end CI job runs it, while the governs list above holds the file's existence to make check-spec)`
+
 ## Open questions
 
-- **How the reach of the clause above is closed for a surface in another repository.** The desktop
+- **How the reach of [LAYER-5](#LAYER-5) is closed for a surface in another repository.** The desktop
   renderer answers it for one in this repository and the answer does not travel: it lands inside the
   paths this spec governs, so a diff under it is read against this clause, and it carries a test
   runner of its own, so a CI job decides it. For a surface elsewhere, one built as a workspace
@@ -201,11 +248,13 @@ is meant to trust, an inch above them.
   depending on `bravebot-net` keeps this crate at no dependencies, which is what makes "auth only"
   checkable by reading its manifest.
 
-- **The desktop renderer's marking is pinned outside `make check`.** The three properties LAYER-5
-  states for it are asserted by `ui/scripts/marking.test.mjs`, which no Makefile target runs: it
-  needs the front end's own dependency tree, so the Front end CI job is what runs it, after an
-  `npm ci` and a build. A renderer change that drops the marking therefore passes every check this
-  repository documents for a commit, and a pull request is the first thing to say so.
+- **What the desktop renderer is held to is pinned outside `make check`.** The three properties
+  [LAYER-5](#LAYER-5) states for it are asserted by `ui/scripts/marking.test.mjs`, and what
+  [LAYER-6](#LAYER-6) asks of a surface by `ui/scripts/ux-state.test.mjs`. No Makefile target runs
+  either: they need the front end's own dependency tree, so the Front end CI job is what runs them,
+  after an `npm ci` and a build. A renderer change that drops the marking, or that goes back to
+  reading a message's words to decide what it is, therefore passes every check this repository
+  documents for a commit, and a pull request is the first thing to say so.
 
 - **A front end in another repository reaches nothing here.** The clause about marking is addressed
   to any surface, and the surfaces checked against it are the crates in this workspace and the
