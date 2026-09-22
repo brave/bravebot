@@ -12276,6 +12276,69 @@ fn a_check_says_how_many_lines_it_is_reading_and_then_that_it_is_over() {
     );
 }
 
+/// What the check cost, on the row the call drew. The interval was already measured for the turn's
+/// own clock and went no further, so nobody could say how long a check took or tell a slow check
+/// from a slow round. Carried per call rather than as a total, because a total cannot answer which
+/// of a round's calls was the slow one.
+#[test]
+fn what_a_check_cost_reaches_the_row_the_call_drew() {
+    let scratch = Scratch::new("read-output-check-timed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "one\ntwo\nthree\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "three words and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(false);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let row = |tool: &str| {
+        reporter
+            .finished
+            .iter()
+            .find(|activity| activity.tool == tool)
+            .unwrap_or_else(|| panic!("no finished row for {tool}"))
+            .clone()
+    };
+    assert!(
+        row("read_output").waited.is_some(),
+        "the check was timed and the row says nothing about it"
+    );
+    // The other half of the claim: a call that asked no model is not credited with a wait it did
+    // not have, which is what filling this from the call's own elapsed time would do.
+    assert_eq!(
+        row("run").waited,
+        None,
+        "a call that ran a program was credited with waiting on a model"
+    );
+}
+
 /// A check whose call never comes back is the case the pair exists for. The verdict falls back to
 /// the prompt, which is drawn while the interface would still be saying a check was running: the
 /// one state a person cannot tell from a check that is working is a backend that is hanging, and

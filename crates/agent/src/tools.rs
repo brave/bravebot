@@ -2000,10 +2000,18 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         other => problem(format!("error: no such tool '{other}'")),
     };
 
+    // The wait the call already measured, on the line the call already draws. The turn's totals
+    // have it too, as part of what the turn spent at the model, but a total cannot answer which
+    // call was the slow one or whether a model or this machine was what took the time.
     let finished = Activity::running(verb, target)
         .of_tool(&name)
         .with_changes(produced.changes)
-        .marked_untrusted(produced.untrusted);
+        .marked_untrusted(produced.untrusted)
+        .after_waiting(
+            produced
+                .inference_interval
+                .map(crate::timing::Interval::duration),
+        );
     reporter.tool_finished(if produced.failed {
         finished.failed(produced.note)
     } else {

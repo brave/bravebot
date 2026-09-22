@@ -140,3 +140,26 @@ fn a_check_crosses_as_a_pair_carrying_only_its_size() {
     );
     assert_eq!(events[1].data, serde_json::json!({}));
 }
+
+/// What a call spent at a model of its own, on the event drawing that call. A front-end has no
+/// clock of its own on a tool call, so without this a call that was slow because a model was slow
+/// is indistinguishable from a slow program, which is what the figure exists to answer.
+#[test]
+fn what_a_call_spent_at_a_model_reaches_a_front_end() {
+    let (mut reporter, events) = harness();
+
+    reporter.tool_finished(
+        Activity::running("read_output", "ref:1")
+            .done("3 lines, read")
+            .after_waiting(Some(std::time::Duration::from_secs(4))),
+    );
+    reporter.tool_finished(Activity::running("read", "a.rs").done("2 lines"));
+
+    let events = events.lock().expect("not poisoned");
+    assert_eq!(events[0].data["waitedSeconds"], serde_json::json!(4));
+    assert_eq!(
+        events[1].data["waitedSeconds"],
+        serde_json::json!(null),
+        "a call that asked no model was credited with one"
+    );
+}

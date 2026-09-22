@@ -50,6 +50,17 @@ pub struct Activity {
     /// Drawn with the same mark the transcript puts on everything the model was not allowed to
     /// read, so one convention covers every place untrusted bytes reach a screen.
     pub untrusted: bool,
+    /// How much of the call was spent waiting on a model of its own, where it called one.
+    ///
+    /// `None` for almost everything: a call that ran a program or read a file waited on this
+    /// machine, and the time it took is the time it took. Some calls run a whole request inside
+    /// themselves, a confined check before quarantined content may be read and a processor's own
+    /// round, and without this the one figure that tells a slow model from a slow program is
+    /// measured and then thrown away.
+    ///
+    /// The duration rather than the boundary, because nothing on a screen can do anything with a
+    /// pair of instants: the turn's own clock does the arithmetic that needs them.
+    pub waited: Option<std::time::Duration>,
 }
 
 impl Activity {
@@ -63,6 +74,7 @@ impl Activity {
             failed: false,
             changes: Vec::new(),
             untrusted: false,
+            waited: None,
         }
     }
 
@@ -94,6 +106,12 @@ impl Activity {
     /// Say that the lines beneath this call are content nobody vouched for.
     pub fn marked_untrusted(mut self, untrusted: bool) -> Self {
         self.untrusted = untrusted;
+        self
+    }
+
+    /// Say how long the call waited on a model of its own.
+    pub fn after_waiting(mut self, waited: Option<std::time::Duration>) -> Self {
+        self.waited = waited;
         self
     }
 

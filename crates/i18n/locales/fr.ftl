@@ -807,6 +807,7 @@ transcript-unchanged = { $count ->
     [one] … { $count } ligne inchangée
    *[other] … { $count } lignes inchangées
     }
+transcript-waited = { $elapsed } auprès du modèle
 
 
 ## Relire la transcription

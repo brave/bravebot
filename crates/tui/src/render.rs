@@ -367,7 +367,10 @@ fn activity_lines(
 
     if let Some(note) = &activity.note {
         lines.push(Line::from(Span::styled(
-            format!("  {DETAIL_MARKER} {note}"),
+            format!(
+                "  {DETAIL_MARKER} {note}{}",
+                crate::indicator::format_waited(activity.waited)
+            ),
             if activity.failed {
                 Style::default().fg(theme::fail())
             } else {
@@ -5202,6 +5205,55 @@ mod tests {
         fn a_short_diff_is_shown_whole_with_no_note() {
             let lines = diff_lines(&[Change::Added("only line".into())], false, 80);
             assert_eq!(lines.len(), 1);
+        }
+
+        /// Everything drawn for one call, as one string to look for things in.
+        fn drawn_for(activity: &Activity) -> String {
+            activity_lines(activity, None, 80)
+                .iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        /// A call that ran a model inside itself says how long it waited there. A read whose check
+        /// took eight seconds otherwise looks exactly like a read that was slow for some other
+        /// reason, and the figure that tells them apart was already measured and then dropped.
+        #[test]
+        fn a_call_that_waited_on_a_model_says_how_long() {
+            let activity = Activity::running("Read output", "ref:1")
+                .done("3 lines, read")
+                .after_waiting(Some(std::time::Duration::from_secs(8)));
+            let drawn = drawn_for(&activity);
+            assert!(
+                drawn.contains("8s at the model"),
+                "the wait the call measured is not on its line: {drawn}"
+            );
+        }
+
+        /// A call that waited on this machine says nothing about a model, which is nearly every
+        /// call: a figure under every row distinguishes nothing and crowds out the rows that do.
+        #[test]
+        fn a_call_that_asked_no_model_says_nothing_about_one() {
+            let drawn = drawn_for(&Activity::running("Run", "cargo test").done("exit 0"));
+            assert!(
+                !drawn.contains("at the model"),
+                "a call that asked no model claimed to have waited on one: {drawn}"
+            );
+        }
+
+        /// A wait too short to state is left off rather than rounded to nothing: `0s at the model`
+        /// is not an answer to how long something took.
+        #[test]
+        fn a_wait_under_a_second_is_left_off() {
+            let activity = Activity::running("Read output", "ref:1")
+                .done("3 lines, read")
+                .after_waiting(Some(std::time::Duration::from_millis(400)));
+            let drawn = drawn_for(&activity);
+            assert!(
+                !drawn.contains("at the model"),
+                "a wait that rounds to zero was drawn as one: {drawn}"
+            );
         }
 
         /// The user is shown what the model was not, and it is marked in the margin so the
