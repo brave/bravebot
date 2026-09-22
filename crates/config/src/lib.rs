@@ -58,13 +58,19 @@ pub fn normalize_model(name: &str) -> &str {
 /// `opus`, `sonnet` and `haiku` name a tier rather than a model, which is what those words mean in
 /// the settings file the model key is copied from. Left as the word they reach a service that has
 /// never heard of them, so they are resolved: the tier's own ARN where an AWS account named one,
-/// and the Brave roster's name for that tier otherwise, since every build can reach Brave.
+/// and the Brave roster's name for that tier otherwise.
 ///
 /// The AWS account wins where it named the tier, because somebody who configured it asked for it
 /// by name. A tier they left unset falls through to Brave rather than being guessed at, an ARN not
 /// being derivable from a word, except on a build that cannot reach Brave: there a Brave name
 /// reaches a service this build cannot sign for, so the strongest tier the AWS account did name is
 /// the only thing that could answer.
+///
+/// `reaches_brave` is whether this build holds the credentials to sign a Brave request, which is
+/// [`holds_brave_credentials`], and `bedrock` is whichever configured AWS account would serve the
+/// request, which is [`tier_account`]. An endpoint on its own decides neither: a source build with
+/// a URL and no key id signs nothing, and an account a `provider` block named answers as readily as
+/// one the tier variables did.
 ///
 /// Shared by every route to a model rather than belonging to the settings key, so a name means the
 /// same model wherever it was written down. See [`Config::model_named`].
@@ -83,6 +89,38 @@ fn resolved_model(name: &str, bedrock: Option<&bedrock::Bedrock>, reaches_brave:
         None => name,
     };
     normalize_model(named).to_string()
+}
+
+/// Whether this build holds everything needed to sign a request to the Brave backend.
+///
+/// All three fields, because a request needs all three: the URL to send to, the key id naming the
+/// credential, and the key that signs with it. Any one of them blank leaves a request that fails
+/// unsigned, so a build in that state cannot reach Brave whatever the other two say. A `provider`
+/// block or a Bedrock account makes each of them optional independently, which is how "endpoint
+/// set, credentials blank" arises. See [`Config::serves_aichat`].
+fn holds_brave_credentials(endpoint: &str, key_id: &str, signing_key: &str) -> bool {
+    !endpoint.is_empty() && !key_id.is_empty() && !signing_key.is_empty()
+}
+
+/// The AWS account a tier word resolves against: the tier variables' account, else a `provider`
+/// block's.
+///
+/// The tier variables are asked first, being the older way to name a Bedrock model and the one a
+/// tier word names a tier of, which is the order [`Config::bedrock_for`] resolves a model in. An
+/// account that named no model at all is passed over rather than shadowing one that did, since a
+/// `BRAVEBOT_USE_BEDROCK=1` with a region and no tier set is an account nothing can be asked of.
+///
+/// One account, not the strongest model across all of them. Comparing two accounts' models would
+/// mean ranking an inference-profile ARN against another one, which nothing here can do: a block
+/// names models rather than tiers, so there is no tier to compare them by.
+fn tier_account<'a>(
+    bedrock: Option<&'a bedrock::Bedrock>,
+    providers: &'a [provider::Provider],
+) -> Option<&'a bedrock::Bedrock> {
+    bedrock
+        .into_iter()
+        .chain(providers.iter().filter_map(|entry| entry.bedrock.as_ref()))
+        .find(|account| account.default_model().is_some())
 }
 
 /// How many prompt tokens a conversation may reach before it is compacted.
@@ -519,18 +557,18 @@ impl Config {
         // answers when nobody has picked. The exception is a build that cannot reach Brave at all,
         // where that name reaches a backend with no credentials and the strongest configured tier
         // is the only thing that can answer.
+        let reaches_brave = holds_brave_credentials(&endpoint, &key_id, signing_key.expose());
+        let account = tier_account(bedrock.as_ref(), &providers);
         let default_model = resolved_model(
             &lookup(env_var::DEFAULT_MODEL)
                 .filter(|m| !m.trim().is_empty())
-                .or_else(|| match bedrock.as_ref() {
-                    Some(bedrock) if endpoint.is_empty() => {
-                        bedrock.default_model().map(str::to_string)
-                    }
+                .or_else(|| match account {
+                    Some(account) if !reaches_brave => account.default_model().map(str::to_string),
                     _ => None,
                 })
                 .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-            bedrock.as_ref(),
-            !endpoint.is_empty(),
+            account,
+            reaches_brave,
         );
 
         // A premium host that is present but malformed is dropped rather than rejected: it only
@@ -666,9 +704,12 @@ impl Config {
     /// startup. A build from source pointed at Bedrock or a gateway is the exception: credentials
     /// may be blank, and offering that roster would list models whose requests fail unsigned.
     pub fn serves_aichat(&self) -> bool {
-        !self.endpoint.is_empty()
-            && !self.key_id.is_empty()
-            && !self.signing_key.expose().is_empty()
+        holds_brave_credentials(&self.endpoint, &self.key_id, self.signing_key.expose())
+    }
+
+    /// The AWS account a tier word resolves against, which is [`tier_account`] over this build.
+    fn tier_account(&self) -> Option<&bedrock::Bedrock> {
+        tier_account(self.bedrock.as_ref(), &self.providers)
     }
 
     /// The credentials this build holds itself, each owing an account of what would end it.
@@ -701,7 +742,7 @@ impl Config {
     /// different set of them, and one that resolved none would send a word the service has never
     /// heard of and be answered by whatever it substitutes.
     pub fn model_named(&self, name: &str) -> String {
-        resolved_model(name, self.bedrock.as_ref(), !self.endpoint.is_empty())
+        resolved_model(name, self.tier_account(), self.serves_aichat())
     }
 
     /// Full URL for the OpenAI-compatible chat completions endpoint.
@@ -1307,15 +1348,36 @@ mod tests {
     /// all, so the strongest configured tier is the only thing that could answer.
     #[test]
     fn without_brave_credentials_the_default_is_the_strongest_bedrock_tier() {
-        let config = Config::from_lookup(|k| match k {
-            env_var::USE_BEDROCK => Some("1".into()),
-            env_var::AWS_REGION => Some("us-west-2".into()),
-            env_var::BEDROCK_SONNET_MODEL => Some("sonnet-arn".into()),
-            _ => None,
-        })
-        .expect("configured");
+        for (state, endpoint) in [
+            ("nothing configured for Brave", None),
+            (
+                "an endpoint and no credentials",
+                Some("https://example.invalid"),
+            ),
+        ] {
+            let config = Config::from_lookup(|k| match k {
+                env_var::USE_BEDROCK => Some("1".into()),
+                env_var::AWS_REGION => Some("us-west-2".into()),
+                env_var::BEDROCK_SONNET_MODEL => Some("sonnet-arn".into()),
+                env_var::ENDPOINT => endpoint.map(str::to_string),
+                _ => None,
+            })
+            .expect("configured");
+            assert!(!config.serves_aichat(), "{state}");
+            assert_eq!(config.default_model, "sonnet-arn", "{state}");
+        }
+
+        // The account a `provider` block named is the only reachable service here too.
+        let settings = Settings::parse(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2"},
+                "models": {"openai.gpt-5.6-sol": {}}
+            }}}"#,
+        );
+        let config = Config::from_lookup_with_providers(|_| None, settings.providers().to_vec())
+            .expect("configured");
         assert!(!config.serves_aichat());
-        assert_eq!(config.default_model, "sonnet-arn");
+        assert_eq!(config.default_model, "openai.gpt-5.6-sol");
     }
 
     /// A budget somebody typed outranks an advertised one: they may know which model an opaque ARN
@@ -1892,18 +1954,107 @@ mod tests {
 
     /// With no Brave credentials a Brave name reaches a service this build cannot sign for, so an
     /// unset tier resolves to the strongest one the AWS account did name instead.
+    ///
+    /// An endpoint is not a credential, and a Bedrock block makes each of the three fields optional
+    /// on its own, so a source build can hold a URL and no key to sign with. Deciding this from the
+    /// endpoint alone sends the word to the Brave roster on exactly the build that cannot sign for
+    /// it.
     #[test]
     fn without_brave_credentials_an_unconfigured_tier_stays_on_aws() {
-        let config = Config::from_lookup(|key| match key {
-            env_var::USE_BEDROCK => Some("1".into()),
-            env_var::AWS_REGION => Some("us-west-2".into()),
-            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
-            env_var::DEFAULT_MODEL => Some("haiku".into()),
-            _ => None,
-        })
-        .unwrap();
+        for (state, endpoint) in [
+            ("nothing configured for Brave", None),
+            (
+                "an endpoint and no credentials",
+                Some("https://example.invalid"),
+            ),
+        ] {
+            let config = Config::from_lookup(|key| match key {
+                env_var::USE_BEDROCK => Some("1".into()),
+                env_var::AWS_REGION => Some("us-west-2".into()),
+                env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+                env_var::DEFAULT_MODEL => Some("haiku".into()),
+                env_var::ENDPOINT => endpoint.map(str::to_string),
+                _ => None,
+            })
+            .unwrap();
+            assert!(!config.serves_aichat(), "{state}");
+            assert_eq!(config.default_model, "opus-arn", "{state}");
+            assert_eq!(config.model_named("haiku"), "opus-arn", "{state}");
+        }
+    }
+
+    /// The AWS account a `provider` block named answers a tier word as readily as the one the tier
+    /// variables named. Consulting only the tier variables resolves the word to a Brave name on a
+    /// build whose only reachable service is that account.
+    #[test]
+    fn a_tier_word_resolves_against_an_aws_account_a_provider_block_named() {
+        const ARN: &str = "arn:aws:bedrock:us-west-2:1:application-inference-profile/abc";
+        let settings = Settings::parse(&format!(
+            r#"{{"model": "opus", "provider": {{"amazon-bedrock": {{
+                "options": {{"region": "us-west-2"}},
+                "models": {{"{ARN}": {{"name": "Sonnet (Bedrock)"}}}}
+            }}}}}}"#
+        ));
+        let config = Config::from_lookup_with_providers(
+            |key| match key {
+                env_var::DEFAULT_MODEL => settings.model().map(str::to_string),
+                _ => None,
+            },
+            settings.providers().to_vec(),
+        )
+        .expect("configured");
+
         assert!(!config.serves_aichat());
-        assert_eq!(config.default_model, "opus-arn");
+        assert_eq!(config.default_model, ARN);
+        assert_ne!(config.default_model, bedrock::Tier::Opus.brave_model());
+        // Every other route to a model resolves the word the same way.
+        assert_eq!(config.model_named("sonnet"), ARN);
+    }
+
+    /// What a block with several models guarantees is that the word resolves to one of them, since
+    /// entries a block named are model ids with no tier to rank them by. Naming a model the account
+    /// does not offer is a request Bedrock refuses on the name.
+    #[test]
+    fn a_tier_word_resolves_to_a_model_the_block_actually_offers() {
+        let settings = Settings::parse(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2"},
+                "models": {"zzz-opus": {}, "aaa-haiku": {}}
+            }}}"#,
+        );
+        let config = Config::from_lookup_with_providers(|_| None, settings.providers().to_vec())
+            .expect("configured");
+
+        assert!(!config.serves_aichat());
+        for word in ["opus", "sonnet", "haiku"] {
+            let resolved = config.model_named(word);
+            assert!(
+                config.bedrock_for(&resolved).is_some(),
+                "{word} resolved to {resolved}, which no configured account offers"
+            );
+        }
+    }
+
+    /// A tier the AWS account left unset still falls through to Brave where this build can sign for
+    /// it, so asking the account first does not take the roster every credentialled build has.
+    #[test]
+    fn with_brave_credentials_a_tier_word_still_falls_through_to_brave() {
+        let settings = Settings::parse(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2"},
+                "models": {"openai.gpt-5.6-sol": {}}
+            }}}"#,
+        );
+        let config =
+            Config::from_lookup_with_providers(complete_env, settings.providers().to_vec())
+                .expect("configured");
+
+        assert!(config.serves_aichat());
+        assert_eq!(
+            config.model_named("haiku"),
+            bedrock::Tier::Haiku.brave_model()
+        );
+        assert_eq!(config.default_model, DEFAULT_MODEL);
     }
 
     #[test]
