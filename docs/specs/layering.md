@@ -7,6 +7,7 @@ governs:
   - crates/*/src/lib.rs
   - crates/*/src/main.rs
   - crates/*/build.rs
+  - crates/*/examples/*.rs
   - ui/src/renderer/components/Transcript.tsx
   - ui/src/renderer/components/Markdown.tsx
   - ui/scripts/marking.test.mjs
@@ -78,9 +79,9 @@ replaced, so the content cannot draw its own.
 ### LAYER-4: a crate root says what it does about unsafe
 
 Every crate root declares `#![forbid(unsafe_code)]`, or `#![deny(unsafe_code)]` with an
-`#[allow(unsafe_code)]` at each site that needs one. A library, a binary and a build script are
-each a crate root, and a `cfg(test)` module is part of the crate it sits in, so an `unsafe` block
-there is one of the crate's own and is named the same way.
+`#[allow(unsafe_code)]` at each site that needs one. A library, a binary, an example, a benchmark
+and a build script are each a crate root, and a `cfg(test)` module is part of the crate it sits in,
+so an `unsafe` block there is one of the crate's own and is named the same way.
 
 **Why.** Nearly every crate here contains no `unsafe` at all. Undeclared, that is a property
 nothing records: it holds by accident, and the first `unsafe` to arrive arrives silently. Declared,
@@ -94,6 +95,7 @@ version ([INSTR-9](instructions.md#INSTR-9)) in the one call a platform states t
 is kept in letter and lost in substance, because `deny` is the one an `allow` added later reopens.
 
 `verified-by: bravebot_cli::unsafe_code::every_crate_root_says_what_it_does_about_unsafe`
+`verified-by: bravebot_cli::unsafe_code::the_rule_reaches_every_example_and_benchmark_beside_a_crate`
 `verified-by: bravebot_cli::unsafe_code::a_crate_that_exempts_nothing_forbids_rather_than_denies`
 `verified-by: bravebot_cli::unsafe_code::allowing_unsafe_at_a_root_is_not_a_declaration`
 

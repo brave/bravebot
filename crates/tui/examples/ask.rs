@@ -12,6 +12,8 @@
 //! Worth pressing: enter and escape on each question, space on the multiple-answer one, the
 //! arrow keys down onto the free-text row, and ctrl-c to confirm it does not answer anything.
 
+#![forbid(unsafe_code)]
+
 use bravebot_core::ask::{Choice, Question, Series};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
