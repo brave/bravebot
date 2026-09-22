@@ -288,6 +288,22 @@ doctor-proxy-unsupported = { $protocol } is not supported by this build, so requ
 doctor-no-proxy = not proxied
 
 
+## A permission rule this build could not act on
+
+# Said wherever a dropped rule is reported: by `doctor`, under the label above, and as a note in
+# the session that read the file. The entry is quoted as the file spelled it, because finding it
+# again is the whole point of being told.
+permission-rule-unreadable = '{ $rule }' { $problem }
+permission-rule-not-a-line = is not a rule; a rule is written as a line of text
+permission-rule-empty = is empty
+permission-rule-unclosed-bracket = is missing its closing bracket
+permission-rule-unknown-family = names no family of tools this agent has; use Read, Edit or Bash
+permission-rule-empty-brackets = has empty brackets; drop them to mean every use
+permission-rule-unanchored = needs a home directory or a settings directory to say where it points
+permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:example.com)
+permission-rule-no-domain-named = names no domain after 'domain:'
+
+
 ## Importing a Leo Premium subscription
 
 leo-no-premium-endpoint =

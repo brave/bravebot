@@ -587,7 +587,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             "{}",
             t!(
                 session_permission_rule_ignored,
-                problem = problem.to_string()
+                problem = bravebot_agent::permissions::describe(problem)
             )
         );
     }
@@ -1767,7 +1767,10 @@ fn doctor() -> ExitCode {
             );
             for problem in &rejected {
                 ok = false;
-                fact(t!(doctor_permissions_unreadable), problem.to_string());
+                fact(
+                    t!(doctor_permissions_unreadable),
+                    bravebot_agent::permissions::describe(problem),
+                );
             }
 
             // Both, where both are reachable, because both are offered to a person choosing and a

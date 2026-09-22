@@ -2381,7 +2381,7 @@ fn event_loop(
     for problem in &rejected {
         session.note(t!(
             session_permission_rule_ignored,
-            problem = problem.to_string()
+            problem = bravebot_agent::permissions::describe(problem)
         ));
     }
     // For the same reason, and it matters more: this one is not a rule that quietly does nothing but

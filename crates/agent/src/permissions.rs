@@ -14,7 +14,8 @@
 //! and quietly meaning something else here would be worse than agreeing.
 
 use bravebot_config::{PermissionLists, Settings};
-use bravebot_core::permissions::{Anchors, Permissions, Rejected};
+use bravebot_core::permissions::{Anchors, Permissions, Rejected, Unreadable};
+use bravebot_i18n::t;
 
 /// The rules a settings file carried, and any of its lines that were not rules.
 ///
@@ -47,6 +48,39 @@ fn entries_that_are_not_lines(lists: &PermissionLists) -> impl Iterator<Item = R
         .unreadable
         .iter()
         .map(|text| Rejected::not_a_line(text))
+}
+
+/// One dropped entry as the person reading about it sees it, in their own language.
+///
+/// The kernel names what was wrong and this says it, because a person reads it and what a person
+/// reads comes from a catalog (LOCALE-1), which the kernel neither holds nor prints through. Every
+/// reporting site goes through here, so `doctor` and a session cannot come to word it differently.
+///
+/// The entry is quoted in the spelling the file used: a line of three spaces and a line of none
+/// are two entries somebody has to find, and a report that trimmed both names neither.
+pub fn describe(rejected: &Rejected) -> String {
+    t!(
+        permission_rule_unreadable,
+        rule = &rejected.text,
+        problem = problem(rejected.reason)
+    )
+}
+
+/// What was wrong, as a clause to follow the entry.
+///
+/// One arm per reason and no catch-all, so a reason added to the kernel does not compile until it
+/// has words: a rule silently reported as nothing is the drop PERM-11 exists to prevent.
+fn problem(reason: Unreadable) -> &'static str {
+    match reason {
+        Unreadable::NotALine => t!(permission_rule_not_a_line),
+        Unreadable::Empty => t!(permission_rule_empty),
+        Unreadable::UnclosedBracket => t!(permission_rule_unclosed_bracket),
+        Unreadable::UnknownFamily => t!(permission_rule_unknown_family),
+        Unreadable::EmptyBrackets => t!(permission_rule_empty_brackets),
+        Unreadable::Unanchored => t!(permission_rule_unanchored),
+        Unreadable::NotADomainRule => t!(permission_rule_not_a_domain_rule),
+        Unreadable::NoDomainNamed => t!(permission_rule_no_domain_named),
+    }
 }
 
 /// The same rules for a run with nobody at it, which is every list but the one that allows.
@@ -153,7 +187,7 @@ mod tests {
         let (permissions, rejected) = from_settings(&settings, Some(&PathBuf::from("/home/x")));
         assert_eq!(permissions.len(), 1);
         assert_eq!(rejected.len(), 1);
-        assert!(rejected[0].to_string().contains("Nonsense"));
+        assert!(describe(&rejected[0]).contains("Nonsense"));
     }
 
     /// A run with nobody at it keeps the two lists it can act on and loses the one that answers a
@@ -196,7 +230,7 @@ mod tests {
             for_an_unattended_run(&settings, Some(&PathBuf::from("/home/x")));
         assert!(permissions.is_empty());
         assert_eq!(rejected.len(), 1);
-        assert!(rejected[0].to_string().contains("git diff"));
+        assert!(describe(&rejected[0]).contains("git diff"));
     }
 
     /// A deny rule nested one array too deep, which is the ordinary way this key is mistyped. It
@@ -210,7 +244,7 @@ mod tests {
         let (permissions, rejected) = from_settings(&settings, Some(&PathBuf::from("/home/x")));
         assert_eq!(permissions.len(), 1);
         assert_eq!(
-            rejected.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            rejected.iter().map(describe).collect::<Vec<_>>(),
             [r#"'["Read(./.env)"]' is not a rule; a rule is written as a line of text"#]
         );
         // What the dropped rule was meant to stop, still not stopped. The report is the whole of
@@ -231,7 +265,7 @@ mod tests {
             for_an_unattended_run(&settings, Some(&PathBuf::from("/home/x")));
         assert!(permissions.is_empty());
         assert_eq!(rejected.len(), 1);
-        assert!(rejected[0].to_string().contains("Bash(git diff *)"));
+        assert!(describe(&rejected[0]).contains("Bash(git diff *)"));
     }
 
     /// Blank text is a line, so it reaches the rule parser and comes back with the parser's own
@@ -245,9 +279,35 @@ mod tests {
         let (permissions, rejected) = from_settings(&settings, Some(&PathBuf::from("/home/x")));
         assert!(permissions.is_empty());
         assert_eq!(
-            rejected.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            rejected.iter().map(describe).collect::<Vec<_>>(),
             ["'   ' is empty", "'' is empty"]
         );
+    }
+
+    /// Every reason a rule can be dropped for has words of its own. An arm is easy to copy and
+    /// leave pointing at the message above it, and a report that gave a mistyped bracket the
+    /// wording for a misspelled family would send somebody looking at the wrong part of their
+    /// line. Which reasons exist is the kernel's to say and the match has no catch-all, so one
+    /// added there does not build until it has been given words.
+    #[test]
+    fn every_reason_a_rule_is_dropped_for_says_something_of_its_own() {
+        let said = [
+            Unreadable::NotALine,
+            Unreadable::Empty,
+            Unreadable::UnclosedBracket,
+            Unreadable::UnknownFamily,
+            Unreadable::EmptyBrackets,
+            Unreadable::Unanchored,
+            Unreadable::NotADomainRule,
+            Unreadable::NoDomainNamed,
+        ]
+        .map(problem);
+
+        let mut seen = std::collections::BTreeSet::new();
+        for words in said {
+            assert!(!words.is_empty(), "a reason with nothing to say");
+            assert!(seen.insert(words), "two reasons both read '{words}'");
+        }
     }
 
     /// A single leading slash is anchored at the settings file's own directory, which is the
