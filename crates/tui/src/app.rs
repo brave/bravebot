@@ -1417,11 +1417,13 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
 /// What comes back is what [`act_while_working`] carries out, which is the clipboard read an empty
 /// paste asks for and nothing else.
 pub fn handle_paste_while_working(session: &mut Session, text: &str) -> Action {
-    // The line is the scroller's to leave alone, and a paste is not a key: it arrives from the
-    // terminal whatever mode is open, so the guard that holds the box still for a keystroke never
-    // sees it. Nothing is said about it, because the scroller has the whole screen but its footer
-    // and a sentence drawn nowhere is no answer.
-    if session.scrolling() {
+    // The line is the scroller's to leave alone, and the delegate view's: a paste is not a key, so
+    // it arrives from the terminal whatever mode is open and the guard that holds the box still for
+    // a keystroke never sees it. Mid-turn is when the view is open, since a delegate only runs
+    // inside a turn, so this is the path a paste while watching actually takes. Nothing is said
+    // about it either way, because both modes have the whole screen but their footer and a sentence
+    // drawn nowhere is no answer.
+    if session.scrolling() || session.watching().is_some() {
         return Action::None;
     }
     // A picture the terminal could not carry arrives as a paste of nothing, mid-turn exactly as at
@@ -1611,11 +1613,12 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
 /// Said once per session and then not again, because a user who has been told which key carries a
 /// picture does not need telling every time they use the other one.
 pub fn handle_paste(session: &mut Session, text: &str) -> Action {
-    // The line is the scroller's to leave alone, and a paste is not a key: it arrives from the
-    // terminal whatever mode is open, so the guard that holds the box still for a keystroke never
-    // sees it. Before the empty case as much as the rest, because that one spends a hint said
-    // once a session on a sentence the scroller leaves no room to draw.
-    if session.scrolling() {
+    // The line is the scroller's to leave alone, and the delegate view's: a paste is not a key, so
+    // it arrives from the terminal whatever mode is open and the guard that holds the box still for
+    // a keystroke never sees it. Before the empty case as much as the rest, because that one spends
+    // a hint said once a session on a sentence neither mode leaves room to draw, and answers with
+    // the clipboard read that would put a picture in a box nobody can see.
+    if session.scrolling() || session.watching().is_some() {
         return Action::None;
     }
     // A picture copied to the clipboard reaches a terminal as a paste of nothing at all, since
@@ -6548,6 +6551,69 @@ mod tests {
             handle_key(&mut session, key(KeyCode::Char('z')));
 
             assert!(session.input().is_empty(), "what was typed reached the box");
+        }
+
+        /// A paste and a drop reach this process as events of their own rather than as keys, so
+        /// the guard that holds every key at the view does not see them. The box they would land
+        /// in is not drawn at either level, so the words would be waiting in a line nobody knows
+        /// they are writing, to be sent to the turn the person went to look behind. The empty
+        /// paste is the one worth saying separately: answered, it spends a hint said once a
+        /// session on a sentence drawn nowhere and asks the loop to read the clipboard into that
+        /// same invisible line.
+        #[test]
+        fn a_paste_and_a_drop_do_not_reach_the_line_while_the_view_is_open() {
+            let directory = crate::testutil::scratch_dir("bravebot-app-drop-while-watching");
+            let _ = std::fs::remove_dir_all(&directory);
+            std::fs::create_dir_all(&directory).expect("scratch");
+            let file = directory.join("shot.png");
+            std::fs::write(&file, [0x89u8, 0x50]).expect("write");
+            let dropped = file.to_string_lossy().into_owned();
+
+            let mut session = Session::new("kernel-enforced").in_workspace(&directory);
+            session.status = Status::Working;
+            spawn(&mut session, "reader", "find the parser");
+            for c in "half a thought".chars() {
+                session.type_char(c);
+            }
+            handle_key_while_working(&mut session, ctrl('l'));
+            assert!(session.watching().is_some(), "the view did not open");
+            let said = session.transcript.len();
+
+            // Both handlers, because a delegate only runs inside a turn, so the mid-turn one is
+            // the path a paste while watching takes, and the idle one is reachable the moment the
+            // turn ends under a view left open over it.
+            for pasted in ["pasted", "", dropped.as_str()] {
+                assert_eq!(
+                    handle_paste(&mut session, pasted),
+                    Action::None,
+                    "a paste of {pasted:?} was answered from inside the view"
+                );
+                assert_eq!(
+                    handle_paste_while_working(&mut session, pasted),
+                    Action::None,
+                    "a paste of {pasted:?} mid-turn was answered from inside the view"
+                );
+            }
+
+            assert_eq!(
+                session.transcript.len(),
+                said,
+                "the empty paste spent the hint from inside the view"
+            );
+            assert!(
+                session.attached().is_empty(),
+                "a drop staged an attachment from inside the view"
+            );
+
+            handle_key_while_working(&mut session, key(KeyCode::Char('q')));
+            assert!(session.watching().is_none(), "q did not close the view");
+            assert_eq!(
+                session.input(),
+                "half a thought",
+                "what was pasted reached the box"
+            );
+
+            let _ = std::fs::remove_dir_all(&directory);
         }
 
         /// Comparing two runs is what having several is for, and going back through the list to
