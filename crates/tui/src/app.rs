@@ -13291,6 +13291,49 @@ mod tests {
         assert_eq!(exported.matches("503").count(), 1);
         assert!(session.finished.unwrap().failed());
     }
+    /// The stop arm the event loop reaches takes the prompt the turn began with, so it is the
+    /// half that can hand it back to the box. An interjection the turn had already taken is part
+    /// of the conversation it carries on with, so neither prompt moves: the opening one stays sent
+    /// and the stop is recorded under both.
+    #[test]
+    fn stopping_a_turn_that_took_a_prompt_mid_turn_hands_nothing_back() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.status, Status::Working);
+        for c in "second".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        // What [`crate::remote_confirm::ToMain::Interjected`] does when the turn says it took one.
+        session.interjected();
+
+        finish_cancelled_turn(&mut session, "first", Some(0));
+
+        assert_eq!(
+            session.input(),
+            "",
+            "the opening prompt was handed back over an interjection"
+        );
+        assert_eq!(
+            session
+                .transcript
+                .iter()
+                .filter(|entry| entry.speaker == crate::state::Speaker::User)
+                .map(|entry| entry.text.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"],
+            "the interjection was lifted back out of the transcript"
+        );
+        assert!(
+            session
+                .transcript
+                .last()
+                .is_some_and(|entry| entry.speaker == crate::state::Speaker::Stopped),
+            "nothing recorded that it stopped"
+        );
+    }
+
     /// Repeated reports must not charge a stopped turn twice, even when restoring its prompt.
     #[test]
     fn the_cancellation_path_charges_progress_before_restoring_or_quitting() {

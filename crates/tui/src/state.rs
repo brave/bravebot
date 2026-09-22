@@ -4510,8 +4510,19 @@ impl Session {
         // Un-sent whole only where nothing was recorded after the prompt, nothing is waiting
         // behind it, and the box is free to take it. The first two mean there is something to have
         // second thoughts about; the third is the only place the line can go.
-        let something_was_recorded =
-            !matches!(self.transcript.last(), Some(entry) if entry.speaker == Speaker::User);
+        //
+        // Measured from where this turn's own prompt sits, because the speaker of the last entry
+        // cannot tell that prompt from one interjected mid-turn: both are `User` entries, and a
+        // stop just after the turn took an interjection would read as nothing recorded. That
+        // un-sends the interjection, which the planner has read and the conversation carries on
+        // with, and hands the opening prompt back to the box while its own entry stays above as
+        // sent, leaving one prompt in two places and the stop in neither.
+        //
+        // [`Session::begin_turn`] keeps the length from before it pushed the prompt, so nothing is
+        // recorded exactly when that prompt is the whole of what this turn added. Any other length
+        // leaves it sent, which is also the safe answer where the transcript has been rewound from
+        // under the figure: the entry popped below is then not the prompt.
+        let something_was_recorded = self.transcript.len() != self.turn_start.transcript_len + 1;
         let waiting = !self.queued.is_empty();
         let the_box_is_taken = !self.input.trim().is_empty();
         if something_was_recorded || waiting || the_box_is_taken {
@@ -10420,6 +10431,44 @@ mod tests {
         s.restore("first");
 
         assert_eq!(s.input(), "first");
+    }
+
+    /// An interjection the turn took is in the conversation the planner was given, so it is work
+    /// on the screen like any other: lifting it back out would leave the transcript reading in an
+    /// order that never happened, and handing the opening prompt back to the box would put one
+    /// prompt in two places while its own entry stayed in the transcript as sent.
+    #[test]
+    fn a_stopped_turn_that_took_an_interjection_leaves_both_prompts_where_they_are() {
+        let mut s = session();
+        for c in "first".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        for c in "second".chars() {
+            s.type_char(c);
+        }
+        s.queue();
+        s.interjected();
+        assert!(s.queued.is_empty(), "the turn did not take the prompt");
+
+        s.restore("first");
+
+        assert_eq!(s.input(), "", "the stopped prompt went back into the box");
+        assert_eq!(
+            s.transcript
+                .iter()
+                .filter(|entry| entry.speaker == Speaker::User)
+                .map(|entry| entry.text.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"],
+            "the interjection was lifted back out of the transcript"
+        );
+        assert!(
+            s.transcript
+                .last()
+                .is_some_and(|entry| entry.speaker == Speaker::Stopped),
+            "nothing recorded that it stopped"
+        );
     }
 
     /// A stop is aimed at the turn in flight. The prompts behind it are ones the person typed and
