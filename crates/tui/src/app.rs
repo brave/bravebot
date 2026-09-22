@@ -1016,8 +1016,12 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // The line is taken off the box before it is dispatched, the way each of these arms took it
         // before doing anything, so a command that opens a picker or ends the session does not leave
         // its own word sitting in the box behind it.
+        //
+        // Settled as it is taken, the way a line queued behind a turn is settled as it is queued:
+        // `/btw`, `/loop` and `/manifest` hand their argument to a planner, which has no way to put
+        // a marker back.
         KeyCode::Enter if command_typed(session.input()).is_some() => {
-            let line = session.input().to_string();
+            let line = session.unfolded(session.input());
             session.clear_input();
             dispatch_command(session, &line)
         }
@@ -7329,6 +7333,65 @@ mod tests {
         handle_paste_while_working(&mut session, "first\nsecond\nthird\nfourth");
 
         assert_eq!(session.input(), "[Pasted text #1 +4 lines]");
+    }
+
+    /// The question goes to a planner, and the marker stands for words only the session holding it
+    /// can put back. Sent as it stands, the aside asks about a placeholder.
+    #[test]
+    fn a_folded_paste_in_a_btw_question_is_the_words_that_were_pasted() {
+        let mut session = Session::new("none");
+        for c in "/btw what is ".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_paste(&mut session, "first\nsecond\nthird\nfourth");
+        assert_eq!(session.input(), "/btw what is [Pasted text #1 +4 lines]");
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Aside("what is first\nsecond\nthird\nfourth".to_string())
+        );
+    }
+
+    /// Every tick sends the prompt the loop was armed with, so a marker kept there is a placeholder
+    /// re-sent for as long as the loop runs, with nothing on the screen to say the paste went
+    /// nowhere.
+    #[test]
+    fn a_folded_paste_in_a_loop_prompt_is_the_words_that_were_pasted() {
+        let mut session = Session::new("none");
+        for c in "/loop 5m explain ".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_paste(&mut session, "first\nsecond\nthird\nfourth");
+        assert_eq!(
+            session.input(),
+            "/loop 5m explain [Pasted text #1 +4 lines]"
+        );
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("explain first\nsecond\nthird\nfourth".to_string())
+        );
+        assert_eq!(
+            session.looping().expect("a loop is running").prompt(),
+            "explain first\nsecond\nthird\nfourth"
+        );
+    }
+
+    /// The task is the whole of what the fresh planner is given, since the conversation does not go
+    /// into the run: a marker there names something that run can never read.
+    #[test]
+    fn a_folded_paste_in_a_manifest_task_is_the_words_that_were_pasted() {
+        let mut session = Session::new("none");
+        for c in "/manifest fix ".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_paste(&mut session, "first\nsecond\nthird\nfourth");
+        assert_eq!(session.input(), "/manifest fix [Pasted text #1 +4 lines]");
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Manifest("fix first\nsecond\nthird\nfourth".to_string())
+        );
     }
 
     /// A drop reaches the terminal as a paste, so a working loop that only pasted wrote the path

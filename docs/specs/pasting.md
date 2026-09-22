@@ -68,6 +68,9 @@ place of everything the person pasted, with nothing on the screen to say so.
 `verified-by: bravebot_tui::app::a_paste_that_ends_in_a_newline_does_not_send_it`
 `verified-by: bravebot_tui::app::a_pasted_prompt_is_sent_when_the_user_says_so`
 `verified-by: bravebot_tui::app::a_long_paste_folds_while_a_turn_is_running`
+`verified-by: bravebot_tui::app::a_folded_paste_in_a_btw_question_is_the_words_that_were_pasted`
+`verified-by: bravebot_tui::app::a_folded_paste_in_a_loop_prompt_is_the_words_that_were_pasted`
+`verified-by: bravebot_tui::app::a_folded_paste_in_a_manifest_task_is_the_words_that_were_pasted`
 
 
 <a id="PASTE-2"></a>
