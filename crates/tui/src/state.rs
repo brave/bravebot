@@ -420,6 +420,20 @@ impl Waiting {
     }
 }
 
+/// A command line on its way to being carried out, and the pictures it named.
+///
+/// The two travel together because what becomes of a picture depends on the command: three of them
+/// hand their argument to a planner and a picture goes with it, and for the rest there is nowhere
+/// for one to go. Which is which is the caller's to know, so the box hands over both and says
+/// nothing about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Commanded {
+    /// The line, exactly as it was typed, markers and all.
+    pub line: String,
+    /// The pictures pasted into it, in the order the markers number them.
+    pub pasted: Vec<AttachedImage>,
+}
+
 /// What the session is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -579,6 +593,37 @@ pub struct AttachedImage {
     pub marker: String,
     pub media_type: &'static str,
     pub bytes: Vec<u8>,
+}
+
+impl AttachedImage {
+    /// What stands in the line where the picture cannot travel with it.
+    ///
+    /// Not from the catalog, and deliberately: the planner reads this, so it is part of what the
+    /// model is given rather than something a person is being told. Same reasoning as the marker
+    /// in [`Session::attach`], and the catalog says so at the top of itself.
+    ///
+    /// Why it cannot travel is the caller's to say, because a picture misses a turn already running
+    /// for one reason and a command for another, and the one thing this must not do is guess.
+    fn in_words(&self, why: &str) -> String {
+        format!(
+            "({} was pasted here, but it cannot be shown to you: {why}. Ask for it again if you \
+             need to see it.)",
+            self.marker
+        )
+    }
+}
+
+/// A line with every marker in it standing for one of `carried` replaced by what it says instead.
+///
+/// One place, because a picture misses a request for more than one reason and the sentence that
+/// takes its place reads the same however it was missed. `why` is the reason, which is the caller's:
+/// see [`AttachedImage::in_words`].
+fn put_back_to_words(line: &str, carried: &[AttachedImage], why: &str) -> String {
+    let mut settled = line.to_string();
+    for picture in carried {
+        settled = settled.replace(&picture.marker, &picture.in_words(why));
+    }
+    settled
 }
 
 /// A paragraph pasted into the line, standing behind the marker written in its place.
@@ -4784,6 +4829,49 @@ impl Session {
         Some(self.begin_turn(prompt, taken, Some(recall)))
     }
 
+    /// Take the current line as a command to carry out now.
+    ///
+    /// The line comes off the box with the pictures it named, the way [`Session::submit`] takes a
+    /// prompt: the box is about to be empty, and a picture left staged behind an empty box is one no
+    /// line can name again. What becomes of them is the caller's, since the caller is what knows
+    /// which command this is.
+    ///
+    /// A folded paste is put back to its words here, unlike a picture. That marker is a handle on
+    /// text only the session holding it can undo, so it goes no further than the box whatever the
+    /// command does with its argument.
+    pub fn take_command(&mut self) -> Commanded {
+        let typed = self.input.clone();
+        let pasted = self.pasted_named(&typed);
+        let line = self.unfolded(&typed);
+        self.pasted.clear();
+        self.clear_input();
+        Commanded { line, pasted }
+    }
+
+    /// The same command with the pictures it named put back to words.
+    ///
+    /// What a command that has nowhere to put one is carried out as. It is carried out rather than
+    /// sent, so unless its argument goes to a planner there is no request for a picture to travel in:
+    /// a marker left in the line would name a screenshot nothing came with, which is the same thing
+    /// [`Session::resolved`] keeps a queued prompt from doing. What a command does with its argument
+    /// is not something the box knows, so which commands those are is the caller's to say.
+    ///
+    /// The person is told, because the picture they pasted did not go where they put it.
+    pub fn without_pictures(&mut self, commanded: Commanded) -> Commanded {
+        if commanded.pasted.is_empty() {
+            return commanded;
+        }
+        self.note(t!(paste_not_with_a_command));
+        Commanded {
+            line: put_back_to_words(
+                &commanded.line,
+                &commanded.pasted,
+                "a picture cannot join that command",
+            ),
+            pasted: Vec::new(),
+        }
+    }
+
     /// Take the current line as a prompt to send when the turn in flight has finished.
     ///
     /// The line leaves the box exactly as it would on sending, and is remembered in the history
@@ -4900,20 +4988,11 @@ impl Session {
         for attached in self.named_in(line) {
             resolved = resolved.replace(&attached.marker, &attached.name);
         }
-        // Not from the catalog, and deliberately: the planner reads this, so it is part of what the
-        // model is given rather than something a person is being told. Same reasoning as the marker
-        // in [`Session::attach`], and the catalog says so at the top of itself.
-        for pasted in self.pasted_named(line) {
-            resolved = resolved.replace(
-                &pasted.marker,
-                &format!(
-                    "({} was pasted here, but it cannot be shown to you: a picture cannot join a \
-                     turn already running. Ask for it again if you need to see it.)",
-                    pasted.marker
-                ),
-            );
-        }
-        resolved
+        put_back_to_words(
+            &resolved,
+            &self.pasted_named(line),
+            "a picture cannot join a turn already running",
+        )
     }
 
     /// Record that the prompt queued longest ago has reached the planner mid-turn.
@@ -4967,18 +5046,24 @@ impl Session {
 
     /// Take the command waiting longest, if the session is free to carry one out.
     ///
-    /// The line as it was typed, for the caller to dispatch exactly as it dispatches one typed at
-    /// rest. Nothing here decides what any command does, and nothing here puts anything in the
-    /// transcript: a command is not part of the conversation, and it was not while it waited either.
+    /// The line as it was typed, with the pictures it named, for the caller to dispatch exactly as it
+    /// dispatches one typed at rest: waiting changes nothing about what a command can carry, so the
+    /// same caller settles the same pictures for the same commands. Nothing here decides what any
+    /// command does and nothing here is written down: a command is not part of the conversation, and
+    /// it was not while it waited either.
     ///
     /// Only from the head of the queue, so the order somebody typed things in is the order they
     /// happen in: a command behind a prompt waits for that prompt's turn, the same way the prompt
     /// waited for the turn that was running when it was typed.
-    pub fn take_queued_command(&mut self) -> Option<String> {
+    pub fn take_queued_command(&mut self) -> Option<Commanded> {
         if self.status != Status::Idle || self.queued.first()?.waiting != Waiting::Command {
             return None;
         }
-        Some(self.queued.remove(0).prompt)
+        let taken = self.queued.remove(0);
+        Some(Commanded {
+            line: taken.prompt,
+            pasted: taken.pasted,
+        })
     }
 
     /// Take the command line waiting longest, if the session is free to run one.
@@ -5011,9 +5096,18 @@ impl Session {
     /// something every five minutes wants to see it happen, and a loop whose first sign of life
     /// is five minutes of nothing is one nobody can tell is running.
     ///
+    /// `pasted` is what the person pasted into the line they typed `/loop` on, and it goes with the
+    /// first tick: that tick is the turn the picture was pasted into, and it is a turn like any
+    /// other. Every tick after it sends the same words with the marker put back, because the picture
+    /// went with the tick that took it and a loop sends the same line however long it runs.
+    ///
     /// `None` where the session is not free to start a turn, since the first tick is a turn like
     /// any other and there is nowhere to put it.
-    pub fn start_loop(&mut self, request: crate::loops::Request) -> Option<String> {
+    pub fn start_loop(
+        &mut self,
+        request: crate::loops::Request,
+        pasted: Vec<AttachedImage>,
+    ) -> Option<String> {
         if self.status != Status::Idle {
             self.note(t!(loop_busy));
             return None;
@@ -5047,7 +5141,20 @@ impl Session {
             crate::loops::Pacing::SelfPaced => self.note(t!(loop_started_self_paced)),
         }
 
-        self.looping = Some(crate::loops::Running::begin(request));
+        // Said before the first tick goes, because it is about every tick after it: somebody who
+        // pasted a screenshot into a loop is owed the difference between the turn that sees it and
+        // the ones that read a sentence in its place.
+        let mut running = crate::loops::Running::begin(request);
+        if !pasted.is_empty() {
+            self.note(t!(paste_with_the_first_tick));
+            let settled = put_back_to_words(
+                running.prompt(),
+                &pasted,
+                "a picture goes with the first tick of a loop, and this is a later one",
+            );
+            running = running.carrying(pasted, settled);
+        }
+        self.looping = Some(running);
         self.dispatch_tick()
     }
 
@@ -5441,21 +5548,22 @@ impl Session {
 
     /// Send a tick, announcing which one it is.
     ///
-    /// The line is the loop's own, taken from what the person typed, and it carries no files or
-    /// pictures: what was staged in the box belonged to the line it was staged in. A `@path` in
-    /// the prompt is read back out of it every tick, the way it is for any other prompt.
+    /// The line is the loop's own, taken from what the person typed, and it carries no files: one
+    /// staged in the box belonged to the line it was staged in. A picture is the exception the loop
+    /// itself makes, and only once: [`crate::loops::Running::dispatching`] hands it to the first tick
+    /// and has nothing to hand any tick after that. A `@path` in the prompt is read back out of it
+    /// every tick, the way it is for any other prompt.
     fn dispatch_tick(&mut self) -> Option<String> {
         let running = self.looping.as_mut()?;
-        running.dispatched();
+        let (prompt, pasted) = running.dispatching();
         let count = running.ticks();
         let quiet = running.quiet();
-        let prompt = running.prompt().to_string();
         if quiet > 0 {
             self.note(t!(loop_tick_quiet, count = count, quiet = quiet));
         } else {
             self.note(t!(loop_tick, count = count));
         }
-        Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), None))
+        Some(self.begin_turn(prompt, (Vec::new(), pasted), None))
     }
 
     /// Take every waiting prompt back out of the queue and into the box.
@@ -8736,7 +8844,10 @@ mod tests {
         let mut s = session();
         let request = crate::loops::parse("5m check the deploy").expect("a request");
 
-        assert_eq!(s.start_loop(request).as_deref(), Some("check the deploy"));
+        assert_eq!(
+            s.start_loop(request, Vec::new()).as_deref(),
+            Some("check the deploy")
+        );
         assert_eq!(s.status, Status::Working);
         assert_eq!(
             s.transcript
@@ -8744,6 +8855,71 @@ mod tests {
                 .filter(|entry| entry.speaker == Speaker::User)
                 .count(),
             1
+        );
+    }
+
+    /// Somebody pasting a screenshot into `/loop` is asking about that screenshot, so the tick they
+    /// wait for carries it. Settling it here instead would leave the loop running forever on a
+    /// sentence saying a picture was meant, which is the answer to nothing.
+    #[test]
+    fn the_first_tick_of_a_loop_carries_the_picture_pasted_into_it() {
+        let mut s = session();
+        for c in "/loop 15m look at ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        let commanded = s.take_command();
+        assert_eq!(commanded.line, "/loop 15m look at [Image #1]");
+
+        let sent = s.start_loop(
+            crate::loops::parse("15m look at [Image #1]").expect("a request"),
+            commanded.pasted,
+        );
+
+        assert_eq!(sent.as_deref(), Some("look at [Image #1]"));
+        assert_eq!(
+            s.sent_pasted().len(),
+            1,
+            "the first tick went without the picture"
+        );
+        assert_eq!(s.sent_pasted()[0].bytes, b"pixels".to_vec());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(paste_with_the_first_tick)),
+            "nothing said which tick the picture goes with"
+        );
+    }
+
+    /// Every tick after it sends the marker put back to words. Sending the picture each time would
+    /// pay for the same screenshot every interval for as long as the loop runs, and sending the
+    /// marker with nothing behind it would point at something that tick was never given.
+    #[test]
+    fn a_later_tick_of_a_loop_says_the_picture_went_with_the_first() {
+        let mut s = session();
+        for c in "/loop 15m look at ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        let commanded = s.take_command();
+        s.start_loop(
+            crate::loops::parse("15m look at [Image #1]").expect("a request"),
+            commanded.pasted,
+        );
+        s.complete("the first answer", Vec::new(), 0);
+        s.loop_turn_ended(None);
+
+        assert_eq!(
+            s.dispatch_tick().as_deref(),
+            Some(
+                "look at ([Image #1] was pasted here, but it cannot be shown to you: a picture \
+                 goes with the first tick of a loop, and this is a later one. Ask for it again if \
+                 you need to see it.)"
+            )
+        );
+        assert!(
+            s.sent_pasted().is_empty(),
+            "a later tick carried the picture again"
         );
     }
 
@@ -8800,7 +8976,7 @@ mod tests {
             ("8d watch", t!(loop_interval_capped, every = "7d")),
         ] {
             let mut s = session();
-            s.start_loop(crate::loops::parse(typed).expect("a request"));
+            s.start_loop(crate::loops::parse(typed).expect("a request"), Vec::new());
 
             assert!(
                 s.transcript.iter().any(|entry| entry.text == said),
@@ -8820,7 +8996,10 @@ mod tests {
         let mut s = session();
         let request = crate::loops::parse("5m /status").expect("a request");
 
-        assert_eq!(s.start_loop(request).as_deref(), Some("/status"));
+        assert_eq!(
+            s.start_loop(request, Vec::new()).as_deref(),
+            Some("/status")
+        );
         assert_eq!(s.looping().expect("a loop").prompt(), "/status");
     }
 
@@ -8904,7 +9083,10 @@ mod tests {
     #[test]
     fn a_watch_asked_for_under_a_loop_or_a_goal_is_refused_and_says_why() {
         let mut under_a_loop = session();
-        under_a_loop.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        under_a_loop.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         under_a_loop.arm_watch("notes.md", ARMED_IN, saw("first"));
         assert!(under_a_loop.watches().is_empty());
         assert!(
@@ -8935,7 +9117,10 @@ mod tests {
     fn a_person_starting_a_loop_or_a_goal_is_told_the_watches_have_ended() {
         for start in [
             &mut (|s: &mut Session| {
-                s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+                s.start_loop(
+                    crate::loops::parse("5m watch").expect("a request"),
+                    Vec::new(),
+                );
             }) as &mut dyn FnMut(&mut Session),
             &mut |s: &mut Session| s.start_goal("cargo test exits 0".to_string()),
         ] {
@@ -8989,7 +9174,10 @@ mod tests {
         assert_eq!(s.arming(), Arming::Allowed { free: 7 });
 
         let mut looping = session();
-        looping.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        looping.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         assert_eq!(looping.arming(), Arming::UnderALoop);
 
         let mut goal = session();
@@ -9143,7 +9331,10 @@ mod tests {
     #[test]
     fn a_tick_waits_for_the_turn_in_flight_and_for_what_is_queued() {
         let mut s = session();
-        s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        s.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         s.complete("done", Vec::new(), 0);
 
         // Due, but the person has started something of their own.
@@ -9166,7 +9357,7 @@ mod tests {
     #[test]
     fn a_prompt_typed_during_a_loop_is_not_a_tick_of_it() {
         let mut s = session();
-        s.start_loop(crate::loops::parse("watch").expect("a request"));
+        s.start_loop(crate::loops::parse("watch").expect("a request"), Vec::new());
         assert!(s.looping().expect("a loop").ticking());
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(120, false)));
@@ -9189,7 +9380,10 @@ mod tests {
     #[test]
     fn a_tick_that_says_when_to_wake_arms_the_next_one() {
         let mut s = session();
-        s.start_loop(crate::loops::parse("watch the build").expect("a request"));
+        s.start_loop(
+            crate::loops::parse("watch the build").expect("a request"),
+            Vec::new(),
+        );
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(900, false)));
 
@@ -9208,7 +9402,10 @@ mod tests {
     #[test]
     fn clearing_the_session_ends_the_loop() {
         let mut s = session();
-        s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        s.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         s.clear();
         assert!(s.looping().is_none());
     }
@@ -9219,7 +9416,10 @@ mod tests {
         assert!(!s.stop_loop());
         assert!(s.transcript.is_empty());
 
-        s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        s.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         assert!(s.stop_loop());
         assert!(s.looping().is_none());
     }
@@ -9268,14 +9468,20 @@ mod tests {
     #[test]
     fn a_goal_and_a_loop_are_never_both_running() {
         let mut s = session();
-        s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        s.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         s.start_goal("cargo test exits 0".to_string());
         assert!(s.looping().is_none(), "the loop outlived the goal");
         assert!(s.goal().is_some());
 
         let mut s = session();
         s.start_goal("cargo test exits 0".to_string());
-        s.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        s.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         assert!(s.goal().is_none(), "the goal outlived the loop");
         assert!(s.looping().is_some());
     }

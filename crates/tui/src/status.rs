@@ -780,7 +780,7 @@ mod tests {
         let mut running = crate::loops::Running::begin(
             crate::loops::parse("5m check the deploy").expect("a request"),
         );
-        running.dispatched();
+        running.dispatching();
         running.ended(None, std::time::Instant::now());
 
         let mut facts = facts(&config, &trust);

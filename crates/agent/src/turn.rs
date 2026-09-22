@@ -715,6 +715,27 @@ pub struct PastedImage {
     pub bytes: Vec<u8>,
 }
 
+impl PastedImage {
+    /// The part of a message that carries the picture.
+    ///
+    /// One place, because three requests carry a paste now: a turn's prompt, a question asked
+    /// beside the work, and the task a manifest run is planned from. The encoding happens here
+    /// rather than in the interface because a data URI is the wire's business, and holding raw
+    /// bytes until this point keeps the size the trail reports honest.
+    ///
+    /// The record `pasting.md` PASTE-8 asks for is the caller's, and each of the three takes it
+    /// where it has the policy: [`Policy::admit_pasted_image`] is not on this path because a part
+    /// can be built on a thread that holds no policy at all.
+    pub(crate) fn part(&self) -> Part {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&self.bytes);
+        Part::ImageUrl {
+            image_url: ImageUrl {
+                url: format!("data:{};base64,{}", self.media_type, encoded),
+            },
+        }
+    }
+}
+
 impl Task {
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
@@ -2302,18 +2323,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // footing of the prompt it landed in, and there is no path to look up and nothing to
         // quarantine. What is left is the record, which is what `admit_pasted_image` is.
         //
-        // Recorded one by one, so the trail says what arrived rather than that something did. The
-        // encoding happens here and not in the interface because a data URI is the wire's
-        // business, and holding raw bytes until this point keeps the size that is reported honest.
+        // Recorded one by one, so the trail says what arrived rather than that something did.
         for image in &task.images {
             policy.admit_pasted_image(image.media_type, image.bytes.len());
-
-            let encoded = base64::engine::general_purpose::STANDARD.encode(&image.bytes);
-            parts.push(Part::ImageUrl {
-                image_url: ImageUrl {
-                    url: format!("data:{};base64,{}", image.media_type, encoded),
-                },
-            });
+            parts.push(image.part());
         }
 
         conversation.push(Message::user_parts(parts));

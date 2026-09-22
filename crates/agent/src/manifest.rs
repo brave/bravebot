@@ -65,7 +65,7 @@
 //! conversation to resume: the planner is never shown a result, so there is nothing for a second
 //! turn to continue. A manifest run is one run, start to finish.
 
-use bravebot_aichat::protocol::{Cached, ChatRequest, Effort, Message};
+use bravebot_aichat::protocol::{Cached, ChatRequest, Effort, Message, Part};
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet};
@@ -751,8 +751,26 @@ fn plan<S: Sink, R: Reporter>(
     // A real conversation, so the second call sees the first as a turn that happened rather
     // than as a quotation. It holds two exchanges and ends there: no tool result ever joins it,
     // which is what keeps its integrity where `before_planning` insists it stays.
+    //
+    // A picture pasted into the line goes in with the words it was pasted beside, in the one
+    // message, because a screenshot of the thing to be built is the task. It is the user's own
+    // keystroke and not something observed, which is why manifest.md MANIFEST-1 admits it and
+    // MANIFEST-9 still refuses a pipe.
     let mut history = Conversation::new();
-    history.push(Message::user(opening));
+    history.push(match task.images.is_empty() {
+        true => Message::user(opening),
+        false => {
+            // One record per picture, so the trail says what arrived: pasting.md PASTE-8.
+            for image in &task.images {
+                policy.admit_pasted_image(image.media_type, image.bytes.len());
+            }
+            Message::user_parts(
+                std::iter::once(Part::Text { text: opening })
+                    .chain(task.images.iter().map(crate::turn::PastedImage::part))
+                    .collect(),
+            )
+        }
+    });
 
     let mut tokens = 0u64;
     let mut output_tokens = 0u64;
