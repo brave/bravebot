@@ -227,8 +227,13 @@ doctor-settings-vetting-ignored =
 # the reason the vetting line gives: a rule that looks like configuration and does nothing is the
 # one worth saying out loud.
 doctor-settings-allow-ignored =
-    the allow rule { $rule } in { $path } is not granted: an allow rule answers a prompt, so it is
-    read from ~/.bravebot/settings.json only
+    the allow rule { $rule } in { $path } is not granted: an allow rule answers a prompt, so a
+    project's file proposes one and you grant it when a session starts
+# The other answer for the same rule: one somebody granted for this workspace is in force, and saying
+# so is what keeps the line above readable as the exception rather than as the only outcome.
+doctor-settings-granted = granted
+doctor-settings-allow-granted =
+    the allow rule { $rule } in { $path } is granted for this directory
 # The machine-level layer, above everything a person can set. The names rather than the values, for
 # the reason the settings lines give, and the path because a pin somebody wants lifted is lifted by
 # whoever can write that file.
@@ -376,6 +381,23 @@ named-directory-regardless =
     opens one at any time.
 named-directory-yes = open it
 named-directory-no = leave it closed
+
+
+## Granting the allow rules a checkout's settings file proposed, asked once for the whole list
+
+# One question for every rule, listing each with the file it came from. The list is what makes the
+# answer consent to specific grants rather than a feeling about the tree, and one box per rule would
+# be thirty answers nobody reads.
+granted-rules-title = grant these permission rules?
+granted-rules-question = This project's settings ask to stop you being asked about:
+granted-rules-explained =
+    Each of these answers an approval prompt you would otherwise see: running a program, writing a
+    file, or fetching a URL. They were written by whoever wrote this project, not by you.
+granted-rules-regardless =
+    A project cannot grant itself these. Say no and this session asks about each action as usual;
+    rules in ~/.bravebot/settings.json are your own and always apply.
+granted-rules-yes = grant them
+granted-rules-no = keep asking me
 
 
 ## Choosing a theme, a model, or a session to pick up
@@ -1008,8 +1030,15 @@ session-permission-rule-ignored = ignoring a permission rule in settings.json: {
 # capability rather than a narrowing, so it is read from the person's own file only. Named rather
 # than counted: whoever wrote it is looking for their own line.
 session-permission-allow-ignored =
-    not granting the allow rule { $rule } from { $path }: an allow rule answers a prompt, so it is
-    read from ~/.bravebot/settings.json only
+    not granting the allow rule { $rule } from { $path }: an allow rule answers a prompt, so a
+    project's file proposes one and you grant it
+# Said where a rule this project proposed was granted in an earlier session here, so the box does not
+# ask about it again. Names the rule rather than counting, for the reason the line above it does, and
+# names the file the answer is in: deleting a line from that file is the way back from having granted
+# a rule.
+session-permission-allow-granted-before =
+    granting the allow rule { $rule } from { $path }, which you allowed this project before;
+    { $record } is where that answer is kept
 # Said once, at the top of a session the flag was given for. A person who did not mean to pass it
 # should find out before the first write rather than after it, and the words name the flag so they
 # can tell what to take off the command line. The line under the box says so for as long as it holds;

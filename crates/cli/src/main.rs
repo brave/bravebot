@@ -1744,19 +1744,52 @@ fn doctor() -> ExitCode {
                 );
             }
 
-            // The same, for the other name a checkout cannot answer: an `allow` entry stops a
-            // prompt, so one read out of a file that arrived with a clone would run a program
-            // nobody was asked about. Named one rule at a time rather than counted, because the
-            // person who wrote it is looking for their own line and a count tells them nothing.
-            for (path, rule) in settings.allow_ignored() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_allow_ignored,
-                        rule = rule,
-                        path = path.display().to_string()
+            // The same, for the other name a checkout cannot answer on its own: an `allow` entry
+            // stops a prompt, so one read out of a file that arrived with a clone would run a
+            // program nobody was asked about. A rule this workspace's own record says the person
+            // granted is in force and says so; every other one is dropped and says that. Named one
+            // rule at a time rather than counted, for the reason the vetting line gives and because
+            // the two answers are per rule rather than per file.
+            let proposed: Vec<bravebot_agent::granted::Proposed> = settings
+                .allow_ignored()
+                .map(|(path, rule)| bravebot_agent::granted::Proposed::new(path, rule))
+                .collect();
+            // The record is keyed on the workspace, so this answers about the directory `doctor` ran
+            // in. Canonicalized, because a session keys on the root the workspace resolved and a
+            // report keyed on the spelling would answer about a path that session never wrote: the
+            // two agree on Unix and do not on Windows, where resolving prefixes a name. No state
+            // directory, or one that cannot be read, is a record that says nothing, and a rule
+            // nobody granted is one that is dropped.
+            let here = std::env::current_dir().and_then(|cwd| cwd.canonicalize());
+            let granted: Vec<bravebot_agent::granted::Proposed> =
+                match (bravebot_agent::home::directory(), here) {
+                    (Some(home), Ok(cwd)) => bravebot_agent::granted::Store::new(&home, &cwd)
+                        .granted(&proposed)
+                        .into_iter()
+                        .cloned()
+                        .collect(),
+                    _ => Vec::new(),
+                };
+            for rule in &proposed {
+                let path = rule.path.display().to_string();
+                match granted.contains(rule) {
+                    true => fact(
+                        t!(doctor_settings_granted),
+                        t!(
+                            doctor_settings_allow_granted,
+                            rule = &rule.rule,
+                            path = path
+                        ),
                     ),
-                );
+                    false => fact(
+                        t!(doctor_settings_ignored),
+                        t!(
+                            doctor_settings_allow_ignored,
+                            rule = &rule.rule,
+                            path = path
+                        ),
+                    ),
+                }
             }
 
             // After the layers a person owns, because it is what answers for a name none of them
@@ -1769,8 +1802,14 @@ fn doctor() -> ExitCode {
             // nothing they cannot read in the file. What is worth saying is which of them this
             // build could not act on, because those are the ones that look like protection and
             // are not.
-            let (permissions, rejected) = bravebot_agent::permissions::from_settings(
+            // The granted rules are in the count, because they are rules in force: a report that
+            // left them out would say a workspace had one rule where a session there has two.
+            let (permissions, rejected) = bravebot_agent::permissions::with_granted(
                 &settings,
+                &granted
+                    .iter()
+                    .map(|rule| rule.rule.clone())
+                    .collect::<Vec<_>>(),
                 bravebot_agent::home::profile().as_deref(),
             );
             fact(

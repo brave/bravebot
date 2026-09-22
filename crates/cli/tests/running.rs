@@ -724,6 +724,88 @@ fn doctor_names_an_allow_rule_a_checkout_wrote() {
     );
 }
 
+/// PERM-15: the other answer for the same rule. One the person granted for this directory is in
+/// force, and `doctor` says so and counts it, because a report calling it "not granted" one line
+/// above a session that honours it would send somebody looking for a fault that is not there.
+///
+/// The record is seeded rather than written by a session, because the answer is the person's and the
+/// question that collects it needs a terminal. What is under test here is the reading: that `doctor`
+/// looks in the record keyed on the directory it ran in, and reports and counts what it finds.
+#[test]
+fn doctor_says_an_allow_rule_a_checkout_wrote_is_granted_where_it_was() {
+    let scratch = Scratch::new("cli-running-granted-allow");
+    let cwd = scratch.path.join("checkout");
+    let project = cwd.join(".bravebot");
+    std::fs::create_dir_all(&project).expect("create the project directory");
+    let settings = project.join("settings.json");
+    std::fs::write(
+        &settings,
+        r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"], "deny": ["Read(.env)"]}}"#,
+    )
+    .expect("write the project layer");
+
+    // The record a session would have written on a yes: in the person's own directory, keyed on the
+    // workspace the answer was given about, holding the rule text and the file that proposed it.
+    let workspace = cwd.canonicalize().expect("canonical checkout");
+    let granted = scratch.path.join(".bravebot").join("granted");
+    std::fs::create_dir_all(&granted).expect("create the record directory");
+    let record = granted.join(format!(
+        "{}.jsonl",
+        bravebot_agent::home::key_for(&workspace)
+    ));
+    // Written out rather than encoded, since this crate's tests carry no JSON library. Both paths
+    // are under the scratch directory, so neither holds a character JSON would need escaped, and a
+    // path that did would produce a line the record skips rather than a wrong answer.
+    for path in [&workspace, &settings] {
+        let shown = path.display().to_string();
+        assert!(
+            !shown.contains(['"', '\\']),
+            "the scratch path needs JSON escaping, so this test would seed an unreadable line: {shown}"
+        );
+    }
+    std::fs::write(
+        &record,
+        format!(
+            concat!(
+                r#"{{"workspace":"{}","session":"an-earlier-session","#,
+                r#""rule":"Bash(bash scripts/check.sh)","path":"{}"}}"#,
+                "\n"
+            ),
+            workspace.display(),
+            settings.display(),
+        ),
+    )
+    .expect("seed the record");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+    assert!(
+        stdout.contains("is granted for this directory"),
+        "the granted rule was not reported as granted: {stdout}"
+    );
+    assert!(
+        !stdout.contains("is not granted"),
+        "a rule the person granted was reported as dropped: {stdout}"
+    );
+    // Two rules now: the `deny` entry the file could write on its own, and the `allow` entry the
+    // person granted. A count that left the grant out would say a session here has one.
+    assert!(
+        stdout.contains("2 rules"),
+        "the granted rule was not counted as a rule in force: {stdout}"
+    );
+}
+
 /// A failure before the turn is a result object too, and this one happens before the arguments have
 /// been parsed as an invocation. Whether one was asked for is therefore read off the command line as
 /// typed: the flag takes the token after it as its path, whatever that token is, so a caller who

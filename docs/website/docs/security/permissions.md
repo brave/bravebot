@@ -385,12 +385,21 @@ extend reach: it cannot open a path the workspace and the directories you opened
 `.bravebot/settings.json` and `.bravebot/settings.local.json` that arrive with a repository, because
 both of those only ever take something away. `allow` is the one list that hands something back, so it
 is read from `~/.bravebot/settings.json`, and from a file you passed to `--settings` that sits outside
-the project you are working in. An `allow` entry in a checkout's file is dropped: whoever last edited
-the repository would otherwise be answering an approval prompt on your behalf, which is a program run
-with your privileges, a file written without the question, or a redirect to a host you were never
-shown. Every entry dropped is named, by `bravebot doctor` and in the session that read the file, so
-the prompt you still get is not a mystery. The cost is that waiving a prompt for one project means
-writing the rule in your own file, or passing one on the command line for that run.
+the project you are working in. An `allow` entry in a checkout's file takes effect on nothing by
+itself: whoever last edited the repository would otherwise be answering an approval prompt on your
+behalf, which is a program run with your privileges, a file written without the question, or a
+redirect to a host you were never shown.
+
+**A project asks, and you grant.** When a session opens in a checkout whose settings carry `allow`
+entries, one box lists every one of them and the file each came from. Saying yes grants exactly those
+rules; saying no grants none and the session carries on asking about each action as it would have.
+The answer is kept per project, in `~/.bravebot/granted/`, so the next session there does not ask
+again, and a project that edits a rule after you granted it asks about the new one. Delete the file,
+or the line in it, to take a grant back.
+
+`bravebot doctor` names every such rule and says which of the two it is, for the directory you run it
+in, so neither the prompt you still get nor the one you no longer get is a mystery. Waiving a prompt
+for *every* project is still your own file, or a file passed on the command line for one run.
 
 **Three prompts no rule can answer.** A run that would put your private data into a program asks
 whatever the rules say, because a rule saying which commands may run is not consent to hand one your
