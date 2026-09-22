@@ -55,6 +55,10 @@ impl Scratch {
 
     /// Declare hooks under this home, as writing the file by hand does, and return this scratch
     /// for chaining.
+    ///
+    /// Gated with the one test that calls it, which is Unix only: an ungated helper is dead code on
+    /// Windows, where `-D warnings` makes that a failed build rather than a warning.
+    #[cfg(unix)]
     fn with_hooks(self, json: &str) -> Self {
         self.with_state("hooks.json", json)
     }
