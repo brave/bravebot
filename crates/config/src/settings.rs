@@ -219,15 +219,27 @@ pub struct PermissionLists {
     pub allow: Vec<String>,
     /// Directories a file asks to have opened, alongside the working directory.
     pub additional_directories: Vec<String>,
+    /// Entries of the three rule lists that were not text at all, in the spelling the file used.
+    ///
+    /// A rule is a line, so an entry that is not a string is nothing this layer can hand on as
+    /// one. Carried out beside the lists rather than dropped here, because PERM-11 has every
+    /// entry that was dropped named where a person reads it, and a drop that ends inside the
+    /// parser is a deny rule that reads as protection and is not there.
+    pub unreadable: Vec<String>,
 }
 
 impl PermissionLists {
     /// Whether the block said anything.
+    ///
+    /// An entry nothing can act on still said something: a file whose only deny rule is mistyped
+    /// is a file with a `permissions` block, and reading it as absence would have `doctor` report
+    /// no settings one line above the rule it could not read.
     pub fn is_empty(&self) -> bool {
         self.deny.is_empty()
             && self.ask.is_empty()
             && self.allow.is_empty()
             && self.additional_directories.is_empty()
+            && self.unreadable.is_empty()
     }
 }
 
@@ -768,9 +780,10 @@ fn search_caps(root: &serde_json::Map<String, serde_json::Value>) -> SearchCaps 
 
 /// The `permissions` block: three lists of rule text, and the directories to open.
 ///
-/// Strings only, and a malformed entry is dropped rather than refused, on the same footing as
-/// everything else here. A rule that is not a string cannot be matched against anything, and
-/// refusing the file over one would take away the rules that were readable.
+/// A malformed entry is dropped rather than refused, on the same footing as everything else here:
+/// refusing the file over one would take away the rules that were readable. Dropped from the list
+/// and not from the block, though: an entry that is not text lands in
+/// [`PermissionLists::unreadable`], so that whoever reads the rules can name it (PERM-11).
 ///
 /// `defaultMode` is read by nothing yet. A file setting it is not an error and not a warning here:
 /// [`Settings::parse`] reads what the file says and reports it, and which modes exist is a
@@ -779,12 +792,45 @@ fn permission_lists(root: &serde_json::Map<String, serde_json::Value>) -> Permis
     let Some(serde_json::Value::Object(block)) = root.get("permissions") else {
         return PermissionLists::default();
     };
+    let mut unreadable = Vec::new();
+    let deny = rule_texts(block, "deny", &mut unreadable);
+    let ask = rule_texts(block, "ask", &mut unreadable);
+    let allow = rule_texts(block, "allow", &mut unreadable);
     PermissionLists {
-        deny: strings(block, "deny"),
-        ask: strings(block, "ask"),
-        allow: strings(block, "allow"),
+        deny,
+        ask,
+        allow,
+        // Strings only, and silently: a directory is not a rule, and a name that is not text is
+        // nothing to put to a person as a directory to open. PERM-10 answers for this key.
         additional_directories: strings(block, "additionalDirectories"),
+        unreadable,
     }
+}
+
+/// One array of rule text out of a block, with every entry that is not text put in `unreadable`.
+///
+/// Blank text is carried rather than filtered, because the rule language already has a word for
+/// it: `Rule::parse` calls an empty rule empty, and a filter here is what stopped it ever being
+/// asked. Nothing that reaches a list here is a rule yet, since which of them is one is the
+/// kernel's question, and this drops only what could not be put to it.
+fn rule_texts(
+    block: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+    unreadable: &mut Vec<String>,
+) -> Vec<String> {
+    let Some(serde_json::Value::Array(entries)) = block.get(name) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            serde_json::Value::String(text) => Some(text.clone()),
+            other => {
+                unreadable.push(other.to_string());
+                None
+            }
+        })
+        .collect()
 }
 
 /// One array of non-empty strings out of a block, or empty for every other shape.
@@ -1177,14 +1223,42 @@ mod tests {
         assert!(!settings.is_empty());
     }
 
-    /// A rule is a string. An entry that is not one cannot be matched against anything, and
-    /// dropping it keeps the rules that were readable rather than losing the file over one.
+    /// A rule is a line. An entry that is not one cannot be matched against anything, and dropping
+    /// it keeps the rules that were readable rather than losing the file over one. It is dropped
+    /// from the list and not from the block, though, because the rule nobody can act on is exactly
+    /// the one PERM-11 has named where a person reads it.
+    ///
+    /// Blank text is carried on into the list instead. It is a line, and what an empty rule is
+    /// belongs to the language rather than to the reader.
     #[test]
-    fn an_entry_that_is_not_a_rule_is_left_out() {
+    fn an_entry_that_is_not_a_rule_is_carried_out_to_be_reported() {
         let settings = Settings::parse(
-            r#"{"permissions": {"deny": ["Read(./.env)", 1, true, null, "", "  ", []]}}"#,
+            r#"{"permissions":
+                 {"deny": ["Read(./.env)", 1, true, null, "", "  ", ["Read(./.env)"]]}}"#,
         );
-        assert_eq!(settings.permissions().deny, ["Read(./.env)"]);
+        let permissions = settings.permissions();
+        assert_eq!(permissions.deny, ["Read(./.env)", "", "  "]);
+        assert_eq!(
+            permissions.unreadable,
+            ["1", "true", "null", r#"["Read(./.env)"]"#]
+        );
+    }
+
+    /// One report for the three rule lists, since one is what `doctor` and a session print. A
+    /// directory is not a rule and stays out of it: an entry that is not text is nothing to put to
+    /// a person as a directory to open, and PERM-10 rather than PERM-11 answers for that key.
+    ///
+    /// A file whose every rule is mistyped still said something. Reading it as an empty block
+    /// would have `doctor` report no settings one line above the rules it could not read.
+    #[test]
+    fn an_unreadable_entry_is_carried_out_of_whichever_rule_list_held_it() {
+        let settings = Settings::parse(
+            r#"{"permissions": {"deny": [1], "ask": [2], "allow": [3],
+                                "additionalDirectories": [4]}}"#,
+        );
+        assert_eq!(settings.permissions().unreadable, ["1", "2", "3"]);
+        assert!(!settings.permissions().is_empty());
+        assert!(!settings.is_empty());
     }
 
     /// Every shape that is not a block of lists reads as no rules at all, on the same footing as

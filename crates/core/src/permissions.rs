@@ -187,10 +187,14 @@ impl Rule {
     /// so `doctor` can name it. Guessing would be worse than ignoring: a misread deny rule reads
     /// as protection that is not there.
     pub fn parse(text: &str, anchors: &Anchors) -> Result<Self, Rejected> {
-        let text = text.trim();
-        if text.is_empty() {
+        let rule = text.trim();
+        if rule.is_empty() {
+            // The spelling the file used, not the nothing that is left of it. A line of three
+            // spaces and a line of none are two entries somebody has to find in their file, and a
+            // report calling both of them `''` names neither.
             return Err(Rejected::new(text, "is empty"));
         }
+        let text = rule;
 
         let (name, specifier) = match text.split_once('(') {
             None => (text, None),
@@ -310,6 +314,17 @@ impl Rejected {
             text: text.to_string(),
             reason,
         }
+    }
+
+    /// An entry of a permissions list that was never a line, so [`Rule::parse`] never saw it.
+    ///
+    /// A rule is text, and a settings file is JSON, so an entry can be a number, a boolean, or a
+    /// rule nested one array too deep, which is the ordinary way this key is mistyped. Whoever
+    /// read the file has the spelling it used and hands it here, because the reason belongs to the
+    /// rule language rather than to the reader, and because a rule that went missing between the
+    /// file and the parser has to arrive in the same report as one the parser refused (PERM-11).
+    pub fn not_a_line(text: &str) -> Self {
+        Self::new(text, "is not a rule; a rule is written as a line of text")
     }
 }
 

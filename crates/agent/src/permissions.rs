@@ -13,7 +13,7 @@
 //! improving on, because somebody who has read those docs will write `//` when they mean the root,
 //! and quietly meaning something else here would be worse than agreeing.
 
-use bravebot_config::Settings;
+use bravebot_config::{PermissionLists, Settings};
 use bravebot_core::permissions::{Anchors, Permissions, Rejected};
 
 /// The rules a settings file carried, and any of its lines that were not rules.
@@ -30,7 +30,23 @@ pub fn from_settings(
     profile: Option<&std::path::Path>,
 ) -> (Permissions, Vec<Rejected>) {
     let lists = settings.permissions();
-    Permissions::parse(&lists.deny, &lists.ask, &lists.allow, &anchors(profile))
+    let (permissions, mut rejected) =
+        Permissions::parse(&lists.deny, &lists.ask, &lists.allow, &anchors(profile));
+    rejected.extend(entries_that_are_not_lines(lists));
+    (permissions, rejected)
+}
+
+/// The entries the settings layer could not hand over as rule text, as rejects.
+///
+/// An entry that is not a line never reaches [`Permissions::parse`], so the list that call builds
+/// cannot hold it, and this is where the two halves of one report are put back together. Here
+/// rather than in the settings crate because `Rejected` belongs to the kernel, which layering.md
+/// puts above the crate that reads the file.
+fn entries_that_are_not_lines(lists: &PermissionLists) -> impl Iterator<Item = Rejected> + '_ {
+    lists
+        .unreadable
+        .iter()
+        .map(|text| Rejected::not_a_line(text))
 }
 
 /// The same rules for a run with nobody at it, which is every list but the one that allows.
@@ -56,6 +72,7 @@ pub fn for_an_unattended_run(
     // written, and an allow rule that is silently unreadable here reads to them as one that holds.
     let (_, unreadable) = Permissions::parse(&[], &[], &lists.allow, &anchors);
     rejected.extend(unreadable);
+    rejected.extend(entries_that_are_not_lines(lists));
     (permissions, rejected)
 }
 
@@ -180,6 +197,57 @@ mod tests {
         assert!(permissions.is_empty());
         assert_eq!(rejected.len(), 1);
         assert!(rejected[0].to_string().contains("git diff"));
+    }
+
+    /// A deny rule nested one array too deep, which is the ordinary way this key is mistyped. It
+    /// is not a line, so the rule parser never sees it and cannot be the thing that names it: what
+    /// the settings layer could not hand over has to arrive in the same report, or the person is
+    /// told the file carries no rules while they believe `.env` is denied.
+    #[test]
+    fn an_entry_that_is_not_a_line_is_reported() {
+        let settings =
+            Settings::parse(r#"{"permissions": {"deny": [["Read(./.env)"], "Read(./notes)"]}}"#);
+        let (permissions, rejected) = from_settings(&settings, Some(&PathBuf::from("/home/x")));
+        assert_eq!(permissions.len(), 1);
+        assert_eq!(
+            rejected.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            [r#"'["Read(./.env)"]' is not a rule; a rule is written as a line of text"#]
+        );
+        // What the dropped rule was meant to stop, still not stopped. The report is the whole of
+        // what stands between that and somebody believing otherwise.
+        assert_eq!(
+            permissions.for_path(Subject::Read, ".env"),
+            Decision::Unmatched
+        );
+    }
+
+    /// A run with nobody at it reads the same file and reports the same entry. Its rules are built
+    /// from two passes rather than one, so an entry that belongs to neither pass is the one a fix
+    /// made in the first of them would lose.
+    #[test]
+    fn an_entry_that_is_not_a_line_is_reported_to_a_run_nobody_is_watching() {
+        let settings = Settings::parse(r#"{"permissions": {"allow": [["Bash(git diff *)"]]}}"#);
+        let (permissions, rejected) =
+            for_an_unattended_run(&settings, Some(&PathBuf::from("/home/x")));
+        assert!(permissions.is_empty());
+        assert_eq!(rejected.len(), 1);
+        assert!(rejected[0].to_string().contains("Bash(git diff *)"));
+    }
+
+    /// Blank text is a line, so it reaches the rule parser and comes back with the parser's own
+    /// word for it. A filter over the list is what stopped that rejection ever being reached.
+    ///
+    /// Reported in the spelling the file used, which for a blank line is the whole of what
+    /// distinguishes it: two blank entries reported as `''` are two lines a person cannot find.
+    #[test]
+    fn a_blank_rule_is_reported_as_empty() {
+        let settings = Settings::parse(r#"{"permissions": {"deny": ["   ", ""]}}"#);
+        let (permissions, rejected) = from_settings(&settings, Some(&PathBuf::from("/home/x")));
+        assert!(permissions.is_empty());
+        assert_eq!(
+            rejected.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            ["'   ' is empty", "'' is empty"]
+        );
     }
 
     /// A single leading slash is anchored at the settings file's own directory, which is the
