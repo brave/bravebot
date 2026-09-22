@@ -143,7 +143,7 @@ mode points.
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so
 
-Five things still reach the filesystem in an incognito session, each because refusing it would cost
+Six things still reach the filesystem in an incognito session, each because refusing it would cost
 more than what it leaves behind:
 
 - **The workspace.** `write_file` and `edit_file` go on editing the project. Those edits are the
@@ -161,6 +161,12 @@ more than what it leaves behind:
   directory beside the editor's hand-off file, on the same terms, and goes with the session. Its
   name says which program made it and nothing about which project or which session, so an empty one
   records that this program ran at this time. [trust-map.md](trust-map.md) governs it.
+- **A language server's index.** A server indexes the workspace to answer anything at all, and the
+  index is too large to hold in memory and rebuild per question. It is not kept, which is what this
+  mode asks for: it goes to a directory of its own in the system temporary directory, on the same
+  terms as the two above, and goes with the session, so the next one indexes again. What it must
+  not do instead is land in the workspace, which is [LSP-10](tools/lsp.md#LSP-10)'s rule and holds
+  in this mode as in any other.
 - **A credential that was spent.** An imported subscription is read and spent as in any session, and
   the spent markers reach the file the import created under `~/.bravebot` when the session ends. A
   credential is single use and presenting one to the service spends it there, so a marker that never
@@ -178,4 +184,5 @@ can decide not to open an editor; someone who assumed the mode covered it has be
 own tool.
 
 `verified-by: bravebot_tui::editor::the_scratch_file_does_not_outlive_the_edit`
+`verified-by: bravebot_lsp::server::an_index_a_session_keeps_nothing_of_goes_with_the_session`
 `verified-by: bravebot_agent::incognito_credentials::a_spent_credential_is_written_back_in_a_private_session`

@@ -403,12 +403,29 @@ does: the only reader is the server, the driver never opens it, and what reaches
 and still answers; it re-indexes each session and says so under [LSP-7](#LSP-7). That is the same
 trade incognito already makes for the session record.
 
+**A session with nothing to keep still indexes somewhere, and it is not the workspace.** Incognito
+is one such session, and a machine that names no profile directory, and so has no state directory
+at all, is another ([state-directory.md](../state-directory.md)). The paragraph above rules out the
+same answer for both: dropping the variable runs the server in the workspace with no index
+location, which writes the index into the tree. So the directory is taken where the platform keeps
+what does not outlive a process, on the terms [incognito.md](../incognito.md#INCOG-8) already
+states for the two files that go there. It is created by this process rather than adopted from a
+name already taken, at the modes [state-directory.md](../state-directory.md#STATE-1) gives them,
+with nothing in its name saying which workspace is being indexed, and it is removed as the session
+ends, the servers having stopped first. Where even that cannot be created the server does not
+start, under [LSP-6](#LSP-6). The cost is the one the paragraph below names, and it is the cost
+incognito has already accepted.
+
 `verified-by: bravebot_lsp::server::the_cache_is_outside_the_workspace`
 `verified-by: bravebot_lsp::server::the_cache_sits_directly_under_the_directory_it_is_given`
 `verified-by: bravebot_lsp::server::an_index_an_earlier_build_left_too_deep_is_removed`
 `verified-by: bravebot_lsp::server::a_nested_directory_that_holds_no_index_is_left_where_it_is`
 `verified-by: bravebot_lsp::server::the_cache_is_keyed_by_the_workspace`
-`verified-by: bravebot_lsp::server::an_incognito_session_is_given_no_cache`
+`verified-by: bravebot_lsp::server::an_incognito_session_keeps_nothing_under_the_state_directory`
+`verified-by: bravebot_lsp::server::a_session_that_keeps_nothing_still_indexes_outside_the_workspace`
+`verified-by: bravebot_lsp::server::an_index_a_session_keeps_nothing_of_goes_with_the_session`
+`verified-by: bravebot_lsp::server::a_session_index_directory_is_created_never_adopted`
+`verified-by: bravebot_lsp::server::a_session_with_a_state_directory_indexes_under_it`
 `verified-by: bravebot_lsp::server::the_cache_is_never_read_by_the_driver`
 `verified-by: bravebot_lsp::server::a_server_whose_index_directory_cannot_be_made_private_does_not_start`
 
@@ -468,6 +485,15 @@ trade incognito already makes for the session record.
   workspace under `~/.bravebot`, which is what makes the second session fast. It is not small: this
   workspace's is a few hundred megabytes, since what rust-analyzer keeps there is a build directory. A
   machine that has been in many workspaces holds one for each, and nothing removes them.
+
+- **The one a session keeps nothing of is removed as the session ends, and only then.** Removal is a
+  destructor, so a session that does not unwind (a panic in a release build, where the profile
+  aborts, or a kill) leaves a directory of the same size in the system temporary directory.
+  Nothing reaps one later: the name carries the process id that made it, so a later run cannot tell
+  a live one from a dead one by the name, and the platform's own sweep of that directory is what
+  eventually takes it. The same is true of the session's scratch directory
+  ([incognito.md](../incognito.md#INCOG-8)), which is why this is stated rather than fixed here;
+  what differs is the size, and that is the eviction rule the open question below asks for.
 
 - **A server's own fault at a position reads as nothing found.** [LSP-2](#LSP-2) takes a rejection
   of a position request as an empty answer, and a server numbers a fault of its own the same way
