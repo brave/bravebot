@@ -4,6 +4,7 @@ title: The state directory
 status: normative
 governs:
   - crates/agent/src/home.rs
+  - crates/agent/src/granted.rs
   - crates/agent/src/remembered.rs
   - crates/config/src/settings.rs
   - crates/session/src/store.rs
@@ -25,12 +26,13 @@ documented-by: docs/website/docs/customize/configuration.md
 `~/.bravebot`, the directory holding what outlives a session, and who on the machine may read what
 is written into it. The prompt history, the model, theme, effort and editing choices, the answer to
 the update question, session records, a language server's index of a workspace, skills, standing
-instructions, an imported subscription and the command lines somebody asked to be remembered past a
-session all live here.
+instructions, an imported subscription, the command lines somebody asked to be remembered past a
+session and the permission rules somebody granted a checkout all live here.
 
 What each of those files means belongs to the spec for that subject:
 [sessions.md](sessions.md) for a session record, [tools/run.md](tools/run.md) for the remembered
-command lines, [skills.md](skills.md) and [instructions.md](instructions.md) for what is read out of
+command lines, [permissions.md](permissions.md) for the granted rules,
+[skills.md](skills.md) and [instructions.md](instructions.md) for what is read out of
 the directory,
 [premium-credentials.md](premium-credentials.md) for the subscription,
 [tools/lsp.md](tools/lsp.md) for the index and why sitting here confers nothing on it, and

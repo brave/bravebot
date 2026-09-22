@@ -17,8 +17,15 @@
 //! opened. A file arriving with a checkout is the easiest thing on the machine to write to, so a
 //! name in one deciding what is reachable and trusted would be reach granted by whatever last
 //! edited it.
+//!
+//! The `allow` rules such a file carries are the same kind of request, for the same reason, and are
+//! put as a third question after the other two. Each one answers an approval prompt, so a rule read
+//! out of a checkout would be a prompt answered by whatever last edited it. What makes the question
+//! worth asking is that it lists the rules it would grant and the file each came from: an answer
+//! about a tree's content spent on capability would be the defect rather than consent to it.
 
 use bravebot_agent::PermissionMode;
+use bravebot_agent::granted::Proposed;
 use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
 use ratatui::Terminal;
@@ -84,6 +91,51 @@ pub fn ask_named<B: Backend>(
             Err(_) => Answer::Decline,
         }
     })
+}
+
+/// Ask whether to grant the `allow` rules a checkout proposed, returning whether they were granted.
+///
+/// One question for the whole list rather than one per rule. A directory grants reach over a tree of
+/// its own, which is why [`ask_named`] asks about each; rules are a list a person reads at once, and
+/// thirty boxes would be thirty answers nobody reads, the cost `permissions.md` already records
+/// against `additionalDirectories`. Accepting grants every rule listed and declining grants none,
+/// and the session begins either way: a rule nobody granted is a prompt the person still gets.
+///
+/// Asked after the working directory's own question and separately from it, because trusting a
+/// tree's content and granting a rule that suppresses a prompt are different claims. One box
+/// answering both would be collecting an answer about content and spending it on capability, which
+/// is what [PERM-14] is about.
+///
+/// `None` is the request to leave, for the reason it is at the other two questions: a session that
+/// began behind it is one nobody agreed to have.
+///
+/// [PERM-14]: ../../docs/specs/permissions.md
+pub fn ask_granted<B: Backend>(terminal: &mut Terminal<B>, rules: &[Proposed]) -> Option<bool> {
+    granting(rules, || {
+        match terminal.draw(|frame| draw_granted(frame, rules)) {
+            Ok(_) => read_answer(),
+            // A terminal that cannot be drawn to cannot carry the question.
+            Err(_) => Answer::Decline,
+        }
+    })
+}
+
+/// Whether the rules are granted, given how the one question about them was answered.
+///
+/// Separated from the terminal so the decision can be tested without one, the way [`accepted`] is.
+/// An empty list is not asked about and grants nothing: no checkout `allow` entries means no box,
+/// which is the common case and is what [PERM-12] requires of a session nobody configured.
+///
+/// [PERM-12]: ../../docs/specs/permissions.md
+fn granting(rules: &[Proposed], answer: impl FnOnce() -> Answer) -> Option<bool> {
+    if rules.is_empty() {
+        return Some(false);
+    }
+    match answer() {
+        Answer::Trust => Some(true),
+        Answer::Decline => Some(false),
+        Answer::Leave => None,
+    }
 }
 
 /// Which of the directories to open, given how the question about each was answered.
@@ -225,6 +277,49 @@ fn draw_named(frame: &mut ratatui::Frame, directory: &str) {
     ];
 
     panel(frame, t!(named_directory_title), lines);
+}
+
+/// Draw the question about the `allow` rules a checkout proposed.
+///
+/// Every rule is listed, in the order the files wrote them, with the file each came from. That is
+/// what makes this an acceptable gate at all: the answer is informed consent for specific grants
+/// rather than a general feeling about the tree, and a question that named none of them would be the
+/// defect wearing a consent story.
+fn draw_granted(frame: &mut ratatui::Frame, rules: &[Proposed]) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            t!(granted_rules_question),
+            Style::default()
+                .fg(theme::brand_primary())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+    ];
+    // The rule first and the file under it, because the rule is what an answer is about and the file
+    // is what explains where a line the person never wrote came from.
+    for rule in rules {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", rule.rule),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("    {}", rule.path.display()),
+            Style::default().fg(theme::muted()),
+        )));
+    }
+    lines.extend([
+        Line::raw(""),
+        Line::from(Span::raw(t!(granted_rules_explained))),
+        Line::raw(""),
+        Line::from(Span::styled(
+            t!(granted_rules_regardless),
+            Style::default().fg(theme::muted()),
+        )),
+        Line::raw(""),
+        keys(t!(granted_rules_yes), t!(granted_rules_no)),
+    ]);
+
+    panel(frame, t!(granted_rules_title), lines);
 }
 
 /// What is being asked, and the path it is being asked about.
@@ -477,6 +572,130 @@ mod tests {
         assert!(answered.is_none(), "leaving started a session anyway");
     }
 
+    /// The rules a checkout proposes in the tests below.
+    fn proposed(rules: &[(&str, &str)]) -> Vec<Proposed> {
+        rules
+            .iter()
+            .map(|(path, rule)| Proposed::new(Path::new(path), rule))
+            .collect()
+    }
+
+    /// PERM-15: accepting grants the rules that were listed and declining grants none, and either
+    /// way the session begins. Both directions, because a fix that granted on any answer would pass
+    /// a test that only checked the accepting one, and that is the defect this route closes.
+    #[test]
+    fn the_rules_are_granted_only_where_the_person_accepts_them() {
+        let rules = proposed(&[(
+            "/work/.bravebot/settings.json",
+            "Bash(bash scripts/check.sh)",
+        )]);
+
+        assert!(
+            granting(&rules, || Answer::Trust).expect("answering still starts a session"),
+            "an accepted rule was not granted"
+        );
+        assert!(
+            !granting(&rules, || Answer::Decline).expect("declining still starts a session"),
+            "a declined rule was granted anyway"
+        );
+    }
+
+    /// PERM-12: no rules means no change. A session with nothing proposed is asked nothing extra,
+    /// which is the common case: a box that appeared with an empty list would be a question about
+    /// nothing, and a question that changes nothing either way trains answering without reading.
+    #[test]
+    fn nothing_is_asked_where_there_is_nothing_to_grant() {
+        let mut asked = false;
+        let granted = granting(&[], || {
+            asked = true;
+            Answer::Trust
+        })
+        .expect("a session with nothing proposed still starts");
+
+        assert!(!asked, "a question was put about an empty list");
+        assert!(!granted, "an empty list granted something");
+    }
+
+    /// Leaving is the answer to no question, so nothing is granted on the way out: a session that
+    /// granted a rule while its user was leaving would be acting on an answer nobody gave.
+    #[test]
+    fn leaving_at_the_rules_question_grants_nothing_and_starts_no_session() {
+        let rules = proposed(&[(
+            "/work/.bravebot/settings.json",
+            "Bash(bash scripts/check.sh)",
+        )]);
+
+        assert!(
+            granting(&rules, || Answer::Leave).is_none(),
+            "leaving started a session anyway"
+        );
+    }
+
+    /// PERM-15: the box names every rule it would grant and the file each came from. This is what
+    /// makes trust an acceptable gate here at all: a question that collected an answer about the
+    /// tree and spent it on capability would be the defect wearing a consent story, so a rule the
+    /// person was not shown is a rule the box may not grant.
+    #[test]
+    fn the_rules_prompt_names_every_rule_and_the_file_it_came_from() {
+        let rules = proposed(&[
+            (
+                "/work/.bravebot/settings.json",
+                "Bash(bash scripts/check.sh)",
+            ),
+            ("/work/.bravebot/settings.local.json", "Edit(src/**)"),
+        ]);
+        let output = rendered(|frame| draw_granted(frame, &rules));
+
+        assert!(
+            output.contains("Bash(bash scripts/check.sh)"),
+            "the first rule was not shown: {output}"
+        );
+        assert!(
+            output.contains("Edit(src/**)"),
+            "the second rule was not shown: {output}"
+        );
+        assert!(
+            output.contains("settings.json"),
+            "no file was named: {output}"
+        );
+        assert!(
+            output.contains("settings.local.json"),
+            "the second rule's file was not named: {output}"
+        );
+    }
+
+    /// The box has to say what accepting does, since a rule answers a prompt the person would
+    /// otherwise have seen and that is the one thing they cannot read off a transcript afterwards.
+    #[test]
+    fn the_rules_prompt_explains_what_granting_does() {
+        let rules = proposed(&[(
+            "/work/.bravebot/settings.json",
+            "Bash(bash scripts/check.sh)",
+        )]);
+        let output = rendered(|frame| draw_granted(frame, &rules));
+
+        // Wrapping can split a phrase across lines, so assert on short fragments.
+        assert!(
+            output.contains("approval prompt"),
+            "no mention of what a rule answers: {output}"
+        );
+        assert!(
+            output.contains("not by you"),
+            "no mention of who wrote the rules: {output}"
+        );
+    }
+
+    /// This question needs the theme's own chrome for the reason the other two do: the frame is what
+    /// says the question is the system's and not something a file being read is asking.
+    #[test]
+    fn the_rules_prompt_paints_the_themes_background_inside_its_border() {
+        let rules = proposed(&[(
+            "/work/.bravebot/settings.json",
+            "Bash(bash scripts/check.sh)",
+        )]);
+        paints_the_themes_chrome(|frame| draw_granted(frame, &rules));
+    }
+
     /// The path is the whole of what the answer is about, and it is the one thing a settings file
     /// chose rather than the person reading the box.
     #[test]
@@ -509,12 +728,13 @@ mod tests {
         paints_the_themes_chrome(|frame| draw_named(frame, "/home/me/.ssh"));
     }
 
-    /// Both questions, since either can be the first thing a session draws on a small terminal.
+    /// All three questions, since any can be the first thing a session draws on a small terminal.
     ///
-    /// Surviving the draw is half of it. These two are asked before a session exists, and nothing
+    /// Surviving the draw is half of it. These are asked before a session exists, and nothing
     /// else is on the screen to say what the keys mean, so a small terminal that drew the border
     /// and lost the question would leave somebody pressing `y` at a panel that never said what it
-    /// was about.
+    /// was about. The rules box is the one that can be arbitrarily long, so it is also the one where
+    /// the question could be pushed out of view by its own content.
     #[test]
     fn a_tiny_terminal_still_renders() {
         let mut terminal = Terminal::new(TestBackend::new(24, 8)).expect("terminal");
@@ -532,6 +752,19 @@ mod tests {
             .expect("must not panic on a small area");
         assert!(
             drawn_on(&terminal).contains("Open /tmp/x?"),
+            "the question was drawn out of view: {}",
+            drawn_on(&terminal)
+        );
+
+        let rules = proposed(&[(
+            "/work/.bravebot/settings.json",
+            "Bash(bash scripts/check.sh)",
+        )]);
+        terminal
+            .draw(|frame| draw_granted(frame, &rules))
+            .expect("must not panic on a small area");
+        assert!(
+            drawn_on(&terminal).contains("This project"),
             "the question was drawn out of view: {}",
             drawn_on(&terminal)
         );

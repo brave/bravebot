@@ -2432,8 +2432,28 @@ fn event_loop(
     // line's switch is read here and nowhere else in the interface.
     session.adopt_vetting(bravebot_core::vetting::asked_for(), settings.auto_vetting());
     session.adopt_keybindings(settings.keybindings());
-    let (permissions, rejected) = bravebot_agent::permissions::from_settings(
+    // The `allow` rules a checkout proposed, which decide something only where this session's own
+    // user grants them. Settled before the rules are built, because a granted one is a rule and the
+    // list has to be complete before anything is parsed out of it.
+    let proposed = proposed_rules(&settings);
+    let grants = bravebot_agent::home::directory()
+        .map(|home| bravebot_agent::granted::Store::new(&home, workspace.root()));
+    let Some(granted) = grant_proposed_rules(
+        terminal,
+        &mut session,
+        whence,
+        grants.as_ref(),
+        &proposed,
+        stored.id(),
+    ) else {
+        return Ok(left_behind(&stored));
+    };
+    let (permissions, rejected) = bravebot_agent::permissions::with_granted(
         &settings,
+        &granted
+            .iter()
+            .map(|rule| rule.rule.clone())
+            .collect::<Vec<_>>(),
         bravebot_agent::home::profile().as_deref(),
     );
     // Said out loud, because a rule that parses as nothing is a rule somebody believes is in
@@ -2444,14 +2464,19 @@ fn event_loop(
             problem = bravebot_agent::permissions::describe(problem)
         ));
     }
-    // And said out loud for the same reason: an `allow` entry a checkout wrote is dropped, so the
-    // prompt it was meant to answer still appears. Somebody told nothing reads that prompt as a
-    // second fault rather than as the rule not being in force.
-    for (path, rule) in settings.allow_ignored() {
+    // And said out loud for the same reason: an `allow` entry a checkout wrote that nobody granted
+    // is dropped, so the prompt it was meant to answer still appears. Somebody told nothing reads
+    // that prompt as a second fault rather than as the rule not being in force. One this session
+    // granted is not named here, because it is in force and there is nothing to explain.
+    //
+    // Matched on the file as well as the text, since two layers may write one rule and only one of
+    // them be granted: a comparison on the text alone would report neither, leaving an entry that
+    // answers nothing with nothing said about it.
+    for rule in proposed.iter().filter(|rule| !granted.contains(rule)) {
         session.note(t!(
             session_permission_allow_ignored,
-            rule = rule,
-            path = path.display().to_string()
+            rule = &rule.rule,
+            path = rule.path.display().to_string()
         ));
     }
     // For the same reason, and it matters more: this one is not a rule that quietly does nothing but
@@ -3719,6 +3744,136 @@ fn named_directories(whence: Whence, named: &[String]) -> Named {
         // for a question nobody is being asked.
         Whence::Resumed => Named::Opening(Vec::new()),
     }
+}
+
+/// The `allow` rules a checkout's settings files proposed, in the order the files wrote them.
+///
+/// A rule in one of those layers grants rather than narrows, so it is dropped where it is read
+/// ([PERM-14]) and arrives here as a request instead. The order is the files' own, because that is
+/// the order a person reads them in the box.
+///
+/// [PERM-14]: ../../docs/specs/permissions.md
+fn proposed_rules(settings: &bravebot_config::Settings) -> Vec<bravebot_agent::granted::Proposed> {
+    settings
+        .allow_ignored()
+        .map(|(path, rule)| bravebot_agent::granted::Proposed::new(path, rule))
+        .collect()
+}
+
+/// What becomes of the `allow` rules a checkout proposed.
+#[derive(Debug, PartialEq, Eq)]
+enum Granting {
+    /// In force with nothing put to anybody, because something else answered.
+    Granting(Vec<bravebot_agent::granted::Proposed>),
+    /// The rules already granted for this workspace, and the rest put to the person as one question.
+    Asking {
+        already: Vec<bravebot_agent::granted::Proposed>,
+        asking: Vec<bravebot_agent::granted::Proposed>,
+    },
+}
+
+/// What becomes of those rules for a session that opened this way, given what the record holds.
+///
+/// Three ways a rule ends up in force, and they are the three [`Whence`] names:
+///
+/// - **Asked.** The person answered the workspace question just now, so they answer this one too,
+///   bar the rules their own record already holds for this workspace, which they answered before and
+///   are not asked about twice. A question already answered a box ago trains answering without
+///   reading, which is [PERM-13]'s reasoning for a directory two layers both named.
+/// - **Unasked.** The mode in force answers every question, so it answers this one, on the terms it
+///   answers the workspace's. The record is not consulted and nothing is written to it: a grant
+///   recorded for somebody who was never asked would be an answer on disk outliving the flag that
+///   made it, and the mode grants these for the session it is in force for.
+/// - **Resumed.** Nothing is put to it, and what holds is what that workspace's record already says,
+///   which is [PERM-10]'s treatment of a resume that brought its own map. A rule the checkout has
+///   added since is not one anybody granted, so it is not in force here either.
+///
+/// Separated from [`grant_proposed_rules`] so the decision can be made without a terminal, the way
+/// [`named_directories`] is.
+///
+/// [PERM-10]: ../../docs/specs/permissions.md
+/// [PERM-13]: ../../docs/specs/permissions.md
+fn granting_proposed_rules(
+    whence: Whence,
+    proposed: &[bravebot_agent::granted::Proposed],
+    already: &[bravebot_agent::granted::Proposed],
+) -> Granting {
+    match whence {
+        Whence::Resumed => Granting::Granting(already.to_vec()),
+        Whence::Unasked => Granting::Granting(proposed.to_vec()),
+        Whence::Asked => Granting::Asking {
+            already: already.to_vec(),
+            asking: proposed
+                .iter()
+                .filter(|rule| !already.contains(rule))
+                .cloned()
+                .collect(),
+        },
+    }
+}
+
+/// Which proposed rules this session installs, or `None` where the person asked to leave.
+///
+/// A rule is granted for the file that proposed it, so what comes back is the text alone: which
+/// layer wrote it decided whether to ask, and by here that is answered.
+fn grant_proposed_rules(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
+    whence: Whence,
+    grants: Option<&bravebot_agent::granted::Store>,
+    proposed: &[bravebot_agent::granted::Proposed],
+    id: &str,
+) -> Option<Vec<bravebot_agent::granted::Proposed>> {
+    // Nothing proposed is nothing to ask about and no record to read (PERM-12), which is every
+    // session in a checkout that carries no such rule.
+    if proposed.is_empty() {
+        return Some(Vec::new());
+    }
+    // No state directory, or one that cannot be read, is a record that says nothing, and a record
+    // that says nothing is a session that asks. Nothing here may fail a run.
+    let held: Vec<bravebot_agent::granted::Proposed> = match (whence, grants) {
+        // Not consulted where nothing is being put to anybody: the mode grants the whole list, so
+        // what the record holds cannot change the answer and reading it would be work for nothing.
+        (Whence::Unasked, _) | (_, None) => Vec::new(),
+        (_, Some(store)) => store.granted(proposed).into_iter().cloned().collect(),
+    };
+
+    let (already, asking) = match granting_proposed_rules(whence, proposed, &held) {
+        Granting::Granting(granting) => (granting, Vec::new()),
+        Granting::Asking { already, asking } => (already, asking),
+    };
+
+    // Said before the box rather than after it, so a person who granted these already is told which
+    // rules are in force without being asked again, and where that answer is kept. Named one at a
+    // time, for the reason a dropped rule is: whoever wrote it is looking for their own line and a
+    // count tells them nothing.
+    //
+    // Read off the record rather than off what is in force, because the two differ in the mode that
+    // answers every question: there the whole list holds and the record holds none of it, so a line
+    // saying the person allowed these before would name a file that does not mention them.
+    if let Some(store) = grants {
+        for rule in &held {
+            session.note(t!(
+                session_permission_allow_granted_before,
+                rule = &rule.rule,
+                path = rule.path.display().to_string(),
+                record = store.path().display().to_string()
+            ));
+        }
+    }
+
+    let mut granted = already;
+    if asking.is_empty() {
+        return Some(granted);
+    }
+    if !crate::trust_prompt::ask_granted(terminal, &asking)? {
+        return Some(granted);
+    }
+    if let Some(store) = grants {
+        store.grant(&asking.iter().collect::<Vec<_>>(), id);
+    }
+    granted.extend(asking);
+    Some(granted)
 }
 
 /// The directories the names in a settings file would open, in the order they were named.
@@ -12791,6 +12946,110 @@ mod tests {
         assert_eq!(
             named_directories(Whence::Resumed, &named),
             Named::Opening(Vec::new())
+        );
+    }
+
+    /// The rules a checkout proposes in the tests below.
+    fn proposed(rules: &[&str]) -> Vec<bravebot_agent::granted::Proposed> {
+        rules
+            .iter()
+            .map(|rule| {
+                bravebot_agent::granted::Proposed::new(
+                    std::path::Path::new("/work/.bravebot/settings.json"),
+                    rule,
+                )
+            })
+            .collect()
+    }
+
+    /// PERM-15: the person who was asked about the working directory is asked about the `allow` rules
+    /// a checkout proposed too, because each answers an approval prompt they would otherwise see and
+    /// the file is the easiest thing in a checkout to write to.
+    #[test]
+    fn a_person_asked_about_the_workspace_is_asked_about_the_rules_a_checkout_proposed() {
+        let rules = proposed(&["Bash(bash scripts/check.sh)", "Edit(src/**)"]);
+
+        assert_eq!(
+            granting_proposed_rules(Whence::Asked, &rules, &[]),
+            Granting::Asking {
+                already: Vec::new(),
+                asking: rules,
+            }
+        );
+    }
+
+    /// PERM-15: and not twice about the same rule. A rule this workspace's record already holds was
+    /// answered in an earlier session here, so it is in force without a box: a question already
+    /// answered trains the habit of answering without reading, which is the whole of what asking is
+    /// worth.
+    #[test]
+    fn a_rule_granted_in_an_earlier_session_is_in_force_rather_than_asked_about_again() {
+        let rules = proposed(&["Bash(bash scripts/check.sh)", "Edit(src/**)"]);
+        let already = proposed(&["Bash(bash scripts/check.sh)"]);
+
+        assert_eq!(
+            granting_proposed_rules(Whence::Asked, &rules, &already),
+            Granting::Asking {
+                already,
+                asking: proposed(&["Edit(src/**)"]),
+            }
+        );
+    }
+
+    /// PERM-15: two layers may write one rule, and a grant is for the file that proposed it, so the
+    /// one that was granted is in force and the other is still asked about.
+    ///
+    /// The case that decides how a dropped rule is reported. What is in force and what was proposed
+    /// are compared to work out which entries to name, and comparing the two on the rule text alone
+    /// would find this rule in both lists and report the ungranted copy as neither granted nor
+    /// dropped: an entry that answers no prompt, with nothing said about it.
+    #[test]
+    fn one_rule_text_in_two_files_is_granted_for_the_file_it_was_granted_in() {
+        let project = bravebot_agent::granted::Proposed::new(
+            std::path::Path::new("/work/.bravebot/settings.json"),
+            "Bash(bash scripts/check.sh)",
+        );
+        let local = bravebot_agent::granted::Proposed::new(
+            std::path::Path::new("/work/.bravebot/settings.local.json"),
+            "Bash(bash scripts/check.sh)",
+        );
+        let proposed = vec![project.clone(), local.clone()];
+
+        assert_eq!(
+            granting_proposed_rules(Whence::Asked, &proposed, std::slice::from_ref(&project)),
+            Granting::Asking {
+                already: vec![project],
+                asking: vec![local],
+            }
+        );
+    }
+
+    /// PERM-15: the mode that answers every permission question answers this one too, on the terms it
+    /// answers the workspace's. It approves every write, every run and vouching for every file the
+    /// planner reads, so stopping at a modal box about a rule that suppresses one of those prompts
+    /// would be the one thing it did not answer.
+    #[test]
+    fn bypassing_grants_the_rules_a_checkout_proposed_without_asking() {
+        let rules = proposed(&["Bash(bash scripts/check.sh)"]);
+
+        assert_eq!(
+            granting_proposed_rules(Whence::Unasked, &rules, &[]),
+            Granting::Granting(rules)
+        );
+    }
+
+    /// PERM-15: a session resumed with the map its own user left puts no question, and what holds is
+    /// what that workspace's record already says. A rule the checkout has added since is one nobody
+    /// granted, so granting it here would answer an approval prompt on behalf of somebody who was
+    /// never asked, out of a file that may have been edited since they answered.
+    #[test]
+    fn a_resume_grants_only_the_rules_the_record_already_held() {
+        let rules = proposed(&["Bash(bash scripts/check.sh)", "Edit(src/**)"]);
+        let already = proposed(&["Bash(bash scripts/check.sh)"]);
+
+        assert_eq!(
+            granting_proposed_rules(Whence::Resumed, &rules, &already),
+            Granting::Granting(already)
         );
     }
 
