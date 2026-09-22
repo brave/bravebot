@@ -68,7 +68,9 @@ skip = [
     { crate = "base64:0.22", reason = "the version challenge-bypass-ristretto 2.1 pins, and the workspace pins it to match; ureq 3.4 is on 0.23 internally" },
     { crate = "hashbrown:0.16", reason = "kasuari 0.4 pins it while the rest of ratatui 0.30 is on 0.17; neither is a dependency of this workspace" },
     { crate = "syn:2", reason = "proc macros only, so nothing of either version is in the binary; ratatui's macro crates are on 2 and serde_derive is on 3" },
+    { crate = "windows-sys:0.45", reason = "compiled for Windows audio capture and recognition under cpal 0.15 and vosk-sys" },
     { crate = "windows-sys:0.52", reason = "compiled for the Windows targets only; ring 0.17 pins it while rustix and mio are on 0.61" },
+    { crate = "windows-targets:0.42", reason = "transitive dependency of windows-sys 0.45 used by audio capture and recognition" },
 ]
 
 [sources]

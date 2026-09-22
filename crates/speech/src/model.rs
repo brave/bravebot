@@ -67,7 +67,9 @@ pub fn resolve_model_path(override_path: Option<&Path>) -> Result<PathBuf, Model
 pub fn default_model_directory() -> Result<PathBuf, io::Error> {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "neither HOME nor USERPROFILE set"))?;
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "neither HOME nor USERPROFILE set")
+        })?;
     let path = PathBuf::from(home).join(".bravebot").join("models");
     ensure_secure_dir(&path)?;
     Ok(path)

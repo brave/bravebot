@@ -9,6 +9,7 @@ repository.workspace = true
 
 [features]
 default = []
+speech = ["vosk-backend"]
 vosk-backend = ["dep:vosk", "dep:cpal"]
 
 [dependencies]

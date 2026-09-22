@@ -9,11 +9,11 @@ pub mod model;
 pub mod recognizer;
 pub mod synthesis;
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 
-pub use model::{resolve_model_path, ModelError};
+pub use model::{ModelError, resolve_model_path};
 pub use recognizer::{RecognitionResult, Recognizer};
 pub use synthesis::SpeechSynthesizer;
 
@@ -78,10 +78,10 @@ impl SpeechController {
 
         if self.canceled.load(Ordering::SeqCst) {
             let _ = tx.send(SpeechEvent::Canceled);
-        } else if let Some(text) = final_text {
-            if !text.trim().is_empty() {
-                let _ = tx.send(SpeechEvent::Transcript(text));
-            }
+        } else if let Some(text) = final_text
+            && !text.trim().is_empty()
+        {
+            let _ = tx.send(SpeechEvent::Transcript(text));
         }
     }
 

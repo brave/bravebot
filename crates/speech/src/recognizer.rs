@@ -5,8 +5,8 @@
 //! recognizer to ensure 100% pure Rust cross-compilability across all 6 architectures.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A speech recognition engine instance.
 pub struct Recognizer {
@@ -34,10 +34,10 @@ impl Recognizer {
                 .ok_or_else(|| "failed to load vosk model".to_string())?;
             let recognizer = vosk::Recognizer::new(&model, 16000.0)
                 .ok_or_else(|| "failed to instantiate vosk recognizer".to_string())?;
-            return Ok(Self {
+            Ok(Self {
                 canceled,
                 inner: Some(recognizer),
-            });
+            })
         }
 
         #[cfg(not(feature = "vosk-backend"))]
@@ -67,23 +67,25 @@ impl Recognizer {
         {
             if let Some(ref mut rec) = self.inner {
                 let state = rec.accept_waveform(data);
-                if state == vosk::DecodingState::Finalized {
-                    let result_str = rec.result().unwrap_or("");
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(result_str) {
-                        if let Some(text) = val.get("text").and_then(|t| t.as_str()) {
-                            if !text.is_empty() {
-                                return RecognitionResult::Final(text.to_string());
+                if let Ok(vosk::DecodingState::Finalized) = state {
+                    match rec.result() {
+                        vosk::CompleteResult::Single(s) => {
+                            if !s.text.is_empty() {
+                                return RecognitionResult::Final(s.text.to_string());
+                            }
+                        }
+                        vosk::CompleteResult::Multiple(m) => {
+                            if let Some(first) = m.alternatives.first()
+                                && !first.text.is_empty()
+                            {
+                                return RecognitionResult::Final(first.text.to_string());
                             }
                         }
                     }
                 } else {
-                    let partial_str = rec.partial_result();
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(partial_str) {
-                        if let Some(partial) = val.get("partial").and_then(|p| p.as_str()) {
-                            if !partial.is_empty() {
-                                return RecognitionResult::Partial(partial.to_string());
-                            }
-                        }
+                    let partial = rec.partial_result();
+                    if !partial.partial.is_empty() {
+                        return RecognitionResult::Partial(partial.partial.to_string());
                     }
                 }
             }
@@ -106,11 +108,17 @@ impl Recognizer {
         #[cfg(feature = "vosk-backend")]
         {
             if let Some(ref mut rec) = self.inner {
-                let result_str = rec.final_result().unwrap_or("");
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(result_str) {
-                    if let Some(text) = val.get("text").and_then(|t| t.as_str()) {
-                        if !text.is_empty() {
-                            return Some(text.to_string());
+                match rec.final_result() {
+                    vosk::CompleteResult::Single(s) => {
+                        if !s.text.is_empty() {
+                            return Some(s.text.to_string());
+                        }
+                    }
+                    vosk::CompleteResult::Multiple(m) => {
+                        if let Some(first) = m.alternatives.first()
+                            && !first.text.is_empty()
+                        {
+                            return Some(first.text.to_string());
                         }
                     }
                 }

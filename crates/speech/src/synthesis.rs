@@ -2,8 +2,8 @@
 //!
 //! Enforces immediate silence on user interaction in accordance with SPEECH-5.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A speech synthesis controller.
 #[derive(Clone, Default)]
