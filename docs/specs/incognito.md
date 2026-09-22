@@ -6,6 +6,7 @@ governs:
   - crates/core/src/incognito.rs
   - crates/agent/src/home.rs
   - crates/agent/src/remembered.rs
+  - crates/agent/src/subscription.rs
   - crates/session/src/store.rs
   - crates/session/src/sessions.rs
   - crates/cli/src/main.rs
@@ -18,6 +19,9 @@ documented-by: docs/website/docs/using/sessions.md
 ordinarily kept there is [sessions.md](sessions.md): the record of a session and the prompts a
 person typed. This is the mode that declines to keep it. The audit trail's contents are
 [trace.md](trace.md); this governs only whether it is written down.
+
+One file in that directory is still written, and [INCOG-8](#INCOG-8) states it: the imported
+credentials, which a session spends and records as spent.
 
 The boundary here is the directory this process owns. It is not confinement:
 [sandboxing.md](sandboxing.md) is the operating-system boundary, it applies to subprocesses running
@@ -83,10 +87,11 @@ hold gate names and paths, which is a record of a session having happened and wh
 ### INCOG-5: reading is unchanged
 
 An incognito session reads the settings, the recorded model and theme, the standing instructions,
-the skills and the imported credentials, exactly as an ordinary one does. Only writing is refused. The
-record of command lines somebody asked to be remembered past a session, which
-[tools/run.md](tools/run.md) governs, is read here on the same terms: a line
-already in it stops the asking as it does anywhere, and the key that would add one is not offered.
+the skills and the imported credentials, exactly as an ordinary one does. No read is refused, and
+what is refused is writing, apart from the one file [INCOG-8](#INCOG-8) names. The record of
+command lines somebody asked to be remembered past a session, which [tools/run.md](tools/run.md)
+governs, is read here on the same terms: a line already in it stops the asking as it does anywhere,
+and the key that would add one is not offered.
 
 **Why.** A session that could not read its own configuration would not be private, it would be
 broken, and one that could not read a credential could not reach a backend at all. This is the same
@@ -138,8 +143,8 @@ mode points.
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so
 
-Four things still reach the filesystem in an incognito session, each because not doing it would
-mean not doing the work:
+Five things still reach the filesystem in an incognito session, each because refusing it would cost
+more than what it leaves behind:
 
 - **The workspace.** `write_file` and `edit_file` go on editing the project. Those edits are the
   work rather than a trace of it, and a mode that silently declined them would be a broken agent
@@ -156,9 +161,21 @@ mean not doing the work:
   directory beside the editor's hand-off file, on the same terms, and goes with the session. Its
   name says which program made it and nothing about which project or which session, so an empty one
   records that this program ran at this time. [trust-map.md](trust-map.md) governs it.
+- **A credential that was spent.** An imported subscription is read and spent as in any session, and
+  the spent markers reach the file the import created under `~/.bravebot` when the session ends. A
+  credential is single use and presenting one to the service spends it there, so a marker that never
+  reached the file would leave a credential the service has already seen looking unspent: the next
+  session would offer it again, and the person would lose part of what they paid for. A batch that
+  runs out mid-session is renewed for the same order and written at once, on the same ground, since
+  those credentials cost a round trip to obtain and discarding them would waste them as surely. What
+  the file ends up holding is credentials for an order imported before the session and which of them
+  are spent, and nothing about which project or which prompts. Renewing an order is not importing
+  one, which [INCOG-7](#INCOG-7) refuses outright, and the file itself is governed by
+  [premium-credentials.md](premium-credentials.md).
 
 **Why.** A stated limit is worth more than an unstated one. Someone who knows the third of these
 can decide not to open an editor; someone who assumed the mode covered it has been misled by their
 own tool.
 
 `verified-by: bravebot_tui::editor::the_scratch_file_does_not_outlive_the_edit`
+`verified-by: bravebot_agent::incognito_credentials::a_spent_credential_is_written_back_in_a_private_session`
