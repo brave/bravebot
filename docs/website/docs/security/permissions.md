@@ -381,6 +381,17 @@ it cannot carry the second claim. If a rule could trust output, one line in a se
 fetched bytes into routing, which is the whole thing labels exist to prevent. Nor does an allow rule
 extend reach: it cannot open a path the workspace and the directories you opened do not already cover.
 
+**An allow rule has to be yours.** `deny` and `ask` work from any settings file, including the
+`.bravebot/settings.json` and `.bravebot/settings.local.json` that arrive with a repository, because
+both of those only ever take something away. `allow` is the one list that hands something back, so it
+is read from `~/.bravebot/settings.json`, and from a file you passed to `--settings` that sits outside
+the project you are working in. An `allow` entry in a checkout's file is dropped: whoever last edited
+the repository would otherwise be answering an approval prompt on your behalf, which is a program run
+with your privileges, a file written without the question, or a redirect to a host you were never
+shown. Every entry dropped is named, by `bravebot doctor` and in the session that read the file, so
+the prompt you still get is not a mystery. The cost is that waiving a prompt for one project means
+writing the rule in your own file, or passing one on the command line for that run.
+
 **Three prompts no rule can answer.** A run that would put your private data into a program asks
 whatever the rules say, because a rule saying which commands may run is not consent to hand one your
 data. A write whose destination is known only through a reference asks too: that prompt is the only

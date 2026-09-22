@@ -2444,6 +2444,16 @@ fn event_loop(
             problem = bravebot_agent::permissions::describe(problem)
         ));
     }
+    // And said out loud for the same reason: an `allow` entry a checkout wrote is dropped, so the
+    // prompt it was meant to answer still appears. Somebody told nothing reads that prompt as a
+    // second fault rather than as the rule not being in force.
+    for (path, rule) in settings.allow_ignored() {
+        session.note(t!(
+            session_permission_allow_ignored,
+            rule = rule,
+            path = path.display().to_string()
+        ));
+    }
     // For the same reason, and it matters more: this one is not a rule that quietly does nothing but
     // every rule at once. Said before the first prompt can be typed, so a person who did not mean to
     // pass the flag finds out before a write happens rather than after one. `/status` says it too,

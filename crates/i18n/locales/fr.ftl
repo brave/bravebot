@@ -207,6 +207,9 @@ doctor-settings-ignored = ignoré
 doctor-settings-vetting-ignored =
     vetting.auto dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json
+doctor-settings-allow-ignored =
+    la règle allow { $rule } dans { $path } n'est pas accordée : une règle allow répond à une
+    invite, elle n'est donc lue que depuis ~/.bravebot/settings.json
 doctor-managed = géré
 doctor-managed-pinned = { $names } depuis { $path }
 doctor-managed-nothing = { $path }, n'épinglant rien
@@ -886,6 +889,9 @@ session-directory-changed = travail désormais dans { $directory }, et approuvé
 session-directory-closed = { $directory } fermé ; rouvrez-le avec /add-dir { $directory }
 session-directory-not-changed = impossible de passer à { $directory } : { $problem }
 session-permission-rule-ignored = règle de permission ignorée dans settings.json : { $problem }
+session-permission-allow-ignored =
+    la règle allow { $rule } de { $path } n'est pas accordée : une règle allow répond à une
+    invite, elle n'est donc lue que depuis ~/.bravebot/settings.json
 session-permissions-skipped =
     --dangerously-skip-permissions : rien ne sera demandé avant une écriture, une commande, ou la
     lecture d'un fichier que personne n'a approuvé. shift-tab pour changer
