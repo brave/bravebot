@@ -17,6 +17,14 @@ use std::path::PathBuf;
 /// The crate roots Cargo finds in a member without being told, relative to its directory.
 const DISCOVERED_ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "build.rs"];
 
+/// The directories beside a member whose `.rs` files Cargo compiles as crates of their own,
+/// without the manifest naming any of them.
+///
+/// `tests` is absent for the same reason `[[test]]` is below: what a file there compiles to is
+/// its own crate that no root attribute reaches, which is the known cost recorded beside the
+/// clause.
+const DISCOVERED_TARGET_DIRECTORIES: [&str; 3] = ["src/bin", "examples", "benches"];
+
 /// The manifest sections whose `path` names a crate root as well.
 ///
 /// `[[test]]` is absent deliberately. A file under `tests/` is its own crate that no root
@@ -121,10 +129,10 @@ fn declared_roots(manifest: &str) -> Vec<String> {
     paths
 }
 
-/// Every file in a member's `src/bin`, which Cargo compiles as a binary of its own with nothing
-/// in the manifest saying so.
-fn discovered_binaries(directory: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(directory.join("src/bin")) else {
+/// Every file in one of a member's auto-discovered target directories, which Cargo compiles as a
+/// crate of its own with nothing in the manifest saying so.
+fn discovered_targets(directory: &Path, subdirectory: &str) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(directory.join(subdirectory)) else {
         return Vec::new();
     };
     entries
@@ -132,17 +140,23 @@ fn discovered_binaries(directory: &Path) -> Vec<String> {
         .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
         .map(|path| {
             let name = path.file_name().expect("a file name").to_string_lossy();
-            format!("src/bin/{name}")
+            format!("{subdirectory}/{name}")
         })
         .collect()
 }
 
-/// Every crate root in the workspace, as a workspace-relative name and the file to read.
-fn crate_roots() -> Vec<(String, PathBuf)> {
+/// The root of the workspace this test is compiled in.
+fn workspace() -> PathBuf {
     // CARGO_MANIFEST_DIR is `<workspace>/crates/cli`, so two pops reach the root.
     let mut workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     workspace.pop();
     workspace.pop();
+    workspace
+}
+
+/// Every crate root in the workspace, as a workspace-relative name and the file to read.
+fn crate_roots() -> Vec<(String, PathBuf)> {
+    let workspace = workspace();
 
     let manifest =
         std::fs::read_to_string(workspace.join("Cargo.toml")).expect("the workspace manifest");
@@ -162,7 +176,9 @@ fn crate_roots() -> Vec<(String, PathBuf)> {
         let mut relative: BTreeSet<String> =
             DISCOVERED_ROOTS.iter().map(|&root| root.into()).collect();
         relative.extend(declared_roots(&member_manifest));
-        relative.extend(discovered_binaries(&directory));
+        for subdirectory in DISCOVERED_TARGET_DIRECTORIES {
+            relative.extend(discovered_targets(&directory, subdirectory));
+        }
 
         let found: Vec<(String, PathBuf)> = relative
             .iter()
@@ -207,6 +223,48 @@ fn every_crate_root_says_what_it_does_about_unsafe() {
              `#[allow(unsafe_code)]` at each site that needs one"
         );
     }
+}
+
+/// An example and a benchmark are crate roots the same way a file under `src/bin` is: Cargo finds
+/// them without being told, and `cargo clippy --all-targets` compiles them. Only `tests/` is
+/// excused, so a set of roots that stops at `src/bin` leaves targets the workspace builds with
+/// nothing said about what they do with unsafe, which is the omission the rule above exists to
+/// catch and would silently not catch for them.
+#[test]
+fn the_rule_reaches_every_example_and_benchmark_beside_a_crate() {
+    let workspace = workspace();
+    let manifest =
+        std::fs::read_to_string(workspace.join("Cargo.toml")).expect("the workspace manifest");
+    let roots: BTreeSet<String> = crate_roots().into_iter().map(|(name, _)| name).collect();
+
+    let mut reached = 0;
+    for member in members(&manifest) {
+        for subdirectory in ["examples", "benches"] {
+            let Ok(entries) = std::fs::read_dir(workspace.join(&member).join(subdirectory)) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.expect("a directory entry").path();
+                if path.extension().is_none_or(|extension| extension != "rs") {
+                    continue;
+                }
+                let name = path.file_name().expect("a file name").to_string_lossy();
+                let root = format!("{member}/{subdirectory}/{name}");
+                assert!(
+                    roots.contains(&root),
+                    "{root} is a crate root Cargo compiles and crate_roots() never reads, so the \
+                     rule says nothing about it. DISCOVERED_TARGET_DIRECTORIES is the list it \
+                     walks"
+                );
+                reached += 1;
+            }
+        }
+    }
+    assert!(
+        reached > 0,
+        "the workspace has no example and no benchmark, so this test checked nothing. If the last \
+         one is gone for good, this test goes with it rather than passing on an empty set"
+    );
 }
 
 /// `deny` is the weaker of the two, because an `allow` further down reopens what it closed. A
