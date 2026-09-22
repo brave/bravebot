@@ -376,14 +376,48 @@ pub struct Queued {
     attached: Vec<Attached>,
     /// Pictures it named, settled at the same moment and for the same reason.
     pasted: Vec<AttachedImage>,
-    /// Whether the line is a command, and so waits to be carried out rather than to be sent.
+    /// What the line is waiting to become.
     ///
-    /// Decided by the caller, since which words are commands is the input box's to know and not
-    /// this type's. What it changes is where the line may go: a command is never offered to the
-    /// turn in flight, because the only thing that could do with it there is the planner, and a
-    /// command is not something the planner is asked.
-    command: bool,
+    /// Decided by the caller, since which words are commands and which mode the box was in are
+    /// the input box's to know and not this type's.
+    waiting: Waiting,
     recall: crate::history::Ticket,
+}
+
+impl Queued {
+    /// Whether the line is a command line for a shell rather than anything for this program or
+    /// the planner.
+    ///
+    /// What the row under the box reads from, since a command line drawn as a waiting prompt
+    /// would say the words were on their way to the model.
+    pub fn is_a_command_line(&self) -> bool {
+        self.waiting == Waiting::Shell
+    }
+}
+
+/// What a queued line is waiting to become when the turn in flight ends.
+///
+/// Two of the three are never offered to the turn, because the only thing that could do with a
+/// line there is the planner, and neither a command nor a command line is something the planner is
+/// asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Waiting {
+    /// A prompt: offered to the turn in flight as an interjection, and a turn of its own if the
+    /// turn ends before it is taken.
+    Prompt,
+    /// A command: carried out when the queue reaches it, exactly as Enter on it at rest would
+    /// have carried it out.
+    Command,
+    /// A command line, typed with shell mode armed: run through the shell when the queue reaches
+    /// it, exactly as Enter on it at rest would have run it.
+    Shell,
+}
+
+impl Waiting {
+    /// Whether the line is one the planner may be given.
+    fn is_sent(self) -> bool {
+        self == Waiting::Prompt
+    }
 }
 
 /// What the session is doing.
@@ -4740,7 +4774,7 @@ impl Session {
     /// Only while a turn is running. With none there is nothing to wait for and
     /// [`Session::submit`] is what Enter means.
     pub fn queue(&mut self) -> bool {
-        self.queue_line(false)
+        self.queue_line(Waiting::Prompt)
     }
 
     /// Take the current line as a command to carry out when the turn in flight has finished.
@@ -4754,10 +4788,32 @@ impl Session {
     /// spared: it is never put where the running turn can reach it, so nothing about it is sent
     /// anywhere, and nothing about it is in the conversation while it waits.
     pub fn queue_command(&mut self) -> bool {
-        self.queue_line(true)
+        self.queue_line(Waiting::Command)
     }
 
-    fn queue_line(&mut self, command: bool) -> bool {
+    /// Take the current line as a command line to run when the turn in flight has finished.
+    ///
+    /// The same wait the other two get, for the same reason, and what is different is again at the
+    /// far end: this line is run through the shell, which is what pressing Enter on it at rest
+    /// would have done with it.
+    ///
+    /// Shell mode is how a person said the line was for a shell, and a turn running changes
+    /// nothing about that: a turn can begin without anybody pressing anything, from a loop's tick
+    /// or a watch firing, so the mode is armed mid-turn over a line that was typed to be run. What
+    /// this may never do is hand it to the turn, since the planner would then be sent a command
+    /// line as a sentence somebody said.
+    ///
+    /// Leaves shell mode, exactly as running one at rest does: the mode lasts one command, and one
+    /// still armed over an emptied box would claim whatever is typed next.
+    pub fn queue_shell(&mut self) -> bool {
+        if !self.shell || !self.queue_line(Waiting::Shell) {
+            return false;
+        }
+        self.shell = false;
+        true
+    }
+
+    fn queue_line(&mut self, waiting: Waiting) -> bool {
         if self.status != Status::Working {
             return false;
         }
@@ -4779,17 +4835,18 @@ impl Session {
         // that is what the screen and the history are for, and a second copy of the resolved line
         // would be one for the two to disagree over.
         //
-        // Never for a command. That buffer is the one thing that reaches the planner from here, and
-        // handing it a command is how one used to be answered as a question about itself. A command
-        // waits in the queue below and nowhere else.
-        if !command {
+        // A prompt and nothing else. That buffer is the one thing that reaches the planner from
+        // here, and handing it a command is how one used to be answered as a question about
+        // itself, while handing it a command line is how `echo pwned` used to reach the planner as
+        // something a person had said. Both wait in the queue below and nowhere else.
+        if waiting.is_sent() {
             self.pending.push(resolved);
         }
         self.queued.push(Queued {
             prompt,
             attached,
             pasted,
-            command,
+            waiting,
             recall,
         });
         self.scroll = 0;
@@ -4847,11 +4904,11 @@ impl Session {
     /// where a waiting prompt is drawn. This is the moment it becomes part of the conversation, so
     /// this is the moment it joins the transcript, which reads in the order things happened.
     ///
-    /// The oldest prompt rather than the oldest line, because a command was never offered to the
-    /// turn: what the turn just took is the oldest line that had a copy in the buffer, and a command
-    /// queued ahead of it has one waiting there still.
+    /// The oldest prompt rather than the oldest line, because neither a command nor a command line
+    /// was ever offered to the turn: what the turn just took is the oldest line that had a copy in
+    /// the buffer, and either of those queued ahead of it has one waiting there still.
     pub fn interjected(&mut self) {
-        let Some(taken) = self.queued.iter().position(|waiting| !waiting.command) else {
+        let Some(taken) = self.queued.iter().position(|line| line.waiting.is_sent()) else {
             return;
         };
         let gone = self.queued.remove(taken);
@@ -4869,10 +4926,16 @@ impl Session {
     /// precommitted from it, and the files and pictures it named carried with it. That is why one
     /// left over is better off here than interjected, and why nothing tries to hurry it.
     ///
-    /// A command at the head of the queue stops this, rather than being sent: the queue is drained in
-    /// the order it was typed, and [`Session::take_queued_command`] is what takes that one.
+    /// A command or a command line at the head of the queue stops this, rather than being sent: the
+    /// queue is drained in the order it was typed, and [`Session::take_queued_command`] and
+    /// [`Session::take_queued_shell`] are what take those.
     pub fn send_queued(&mut self) -> Option<String> {
-        if self.status != Status::Idle || self.queued.first().is_none_or(|next| next.command) {
+        if self.status != Status::Idle
+            || self
+                .queued
+                .first()
+                .is_none_or(|next| !next.waiting.is_sent())
+        {
             return None;
         }
         let next = self.queued.remove(0);
@@ -4893,10 +4956,29 @@ impl Session {
     /// happen in: a command behind a prompt waits for that prompt's turn, the same way the prompt
     /// waited for the turn that was running when it was typed.
     pub fn take_queued_command(&mut self) -> Option<String> {
-        if self.status != Status::Idle || !self.queued.first()?.command {
+        if self.status != Status::Idle || self.queued.first()?.waiting != Waiting::Command {
             return None;
         }
         Some(self.queued.remove(0).prompt)
+    }
+
+    /// Take the command line waiting longest, if the session is free to run one.
+    ///
+    /// The line as it was typed, for the caller to run exactly as it runs one typed at rest. It
+    /// joins the transcript here, the way one submitted at rest joins it as it is submitted: this
+    /// is the moment it stops waiting and starts being run, and nothing about it was in the
+    /// transcript while it waited.
+    ///
+    /// Only from the head of the queue, for the reason [`Session::take_queued_command`] takes only
+    /// from there: what somebody typed first happens first.
+    pub fn take_queued_shell(&mut self) -> Option<String> {
+        if self.status != Status::Idle || self.queued.first()?.waiting != Waiting::Shell {
+            return None;
+        }
+        let line = self.queued.remove(0).prompt;
+        self.transcript.push(Entry::shell(line.clone()));
+        self.scroll = 0;
+        Some(line)
     }
 
     /// The loop repeating a prompt, where one is running.
@@ -5350,12 +5432,13 @@ impl Session {
         // Before anything is disturbed, so that finding nothing left to take leaves the box exactly
         // as it was rather than half rewritten.
         //
-        // A command comes back whatever the turn has reached, because there is nothing to take back
-        // from: it was never offered to the turn, so no copy of it is anywhere for the planner to
-        // have been given. What makes a prompt unreclaimable is that it has already gone.
+        // A command and a command line come back whatever the turn has reached, because there is
+        // nothing to take back from: neither was ever offered to the turn, so no copy of either is
+        // anywhere for the planner to have been given. What makes a prompt unreclaimable is that it
+        // has already gone.
         let mut reclaimed = Vec::new();
-        while let Some(command) = self.queued.last().map(|waiting| waiting.command) {
-            if !command && !self.pending.forget_last() {
+        while let Some(waiting) = self.queued.last().map(|line| line.waiting) {
+            if waiting.is_sent() && !self.pending.forget_last() {
                 break;
             }
             reclaimed.push(self.queued.pop().expect("the queue was not empty"));

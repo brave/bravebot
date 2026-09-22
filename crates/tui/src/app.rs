@@ -1188,6 +1188,13 @@ fn queued_next(session: &mut Session) -> Option<Action> {
     if let Some(line) = session.take_queued_command() {
         return Some(dispatch_command(session, &line));
     }
+    // And a command line somebody queued in shell mode, which is here for the same reason and
+    // becomes what Enter on it at rest becomes. Each of the three asks about the head of the queue
+    // and answers for nothing else, so the order they are asked in decides nothing: what somebody
+    // typed first happens first.
+    if let Some(line) = session.take_queued_shell() {
+        return Some(Action::Run(line));
+    }
     session.send_queued().map(Action::Submit)
 }
 
@@ -1505,6 +1512,19 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
         return Action::Redraw;
     }
 
+    // Before every arm that queues anything else, because in shell mode the line is a command line
+    // and nothing else, which is the order the idle ladder answers the two in: `/status` there is a
+    // path to a program somebody may have. The line waits, as every line Enter is pressed on
+    // mid-turn waits, and what it waits to be is what the person armed the mode to make it. What it
+    // is spared is the running turn: handing a command line to the planner would put `echo pwned`
+    // in the conversation as a sentence somebody said.
+    //
+    // Reachable because a turn can begin with nobody pressing anything, from a loop's tick or a
+    // watch firing, which leaves the mode armed over a line that was typed at rest to be run.
+    if key.code == KeyCode::Enter && session.shell && session.queue_shell() {
+        return Action::Redraw;
+    }
+
     // Before the arm that queues a prompt, because the two do the same thing to the box and differ
     // only in what is waiting afterwards. This line waits to be carried out; the queue is what a
     // person typing mid-turn already understands, so a command joins it rather than sitting in the
@@ -1512,7 +1532,7 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // never offered to it, so the planner is never asked what to clear.
     //
     // Not in shell mode, where the line is a command line and `/status` is a path to a program, for
-    // the reason the idle ladder answers a shell line before its command arms.
+    // the reason the arm above answers that mode first.
     if key.code == KeyCode::Enter
         && !session.shell
         && command_typed(session.input()).is_some()
@@ -10389,6 +10409,207 @@ mod tests {
             None,
             "a command line was queued as a command"
         );
+        assert_eq!(
+            queued_next(&mut session),
+            Some(Action::Run(STATUS_COMMAND.to_string())),
+            "the program the person named was not the line that ran"
+        );
+    }
+
+    /// The mode is how a person said the line was for a shell, and a turn beginning under them says
+    /// nothing about it: one begins with no press behind it, from a loop's tick or a watch firing, so
+    /// the mode is armed mid-turn over a line that was typed at rest to be run. Queued as a prompt,
+    /// `echo pwned` reached the planner as a sentence somebody had said, from the keystroke that at
+    /// rest runs it.
+    #[test]
+    fn a_command_line_is_not_sent_to_the_running_turn() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.status, Status::Working);
+        session.shell = true;
+
+        for c in "echo pwned".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+
+        assert!(session.input().is_empty(), "the line stayed in the box");
+        assert_eq!(session.queued.len(), 1, "the command line is not waiting");
+        assert_eq!(session.queued[0].prompt, "echo pwned");
+        assert_eq!(
+            session.interjections().take(),
+            None,
+            "the running turn was handed the command line"
+        );
+        assert_eq!(
+            session
+                .transcript
+                .last()
+                .expect("the first prompt is in the transcript")
+                .text,
+            "first",
+            "the command line joined the conversation while it waited"
+        );
+    }
+
+    /// What queueing a command line promises, and the whole of what the press deferred: the line is
+    /// run, it is run as a command line rather than as anything the planner is asked, and it is run
+    /// off the loop, since the press that asked for it has already been made. It joins the transcript
+    /// as it starts running, behind the marker the scrollback echoes a command line with.
+    #[test]
+    fn the_command_line_queued_while_a_turn_ran_is_run_when_the_turn_ends() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.shell = true;
+
+        for c in "echo pwned".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        assert_eq!(
+            queued_next(&mut session),
+            None,
+            "it ran while the turn was still running"
+        );
+
+        session.complete("answered", Vec::new(), 0);
+        assert_eq!(
+            queued_next(&mut session),
+            Some(Action::Run("echo pwned".to_string()))
+        );
+        assert!(session.queued.is_empty(), "it is still waiting");
+        assert_eq!(queued_next(&mut session), None, "it ran twice");
+
+        let echoed = session
+            .transcript
+            .last()
+            .expect("the command line is in the transcript");
+        assert_eq!(echoed.text, "echo pwned");
+        assert_eq!(
+            echoed.speaker,
+            crate::state::Speaker::Shell,
+            "the line the person ran was recorded as something they said"
+        );
+    }
+
+    /// The mode lasts one command line, whether that line ran at once or waited for a turn. Left
+    /// armed over an emptied box it would claim whatever was typed next, which is the reason `!`
+    /// itself is refused mid-turn: nobody armed a mode over a sentence they have not written yet.
+    #[test]
+    fn queueing_a_command_line_leaves_shell_mode() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.shell = true;
+
+        for c in "echo pwned".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+
+        assert!(!session.shell, "the mode is armed over the next line");
+    }
+
+    /// The turn takes the oldest prompt, and a command line queued ahead of one is not it. Taking the
+    /// head of the queue regardless would record the command line as the line the planner was given,
+    /// which is the whole of what the mode says it is not.
+    #[test]
+    fn a_queued_command_line_is_not_what_the_turn_took() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.shell = true;
+
+        for c in "echo pwned".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        for c in "and tidy up".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(
+            session.interjections().take().as_deref(),
+            Some("and tidy up"),
+            "the turn was offered something other than the prompt"
+        );
+        session.interjected();
+
+        assert_eq!(
+            session
+                .transcript
+                .last()
+                .expect("the interjection is in the transcript")
+                .text,
+            "and tidy up",
+            "the command line was recorded as the line the turn took"
+        );
+        assert_eq!(session.queued.len(), 1, "the command line stopped waiting");
+        assert_eq!(session.queued[0].prompt, "echo pwned");
+    }
+
+    /// The order somebody typed things in is the order they happen in, and what sends a queued prompt
+    /// is a turn ending. The turn that ended stopped at the command line in front of it, so without
+    /// the loop taking that one the prompt behind it would wait for a press nobody is going to make.
+    #[test]
+    fn a_prompt_queued_behind_a_command_line_is_sent_once_it_has_run() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.shell = true;
+
+        for c in "echo pwned".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        for c in "and tidy up".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        session.complete("answered", Vec::new(), 0);
+
+        assert_eq!(
+            queued_next(&mut session),
+            Some(Action::Run("echo pwned".to_string())),
+            "the prompt went before the command line in front of it"
+        );
+        assert_eq!(
+            queued_next(&mut session),
+            Some(Action::Submit("and tidy up".to_string())),
+            "the prompt behind the command line was left waiting"
+        );
+        assert_eq!(session.status, Status::Working);
+    }
+
+    /// A waiting command line comes back like anything else waiting, and it comes back whatever the
+    /// turn has reached: what stops a prompt coming back is the planner having been given it, and this
+    /// line was given to nobody. It comes back as words, the way a line put away does, so running it
+    /// takes arming the mode again.
+    #[test]
+    fn a_queued_command_line_comes_back_to_the_box() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.shell = true;
+
+        for c in "echo pwned".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+
+        assert!(
+            session.unqueue(),
+            "the command line could not be taken back"
+        );
+        assert_eq!(session.input(), "echo pwned");
+        assert!(session.queued.is_empty(), "it is waiting still");
+        assert!(!session.shell, "the line brought the mode back with it");
     }
 
     /// Every word in the table rather than the one that was reported. The arm reads the same table the

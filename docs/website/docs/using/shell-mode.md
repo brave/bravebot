@@ -21,6 +21,15 @@ run.
 The `!` is a mode rather than a character: the prompt changes colour, the hint names the shell the line
 is about to go to, Backspace or Escape leaves it, and the mode lasts one command.
 
+## While a turn is running
+
+A turn can begin with nobody pressing anything, from a [`/loop`](../reference/commands.md#loop-interval-prompt) tick
+or a watch firing, so it can begin while `!` is armed and a command line is in the box. Enter there
+does what Enter does to any line typed mid-turn: the line waits, drawn under the box behind its `!`
+and marked as waiting, and it is run when the turn ends. It is never sent to the model as a prompt,
+because the mode is how you said the line was for a shell. Taking the queue back gives it to the box
+as words, so running it then takes arming the mode again.
+
 ## Nothing asks
 
 `! rm -rf build` runs, with no approval prompt. The approval prompt exists so that a person endorses

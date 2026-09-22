@@ -2634,12 +2634,20 @@ fn stashed_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
 /// The prompt is the user's own text on its way back to them, so nothing here is a decision and
 /// nothing is labelled. Control characters go through `printable` all the same, since a prompt can
 /// be pasted and a paste can carry anything.
+///
+/// A command line waiting there carries the `!` the scrollback echoes one behind, because the two
+/// go to different places and the row is the only thing that says which: `echo pwned` under the
+/// box with nothing in front of it reads as words on their way to the model.
 fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for waiting in &session.queued {
         let room = (width as usize).saturating_sub(4);
+        let lead = match waiting.is_a_command_line() {
+            true => "! ",
+            false => "  ",
+        };
         lines.push(Line::from(vec![
-            Span::styled("  ", Style::default().fg(theme::brand_primary())),
+            Span::styled(lead, Style::default().fg(theme::brand_primary())),
             Span::styled(
                 printable(&head_of(&waiting.prompt, room)),
                 Style::default().fg(theme::brand_primary()),
