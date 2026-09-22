@@ -17,7 +17,7 @@ guards:
       - crates/agent/tests/workspace.rs: 27
       - crates/aichat/src/lib.rs: 4
       - crates/bedrock/src/lib.rs: 5
-      - crates/core/src/policy.rs: 80
+      - crates/core/src/policy.rs: 83
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
@@ -168,9 +168,10 @@ No inputs means no taint.
 ### LABEL-3: nothing untrusted in the planner's context
 
 Untrusted content is never placed in a message to the model. It is quarantined in a write-once
-slot and the planner is given a **reference**: origin, line count, byte count, label. The planner
-acts on content it cannot read by naming that reference, and the policy layer resolves it when the
-write or the call actually happens. Where the content has to be changed rather than moved, it goes
+slot and the planner is given a **reference**: origin, line count, byte count, label, and for an
+entry out of a listing whether it stands for a file or for a directory the walk stopped at. The
+planner acts on content it cannot read by naming that reference, and the policy layer resolves it
+when the write or the call actually happens. Where the content has to be changed rather than moved, it goes
 to a processor, described in [processors.md](processors.md).
 
 The origin is routing, and it is trusted where it is presented. The counts are numbers and the

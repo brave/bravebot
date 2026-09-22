@@ -106,6 +106,7 @@ impl std::error::Error for SlotError {}
 pub(crate) struct Deferred {
     path: String,
     label: Label,
+    directory: bool,
 }
 
 impl Deferred {
@@ -117,6 +118,11 @@ impl Deferred {
     /// The label recorded when the read was deferred.
     pub(crate) fn label(&self) -> Label {
         self.label
+    }
+
+    /// Whether the path is a directory a listing stopped at rather than a file in it.
+    pub(crate) fn is_a_directory(&self) -> bool {
+        self.directory
     }
 }
 
@@ -465,6 +471,31 @@ impl SlotStore {
         path: impl Into<String>,
         label: Label,
     ) -> Result<(), SlotError> {
+        self.defer_entry(id, path, label, false)
+    }
+
+    /// Record that a slot stands for a directory a listing stopped at.
+    ///
+    /// The name is kept exactly as a file's is, because the trail is read by the person whose
+    /// directory it is. What differs is that nothing may resolve it as somewhere to read from or
+    /// write to, which [`crate::policy::Policy::promote_reference_for_read`] and
+    /// [`crate::policy::Policy::destination_from_reference`] are what enforce.
+    pub(crate) fn defer_directory(
+        &mut self,
+        id: SlotId,
+        path: impl Into<String>,
+        label: Label,
+    ) -> Result<(), SlotError> {
+        self.defer_entry(id, path, label, true)
+    }
+
+    fn defer_entry(
+        &mut self,
+        id: SlotId,
+        path: impl Into<String>,
+        label: Label,
+        directory: bool,
+    ) -> Result<(), SlotError> {
         if self.is_written(&id) {
             return Err(SlotError::AlreadyWritten(id));
         }
@@ -473,9 +504,19 @@ impl SlotStore {
             Entry::Unread(Deferred {
                 path: path.into(),
                 label,
+                directory,
             }),
         );
         Ok(())
+    }
+
+    /// Whether a slot stands for a directory a listing stopped at rather than a file.
+    ///
+    /// False for a slot holding content and for one nothing has deferred, which is the answer
+    /// either way: neither is a directory, and what each of those is instead is refused by
+    /// whoever asked for a path.
+    pub(crate) fn names_a_directory(&self, id: &SlotId) -> bool {
+        matches!(self.slots.get(id), Some(Entry::Unread(deferred)) if deferred.is_a_directory())
     }
 
     /// Put the bytes into a slot that was waiting for them.
