@@ -20,12 +20,19 @@ make github-release
 # later: Actions → Publish npm, with tag v<version>
 ```
 
-`bump-version` rewrites the version in `Cargo.toml`, `Cargo.lock`, `package.json`, and
-`package-lock.json`, commits exactly those four as `Bump version to <version>`, and stops there:
-nothing is pushed and nothing is tagged. It refuses if any of the four is already modified,
-rather than committing changes it did not write. `github-release` refuses to tag unless the tree
-is clean, the two version files agree, and HEAD is `main` at the release remote's `main`, then
-pushes `v<version>` there.
+`bump-version` rewrites the version in `Cargo.toml`, `Cargo.lock`, `package.json`,
+`package-lock.json`, `ui/package.json`, and `ui/package-lock.json`, commits exactly those six as
+`Bump version to <version>`, and stops there: nothing is pushed and nothing is tagged. It refuses
+if any of the six is already modified, rather than committing changes it did not write, and it
+runs `make check-versions` before committing, so a bump that misses one fails there rather than
+at the tag. `github-release` refuses to tag unless the tree is clean, every file that states the
+version agrees, and HEAD is `main` at the release remote's `main`, then pushes `v<version>` there.
+
+The desktop application is packaged from `ui/package.json`, so its version is the one the app
+bundle carries and the one the About window shows beside the agent build. It is the same release:
+the app ships an agent build rather than versioning separately. `make check-versions` is what
+holds the six together, and CI runs it, so a manifest left behind fails the pull request that
+left it rather than the release weeks later.
 
 **The release remote.** `origin` by default, which is right for a clone of this repository and
 wrong for a clone of a fork of it, where `origin` names the fork. A tag pushed to a fork is one

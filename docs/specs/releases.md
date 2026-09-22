@@ -10,6 +10,9 @@ governs:
   - install.sh
   - package.json
   - package-lock.json
+  - ui/package.json
+  - ui/package-lock.json
+  - contrib/check-versions.py
 documented-by: docs/website/docs/quickstart.md
 ---
 
@@ -41,14 +44,19 @@ suite can execute, so each clause says in brackets what makes it hold.
 ### RELEASE-1: one version names a release, and every file that states it agrees
 
 The workspace manifest holds the version. Every other file that repeats it, the npm package
-manifest in particular, states the same value, and a disagreement stops a release rather than
-being resolved in favour of either.
+manifest and the desktop application's manifest in particular, states the same value, and a
+disagreement stops a release rather than being resolved in favour of either. A disagreement is
+reported by a check that runs on every pull request, rather than only by the refusal at the tag.
 
 **Why.** The installer derives the tag it downloads from the version it was published with, so two
 files disagreeing does not produce a mislabelled release, it produces a release whose assets the
-installer looks for under a name that was never uploaded.
+installer looks for under a name that was never uploaded. The application is packaged from its own
+manifest and ships an agent build, so a version left behind there is an app naming a release that
+was never made. Reporting it at the tag is release day; reporting it in CI is the pull request
+that caused it, and the front end sat two minor versions behind from the day it was folded in with
+nothing anywhere saying so.
 
-`verified-by: by-construction (bumping rewrites every file that states the version in one step, and both tagging and Jenkins refuse a mismatch)`
+`verified-by: by-construction (bumping rewrites every file that states the version in one step and checks its own work before committing, make check-versions faults a disagreement on every pull request, and both tagging and Jenkins refuse a mismatch)`
 
 <a id="RELEASE-2"></a>
 ### RELEASE-2: setting the next version commits every file that states it, and publishes nothing
@@ -95,8 +103,8 @@ work that was never reviewed; tagging ahead of the remote names a commit nobody 
 <a id="RELEASE-5"></a>
 ### RELEASE-5: the published name is the version in the tree that was built
 
-The makefile names the tag `v` plus the version in `Cargo.toml`, after refusing a
-`package.json` mismatch. Jenkins names the GitHub release the same way from the `Cargo.toml`
+The makefile names the tag `v` plus the version in `Cargo.toml`, after refusing any
+disagreement among the files that state it. Jenkins names the GitHub release the same way from the `Cargo.toml`
 of the commit it checked out, after the same refusal. Neither path publishes under a name that
 disagrees with the tree it built.
 
@@ -104,7 +112,7 @@ disagrees with the tree it built.
 a release whose name is not the version in the tree is a release whose assets the installer
 looks for under a name that was never uploaded.
 
-`verified-by: by-construction (the tagging path sets the tag from Cargo.toml after checking package.json, a Jenkins RELEASE refuses unless that tag already names the commit it checked out and package.json states the same version, then names the GitHub release from Cargo.toml, and the npm publish refuses unless the tag is v plus the same version in both files)`
+`verified-by: by-construction (the tagging path sets the tag from Cargo.toml after make check-versions, a Jenkins RELEASE refuses unless that tag already names the commit it checked out and package.json states the same version, then names the GitHub release from Cargo.toml, and the npm publish refuses unless the tag is v plus the same version in both files)`
 
 <a id="RELEASE-6"></a>
 ### RELEASE-6: a published binary carries the configuration it needs to run
@@ -213,13 +221,16 @@ the pipeline that publishes.
 
 ## Known costs
 
-- **Nothing here is pinned by a test.** Every clause is by-construction, which means a refusal can
-  be removed and only a reader will notice. The tagging path is shell in a makefile, publication
-  is a Jenkins job in another repository, and a test that shelled out to a real tag push would
-  have to publish something to prove anything. What `make check-security` holds is the shape of the
-  publish workflow rather than any of these refusals: that no job beside the credential installs a
-  dependency, and that the checkout names a kind of ref. Both are read off the file, so a refusal
-  deleted from a `run:` block passes them.
+- **Nothing here is pinned by a Rust test.** Every clause is by-construction, which means a
+  refusal can be removed and only a reader will notice. The tagging path is shell in a makefile,
+  publication is a Jenkins job in another repository, and a test that shelled out to a real tag
+  push would have to publish something to prove anything. Two checks hold part of it from outside
+  the suite. `make check-security` holds the shape of the publish workflow rather than any of these
+  refusals: that no job beside the credential installs a dependency, and that the checkout names a
+  kind of ref. `make check-versions` holds [RELEASE-1](#RELEASE-1) itself, over the six files that
+  state a version, and carries its own selftest because a version check that is quietly partial
+  reports success forever. All three are read off files, so a refusal deleted from a `run:` block
+  passes them.
 
 - **Publication lives outside this repository.** `bravebot-build` in devops is what signs and
   attaches assets. A change there can break RELEASE-6 through RELEASE-8 without this tree
@@ -227,7 +238,7 @@ the pipeline that publishes.
   wrong form is refused here, not accepted.
 
 - **The refusals before a tag guard the tag, not the branch.** Tagging checks the branch, the
-  remote, and the agreement between the two version files. The publish job builds the tip of a
+  remote, and the agreement among the files that state a version. The publish job builds the tip of a
   branch it is handed, refuses a `package.json` mismatch, and refuses unless tag `v` plus the
   version in `Cargo.toml` already names that commit. A commit that is not `origin/main` can
   still be published if that is what the tag names and BRANCH points there.
