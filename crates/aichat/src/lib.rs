@@ -32,9 +32,9 @@ use std::time::Duration;
 
 /// Header that tells Brave's endpoint which product is calling.
 const BRAVE_PRODUCT_HEADER: &str = "Brave-Product";
-const BRAVE_PRODUCT: &str = "brave-bot";
+const BRAVE_PRODUCT: &str = "bravebot";
 
-/// Mark a request as coming from brave-bot so Brave's endpoint serves this product's roster and
+/// Mark a request as coming from bravebot so Brave's endpoint serves this product's roster and
 /// routing rather than Leo's.
 fn as_brave_bot(request: Request) -> Request {
     request.header(BRAVE_PRODUCT_HEADER, BRAVE_PRODUCT)
@@ -1164,7 +1164,7 @@ mod tests {
             header(&http, "authorization").is_some_and(|value| !value.starts_with("Bearer ")),
             "a signed request does not bearer-authenticate"
         );
-        assert_eq!(header(&http, "Brave-Product"), Some("brave-bot"));
+        assert_eq!(header(&http, "Brave-Product"), Some("bravebot"));
     }
 
     /// The interface reports what a request carries, and once a service has refused the field no

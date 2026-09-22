@@ -1,11 +1,11 @@
-//! What `GET /v1/models` offers when called with `Brave-Product: brave-bot`.
+//! What `GET /v1/models` offers when called with `Brave-Product: bravebot`.
 //!
 //! Asked so a person can pick one, and for nothing else. No model reads any of this: the list
 //! reaches a picker, the person there chooses, and what comes back is the name sent in the `model`
 //! field of a later request. That field is routing, and the endorsement for it is the choice.
 //!
 //! The endpoint answers with a bare array rather than an OpenAI-style `{"data": [...]}` envelope.
-//! [`automatic-brave-bot`](bravebot_config::DEFAULT_MODEL) is added here when the listing omits it,
+//! [`automatic-bravebot`](bravebot_config::DEFAULT_MODEL) is added here when the listing omits it,
 //! so a picker always offers the product's default triage entry.
 
 use bravebot_config::Config;
@@ -56,7 +56,7 @@ pub struct Model {
 impl Model {
     /// Let the server decide per request for this product.
     ///
-    /// Always offered: the curated brave-bot roster may omit it, and it is what an unrecognised
+    /// Always offered: the curated bravebot roster may omit it, and it is what an unrecognised
     /// name is reset to anyway, so it is the one choice that cannot fail to work.
     pub fn automatic() -> Self {
         Self {
@@ -453,7 +453,7 @@ mod tests {
     #[test]
     fn automatic_is_offered_once_even_if_the_server_lists_it_too() {
         let models = decoded(
-            r#"[{"key":"automatic-brave-bot","display_name":"Automatic","capabilities":["chat","tools"],
+            r#"[{"key":"automatic-bravebot","display_name":"Automatic","capabilities":["chat","tools"],
                  "options":{"access":"basic_and_premium"}}]"#,
         );
         assert_eq!(models, vec![Model::automatic()], "{models:?}");

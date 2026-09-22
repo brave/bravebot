@@ -100,7 +100,7 @@ settle the tier either. A pane too narrow for the wordmark still reports both.
 
 Where the server reports using a model other than the one you asked for, **both are shown**: the
 choice you made and the model that actually answered. This is said once when it starts happening
-rather than every turn. The automatic entry (`automatic-brave-bot`, shown as **Automatic**) resolving
+rather than every turn. The automatic entry (`automatic-bravebot`, shown as **Automatic**) resolving
 to a concrete model is not a substitution: that is the server choosing per request, which is what
 picking it means.
 

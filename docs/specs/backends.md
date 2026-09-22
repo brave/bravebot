@@ -280,7 +280,7 @@ configuration is built without touching the network, and a one-shot run never as
 only the interactive picker does. Resolving a word against it would put a round trip in front of every
 one-shot run to expand one word, and would fail with no network where it currently succeeds. The cost
 is that the service owns those names, and a renamed one is reset by the endpoint to
-`automatic-brave-bot`, which is where somebody with no `model` key already starts.
+`automatic-bravebot`, which is where somebody with no `model` key already starts.
 
 `verified-by: bravebot_config::lib::a_tier_alias_resolves_to_the_model_that_tier_names`
 `verified-by: bravebot_config::lib::a_tier_alias_without_bedrock_resolves_against_the_brave_roster`
@@ -766,7 +766,7 @@ with it.
 <a id="BACKEND-25"></a>
 ### BACKEND-25: a request to Brave's endpoint says which product is asking
 
-Every request to the aichat endpoint Brave runs carries `Brave-Product: brave-bot`, both the one
+Every request to the aichat endpoint Brave runs carries `Brave-Product: bravebot`, both the one
 asking for a reply and the one asking what models exist. The endpoint answers a listing curated for
 this product, and resolves that product's own automatic entry. Nothing decides whether to send the
 header: it is a literal on the one path that builds a request to that endpoint.
@@ -790,9 +790,9 @@ is the thing that knows.
 <a id="BACKEND-26"></a>
 ### BACKEND-26: the automatic entry names this product, and Leo's name resolves to it
 
-The name requested when nobody has chosen a model is `automatic-brave-bot`. Where a settings file,
+The name requested when nobody has chosen a model is `automatic-bravebot`. Where a settings file,
 an exported variable or a choice recorded earlier says `automatic`, that name resolves to
-`automatic-brave-bot` before it reaches a request. Every other name is used as written, under
+`automatic-bravebot` before it reaches a request. Every other name is used as written, under
 BACKEND-12.
 
 **Why.** `automatic` is Leo's triage entry and routes by a policy chosen for a chat assistant, so the
@@ -1595,7 +1595,7 @@ finished call except the stop reason, and the stop reason says not to trust any 
   is withholding a level from every Bedrock model including the ones that read it.
 
 - **Which models a product is served is the service's decision, and this holds no copy of it.** The
-  roster is whatever the endpoint returns for `brave-bot`, so a model becoming unsuitable for agentic
+  roster is whatever the endpoint returns for `bravebot`, so a model becoming unsuitable for agentic
   work is a change nothing here would notice, and one wrongly dropped from the curated set is a model
   a person cannot pick however well it would have worked. The alternative is a list of names compiled
   in, which BACKEND-12 already declines for the tier words and for the same reason: the service owns
