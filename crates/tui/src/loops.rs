@@ -13,6 +13,7 @@
 //! Nothing here is written to disk. A loop lives as long as the session that started it.
 
 pub use bravebot_agent::turn::{Tick, Wakeup};
+use bravebot_i18n::t;
 use std::time::{Duration, Instant};
 
 /// The shortest interval a person may set.
@@ -72,6 +73,9 @@ const SHORT_UNITS: [(&str, u64); 4] = [("s", 1), ("m", 60), ("h", 3_600), ("d", 
 /// The word that introduces an interval written at the end of a sentence.
 const EVERY: &str = "every";
 
+/// The word that ends the loop that is running, rather than starting one over it.
+const STOP: &str = "stop";
+
 /// How the moment of the next tick is decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pacing {
@@ -103,14 +107,54 @@ pub enum Held {
     Capped(Duration),
 }
 
+/// What the argument to `/loop` asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Asked {
+    /// The bare word: say what is repeating, or that nothing is.
+    Report,
+    /// End the loop that is running.
+    Stop,
+    /// Start a loop over this line.
+    Start(Request),
+    /// An interval with nothing to send, answered by saying what the command needs.
+    Unreadable,
+}
+
+impl Asked {
+    /// The request where the argument started a loop, and nothing where it asked for anything else.
+    pub fn started(self) -> Option<Request> {
+        match self {
+            Asked::Start(request) => Some(request),
+            _ => None,
+        }
+    }
+}
+
 /// Read the argument to `/loop`.
 ///
-/// `None` where there is nothing to send, which is the bare command and the interval on its own.
-/// Both are answered by saying what the command needs.
-pub fn parse(argument: &str) -> Option<Request> {
+/// Three forms and a refusal. The bare word says what is repeating, because what is going to
+/// happen without anybody typing is the one thing about a session that its transcript does not
+/// hold. `stop` ends the loop, which is the same ending Ctrl-C reaches and does not also stop the
+/// turn in flight. Anything else is a line to repeat, read for an interval as in
+/// [`leading_interval`] and [`trailing_interval`].
+///
+/// [`Asked::Unreadable`] is an interval with nothing after it, which is a loop that cannot be
+/// started. It stays apart from the bare word so that `/loop 5m` says what the command needs even
+/// while some other loop is running and could have been reported instead.
+pub fn parse(argument: &str) -> Asked {
     let argument = argument.trim();
     if argument.is_empty() {
-        return None;
+        return Asked::Report;
+    }
+
+    // Only as the whole of what would be sent. `stop the deploy` is a line somebody wants sent
+    // again, and a reserved word that ate its first token would send them the rest of their
+    // sentence forever. An interval beside it leaves the word the whole line even so, which is why
+    // the reading happens again in [`interval`]: `stop every 5m` is somebody ending the loop that
+    // runs every five minutes, and a loop sending the bare word `stop` to a model is nothing
+    // anybody means by anything.
+    if is_stop(argument) {
+        return Asked::Stop;
     }
 
     // The front of the line first. A token that is nothing but a number and a unit letter was
@@ -124,17 +168,28 @@ pub fn parse(argument: &str) -> Option<Request> {
         return interval(asked, prompt);
     }
 
-    Some(Request {
+    Asked::Start(Request {
         pacing: Pacing::SelfPaced,
         prompt: argument.to_string(),
         adjusted: None,
     })
 }
 
-/// A request from an interval and what is left of the line, or `None` where nothing is left.
-fn interval(asked: Duration, prompt: &str) -> Option<Request> {
+/// The reserved word, however somebody's terminal capitalised it.
+///
+/// Case-insensitive because the miss is not a message: a line that is the word and is not read as
+/// one becomes a loop sending `Stop` to a model until somebody presses Ctrl-C twice.
+fn is_stop(line: &str) -> bool {
+    line.eq_ignore_ascii_case(STOP)
+}
+
+/// A request from an interval and what is left of the line, where anything is left.
+fn interval(asked: Duration, prompt: &str) -> Asked {
     if prompt.is_empty() {
-        return None;
+        return Asked::Unreadable;
+    }
+    if is_stop(prompt) {
+        return Asked::Stop;
     }
     let held = asked.clamp(FLOOR, MAX_AGE);
     let adjusted = match held {
@@ -142,11 +197,22 @@ fn interval(asked: Duration, prompt: &str) -> Option<Request> {
         _ if held == FLOOR => Some(Held::Raised(held)),
         _ => Some(Held::Capped(held)),
     };
-    Some(Request {
+    Asked::Start(Request {
         pacing: Pacing::Every(held),
         prompt: prompt.to_string(),
         adjusted,
     })
+}
+
+/// The request in an argument that starts a loop, for the tests of what a loop then does.
+///
+/// Those tests want a running loop rather than the reading of an argument, and going through
+/// [`parse`] for it keeps them from disagreeing with it.
+#[cfg(test)]
+pub(crate) fn request(argument: &str) -> Request {
+    parse(argument)
+        .started()
+        .unwrap_or_else(|| panic!("{argument:?} started no loop"))
 }
 
 /// An interval written as the first word, and the rest of the line.
@@ -351,6 +417,27 @@ impl Running {
         self.due.map(|due| due.saturating_duration_since(now))
     }
 
+    /// How often this loop runs, in the words the status panel and the report both say it in.
+    pub fn pace(&self) -> String {
+        match self.pacing {
+            Pacing::Every(every) => t!(status_loop_every, every = spell(every)),
+            Pacing::SelfPaced => t!(status_loop_self_paced).to_string(),
+        }
+    }
+
+    /// When the next tick is, in those same words.
+    ///
+    /// Beside [`Self::pace`] because the two are read together and a session may hold either half
+    /// without the other making sense: a loop with a tick in flight has a pace and no moment, and
+    /// one waiting on a planner has neither.
+    pub fn when(&self, now: Instant) -> String {
+        match self.until(now) {
+            Some(until) => t!(status_loop_next, next = spell(until)),
+            None if self.ticking() => t!(status_loop_running).to_string(),
+            None => t!(status_loop_unpaced).to_string(),
+        }
+    }
+
     /// Whether the loop has run longer than a loop may run.
     pub fn aged_out(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.began) >= MAX_AGE
@@ -457,7 +544,7 @@ mod tests {
     /// know what they want repeated.
     #[test]
     fn an_interval_written_first_is_taken_off_the_front() {
-        let request = parse("5m check the deploy").expect("a prompt and an interval");
+        let request = request("5m check the deploy");
         assert_eq!(every(&request), Duration::from_secs(300));
         assert_eq!(request.prompt, "check the deploy");
     }
@@ -470,7 +557,7 @@ mod tests {
             ("2h watch", 7_200),
             ("1d watch", 86_400),
         ] {
-            let request = parse(line).expect("a prompt and an interval");
+            let request = request(line);
             assert_eq!(every(&request), Duration::from_secs(seconds), "{line}");
         }
     }
@@ -478,7 +565,7 @@ mod tests {
     /// The other way people write it, which reads as a sentence rather than as an argument.
     #[test]
     fn an_interval_written_last_is_taken_off_the_end() {
-        let request = parse("check the deploy every 20m").expect("a prompt and an interval");
+        let request = request("check the deploy every 20m");
         assert_eq!(every(&request), Duration::from_secs(1_200));
         assert_eq!(request.prompt, "check the deploy");
     }
@@ -491,7 +578,7 @@ mod tests {
             "check it every 20m",
             "check it EVERY 20 MINUTES",
         ] {
-            let request = parse(line).expect("a prompt and an interval");
+            let request = request(line);
             assert_eq!(every(&request), Duration::from_secs(1_200), "{line}");
             assert_eq!(request.prompt, "check it", "{line}");
         }
@@ -502,7 +589,7 @@ mod tests {
     #[test]
     fn every_without_a_time_after_it_is_words_rather_than_an_interval() {
         for line in ["check every PR", "look at every so often", "review every"] {
-            let request = parse(line).expect("a prompt");
+            let request = request(line);
             assert_eq!(request.pacing, Pacing::SelfPaced, "{line}");
             assert_eq!(request.prompt, line, "{line}");
         }
@@ -517,13 +604,12 @@ mod tests {
             "search everywhere 1h",
             "practice everyday 10s",
         ] {
-            let request = parse(line).expect("a prompt");
+            let request = request(line);
             assert_eq!(request.pacing, Pacing::SelfPaced, "{line}");
             assert_eq!(request.prompt, line, "{line}");
         }
 
-        let with_trailing =
-            parse("check everything 20m every 5m").expect("a prompt and an interval");
+        let with_trailing = request("check everything 20m every 5m");
         assert_eq!(every(&with_trailing), Duration::from_secs(300));
         assert_eq!(with_trailing.prompt, "check everything 20m");
     }
@@ -532,30 +618,84 @@ mod tests {
     /// an argument rather than by the one written in the sentence.
     #[test]
     fn a_leading_interval_wins_over_a_trailing_one() {
-        let request = parse("5m check the deploy every 20m").expect("a prompt and an interval");
+        let request = request("5m check the deploy every 20m");
         assert_eq!(every(&request), Duration::from_secs(300));
         assert_eq!(request.prompt, "check the deploy every 20m");
     }
 
     #[test]
     fn a_line_with_no_interval_is_paced_by_the_planner() {
-        let request = parse("watch the build").expect("a prompt");
+        let request = request("watch the build");
         assert_eq!(request.pacing, Pacing::SelfPaced);
         assert_eq!(request.prompt, "watch the build");
     }
 
-    /// Nothing to send is not a loop, however it was written.
+    /// Nothing to send is not a loop, however it was written. Kept apart from the bare word so
+    /// that a person who typed an interval and stopped is told what the command needs, rather
+    /// than handed a report about the loop they were in the middle of replacing.
     #[test]
     fn an_interval_with_nothing_to_send_is_not_a_request() {
-        for line in ["", "   ", "5m", "  5m  "] {
-            assert_eq!(parse(line), None, "{line}");
+        for line in ["5m", "  5m  ", "every 5m"] {
+            assert_eq!(parse(line), Asked::Unreadable, "{line}");
         }
+    }
+
+    /// What is going to happen next without anybody typing is the one thing about a session that
+    /// its transcript does not hold, so the bare word asks for it rather than being a mistake.
+    #[test]
+    fn the_bare_command_asks_what_is_repeating() {
+        for line in ["", "   "] {
+            assert_eq!(parse(line), Asked::Report, "{line}");
+        }
+    }
+
+    #[test]
+    fn stop_on_its_own_ends_the_loop() {
+        for line in ["stop", "  stop  "] {
+            assert_eq!(parse(line), Asked::Stop, "{line}");
+        }
+    }
+
+    /// A terminal that capitalises the first letter of a line, or a shift held a beat too long.
+    /// Read as a line instead, the word becomes a loop sending `Stop` to a model on its own pace
+    /// until somebody presses ctrl-c twice, which is the one wrong reading here that spends money.
+    #[test]
+    fn the_word_ends_the_loop_whatever_its_case() {
+        for line in ["Stop", "STOP", "  StOp  "] {
+            assert_eq!(parse(line), Asked::Stop, "{line}");
+        }
+    }
+
+    /// `stop every 5m` is somebody ending the loop that runs every five minutes, and `5m stop` is
+    /// the same sentence the other way round. Read as lines they replace that loop with one sending
+    /// the bare word `stop` to a model, which is the one remainder that cannot be a prompt.
+    #[test]
+    fn an_interval_beside_the_word_still_ends_the_loop() {
+        for line in ["stop every 5m", "5m stop", "  STOP every 1h  "] {
+            assert_eq!(parse(line), Asked::Stop, "{line}");
+        }
+    }
+
+    /// The one place in the command where a reserved word could eat a line somebody meant to have
+    /// repeated. `stop` ends the loop as the whole of the line to be sent, and is an ordinary first
+    /// word of a prompt anywhere else.
+    #[test]
+    fn a_line_that_begins_with_stop_is_still_a_line_to_repeat() {
+        for line in ["stop the deploy", "stop 5m", "stopping at noon"] {
+            let asked = request(line);
+            assert_eq!(asked.pacing, Pacing::SelfPaced, "{line}");
+            assert_eq!(asked.prompt, line, "{line}");
+        }
+
+        let with_interval = request("stop the deploy every 5m");
+        assert_eq!(every(&with_interval), Duration::from_secs(300));
+        assert_eq!(with_interval.prompt, "stop the deploy");
     }
 
     /// A word that merely starts with a digit is not an interval, and the line keeps it.
     #[test]
     fn a_word_that_is_not_a_time_stays_part_of_the_prompt() {
-        let request = parse("5minutes to midnight").expect("a prompt");
+        let request = request("5minutes to midnight");
         assert_eq!(request.pacing, Pacing::SelfPaced);
         assert_eq!(request.prompt, "5minutes to midnight");
     }
@@ -564,21 +704,21 @@ mod tests {
     /// the interval somebody actually types is usually the interval they get.
     #[test]
     fn an_interval_the_person_gave_is_kept_down_to_the_floor() {
-        let request = parse("10s watch").expect("a prompt and an interval");
+        let request = request("10s watch");
         assert_eq!(every(&request), Duration::from_secs(10));
         assert_eq!(request.adjusted, None);
     }
 
     #[test]
     fn an_interval_faster_than_the_floor_is_raised_to_it_and_said_so() {
-        let request = parse("1s watch").expect("a prompt and an interval");
+        let request = request("1s watch");
         assert_eq!(every(&request), FLOOR);
         assert_eq!(request.adjusted, Some(Held::Raised(FLOOR)));
     }
 
     #[test]
     fn an_interval_longer_than_a_loop_may_live_is_capped() {
-        let request = parse("30d watch").expect("a prompt and an interval");
+        let request = request("30d watch");
         assert_eq!(every(&request), MAX_AGE);
         assert_eq!(request.adjusted, Some(Held::Capped(MAX_AGE)));
     }
@@ -587,13 +727,13 @@ mod tests {
     /// one would have to invent a duration nobody asked for.
     #[test]
     fn a_count_too_large_to_be_a_duration_is_not_an_interval() {
-        let request = parse("check it every 99999999999999999999 days").expect("a prompt");
+        let request = request("check it every 99999999999999999999 days");
         assert_eq!(request.pacing, Pacing::SelfPaced);
     }
 
     #[test]
     fn an_interval_within_the_bounds_is_reported_as_unadjusted() {
-        let request = parse("5m watch").expect("a prompt and an interval");
+        let request = request("5m watch");
         assert_eq!(request.adjusted, None);
     }
 
@@ -601,7 +741,7 @@ mod tests {
     /// set the pace of.
     #[test]
     fn a_paced_loop_ignores_what_a_turn_asked_for() {
-        let mut running = Running::begin(parse("5m watch").expect("a request"));
+        let mut running = Running::begin(request("5m watch"));
         let now = Instant::now();
         running.dispatching();
         assert!(running.ended(Some(Wakeup::asked(3_600, false)), now,));
@@ -618,7 +758,7 @@ mod tests {
             media_type: "image/png",
             bytes: b"pixels".to_vec(),
         };
-        let mut running = Running::begin(parse("5m look at [Image #1]").expect("a request"))
+        let mut running = Running::begin(request("5m look at [Image #1]"))
             .carrying(vec![picture.clone()], "look at the picture".to_string());
 
         assert_eq!(
@@ -637,7 +777,7 @@ mod tests {
 
     #[test]
     fn a_self_paced_loop_waits_as_long_as_the_turn_asked() {
-        let mut running = Running::begin(parse("watch").expect("a request"));
+        let mut running = Running::begin(request("watch"));
         let now = Instant::now();
         running.dispatching();
         assert!(running.ended(Some(Wakeup::asked(900, false)), now,));
@@ -682,7 +822,7 @@ mod tests {
     #[test]
     fn a_wait_a_turn_asked_for_is_held_to_the_bounds() {
         for (asked, held) in [(0, Wakeup::FLOOR), (86_400, Wakeup::CEILING)] {
-            let mut running = Running::begin(parse("watch").expect("a request"));
+            let mut running = Running::begin(request("watch"));
             let now = Instant::now();
             running.dispatching();
             running.ended(Some(Wakeup::asked(asked, false)), now);
@@ -694,7 +834,7 @@ mod tests {
     /// every twenty minutes for the rest of the session helps nobody.
     #[test]
     fn a_self_paced_turn_that_says_nothing_is_woken_once_more_and_then_the_loop_ends() {
-        let mut running = Running::begin(parse("watch").expect("a request"));
+        let mut running = Running::begin(request("watch"));
         let now = Instant::now();
 
         running.dispatching();
@@ -708,7 +848,7 @@ mod tests {
     /// The budget is for turns that stopped saying when to wake, not for the one that did.
     #[test]
     fn a_turn_that_says_when_to_wake_restores_the_fallback() {
-        let mut running = Running::begin(parse("watch").expect("a request"));
+        let mut running = Running::begin(request("watch"));
         let now = Instant::now();
 
         running.dispatching();
@@ -722,7 +862,7 @@ mod tests {
 
     #[test]
     fn quiet_ticks_are_counted_until_one_reports_something() {
-        let mut running = Running::begin(parse("watch").expect("a request"));
+        let mut running = Running::begin(request("watch"));
         let now = Instant::now();
         for expected in [1, 2, 3] {
             running.dispatching();
@@ -738,7 +878,7 @@ mod tests {
     /// would have a second tick waiting the moment it drew breath.
     #[test]
     fn a_tick_in_flight_is_not_due_again() {
-        let mut running = Running::begin(parse("5m watch").expect("a request"));
+        let mut running = Running::begin(request("5m watch"));
         let now = Instant::now();
         running.dispatching();
         running.ended(None, now);
@@ -750,13 +890,13 @@ mod tests {
 
     #[test]
     fn a_loop_with_nothing_armed_is_not_due() {
-        let running = Running::begin(parse("watch").expect("a request"));
+        let running = Running::begin(request("watch"));
         assert!(!running.due(Instant::now() + Duration::from_secs(86_400)));
     }
 
     #[test]
     fn a_loop_older_than_a_week_has_aged_out() {
-        let running = Running::begin(parse("5m watch").expect("a request"));
+        let running = Running::begin(request("5m watch"));
         let now = Instant::now();
         assert!(!running.aged_out(now + MAX_AGE - Duration::from_secs(1)));
         assert!(running.aged_out(now + MAX_AGE));

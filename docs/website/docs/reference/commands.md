@@ -22,7 +22,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/compact` | | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
-| `/loop` | `[interval] <prompt>` | Send a prompt again and again, on your interval or at a pace each turn sets |
+| `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
@@ -158,13 +158,24 @@ goes.
 
 ## `/loop [interval] <prompt>`
 
-Sends one prompt again and again until you stop it.
+Sends one prompt again and again until you stop it, says what is repeating, or ends it.
 
 ```
 /loop 5m check the deploy          # now, and every five minutes
 /loop check the deploy every 20m   # the same, written the other way round
 /loop watch the build              # now, and each turn says when the next is due
+/loop                              # what is repeating, and how to end it
+/loop stop                         # end it
 ```
+
+`stop` is the ending whenever it is the whole of the line that would be sent, whatever its case and
+with or without a pace, so `/loop STOP` and `/loop 5m stop` end the loop too. A line that only begins
+with the word is a line: `/loop stop the deploy` is a loop over `stop the deploy`, and
+`/loop stop the deploy every 20m` is that line every twenty minutes. The bare command with no loop
+running says so, and so does `/loop stop`.
+
+Typed while a turn is running, `/loop stop` waits in the queue the way any line typed then waits, and
+ends the loop when the queue is reached. No tick goes out in the meantime.
 
 The first tick goes at once, so you can see it happen while you are still watching. The gap is
 measured from the end of a tick rather than its start, so `every 5m` means five minutes between runs.
@@ -210,11 +221,17 @@ somebody reads it. Where you gave an interval, no turn can change it; a self-pac
 nothing is woken once more twenty minutes later, and a second silence ends the loop.
 
 Each tick is announced with its number, and with how many in a row have reported finding nothing.
-That count is the difference between a loop that is working and a loop with nothing to do. Four
-things end one, and each says so:
+That count is the difference between a loop that is working and a loop with nothing to do. Between
+ticks the row under the input box says `looping, next in 4m`, since the note that announced the last
+tick scrolls away and a loop spending a turn every five minutes is otherwise invisible; on a terminal
+too narrow for everything that row carries, the loop is the last part given up before the permission
+mode. `/loop` and `/status` both answer for it whenever you ask.
+
+Five things end a loop, and each says so:
 
 | What | When |
 |---|---|
+| you ask | `/loop stop`, which ends the loop and leaves the turn in flight running |
 | you interrupt | Ctrl-C, reached after the turn in flight and the half-typed line, and before leaving |
 | a turn is stopped | any turn cancelled while a loop runs, tick or not |
 | the session moves on | `/clear`, and leaving |
@@ -231,7 +248,7 @@ prompts at somebody who opened a conversation only to read it.
 :::caution
 **A loop keeps spending.** Every tick is a turn with the whole conversation re-sent, and nothing bounds
 the total but the interval and the session's own life. A five-minute loop left open overnight is a
-hundred and fifty turns nobody read.
+hundred and fifty turns nobody read. `/loop stop` ends one.
 :::
 
 ## `/goal <condition>`

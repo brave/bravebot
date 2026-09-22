@@ -936,7 +936,7 @@ command-rename = Call this conversation something else
 command-compact = Summarise the conversation so far, keeping the recent part
 command-btw = Ask something beside the work, without putting it in the conversation
 command-clear = Start a new session here, keeping this one resumable
-command-loop = Send a prompt again and again, on your interval or at a pace each turn sets
+command-loop = Send a prompt again and again, say what is repeating, or stop it
 command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
@@ -1072,9 +1072,22 @@ failure-with-attempts = { $what }, after { $attempts } attempts
 loop-needs-a-prompt =
     /loop needs something to repeat, as in /loop 5m check the deploy, or /loop watch the build to
     let each turn say when to run again
-loop-started-every = repeating every { $every }; ctrl-c stops it, and so does leaving
+loop-started-every =
+    repeating every { $every }; /loop stop ends it, and so does ctrl-c or leaving
 loop-started-self-paced =
-    repeating at a pace each turn sets; ctrl-c stops it, and so does leaving
+    repeating at a pace each turn sets; /loop stop ends it, and so does ctrl-c or leaving
+# The answer to the bare command. The line is in it because the note above scrolls away, and
+# somebody asking what is repeating has usually lost sight of what they set going.
+loop-active = repeating: { $prompt } · { $pace } · { $when }
+loop-ends-with = /loop stop ends it, and so does ctrl-c or leaving
+loop-none =
+    nothing is repeating. /loop 5m check the deploy sends a line every five minutes, /loop watch the
+    build lets each turn say when to run again, and /loop stop ends either of them
+# The part of the row under the box that says a loop is live, which between ticks is the only thing
+# on the screen that does. Short on purpose: it shares that row with the mode and the readings, and
+# a part a narrow terminal has no room for is a part the row gives up.
+loop-hint = looping
+loop-hint-next = looping, next in { $next }
 loop-interval-raised = the interval was raised to { $every }, which is as fast as a loop goes
 loop-interval-capped = the interval was capped at { $every }, which is as long as a loop lives
 loop-replaced = the loop that was running has been replaced
@@ -1090,7 +1103,8 @@ loop-busy = /loop starts with a turn of its own, so it waits until this one is d
 loop-replaces-goal =
     the goal that was set has been cleared: a session works towards one thing at a time
 loop-armed-by-the-turn =
-    looking again in { $after }, repeating what you asked; ctrl-c stops it, and so does leaving
+    looking again in { $after }, repeating what you asked; /loop stop ends it, and so does ctrl-c
+    or leaving
 loop-not-armed-under-a-goal =
     a later look was asked for and not started: this session is working towards a goal, and it
     does one thing at a time

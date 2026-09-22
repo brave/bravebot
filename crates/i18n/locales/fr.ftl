@@ -826,7 +826,7 @@ command-rename = Appeler cette conversation autrement
 command-compact = Résumer la conversation jusqu'ici, en gardant la partie récente
 command-btw = Demander quelque chose à côté du travail, sans le mettre dans la conversation
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
-command-loop = Renvoyer une consigne encore et encore, à votre intervalle ou au rythme de chaque tour
+command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, ou l'arrêter
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
@@ -938,9 +938,23 @@ failure-with-attempts = { $what }, après { $attempts } tentatives
 loop-needs-a-prompt =
     /loop demande quelque chose à répéter, comme /loop 5m vérifie le déploiement, ou
     /loop surveille la compilation pour laisser chaque tour dire quand recommencer
-loop-started-every = répétition toutes les { $every } ; ctrl-c l'arrête, et partir aussi
+loop-started-every =
+    répétition toutes les { $every } ; /loop stop l'arrête, comme ctrl-c ou partir
 loop-started-self-paced =
-    répétition au rythme que fixe chaque tour ; ctrl-c l'arrête, et partir aussi
+    répétition au rythme que fixe chaque tour ; /loop stop l'arrête, comme ctrl-c ou partir
+# La réponse à la commande nue. La consigne en fait partie parce que la note ci-dessus a défilé,
+# et qui demande ce qui se répète a le plus souvent perdu de vue ce qu'il avait lancé.
+loop-active = répétition : { $prompt } · { $pace } · { $when }
+loop-ends-with = /loop stop l'arrête, comme ctrl-c ou partir
+loop-none =
+    rien ne se répète. /loop 5m vérifie le déploiement envoie une ligne toutes les cinq minutes,
+    /loop surveille la compilation laisse chaque tour dire quand recommencer, et /loop stop arrête
+    l'une comme l'autre
+# La partie de la ligne sous la zone de saisie qui dit qu'une boucle tourne, la seule chose à
+# l'écran qui le dise entre deux passages. Courte exprès : elle partage cette ligne avec le mode et
+# les mesures, et une partie qui ne tient pas dans le terminal est une partie que la ligne laisse.
+loop-hint = en boucle
+loop-hint-next = en boucle, prochaine dans { $next }
 loop-interval-raised = l'intervalle a été relevé à { $every }, le plus rapide qu'une boucle aille
 loop-interval-capped = l'intervalle a été plafonné à { $every }, le plus long qu'une boucle vive
 loop-replaced = la boucle qui tournait a été remplacée
@@ -956,8 +970,8 @@ loop-busy = /loop commence par un tour à lui, il attend donc la fin de celui-ci
 loop-replaces-goal =
     l'objectif qui était fixé a été retiré : une session ne travaille qu'à une chose à la fois
 loop-armed-by-the-turn =
-    nouveau regard dans { $after }, en répétant ce que vous avez demandé ; ctrl-c l'arrête, et
-    partir aussi
+    nouveau regard dans { $after }, en répétant ce que vous avez demandé ; /loop stop l'arrête,
+    comme ctrl-c ou partir
 loop-not-armed-under-a-goal =
     un regard plus tard a été demandé sans être lancé : cette session travaille vers un objectif,
     et elle fait une chose à la fois

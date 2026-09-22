@@ -2994,8 +2994,30 @@ fn fitted(parts: &[String], expendable: &[usize], width: u16) -> Vec<usize> {
     kept
 }
 
+/// What the row under the box says about a live loop, from how long is left until the next tick.
+///
+/// A moment where one is known and still ahead, and the bare word otherwise. No moment at all is a
+/// tick in flight or a self-paced loop that has not been told when to wake. A moment already gone is
+/// a tick the session is not free to take yet, because a turn is running or the queue is holding
+/// something, and a row counting down to `0s` and sitting there reads as a loop that has stalled
+/// rather than one waiting its turn.
+fn loop_part(until: Option<std::time::Duration>) -> String {
+    match until {
+        Some(until) if until >= std::time::Duration::from_secs(1) => {
+            t!(loop_hint_next, next = crate::loops::spell(until))
+        }
+        _ => t!(loop_hint).to_string(),
+    }
+}
+
 /// The shortcut line. Keeps the bindings discoverable without a help command.
 fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
+    // Read before the shell line as well as the ordinary one. A loop spends a turn whichever mode
+    // the box is in, and shell mode is where somebody is least likely to be thinking about one.
+    let looping = session.looping().map_or_else(String::new, |running| {
+        loop_part(running.until(std::time::Instant::now()))
+    });
+
     // Named only once a turn has left a trail to look at. Offering the key before that is a line
     // under the box inviting a press that changes nothing on screen, and what a person learns from
     // that press is that the key does not work.
@@ -3008,16 +3030,17 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a
     // user needs to know is which shell and how to get back out again.
     if session.shell {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!("  ! {}", bravebot_agent::shell::shell()),
-                    Style::default().fg(theme::accent()),
-                ),
-                Span::styled("  ·  esc to cancel  ·  output goes to the model", dim()),
-            ])),
-            area,
-        );
+        let mut spans = vec![
+            Span::styled(
+                format!("  ! {}", bravebot_agent::shell::shell()),
+                Style::default().fg(theme::accent()),
+            ),
+            Span::styled("  ·  esc to cancel  ·  output goes to the model", dim()),
+        ];
+        if !looping.is_empty() {
+            spans.push(Span::styled(format!("  ·  {looping}"), dim()));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
     }
 
@@ -3088,11 +3111,16 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         .vi_mode()
         .map(|mode| mode.as_str().to_string())
         .unwrap_or_default();
+    // What is going to happen here without anybody touching the keyboard. Between ticks the screen
+    // is a transcript of things that have already happened, so a loop that is quietly spending a
+    // turn every five minutes is the one fact about the session nothing on it reports: the note
+    // that said it started has scrolled away, and the next tick is the first sign of life since.
     let parts = [
         mode.unwrap_or_default().to_string(),
         editing,
         trail.to_string(),
         context,
+        looping,
         watchable,
         SHORTCUTS_HINT.to_string(),
     ];
@@ -3103,10 +3131,16 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // A reading with no figure in it goes before any of them. The readings are kept late because a
     // figure is the one thing on this line nothing else can tell somebody, and a sentence saying
     // there is no figure yet is not one: it would be holding the room against two working bindings.
+    //
+    // The loop is last of all, and is given up only by a terminal with no room for anything else,
+    // because it is the only part of this line that is spending something while nobody watches. It
+    // is still in the list: a part nothing may give up makes `fitted` clear the whole line on a
+    // narrow terminal, which would take the mode with it, and a mode nobody can read is worse than
+    // a loop they can still find with `/loop` or `/status`.
     let expendable: &[usize] = if context_is_unmeasured {
-        &[3, 5, 2, 4]
+        &[3, 6, 2, 5, 4]
     } else {
-        &[5, 2, 3, 4]
+        &[6, 2, 3, 5, 4]
     };
     // A note is drawn over the right of this same row, so what the parts may occupy is the width
     // less that note. Fitted against the whole width instead, the last part that fits is one the
@@ -5882,25 +5916,158 @@ mod tests {
     /// part that is simply absent reads as a line that had no room.
     #[test]
     fn what_does_not_fit_is_dropped_whole_rather_than_cut_mid_word() {
-        let session = Session::new("kernel").allowing_bypass();
-        for width in 20..=120 {
-            let hint = hint_row_at(&session, width, 24);
-            let drawn = hint.trim_end();
-            // Every fragment that survives is a whole part or nothing. The narrowest widths cannot
-            // hold even the mode, and dropping it whole is the same rule rather than an exception.
-            for part in drawn.split("  ·  ").map(str::trim) {
-                if part.is_empty() {
-                    continue;
+        // The second of them has a loop running, whose first tick is still in flight: that is the
+        // state the part says one word in, so the whole of it is a fixed string rather than a
+        // countdown moving while the test reads it.
+        let mut looping = Session::new("kernel").allowing_bypass();
+        looping.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        // The third is between ticks, where the part is at its longest: the countdown is the widest
+        // thing this row ever has to fit, so a sweep that only ever saw the bare word would pass
+        // while the form people spend most of a loop looking at was cut in half. Two days out, so
+        // `1d 23h` is what it says for the hour after this line rather than something that moves.
+        let mut counting_down = Session::new("kernel").allowing_bypass();
+        counting_down.start_loop(crate::loops::request("2d check the deploy"), Vec::new());
+        counting_down.complete("done", Vec::new(), 0);
+        counting_down.loop_turn_ended(None);
+        let counting = t!(loop_hint_next, next = "1d 23h");
+        assert!(
+            hint_row_at(&counting_down, 120, 24).contains(&counting),
+            "the sweep never sees the countdown: {}",
+            hint_row_at(&counting_down, 120, 24)
+        );
+
+        let word = t!(loop_hint).to_string();
+        for session in [
+            Session::new("kernel").allowing_bypass(),
+            looping,
+            counting_down,
+        ] {
+            for width in 20..=120 {
+                let hint = hint_row_at(&session, width, 24);
+                let drawn = hint.trim_end();
+                // Every fragment that survives is a whole part or nothing. The narrowest widths
+                // cannot hold even the mode, and dropping it whole is the same rule rather than an
+                // exception.
+                for part in drawn.split("  ·  ").map(str::trim) {
+                    if part.is_empty() {
+                        continue;
+                    }
+                    assert!(
+                        part == "⏵⏵ bypass permissions on"
+                            || part == "ctrl-t show trail"
+                            || part == UNMEASURED_CONTEXT
+                            || part == SHORTCUTS_HINT
+                            || part == word
+                            || part == counting,
+                        "at width {width} a part was cut: {part:?} in {drawn:?}"
+                    );
                 }
-                assert!(
-                    part == "⏵⏵ bypass permissions on"
-                        || part == "ctrl-t show trail"
-                        || part == UNMEASURED_CONTEXT
-                        || part == SHORTCUTS_HINT,
-                    "at width {width} a part was cut: {part:?} in {drawn:?}"
-                );
             }
         }
+    }
+
+    /// Between ticks a loop is invisible. The note that announced it has scrolled away, the next
+    /// tick has not happened, and everything else on the screen is a record of what already has: a
+    /// session quietly spending a turn every five minutes says so here or nowhere.
+    #[test]
+    fn the_hint_line_says_a_loop_is_live() {
+        let mut session = Session::new("kernel-enforced");
+        session.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        let word = t!(loop_hint).to_string();
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains(&word), "{hint}");
+
+        // Once the tick is over there is a moment to name, which is the question somebody looking
+        // at a live loop is asking.
+        session.complete("done", Vec::new(), 0);
+        session.loop_turn_ended(None);
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(
+            hint.contains(t!(loop_hint_next, next = "").trim()),
+            "{hint}"
+        );
+    }
+
+    /// A word about a loop standing there in a session with none is a word nobody can account for,
+    /// and this line is read at a glance.
+    #[test]
+    fn the_hint_line_says_nothing_about_a_loop_in_a_session_with_none() {
+        let hint = hint_row_at(&Session::new("kernel-enforced"), 120, 24);
+        assert!(!hint.contains(&t!(loop_hint).to_string()), "{hint}");
+    }
+
+    /// Shell mode replaces this row rather than adding to it, and a loop goes on spending turns
+    /// while somebody works in a shell. It is the mode where a live loop is easiest to forget about,
+    /// so it is the one where saying nothing costs the most.
+    #[test]
+    fn the_hint_line_says_a_loop_is_live_in_shell_mode_too() {
+        let mut session = Session::new("kernel-enforced");
+        session.shell = true;
+        session.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains(&t!(loop_hint).to_string()), "{hint}");
+        assert!(
+            hint.contains("esc to cancel"),
+            "this is not the shell row: {hint}"
+        );
+
+        // And nothing where there is no loop, down to the separator that would introduce it: a row
+        // ending in a lone dot reads as a part the terminal cut off.
+        let mut quiet = Session::new("kernel-enforced");
+        quiet.shell = true;
+        let hint = hint_row_at(&quiet, 120, 24);
+        assert!(!hint.contains(&t!(loop_hint).to_string()), "{hint}");
+        assert!(
+            !hint.trim_end().ends_with('·'),
+            "a separator with nothing after it: {hint}"
+        );
+    }
+
+    /// The three states a live loop is in, in the words this row says them in. The moment already
+    /// gone is the one worth pinning: that is a loop whose tick is waiting on a turn or on a queued
+    /// line, and a row counting down to `next in 0s` and staying there reads as one that has stalled.
+    #[test]
+    fn the_loop_part_names_a_moment_only_while_one_is_still_ahead() {
+        let word = t!(loop_hint).to_string();
+        assert_eq!(loop_part(None), word, "a tick in flight names no moment");
+        assert_eq!(
+            loop_part(Some(std::time::Duration::ZERO)),
+            word,
+            "a tick already due names no moment"
+        );
+        assert_eq!(
+            loop_part(Some(std::time::Duration::from_millis(999))),
+            word,
+            "anything under a second is spelled 0s, which is that same nothing"
+        );
+        assert_eq!(
+            loop_part(Some(std::time::Duration::from_secs(90))),
+            t!(loop_hint_next, next = "1m 30s")
+        );
+    }
+
+    /// The loop is the last part this line gives up, because it is the only one spending anything
+    /// while nobody watches. It is given up in the end rather than held: a part nothing may drop
+    /// makes a narrow terminal clear the whole row, which would take the mode with it, and a loop
+    /// is still there to be found with `/loop` where a mode nobody can read is not.
+    #[test]
+    fn a_narrow_terminal_gives_up_a_reading_before_the_loop_and_the_loop_before_the_mode() {
+        let mut session = Session::new("kernel").allowing_bypass();
+        session.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        let word = t!(loop_hint).to_string();
+
+        // Room for the mode and the loop and not for the reading beside them.
+        let hint = hint_row_at(&session, 60, 24);
+        assert!(hint.contains(&word), "the loop went first: {hint}");
+        assert!(
+            !hint.contains(UNMEASURED_CONTEXT),
+            "nothing was given up: {hint}"
+        );
+
+        // Narrower than the mode and the loop together, where the mode is what survives.
+        let hint = hint_row_at(&session, 30, 24);
+        assert!(hint.contains("⏵⏵ bypass permissions on"), "{hint}");
+        assert!(!hint.contains(&word), "the mode went first: {hint}");
     }
 
     /// The point of moving the bindings off the hint line: it has to fit where it used to be cut,

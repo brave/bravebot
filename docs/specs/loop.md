@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/app.rs
   - crates/tui/src/state.rs
   - crates/tui/src/status.rs
+  - crates/tui/src/render.rs
 guards:
   - symbol: Session::start_loop
   - symbol: Session::watch_again
@@ -68,7 +69,7 @@ In that order, and nowhere else.
 | `check every PR` | none, so each turn paces it | `check every PR` |
 | `check everything 20m` | none, so each turn paces it | `check everything 20m` |
 | `5m check the deploy every 20m` | 5 minutes | `check the deploy every 20m` |
-| `5m`, or nothing at all | there is nothing to send | nothing; the command says what it needs |
+| `5m`, or `every 5m` | there is nothing to send | nothing; the command says what it needs |
 
 A leading token counts only when it is a number and one of `s`, `m`, `h` or `d` and nothing
 else. A trailing clause counts only when `every` is a word of its own, with whitespace or the edge
@@ -87,7 +88,7 @@ word that only begins with those five letters, such as `everything`, is not the 
 `verified-by: bravebot_tui::loops::a_word_that_merely_starts_with_every_is_not_an_interval`
 `verified-by: bravebot_tui::loops::a_count_too_large_to_be_a_duration_is_not_an_interval`
 `verified-by: bravebot_tui::loops::an_interval_with_nothing_to_send_is_not_a_request`
-`verified-by: bravebot_tui::app::the_bare_loop_command_is_still_the_command`
+`verified-by: bravebot_tui::app::an_interval_with_nothing_after_it_says_what_the_command_needs`
 
 ## When a tick fires
 
@@ -206,10 +207,11 @@ never has and tells the user it is missing. Both were observed before this claus
 ## What ends one
 
 <a id="LOOP-11"></a>
-### LOOP-11: four things end a loop, and each of them says so
+### LOOP-11: five things end a loop, and each of them says so
 
 | What | When |
 |---|---|
+| the person asks | `/loop stop`, which leaves the turn in flight running; typed during one it ends the loop when the queue reaches it |
 | the person interrupts | Ctrl-C, read against the loop after the turn in flight and the line in the box, and before leaving |
 | a turn is stopped | any turn cancelled while a loop runs, whether or not it was a tick |
 | the session moves on | `/clear`, and leaving |
@@ -219,6 +221,22 @@ Ctrl-C reaches the loop before it reaches the session, so the key that stops a t
 happening is not also the key that ends everything. It reaches the half-written line first,
 because that is nearer still.
 
+**Why the command is not the same ending as the key.** Ctrl-C is read against the turn in flight
+before it is read against the loop, so ending a loop with it during a tick cancels work that was
+half done. The command ends the repeating and nothing else, which is what somebody wants who has
+seen enough of a loop but not of the turn it is in the middle of. It is also the only one of these
+that can be typed, so it is the ending a person reaches for after the sentence announcing the loop
+has scrolled away: the others are a key nobody named, a session ending, and a week.
+
+**Why it may arrive a turn later.** A line typed during a turn waits in the queue, the way every
+line typed during a turn waits, so an ending asked for mid-tick happens when the queue is reached
+rather than on the press. Nothing is lost in the wait: a tick waits on an empty queue as well as on
+an idle session, so the loop cannot send one more turn out ahead of its own ending.
+
+`verified-by: bravebot_tui::app::the_loop_command_ends_the_loop_when_asked_to_stop`
+`verified-by: bravebot_tui::app::asking_to_stop_a_loop_during_a_turn_ends_it_when_the_queue_is_reached`
+`verified-by: bravebot_tui::state::a_tick_waits_for_the_turn_in_flight_and_for_what_is_queued`
+`verified-by: bravebot_tui::app::asking_to_stop_a_loop_that_is_not_running_says_so`
 `verified-by: bravebot_tui::app::interrupting_stops_the_loop_before_it_leaves`
 `verified-by: bravebot_tui::app::interrupting_clears_the_line_before_it_stops_the_loop`
 `verified-by: bravebot_tui::state::clearing_the_session_ends_the_loop`
@@ -242,14 +260,45 @@ open.
 ### LOOP-13: what is going to happen is on the screen
 
 Each tick is announced with its number, and with how many ticks in a row have reported finding
-nothing where there have been any. `/status` says what is repeating and when the next one is due;
-a session with no loop says nothing about loops.
+nothing where there have been any. Three places say a loop is live, and a session with no loop says
+nothing about loops in any of them:
 
-**Why.** The count of quiet ticks is the difference between a loop that is working and a loop
-that has nothing to do, and without it a long watch is twenty identical answers nobody reads. And
-what happens next without anybody typing anything is the one thing about a session that cannot be
-read off the transcript.
+| Where | What it says |
+|---|---|
+| the row under the input box, whichever mode it is in | that a loop is live, and when the next tick is due where a moment is known |
+| `/loop`, with no argument | the repeated line, the pacing, when the next tick is due, and how to end it |
+| `/status` | the repeated line, the pacing, and when the next tick is due |
 
+The row counts down to the next tick while one is ahead, and says only that a loop is live where no
+moment is known or the moment has passed. It is redrawn at least once a second for as long as a loop
+is live, whether or not anything else has happened.
+
+**Why the row under the box.** Everything else on the screen is a record of something that has
+already happened. Between ticks a loop has nothing in the transcript but the sentence that
+announced it, which has scrolled away by the time somebody wonders. Without this row a session
+spending a turn every five minutes while nobody types reads exactly like an idle one, and the row is
+the only part of the screen that is about now rather than about what has already happened.
+
+**Why it is redrawn on its own.** Frames are drawn from what has changed, and a loop waiting for its
+next tick changes nothing. A row drawn once therefore holds the moment it was drawn for the whole of
+an interval: a five-minute loop says `next in 4m 58s` for five minutes and corrects itself only when
+somebody presses a key for an unrelated reason. A countdown is the one thing on this screen that goes
+stale by standing still, so it is the one thing that cannot wait for an event.
+
+**Why a moment already gone is not spelled.** A tick whose moment has passed is one the session is
+not free to take yet, because a turn is running or the queue is holding a line. A row counting down
+to `next in 0s` and sitting there reads as a loop that has stalled rather than one waiting its turn.
+
+**Why the count of quiet ticks.** It is the difference between a loop that is working and a loop
+that has nothing to do, and without it a long watch is twenty identical answers nobody reads.
+
+`verified-by: bravebot_tui::render::the_hint_line_says_a_loop_is_live`
+`verified-by: bravebot_tui::render::the_hint_line_says_a_loop_is_live_in_shell_mode_too`
+`verified-by: bravebot_tui::render::the_loop_part_names_a_moment_only_while_one_is_still_ahead`
+`verified-by: bravebot_tui::app::a_countdown_is_owed_a_frame_once_a_second_and_only_while_a_loop_runs`
+`verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_a_loop_in_a_session_with_none`
+`verified-by: bravebot_tui::state::the_loop_report_says_what_is_repeating_and_how_to_end_it`
+`verified-by: bravebot_tui::state::a_session_with_no_loop_says_so_when_asked`
 `verified-by: bravebot_tui::status::the_report_says_what_is_repeating_and_when_it_is_next_due`
 `verified-by: bravebot_tui::status::a_session_with_no_loop_does_not_mention_one`
 `verified-by: bravebot_tui::loops::quiet_ticks_are_counted_until_one_reports_something`
@@ -282,6 +331,51 @@ asked again then, which is exactly what [LOOP-9](#LOOP-9) already bounds.
 `verified-by: bravebot_tui::state::a_watch_a_turn_arranged_does_not_replace_a_goal`
 `verified-by: bravebot_tui::loops::a_loop_a_turn_asked_for_starts_a_wait_away_rather_than_now`
 `verified-by: bravebot_tui::loops::a_loop_a_turn_asked_for_is_paced_by_the_turns`
+
+## What the argument may be
+
+<a id="LOOP-15"></a>
+### LOOP-15: the command reads its argument three ways, and `stop` only as the whole line
+
+| The argument | What the command does |
+|---|---|
+| a line, with or without an interval | starts a loop over it, per [LOOP-3](#LOOP-3) |
+| nothing at all | says what is repeating and how to end it, per [LOOP-13](#LOOP-13) |
+| `stop`, in any case, with or without an interval | ends the loop, and says there was none where there was not, per [LOOP-11](#LOOP-11) |
+
+An interval with nothing after it is none of the three: it says what the command needs and starts
+nothing, per [LOOP-3](#LOOP-3). The reserved word is the ending whenever it is the whole of the line
+that would be sent, so `/loop STOP`, `/loop stop every 5m` and `/loop 5m stop` all end the loop,
+while `/loop stop the deploy` is a loop over `stop the deploy` and `/loop stop the deploy every 5m`
+is that line every five minutes.
+
+**Why the bare word answers rather than refusing.** The two things a person needs from a command
+about a loop are the two things the transcript cannot give them: what is repeating, and a way to
+end it. Neither is a line to send, so the forms that do them send nothing, which is how `/goal` and
+`/watch` already read.
+
+**Why an interval on its own is not the bare word.** Somebody who typed `/loop 5m` and pressed
+Enter is halfway through starting a loop, not asking about one, and answering with a report about
+the loop they were replacing would be answering a question they did not ask.
+
+**Why the reserved word is the whole line or nothing.** This is the one place in the command where a
+word could be read as an instruction instead of as the line somebody wanted repeated. A first token
+taken as the ending would send them the rest of their own sentence every five minutes, and they
+would have typed both halves of it. An interval is not part of that line, so a pace beside the word
+leaves it the whole of what would be sent: `stop every 5m` is somebody ending the loop that runs
+every five minutes, and a loop sending the bare word `stop` to a model is nothing anybody means by
+anything. The case is not read either, because a miss here is not a message: a line meant as the
+ending and not taken as one becomes a loop sending `Stop` until somebody presses Ctrl-C twice.
+
+`verified-by: bravebot_tui::loops::the_bare_command_asks_what_is_repeating`
+`verified-by: bravebot_tui::loops::stop_on_its_own_ends_the_loop`
+`verified-by: bravebot_tui::loops::the_word_ends_the_loop_whatever_its_case`
+`verified-by: bravebot_tui::loops::an_interval_beside_the_word_still_ends_the_loop`
+`verified-by: bravebot_tui::loops::a_line_that_begins_with_stop_is_still_a_line_to_repeat`
+`verified-by: bravebot_tui::loops::an_interval_with_nothing_to_send_is_not_a_request`
+`verified-by: bravebot_tui::app::the_bare_loop_command_says_what_is_repeating`
+`verified-by: bravebot_tui::app::a_loop_over_a_line_beginning_with_stop_is_still_a_loop`
+`verified-by: bravebot_tui::app::an_interval_with_nothing_after_it_says_what_the_command_needs`
 
 ## Known costs
 
