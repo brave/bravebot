@@ -82,10 +82,18 @@ pub enum LspError {
         method: String,
     },
     /// The server returned a JSON-RPC error.
+    ///
+    /// The `message` the server sent with it is not here, and [`protocol::RpcError`] does not keep
+    /// it either. LSP-5: "a server that can read the disk is not a server that can put prose in
+    /// the planner's context", and a JSON-RPC error message is exactly a place for prose to sit. It
+    /// is free text the server composes, with nothing constraining what goes in it, so this process
+    /// has no way to know whether one holds an identifier, a path or a line of the file being
+    /// analysed. What is reported is structure: which language, which method was put, and the code
+    /// the protocol assigns to the failure.
     Server {
         language: server::Language,
         code: i64,
-        message: String,
+        method: String,
     },
     /// The operation named is not one of ours.
     UnknownOperation { named: String },
@@ -143,10 +151,11 @@ impl fmt::Display for LspError {
             Self::Server {
                 language,
                 code,
-                message,
+                method,
             } => write!(
                 f,
-                "the {} language server returned error {code}: {message}",
+                "the {} language server returned error {code} for {method}; anything it said \
+                 about that is the server's own text and is not reported here",
                 language.as_str()
             ),
             Self::UnknownOperation { named } => write!(
@@ -217,7 +226,7 @@ mod tests {
             !LspError::Server {
                 language: server::Language::Rust,
                 code: -32601,
-                message: "unsupported".into()
+                method: "textDocument/implementation".into()
             }
             .is_absence_of_a_server()
         );
@@ -264,6 +273,11 @@ mod tests {
             LspError::TimedOut {
                 language: server::Language::Rust,
                 method: "textDocument/references".into(),
+            },
+            LspError::Server {
+                language: server::Language::Rust,
+                code: -32601,
+                method: "textDocument/implementation".into(),
             },
         ];
         for failure in failures {

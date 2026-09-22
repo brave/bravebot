@@ -261,10 +261,17 @@ pub struct RpcResponse {
     pub error: Option<RpcError>,
 }
 
+/// A JSON-RPC error object, less the `message` the server put in it.
+///
+/// That field is absent rather than present and unread. LSP-5 says a server that can read the disk
+/// is not a server that can put prose in the planner's context, and `message` is the one part of
+/// this object that is prose: free text the server composes, with nothing constraining what it puts
+/// there. Deserialising it into a `String` this process holds is what let it be interpolated into
+/// the sentence the planner is given, so it is not deserialised at all and there is nothing here
+/// for a later edit to reach for. `code` is the protocol's own numbering, which is structure.
 #[derive(Debug, Deserialize)]
 pub struct RpcError {
     pub code: i64,
-    pub message: String,
 }
 
 /// Frame a message the way LSP expects: a `Content-Length` header, a blank line, then the body.
