@@ -67,7 +67,7 @@ test approach, and use its evidence requirements when reporting the result.
 
 [docs/development/](docs/development/README.md) is how this repository is worked on: what to run
 before a commit and before a push, what one commit contains, the specs the code is developed
-against, the security scan, configuration, releasing, and how an issue is labelled.
+against, the security scan, configuration, releasing, and how an issue is titled and labelled.
 
 [docs/best_practices.md](docs/best_practices.md) is what a pull request is reviewed against,
 and holds only rules a person has to read a diff to decide. A rule a tool enforces or could enforce
