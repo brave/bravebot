@@ -152,7 +152,11 @@ impl<W: Write> Reporter for Progress<W> {
             });
         }
         if let Some(note) = &activity.note {
-            self.say(&format!("  {DETAIL_MARKER} {note}"));
+            // The same figure the interactive transcript puts here, from the same function, for
+            // the same reason: a run watched from a terminal has no other way to tell a slow check
+            // from a slow program.
+            let waited = bravebot_tui::indicator::format_waited(activity.waited);
+            self.say(&format!("  {DETAIL_MARKER} {note}{waited}"));
         }
     }
 
@@ -222,6 +226,29 @@ mod tests {
             p.tool_finished(Activity::running("Search", "todo").done("4 matches"));
         });
         assert!(written.contains("4 matches"), "got: {written}");
+    }
+
+    /// A call that ran a model inside itself says how long it waited there. A one-shot run has no
+    /// status line and no totals on the screen, so this is the only place it could be said at all.
+    #[test]
+    fn a_finished_call_prints_what_it_spent_at_a_model() {
+        let written = log(|p| {
+            p.tool_finished(
+                Activity::running("Read output", "ref:1")
+                    .done("3 lines, read")
+                    .after_waiting(Some(std::time::Duration::from_secs(8))),
+            );
+        });
+        assert!(written.contains("8s at the model"), "got: {written}");
+    }
+
+    /// And a call that asked none says nothing about one.
+    #[test]
+    fn a_finished_call_that_asked_no_model_prints_nothing_about_one() {
+        let written = log(|p| {
+            p.tool_finished(Activity::running("Search", "todo").done("4 matches"));
+        });
+        assert!(!written.contains("at the model"), "got: {written}");
     }
 
     /// A refusal is worth printing too: a run that quietly skipped a write and answered anyway

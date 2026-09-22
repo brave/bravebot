@@ -135,6 +135,10 @@ pub fn change(change: &Change) -> Value {
 /// running line from one that finished with nothing to say, so it is sent as an explicit
 /// null rather than an absent key: a client reading an absent key as "finished, no note"
 /// would draw every in-flight call as complete.
+///
+/// `waitedSeconds` is what the call spent at a model of its own, null for the nearly all of
+/// them that asked none. Whole seconds, as `remainingSeconds` is: what it answers is whether a
+/// slow call was slow because a model was, and that question is not decided in milliseconds.
 pub fn activity(activity: &Activity) -> Value {
     json!({
         "verb": activity.verb,
@@ -143,6 +147,7 @@ pub fn activity(activity: &Activity) -> Value {
         "failed": activity.failed,
         "untrusted": activity.untrusted,
         "changes": activity.changes.iter().map(change).collect::<Vec<_>>(),
+        "waitedSeconds": activity.waited.map(|waited| waited.as_secs()),
     })
 }
 

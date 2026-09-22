@@ -153,6 +153,21 @@ impl Reporter for BridgeReporter {
         self.say("narration", json!({ "text": text }));
     }
 
+    /// A check running, which is news here for the same reason a phase is: a whole model call
+    /// inside the tool call already reported, and no front-end can time it from the outside.
+    ///
+    /// The count and nothing else. What the check reads and what it decides go to a person on the
+    /// prompt, and this event crosses a pipe to a program.
+    fn check_started(&mut self, lines: usize) {
+        self.say("check.started", json!({ "lines": lines }));
+    }
+
+    /// Sent however the check ended, including the failure nobody could read a verdict out of: a
+    /// front-end told only that one began has no way back to a screen that is not checking.
+    fn check_finished(&mut self) {
+        self.say("check.finished", json!({}));
+    }
+
     fn quarantined(&mut self, shown: Shown) {
         self.say("quarantined", wire::shown(&shown));
     }

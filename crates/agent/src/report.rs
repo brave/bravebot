@@ -50,6 +50,17 @@ pub struct Activity {
     /// Drawn with the same mark the transcript puts on everything the model was not allowed to
     /// read, so one convention covers every place untrusted bytes reach a screen.
     pub untrusted: bool,
+    /// How much of the call was spent waiting on a model of its own, where it called one.
+    ///
+    /// `None` for almost everything: a call that ran a program or read a file waited on this
+    /// machine, and the time it took is the time it took. Some calls run a whole request inside
+    /// themselves, a confined check before quarantined content may be read and a processor's own
+    /// round, and without this the one figure that tells a slow model from a slow program is
+    /// measured and then thrown away.
+    ///
+    /// The duration rather than the boundary, because nothing on a screen can do anything with a
+    /// pair of instants: the turn's own clock does the arithmetic that needs them.
+    pub waited: Option<std::time::Duration>,
 }
 
 impl Activity {
@@ -63,6 +74,7 @@ impl Activity {
             failed: false,
             changes: Vec::new(),
             untrusted: false,
+            waited: None,
         }
     }
 
@@ -94,6 +106,12 @@ impl Activity {
     /// Say that the lines beneath this call are content nobody vouched for.
     pub fn marked_untrusted(mut self, untrusted: bool) -> Self {
         self.untrusted = untrusted;
+        self
+    }
+
+    /// Say how long the call waited on a model of its own.
+    pub fn after_waiting(mut self, waited: Option<std::time::Duration>) -> Self {
+        self.waited = waited;
         self
     }
 
@@ -544,6 +562,23 @@ pub trait Reporter {
     /// time: there is never a second call in flight for this to be ambiguous between.
     fn tool_finished(&mut self, _activity: Activity) {}
 
+    /// A confined check has begun, over this many lines of quarantined content.
+    ///
+    /// A whole model call runs inside the tool call, and the verb already on the screen names
+    /// the thing that has not happened yet: a person staring at "Read output" cannot tell a
+    /// check that is working from a backend that is hanging. The count and nothing else, since
+    /// how many lines were sent is structure rather than any part of the content.
+    fn check_started(&mut self, _lines: usize) {}
+
+    /// The check [`Reporter::check_started`] announced is over.
+    ///
+    /// Nothing about what it decided. A verdict reaches a person on the prompt it is drawn on
+    /// and reaches no model at all (`CHECK-9`), and this says only that the wait has ended, so
+    /// that whatever was drawn for it stops being drawn. Sent however the check ended, including
+    /// on the failure that becomes an inconclusive verdict: a display left saying a check is
+    /// running because the backend was down is the fault this pair exists to remove.
+    fn check_finished(&mut self) {}
+
     /// A prompt the person typed mid-turn has reached the planner.
     ///
     /// The user's own words on their way back to them, so there is nothing to release: this is the
@@ -610,6 +645,10 @@ pub struct RecordingReporter {
     pub started: Vec<Activity>,
     /// Every tool call announced as finished, in order.
     pub finished: Vec<Activity>,
+    /// Every check announced as starting, in order, by how many lines it was given.
+    pub checks: Vec<usize>,
+    /// How many checks were announced as over.
+    pub checks_finished: usize,
     /// Every phase the turn entered, in order.
     pub phases: Vec<Phase>,
     /// Everything the model said between tool calls, in order.
@@ -675,6 +714,14 @@ impl Reporter for RecordingReporter {
 
     fn tool_finished(&mut self, activity: Activity) {
         self.finished.push(activity);
+    }
+
+    fn check_started(&mut self, lines: usize) {
+        self.checks.push(lines);
+    }
+
+    fn check_finished(&mut self) {
+        self.checks_finished += 1;
     }
 
     fn quarantined(&mut self, shown: Shown) {

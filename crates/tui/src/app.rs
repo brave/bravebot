@@ -4490,6 +4490,8 @@ fn manifest_animated(
             crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
             crate::remote_confirm::ToMain::Started(activity) => session.start_activity(activity),
             crate::remote_confirm::ToMain::Finished(activity) => session.finish_activity(activity),
+            crate::remote_confirm::ToMain::CheckStarted(lines) => session.checking(lines),
+            crate::remote_confirm::ToMain::CheckFinished => session.checked(),
             crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
             crate::remote_confirm::ToMain::Landed(landing) => session.landed(landing),
             // The questions a turn asks that this mode cannot. There is no shell and no `run` in
@@ -5221,6 +5223,8 @@ fn run_turn_animated(
             crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
             crate::remote_confirm::ToMain::Started(activity) => session.start_activity(activity),
             crate::remote_confirm::ToMain::Finished(activity) => session.finish_activity(activity),
+            crate::remote_confirm::ToMain::CheckStarted(lines) => session.checking(lines),
+            crate::remote_confirm::ToMain::CheckFinished => session.checked(),
             crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
             crate::remote_confirm::ToMain::Printed(output) => session.command_printed(output),
             crate::remote_confirm::ToMain::Landed(landing) => session.landed(landing),

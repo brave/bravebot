@@ -1949,7 +1949,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             "refused: this turn is in plan mode, so writing is refused however the user would \
              have answered. Do not retry; say what you would change and why.",
         ),
-        "read_file" => read_file(policy, tools, confirmer, &arguments),
+        "read_file" => read_file(policy, tools, confirmer, reporter, &arguments),
         "list_files" => list_files(policy, tools.workspace, &arguments),
         "search" => search(policy, tools.workspace, &arguments),
         "lsp" => lsp(policy, tools, confirmer, &arguments),
@@ -1968,11 +1968,13 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         // arbitrate something they never set up. Refused here as well as absent from the list.
         "ask_user" if !tools.delegated => ask_user(policy, confirmer, &arguments),
         "run" => run(policy, tools, confirmer, &arguments),
-        "read_output" => read_output(policy, tools, confirmer, &arguments),
+        "read_output" => read_output(policy, tools, confirmer, reporter, &arguments),
         // Not offered to a delegate, so a call from one is answered the way any other unknown
         // name is. What crosses back from a delegate is its own set of rules, and a delegate
         // promoting a slot would put bytes into a context the person watching never sees.
-        "vet_content" if !tools.delegated => vet_content(policy, tools, confirmer, &arguments),
+        "vet_content" if !tools.delegated => {
+            vet_content(policy, tools, confirmer, reporter, &arguments)
+        }
         // A kind's network capability buys the driver's own model call and nothing a delegate can
         // point somewhere, so this one is refused here too: the gate would pass it, since the
         // capability really is held.
@@ -1998,10 +2000,18 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         other => problem(format!("error: no such tool '{other}'")),
     };
 
+    // The wait the call already measured, on the line the call already draws. The turn's totals
+    // have it too, as part of what the turn spent at the model, but a total cannot answer which
+    // call was the slow one or whether a model or this machine was what took the time.
     let finished = Activity::running(verb, target)
         .of_tool(&name)
         .with_changes(produced.changes)
-        .marked_untrusted(produced.untrusted);
+        .marked_untrusted(produced.untrusted)
+        .after_waiting(
+            produced
+                .inference_interval
+                .map(crate::timing::Interval::duration),
+        );
     reporter.tool_finished(if produced.failed {
         finished.failed(produced.note)
     } else {
@@ -2253,10 +2263,11 @@ fn wait_from(arguments: &Value) -> Result<Option<std::time::Duration>, &'static 
     }
 }
 
-fn read_file<S: Sink, C: Confirmer>(
+fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
     confirmer: &mut C,
+    reporter: &mut R,
     arguments: &Value,
 ) -> Produced {
     let workspace = tools.workspace;
@@ -2369,7 +2380,7 @@ fn read_file<S: Sink, C: Confirmer>(
             let spec = policy.before_vetting_a_path(&proposed_path, body);
             let asked_at = std::time::Instant::now();
             (
-                crate::vet::run(policy, &mut tools.chat, &spec),
+                crate::vet::run(policy, &mut tools.chat, reporter, &spec),
                 Some(crate::timing::Interval::since(asked_at)),
             )
         });
@@ -3663,10 +3674,11 @@ fn watch_file<S: Sink>(
 ///
 /// The driver never reads the output. The text goes from the slot to the screen and, on approval,
 /// from the kernel to the planner; nothing here branches on a byte of it.
-fn read_output<S: Sink, C: Confirmer>(
+fn read_output<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
     confirmer: &mut C,
+    reporter: &mut R,
     arguments: &Value,
 ) -> Produced {
     let Some(named) = argument(arguments, "ref") else {
@@ -3707,7 +3719,7 @@ fn read_output<S: Sink, C: Confirmer>(
         None => (Verdict::Inconclusive("the check was not made"), None),
         Some(spec) => {
             let asked_at = std::time::Instant::now();
-            let checked = crate::vet::run(policy, &mut tools.chat, spec);
+            let checked = crate::vet::run(policy, &mut tools.chat, reporter, spec);
             spent = checked.usage;
             waited = Some(crate::timing::Interval::since(asked_at));
             let reason = checked.reason.map(|reason| {
@@ -3813,10 +3825,11 @@ fn read_output<S: Sink, C: Confirmer>(
 /// Unlike `read_output` this covers any quarantined slot, including a file, and it is still not a
 /// second answer to what a file is worth: nothing written here reaches the trust map, so a later
 /// read of the same path is quarantined exactly as it is today.
-fn vet_content<S: Sink, C: Confirmer>(
+fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
     confirmer: &mut C,
+    reporter: &mut R,
     arguments: &Value,
 ) -> Produced {
     let Some(named) = argument(arguments, "ref") else {
@@ -3869,7 +3882,7 @@ fn vet_content<S: Sink, C: Confirmer>(
         None => Verdict::Inconclusive("the check was not made"),
         Some(spec) => {
             let asked_at = std::time::Instant::now();
-            let checked = crate::vet::run(policy, &mut tools.chat, spec);
+            let checked = crate::vet::run(policy, &mut tools.chat, reporter, spec);
             spent = checked.usage;
             waited = Some(crate::timing::Interval::since(asked_at));
             said = checked.reason;

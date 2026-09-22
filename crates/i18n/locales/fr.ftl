@@ -738,6 +738,10 @@ elapsed-seconds = { $seconds } s
 elapsed-minutes = { $minutes } min { $seconds } s
 indicator-tokens-read = ↓ { $tokens } jetons
 indicator-tokens-written = ↑ { $tokens }
+indicator-checking = { $lines ->
+    [one] Vérification de { $lines } ligne
+   *[other] Vérification de { $lines } lignes
+    }
 tokens-thousands = { $thousands } k
 tokens-millions = { $millions } M
 turn-done = tour { $turn } terminé
@@ -803,6 +807,7 @@ transcript-unchanged = { $count ->
     [one] … { $count } ligne inchangée
    *[other] … { $count } lignes inchangées
     }
+transcript-waited = { $elapsed } auprès du modèle
 
 
 ## Relire la transcription
