@@ -1458,30 +1458,85 @@ fn draw_scroller_help(frame: &mut Frame, area: Rect, session: &Session) {
     frame.render_widget(list, box_area);
 }
 
+/// Put what a turn underneath is saying on the row, keeping `reserved` columns for what follows.
+///
+/// What follows is the way out, and reserving it is how the two rules meeting on this row resolve
+/// when it cannot hold both: a turn in flight is said nowhere else on the screen, and a mode whose
+/// keys do nothing with nothing on the screen to say how to leave it is what an interface that has
+/// stopped responding looks like. Gives back the columns still free, which is what decides whether
+/// a longer list of keys can have them.
+fn say_the_turn_if_it_fits(
+    spans: &mut Vec<Span<'static>>,
+    width: u16,
+    reserved: usize,
+    saying: [Option<Span<'static>>; 2],
+) -> usize {
+    let said: usize = spans.iter().map(|span| span.width()).sum();
+    let mut left = (width as usize).saturating_sub(said + reserved);
+    for span in saying.into_iter().flatten() {
+        if span.width() <= left {
+            left -= span.width();
+            spans.push(span);
+        }
+    }
+    left
+}
+
 /// The one row under the transcript while the scroller is open.
 ///
-/// What it says depends on what the scroller is doing, and in every case the way out comes early
-/// enough to survive a narrow terminal cutting the end off.
+/// What it says depends on what the scroller is doing, and a turn going on underneath is said in
+/// all three of its states: a search standing on the row does not stop the turn running below it,
+/// and this row is the only place either can be said from. A needle long enough to crowd the row
+/// is paid for by what the turn is saying, never by the way out.
 fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: usize) {
     let scroller = match session.scroller() {
         Some(scroller) => scroller,
         None => return,
     };
 
+    // The indicator's row went with the box, and a turn that has not written anything yet leaves
+    // nothing else on the screen moving. Somebody reading back through a turn in flight has to be
+    // able to tell it is still in flight, so the footer says so in the indicator's own word.
+    let running = session.indicator().map(|indicator| {
+        Span::styled(
+            format!("  ·  {}…", indicator.verb),
+            Style::default().fg(theme::running()),
+        )
+    });
+
+    // The view is held, so what arrives goes below it, and how much is a thing the person has no
+    // other way to find out without giving up the place they are reading.
+    let below = session.rows_below();
+    let arrived = (below > 0).then(|| {
+        Span::styled(
+            format!("  ·  {}", t!(scroller_rows_below, count = below)),
+            dim(),
+        )
+    });
+
     // A search being typed owns the line: what somebody is typing is the thing they are looking
     // at, and a caret says the keys are going here rather than into the box.
     if let Some(typing) = &scroller.typing {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!("  /{typing}"),
-                    Style::default().fg(theme::brand_primary()),
-                ),
-                Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
-                Span::styled(format!("  ·  {}", t!(scroller_searching)), dim()),
-            ])),
-            area,
+        let mut spans = vec![
+            Span::styled(
+                format!("  /{typing}"),
+                Style::default().fg(theme::brand_primary()),
+            ),
+            Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
+        ];
+
+        // Escape is the way out of a search, and the hint naming it is what the row holds on to
+        // while the needle grows.
+        let searching = Span::styled(format!("  ·  {}", t!(scroller_searching)), dim());
+        say_the_turn_if_it_fits(
+            &mut spans,
+            area.width,
+            searching.width(),
+            [running, arrived],
         );
+        spans.push(searching);
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
     }
 
@@ -1497,36 +1552,31 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
                 total = found
             )
         };
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!("  /{}", scroller.needle),
-                    Style::default().fg(theme::brand_primary()),
-                ),
-                Span::styled(format!("  ·  {standing}"), dim()),
-                Span::styled(format!("  ·  {}", t!(scroller_search_keys)), dim()),
-            ])),
-            area,
-        );
+        let mut spans = vec![
+            Span::styled(
+                format!("  /{}", scroller.needle),
+                Style::default().fg(theme::brand_primary()),
+            ),
+            Span::styled(format!("  ·  {standing}"), dim()),
+        ];
+
+        // The keys are what gives up the room, because every one of them is behind `?` as well
+        // while a turn underneath is said nowhere but here. What the row keeps before anything
+        // else is the pair naming the key that closes the mode, so a needle wide enough to crowd
+        // the row costs the longer list first and then what the turn is saying.
+        let walking = Span::styled(format!("  ·  {}", t!(scroller_search_keys)), dim());
+        let closing = Span::styled(format!("  ·  {}", t!(scroller_footer_keys)), dim());
+        let left =
+            say_the_turn_if_it_fits(&mut spans, area.width, closing.width(), [running, arrived]);
+        spans.push(if walking.width() <= closing.width() + left {
+            walking
+        } else {
+            closing
+        });
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
     }
-
-    let below = session.rows_below();
-    let arrived = if below == 0 {
-        String::new()
-    } else {
-        format!("  ·  {}", t!(scroller_rows_below, count = below))
-    };
-
-    // The indicator's row went with the box, and a turn that has not written anything yet leaves
-    // nothing else on the screen moving. Somebody reading back through a turn in flight has to be
-    // able to tell it is still in flight, so the footer says so in the indicator's own word.
-    let running = session.indicator().map(|indicator| {
-        Span::styled(
-            format!("  ·  {}…", indicator.verb),
-            Style::default().fg(theme::running()),
-        )
-    });
 
     // Four things and no more, because every key is behind `?` and a row long enough to be cut in
     // half advertises whatever happened to be at the near end of it. `/` is here because it is
@@ -1539,8 +1589,9 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
         Span::styled(format!("  ·  {}", t!(scroller_footer_keys)), dim()),
     ];
     spans.extend(running);
+    spans.extend(arrived);
     spans.push(Span::styled(
-        format!("{arrived}  ·  {}", t!(scroller_footer_search)),
+        format!("  ·  {}", t!(scroller_footer_search)),
         dim(),
     ));
 
@@ -4629,6 +4680,135 @@ mod tests {
             assert!(
                 drawn.contains("12 rows below"),
                 "nothing said there was more underneath: {drawn}"
+            );
+        }
+
+        /// A session reading back off the tail with a turn running underneath it.
+        fn reading_under_a_running_turn() -> Session {
+            let mut session = reading_over(100);
+            session.scroller_back(12);
+            session.status = Status::Working;
+            session
+        }
+
+        /// The word the indicator would have used, which the footer says in its place.
+        fn indicator_verb(session: &Session) -> String {
+            session
+                .indicator()
+                .expect("a turn in flight has an indicator")
+                .verb
+                .to_string()
+        }
+
+        /// A search is how somebody gets back to the part of a turn that went wrong, so it is the
+        /// state they are most likely to be in while one is still running. The indicator went with
+        /// the box and the view is held, so a footer that drops both leaves a screen where nothing
+        /// moves and nothing says a turn is in flight.
+        #[test]
+        fn a_standing_search_says_a_turn_is_running_and_how_much_arrived() {
+            let mut session = reading_under_a_running_turn();
+            search(&mut session, "needle");
+            let verb = indicator_verb(&session);
+
+            let (drawn, _) = screen(&session);
+
+            assert!(
+                drawn.contains(&format!("{verb}…")),
+                "the footer under a standing search did not say the turn was running: {drawn}"
+            );
+            assert!(
+                drawn.contains("12 rows below"),
+                "the footer under a standing search did not say what had arrived: {drawn}"
+            );
+        }
+
+        /// The keys reach the search rather than the mode while a needle is being typed, so a turn
+        /// underneath goes on for as long as somebody takes over typing one.
+        #[test]
+        fn a_half_typed_search_says_a_turn_is_running_and_how_much_arrived() {
+            let mut session = reading_under_a_running_turn();
+            session.begin_search();
+            for c in "need".chars() {
+                session.type_into_search(c);
+            }
+            let verb = indicator_verb(&session);
+
+            let (drawn, _) = screen(&session);
+
+            assert!(
+                drawn.contains(&format!("{verb}…")),
+                "the footer under a half-typed search did not say the turn was running: {drawn}"
+            );
+            assert!(
+                drawn.contains("12 rows below"),
+                "the footer under a half-typed search did not say what had arrived: {drawn}"
+            );
+        }
+
+        /// The row cannot hold the whole key list as well as a turn running underneath, and what
+        /// it gives up is the keys `?` lists anyway rather than the one that leaves the mode: a
+        /// footer naming no way out is what makes a mode look like an interface that has stopped.
+        #[test]
+        fn the_search_footer_names_the_way_out_with_a_turn_running_underneath() {
+            let mut session = reading_under_a_running_turn();
+            search(&mut session, "needle");
+
+            let (drawn, _) = screen(&session);
+
+            assert!(
+                drawn.contains("q closes"),
+                "the footer gave up the way out to make room: {drawn}"
+            );
+        }
+
+        /// A needle is whatever somebody typed, and a long one leaves the row too narrow for the
+        /// match count, the turn and the keys together. What gives is what the turn is saying,
+        /// because `q` is the one thing on the row nobody inside the mode can find out any other
+        /// way.
+        #[test]
+        fn a_long_needle_keeps_the_way_out_and_gives_up_what_the_turn_says() {
+            let mut session = reading_under_a_running_turn();
+            search(&mut session, "a needle long enough to crowd the row");
+
+            let (drawn, _) = screen(&session);
+
+            assert!(
+                drawn.contains("q closes"),
+                "a long needle cost the way out: {drawn}"
+            );
+            assert!(
+                !drawn.contains("12 rows below"),
+                "the row said more than it had the width for: {drawn}"
+            );
+        }
+
+        /// The same rule while the needle is still being typed, where the way out is Escape and the
+        /// hint that names it sits at the end of the row.
+        #[test]
+        fn a_long_needle_being_typed_keeps_the_way_out_of_the_search() {
+            let mut session = reading_under_a_running_turn();
+            session.begin_search();
+            for c in "a needle long enough to crowd the row".chars() {
+                session.type_into_search(c);
+            }
+
+            let (drawn, _) = screen(&session);
+
+            assert!(
+                drawn.contains("esc to abandon"),
+                "a long needle being typed cost the way out: {drawn}"
+            );
+        }
+
+        /// The keys that walk the matches are what somebody wants the moment the first match is
+        /// not the one they were after, so a row with the width for them says them.
+        #[test]
+        fn a_search_footer_with_the_room_names_the_keys_that_walk_the_matches() {
+            let (drawn, _) = screen(&searching("needle"));
+
+            assert!(
+                drawn.contains("n next"),
+                "the footer never named the keys that walk the matches: {drawn}"
             );
         }
 
