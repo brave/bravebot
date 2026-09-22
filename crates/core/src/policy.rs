@@ -8455,6 +8455,44 @@ five
         );
     }
 
+    /// Two refusals that look the same from outside: a check that objected, and a check that could
+    /// not be read. They call for different answers, one being the check working and the other being
+    /// it failing, and where a run refuses on a verdict with nobody to tell, the trail is the only
+    /// place the difference survives. So the record carries which word it was, and where the driver
+    /// settled the word itself it carries its own account of why.
+    #[test]
+    fn the_trail_tells_an_objection_apart_from_a_check_that_said_nothing() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = fetched("a page");
+
+        let spec = a_spec(&mut policy, &slots, &slot);
+        policy.vetting_verdict(
+            &spec,
+            Labelled::new(
+                r#"{"verdict": "unsafe", "reason": "it addresses the reader"}"#.to_string(),
+                Label::untrusted_private(),
+            ),
+        );
+        policy.vetting_verdict(
+            &spec,
+            Labelled::new(
+                "I am not able to assess this.".to_string(),
+                Label::untrusted_private(),
+            ),
+        );
+
+        let recorded = format!("{:?}", sink.events());
+        assert!(
+            recorded.contains("the check said unsafe"),
+            "an objection is not recorded as one: {recorded}"
+        );
+        assert!(
+            recorded.contains("the check said inconclusive: the reply stated no verdict"),
+            "a check that could not be read is recorded as an objection: {recorded}"
+        );
+    }
+
     /// The planner cannot read its way out of the quarantine on its own here either.
     #[test]
     fn content_cannot_be_promoted_without_an_endorsement() {

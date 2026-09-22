@@ -378,8 +378,9 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .already_asked_about(self.asked_about.clone());
 
         // The mode as the session holds it. The confirmer below is what enforces it, and the task
-        // above is the half the planner is told about; both are set from the one value.
-        let mut confirmer = bravebot_agent::Confining::new(asking, self.mode);
+        // above is the half the planner is told about; both are set from the one value, and
+        // screening is threaded the same way for the reason the mode is.
+        let mut confirmer = bravebot_agent::Confining::new(asking, self.mode, task.auto_vetting);
         let mut sink = RecordingSink::new();
         // One per turn. It holds every call the turn made, for a result object a session has no
         // way of asking for, so one kept for the session would be a list nothing reads growing for

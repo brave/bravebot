@@ -87,8 +87,8 @@ cli-option-trace = Afficher le journal d'audit
 cli-option-json = Afficher un objet de résultat sur stdout au lieu de la réponse
 cli-option-incognito = Ne rien écrire dans ~/.bravebot : ni historique, ni session, ni préférence
 cli-option-vet =
-    Pour cette exécution, laisser une vérification sans rien trouver promouvoir du contenu sans
-    vous demander
+    Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
+    promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
 cli-option-dangerously-skip-permissions =
     Contourner toutes les vérifications de permission. Recommandé uniquement pour des bacs à sable
     sans accès à Internet

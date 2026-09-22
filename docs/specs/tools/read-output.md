@@ -88,11 +88,18 @@ checked, and it has said nothing about what the command printed.
 
 While auto-vetting is off, which is the default, the verdict decides nothing here: the word travels
 to the prompt, the prompt draws it, and the answer is what releases the bytes. Where somebody turned
-it on, a verdict of nothing found is what releases them, and every other verdict still draws the
-prompt. [CHECK-12](../vetting.md#CHECK-12) is that rule and the reasoning for it.
+it on, a verdict of nothing found is what releases them, and every other verdict draws the prompt
+where there is one to draw. [CHECK-12](../vetting.md#CHECK-12) is that rule and the reasoning for it.
+
+A run bypassing permissions draws none, and there the verdict is the whole of the answer: nothing
+found releases the output and every other verdict keeps it back, the refusal being what the screening
+was asked for. Without the screening asked for the output is released unshown and no check is made
+([MODE-4](../permission-modes.md#MODE-4)).
 
 `verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
 `verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_releases_command_output_unasked`
 `verified-by: bravebot_agent::turn::with_auto_vetting_an_unsafe_verdict_still_asks_about_command_output`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_broken_check_still_asks_about_command_output`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_a_check_objected_to`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_no_check_could_be_made_about`

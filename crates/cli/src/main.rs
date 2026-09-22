@@ -648,7 +648,10 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     // is what stands between the flag and an effect.
     let attended = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
     let mut one_shot = OneShot::new(std::io::stdin(), std::io::stderr(), attended);
-    let mut confirmer = bravebot_agent::Confining::new(&mut one_shot, permission_mode);
+    // Screening off the task, so the answer the tools fill a verdict in under and the answer that
+    // decides whether a verdict which objects can refuse are the one value resolved above.
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut one_shot, permission_mode, task.auto_vetting);
     // On stderr, beside the progress lines, so a pipe of the reply is unaffected. Said even here,
     // where nobody may be reading: a run that wrote to the tree without asking should leave a record
     // of having been told not to ask.

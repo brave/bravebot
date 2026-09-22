@@ -118,6 +118,19 @@ directory is not put either: the workspace is trusted, which is what answering i
 recorded ([trust-map.md](trust-map.md) is what that record means). A directory a settings file
 asked for is opened and vouched for without being put either.
 
+The two prompts that promote one slot's bytes are answered yes unless the run also asked for
+auto-vetting ([CHECK-11](vetting.md#CHECK-11)). Where it did, the check's word is what answers in the
+absent person's place, and a word that is not `safe` refuses: the alternative is promoting content a
+check objected to, which is the one thing the screening was asked for to stop. Refusing is the answer
+a check that did not complete gets as well as one that objected, because content has some influence
+over the call that reads it and an answer that promoted on a failure is an answer an attacker can
+reach. The planner is told the bytes were kept back and is told nothing about what decided that, as
+[CHECK-9](vetting.md#CHECK-9) requires of every route.
+
+Vouching is not one of those two. It writes a standing rule about a path rather than promoting one
+read, which is a larger question than the one a check answered, so it is approved here however a
+check about today's contents came out.
+
 The two about trust are the ones that cost the most. Vouching is what lets a file's contents be
 shown to the planner rather than held behind a reference, so in this mode every file the planner
 asks to read is shown to it, and the startup question grants that over the whole tree at once
@@ -127,19 +140,30 @@ A run approved this way vouches for no program. The list of commands a person sa
 about is written into the session record and outlives the mode, and a record claiming somebody
 approved programs they were never shown would be a standing permission nobody granted.
 
-**No check is made for a prompt that is not drawn.** [CHECK-10](vetting.md#CHECK-10) puts a confined
-check in front of every prompt that would promote quarantined content, and this is the one mode
-where those prompts are answered without being shown to anybody. A check there would be a model call
-whose word nobody reads, so it is not made, and the verdict recorded is the one that claims nothing.
-This is the only exemption from that clause.
+**No check is made where nothing would read its word.** [CHECK-10](vetting.md#CHECK-10) puts a
+confined check in front of every prompt that would promote quarantined content, and this is the one
+mode where those prompts are answered without being shown to anybody. Where the run asked for no
+screening, a check would be a model call whose word nobody reads, so it is not made and the verdict
+filled in is the one that claims nothing. Where it asked for screening, the word is read on the two
+promotion prompts, so the check is made there; the vouch offer reads no word in this mode whatever
+was asked for, so no check is made before it either. This is the only exemption from that clause.
 
 **Why.** The mode is for a place where the blast radius is bounded by something other than these
 prompts, which in practice means a container with no network and nothing in it worth losing. It is
 the wrong mode everywhere else, and it is named `--dangerously-skip-permissions` for that reason.
 
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
+`verified-by: bravebot_agent::permission_mode::bypassing_promotes_quarantined_content_where_nothing_screens_it`
+`verified-by: bravebot_agent::permission_mode::screening_under_bypass_refuses_what_a_check_would_not_pass`
+`verified-by: bravebot_agent::permission_mode::screening_under_bypass_still_promotes_what_a_check_found_nothing_in`
+`verified-by: bravebot_agent::permission_mode::screening_does_not_reach_the_vouch_offer`
+`verified-by: bravebot_agent::permission_mode::a_check_before_promoting_is_made_wherever_its_word_is_read`
 `verified-by: bravebot_agent::turn::bypassing_makes_no_check_before_promoting_content`
-`verified-by: bravebot_agent::turn::bypassing_records_no_verdict_a_check_never_gave`
+`verified-by: bravebot_agent::turn::bypassing_fills_in_a_verdict_that_claims_nothing`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_content_a_check_objected_to`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_promotes_content_a_check_found_nothing_in`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_a_check_objected_to`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_no_check_could_be_made_about`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
 `verified-by: bravebot_tui::app::bypassing_opens_the_directories_a_file_named_without_asking`
@@ -220,7 +244,14 @@ must not write through one. The enforcing half holds because a delegate's prompt
 same person; the telling half has to be passed deliberately, and without it a delegate's planner
 reads refusals it cannot account for and retries.
 
+**What the mode is read beside travels with it.** Where the spawning turn asked for screening
+([MODE-4](#MODE-4)), so did the delegate. The confirmer a delegate is lent is that turn's, screening
+by what that turn was asked for, so a delegate left at the default is the one run whose check is not
+made and whose filled-in verdict is read anyway: every release inside it refused on a word nothing
+said.
+
 `verified-by: bravebot_agent::turn::a_delegate_inherits_the_mode_of_the_turn_that_spawned_it`
+`verified-by: bravebot_agent::turn::screening_reaches_a_delegate_of_an_unattended_run`
 
 <a id="MODE-10"></a>
 ### MODE-10: a mode belongs to the sitting it was chosen in

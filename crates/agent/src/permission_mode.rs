@@ -24,6 +24,7 @@ use crate::confirm::{
     Confirmer, Decision, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
     WriteRequest,
 };
+use bravebot_core::vetting::Verdict;
 
 /// How much this session asks before it acts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -42,7 +43,8 @@ pub enum PermissionMode {
     /// Nothing is asked at all, including vouching for files nobody vouched for.
     ///
     /// What `--dangerously-skip-permissions` selects, reachable only where it was given. See
-    /// [`Confining::confirm_vouch`] for what the last of those costs.
+    /// [`Confining::confirm_vouch`] for what the last of those costs, and
+    /// [`Confining::confirm_vetted_read`] for the one answer this mode does not give itself.
     Bypass,
 }
 
@@ -81,6 +83,16 @@ impl PermissionMode {
         self == Self::Plan
     }
 
+    /// Whether a prompt that would promote quarantined content is worth a check first.
+    ///
+    /// False in one case. Bypassing draws no such prompt, so a check there is a model call over a
+    /// whole slot to produce a word nobody reads, and the run pays for it. Asking for auto-vetting
+    /// takes that back: the word is then what answers in the absent person's place, so it is read
+    /// after all, and a word that objects is the only thing left that can keep the bytes back.
+    pub fn checks_before_promoting(self, auto_vetting: bool) -> bool {
+        self != Self::Bypass || auto_vetting
+    }
+
     /// What the planner is told about the mode, or `None` where there is nothing to say.
     ///
     /// Only plan mode says anything. The others change who answers a question, which is not a fact
@@ -117,11 +129,37 @@ impl PermissionMode {
 pub struct Confining<'a, C: Confirmer> {
     inner: &'a mut C,
     mode: PermissionMode,
+    auto_vetting: bool,
 }
 
 impl<'a, C: Confirmer> Confining<'a, C> {
-    pub fn new(inner: &'a mut C, mode: PermissionMode) -> Self {
-        Self { inner, mode }
+    /// `auto_vetting` is whatever [`bravebot_core::vetting::auto`] resolved for this run, and the
+    /// same value the task carries. A parameter rather than a default, because the two prompts that
+    /// promote quarantined content answer yes without it: a builder call left off at one of the
+    /// callers below would be a run that stopped screening and said nothing about it.
+    pub fn new(inner: &'a mut C, mode: PermissionMode, auto_vetting: bool) -> Self {
+        Self {
+            inner,
+            mode,
+            auto_vetting,
+        }
+    }
+
+    /// What bypassing answers where a prompt would have promoted one slot's bytes.
+    ///
+    /// Yes, unless somebody asked for screening. Then the check's own word is what answers in the
+    /// place of the person who is not there, and a word that objects is a refusal rather than a
+    /// warning drawn beside bytes on a screen nobody is reading: the alternative is promoting
+    /// content a check objected to, which is what the screening was asked for to stop.
+    ///
+    /// Unsafe and a check that did not complete are answered alike, and that is the whole of what
+    /// fail closed means here. A check can be made to fail by content that has some influence over
+    /// the call, so an answer that promoted on a failure would be an answer an attacker can reach.
+    fn screened(&self, verdict: Verdict) -> Decision {
+        match self.auto_vetting && !verdict.is_safe() {
+            true => Decision::Reject,
+            false => Decision::Approve,
+        }
     }
 }
 
@@ -164,9 +202,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    /// Asked in every mode but bypass, where the verdict answers where screening was asked for.
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
         match self.mode {
-            PermissionMode::Bypass => Decision::Approve,
+            PermissionMode::Bypass => self.screened(request.verdict),
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
                 self.inner.confirm_read_output(request)
             }
@@ -178,9 +217,12 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// Accepting edits does not accept this: what that mode grants is writes to this tree, and
     /// this puts bytes nobody vouched for into the planner's context. Plan mode asks rather than
     /// refusing, since reading is how a plan gets written.
+    ///
+    /// Bypassing answers it, and is the one mode whose answer can be no: a run told to ask nobody
+    /// and to screen what it promotes has the check's word and nothing else to go on.
     fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
         match self.mode {
-            PermissionMode::Bypass => Decision::Approve,
+            PermissionMode::Bypass => self.screened(request.verdict),
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
                 self.inner.confirm_vetted_read(request)
             }
@@ -244,6 +286,11 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// Vouches for the file only where every check is being bypassed, which is the part of that mode
     /// that costs the most: the label on those bytes is what keeps a file's contents from being read
     /// as instructions, and this hands it over for every quarantined file the planner asks for.
+    ///
+    /// Screening does not reach it, and the verdict is not read here. A yes writes a rule about a
+    /// path rather than promoting bytes, which is a standing decision and a larger question than the
+    /// one a check read, so the answer stays the mode's however the check answered. No check is made
+    /// before it either, for the reason it is made before the other two: nothing would read the word.
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
         match self.mode {
             PermissionMode::Bypass => Decision::Approve,
@@ -270,7 +317,8 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
 mod tests {
     use super::*;
     use crate::confirm::{
-        ApprovePlans, ApproveRuns, ChoosesFirst, Intent, ManifestRequest, Unattended,
+        ApprovePlans, ApproveRuns, ChoosesFirst, Intent, ManifestRequest, ReadsOutput, Unattended,
+        VetsContent,
     };
 
     fn a_write() -> WriteRequest {
@@ -307,6 +355,36 @@ mod tests {
         }
     }
 
+    fn an_output(verdict: Verdict) -> OutputRequest {
+        OutputRequest {
+            command: "cat notes.txt".to_string(),
+            output: "a line".to_string(),
+            reference: "ref:1".to_string(),
+            verdict,
+            reason: None,
+        }
+    }
+
+    fn a_vetted_read(verdict: Verdict) -> VetRequest {
+        VetRequest {
+            origin: "https://example.test/page".to_string(),
+            expects: "the release notes".to_string(),
+            content: "a line".to_string(),
+            verdict,
+            reason: None,
+        }
+    }
+
+    fn a_vouch(verdict: Verdict) -> VouchRequest {
+        VouchRequest {
+            path: "notes.txt".to_string(),
+            preview: "a line".to_string(),
+            truncated: false,
+            verdict,
+            reason: None,
+        }
+    }
+
     fn a_run() -> RunRequest {
         RunRequest::from_pipeline(
             &bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new(
@@ -325,7 +403,7 @@ mod tests {
         assert_eq!(PermissionMode::default(), PermissionMode::Ask);
 
         let mut refusing = Unattended;
-        let mut confining = Confining::new(&mut refusing, PermissionMode::Ask);
+        let mut confining = Confining::new(&mut refusing, PermissionMode::Ask, false);
         // The inner confirmer's answer, whatever it is, rather than one this decided.
         assert_eq!(confining.confirm_write(&a_write()), Decision::Reject);
         assert!(!confining.confirm_run(&a_run()).approved());
@@ -337,7 +415,7 @@ mod tests {
     #[test]
     fn accepting_edits_lets_writes_through_but_not_commands() {
         let mut refusing = Unattended;
-        let mut confining = Confining::new(&mut refusing, PermissionMode::AcceptEdits);
+        let mut confining = Confining::new(&mut refusing, PermissionMode::AcceptEdits, false);
         assert_eq!(confining.confirm_write(&a_write()), Decision::Approve);
         assert!(
             !confining.confirm_run(&a_run()).approved(),
@@ -350,7 +428,7 @@ mod tests {
     #[test]
     fn plan_mode_refuses_a_write_the_person_would_have_approved() {
         let mut approving = ApproveRuns;
-        let mut confining = Confining::new(&mut approving, PermissionMode::Plan);
+        let mut confining = Confining::new(&mut approving, PermissionMode::Plan, false);
         assert_eq!(confining.confirm_write(&a_write()), Decision::Reject);
     }
 
@@ -359,7 +437,7 @@ mod tests {
     #[test]
     fn plan_mode_still_lets_a_command_be_asked_about() {
         let mut approving = ApproveRuns;
-        let mut confining = Confining::new(&mut approving, PermissionMode::Plan);
+        let mut confining = Confining::new(&mut approving, PermissionMode::Plan, false);
         assert!(confining.confirm_run(&a_run()).approved());
     }
 
@@ -367,7 +445,7 @@ mod tests {
     #[test]
     fn bypassing_answers_every_permission_question() {
         let mut refusing = Unattended;
-        let mut confining = Confining::new(&mut refusing, PermissionMode::Bypass);
+        let mut confining = Confining::new(&mut refusing, PermissionMode::Bypass, false);
         assert_eq!(confining.confirm_write(&a_write()), Decision::Approve);
         let run = confining.confirm_run(&a_run());
         assert!(run.approved());
@@ -377,6 +455,145 @@ mod tests {
             "a mode that draws no prompt recorded an answer past the session"
         );
         assert_eq!(confining.confirm_manifest(&a_plan()), Decision::Approve);
+    }
+
+    /// A run told to ask nobody and told nothing about screening gets what it asked for, and the
+    /// verdict beside the bytes is not read: nothing made it, so an answer that turned on it would
+    /// be an answer turning on a placeholder. The double refuses, so the yes is the mode's own.
+    #[test]
+    fn bypassing_promotes_quarantined_content_where_nothing_screens_it() {
+        let mut refusing = Unattended;
+        let mut confining = Confining::new(&mut refusing, PermissionMode::Bypass, false);
+        assert_eq!(
+            confining.confirm_read_output(&an_output(Verdict::Unsafe)),
+            Decision::Approve
+        );
+        assert_eq!(
+            confining.confirm_vetted_read(&a_vetted_read(Verdict::Unsafe)),
+            Decision::Approve
+        );
+    }
+
+    /// The point of asking for screening on a run nobody is watching: a word that objects is the
+    /// only thing left that can keep a slot's bytes out of the planner, so it has to be able to
+    /// refuse. A check that did not complete answers with the unsafe one, because content can reach
+    /// the call that makes it and an answer that promoted on a failure is an answer an attacker can
+    /// reach. Each double approves its own route, so the refusal is the mode's own.
+    #[test]
+    fn screening_under_bypass_refuses_what_a_check_would_not_pass() {
+        for objection in [Verdict::Unsafe, Verdict::Inconclusive("the call failed")] {
+            let mut reading = ReadsOutput;
+            assert_eq!(
+                Confining::new(&mut reading, PermissionMode::Bypass, true)
+                    .confirm_read_output(&an_output(objection)),
+                Decision::Reject,
+                "{objection} promoted a command's output"
+            );
+
+            let mut vetting = VetsContent;
+            assert_eq!(
+                Confining::new(&mut vetting, PermissionMode::Bypass, true)
+                    .confirm_vetted_read(&a_vetted_read(objection)),
+                Decision::Reject,
+                "{objection} promoted a quarantined slot"
+            );
+        }
+    }
+
+    /// Screening is a screen rather than a wall. A run that refused every promotion would be one
+    /// nobody could use the two flags together on, and the flags are documented as composing.
+    #[test]
+    fn screening_under_bypass_still_promotes_what_a_check_found_nothing_in() {
+        let mut refusing = Unattended;
+        let mut confining = Confining::new(&mut refusing, PermissionMode::Bypass, true);
+        assert_eq!(
+            confining.confirm_read_output(&an_output(Verdict::Safe)),
+            Decision::Approve
+        );
+        assert_eq!(
+            confining.confirm_vetted_read(&a_vetted_read(Verdict::Safe)),
+            Decision::Approve
+        );
+    }
+
+    /// Vouching writes a standing rule about a path rather than promoting one slot's bytes, which is
+    /// a larger question than the one a check read. Bypassing answers it as it always did, whatever
+    /// a verdict about today's contents says, so screening cannot be read as having narrowed a grant
+    /// it never looked at.
+    #[test]
+    fn screening_does_not_reach_the_vouch_offer() {
+        let mut refusing = Unattended;
+        let mut confining = Confining::new(&mut refusing, PermissionMode::Bypass, true);
+        assert_eq!(
+            confining.confirm_vouch(&a_vouch(Verdict::Unsafe)),
+            Decision::Approve
+        );
+    }
+
+    /// A verdict answers in an absent person's place and nowhere else. Where there is somebody to
+    /// ask, a check that found nothing is advice drawn beside the bytes and the yes is still theirs:
+    /// a screening flag that approved here would have turned a second model into the person.
+    #[test]
+    fn screening_answers_nothing_where_somebody_is_there_to_ask() {
+        for asks in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+        ] {
+            let mut refusing = Unattended;
+            let mut confining = Confining::new(&mut refusing, asks, true);
+            assert_eq!(
+                confining.confirm_read_output(&an_output(Verdict::Safe)),
+                Decision::Reject,
+                "{asks:?} promoted a command's output on a verdict instead of asking"
+            );
+            assert_eq!(
+                confining.confirm_vetted_read(&a_vetted_read(Verdict::Safe)),
+                Decision::Reject,
+                "{asks:?} promoted a quarantined slot on a verdict instead of asking"
+            );
+
+            // The other half of the same rule, and the doubles answer the other way so that each
+            // arm's expected decision is one only the mode can have produced. A word that objects
+            // is a warning drawn beside the bytes here rather than a refusal, so the person's yes
+            // has to reach through.
+            let mut output = ReadsOutput;
+            assert_eq!(
+                Confining::new(&mut output, asks, true)
+                    .confirm_read_output(&an_output(Verdict::Unsafe)),
+                Decision::Approve,
+                "{asks:?} kept a command's output back instead of asking"
+            );
+            let mut vetting = VetsContent;
+            assert_eq!(
+                Confining::new(&mut vetting, asks, true)
+                    .confirm_vetted_read(&a_vetted_read(Verdict::Unsafe)),
+                Decision::Approve,
+                "{asks:?} kept a quarantined slot back instead of asking"
+            );
+        }
+    }
+
+    /// What the check is for decides whether it is made. Every mode that draws a prompt has somebody
+    /// to read the word, and bypassing with screening asked for has the word answering in their
+    /// place; bypassing without it has neither, and a model call whose answer nothing reads is
+    /// latency and money the run pays for nothing.
+    #[test]
+    fn a_check_before_promoting_is_made_wherever_its_word_is_read() {
+        for asks in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+        ] {
+            for screening in [false, true] {
+                assert!(
+                    asks.checks_before_promoting(screening),
+                    "{asks:?} drew a prompt with no verdict beside the bytes"
+                );
+            }
+        }
+        assert!(PermissionMode::Bypass.checks_before_promoting(true));
+        assert!(!PermissionMode::Bypass.checks_before_promoting(false));
     }
 
     /// Every mode but the one that answers everything puts a plan to a person. Accepting edits
@@ -393,7 +610,7 @@ mod tests {
             PermissionMode::Plan,
         ] {
             let mut approving = ApprovePlans;
-            let mut confining = Confining::new(&mut approving, asks);
+            let mut confining = Confining::new(&mut approving, asks, false);
             assert_eq!(
                 confining.confirm_manifest(&a_plan()),
                 Decision::Approve,
@@ -477,7 +694,7 @@ mod tests {
             PermissionMode::Bypass,
         ] {
             let mut choosing = ChoosesFirst;
-            let asked = Confining::new(&mut choosing, mode).ask_user(&a_series());
+            let asked = Confining::new(&mut choosing, mode, false).ask_user(&a_series());
             assert_eq!(
                 asked,
                 vec![

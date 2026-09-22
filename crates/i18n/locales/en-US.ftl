@@ -82,7 +82,8 @@ cli-option-trace = Print the audit trail
 cli-option-json = Print one result object on stdout instead of the reply
 cli-option-incognito = Write nothing to ~/.bravebot: no history, no session record, no preference
 cli-option-vet =
-    For this run, let a check that finds nothing promote content without asking you
+    For this run, let a check answer: content it finds nothing in is promoted without asking you,
+    and where nobody can be asked, anything else is kept back
 cli-option-dangerously-skip-permissions =
     Bypass all permission checks. Recommended only for sandboxes with no internet access
 cli-option-help = Show this message

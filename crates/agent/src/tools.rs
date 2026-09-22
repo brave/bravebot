@@ -2376,6 +2376,10 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         // Not made in the one mode that draws no prompt: bypassing answers this question yes without
         // showing anybody anything, so a check there is a model call whose word nobody reads. A
         // verdict is still filled in, and it is the one that claims nothing.
+        //
+        // The plain mode test and not the one the two promotion gates ask, because screening does not
+        // answer a vouch: it is a standing rule about a path rather than one slot's bytes, so under
+        // bypass nobody reads this word however the run was started.
         let checked = (tools.permission_mode != crate::PermissionMode::Bypass).then(|| {
             let spec = policy.before_vetting_a_path(&proposed_path, body);
             let asked_at = std::time::Instant::now();
@@ -3703,14 +3707,17 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
     // for the output to be read, not for it to be checked, and it has said nothing about what the
     // command printed.
     //
-    // Not made in the one mode that draws no prompt: bypassing answers this question yes without
-    // showing anybody anything, so a check there is a model call whose word nobody reads. A verdict
-    // is still filled in, and it is the one that claims nothing.
+    // Skipped only where nothing would read the word: bypassing with no screening asked for answers
+    // this question yes without showing anybody anything, so a check there is a model call nobody
+    // reads. A verdict is still filled in, and it is the one that claims nothing.
     let mut spent = Usage::default();
     let mut waited = None;
-    let spec = match tools.permission_mode == crate::PermissionMode::Bypass {
-        true => None,
-        false => match policy.before_vetting(&slot, None, tools.slots) {
+    let spec = match tools
+        .permission_mode
+        .checks_before_promoting(tools.auto_vetting)
+    {
+        false => None,
+        true => match policy.before_vetting(&slot, None, tools.slots) {
             Ok(spec) => Some(spec),
             Err(denial) => return problem(format!("refused: {denial}")),
         },
@@ -3756,6 +3763,10 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         // display release cannot feed an effect, and both of these feed a screen. Inside the branch
         // because there is no screen on the other one: releasing for a display nobody is looking at
         // would put a declassification in the trail with no audience for it.
+        //
+        // Bypassing is the standing exception, as it was before screening existed: the mode answers
+        // this without drawing anything, so the branch means a prompt would be drawn wherever there
+        // is anybody to draw it for, and never that somebody read what was released.
         let shown = {
             let content = match policy.resolve("read_output", &slot, tools.slots) {
                 Ok(content) => content,
@@ -3780,10 +3791,13 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
 
         counted = request.lines();
 
+        // Says the bytes are not coming and not who decided that. Under bypass with screening asked
+        // for, nobody was asked and a check answered in their place, so naming the user would be a
+        // false claim and naming the check would hand the planner the word it must not read.
         if confirmer.confirm_read_output(&request) == Decision::Reject {
             return problem(format!(
-                "refused: the user did not let you read {slot}. Do not ask for it again. Work with \
-                 what you have, or say in your reply what you needed from it."
+                "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
+                 you have, or say in your reply what you needed from it."
             ))
             .costing(spent)
             .waiting(waited);
@@ -3862,14 +3876,18 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
 
     // The second opinion, before the question rather than after it.
     //
-    // Not made in the one mode that draws no prompt: bypassing answers this question yes without
-    // showing anybody anything, so a check there is a model call whose word nobody reads. A
-    // verdict is still filled in, and it is the one that claims nothing. The same gate reading
-    // `read_output` and the vouch offer in `read_file` carry, and the exemption
-    // `docs/specs/permission-modes.md` MODE-4 states from the other side.
-    let spec = match tools.permission_mode == crate::PermissionMode::Bypass {
-        true => None,
-        false => match policy.before_vetting(&slot, Some(&expects), tools.slots) {
+    // Skipped only where nothing would read the word: bypassing with no screening asked for answers
+    // this question yes without showing anybody anything, so a check there is a model call nobody
+    // reads. A verdict is still filled in, and it is the one that claims nothing. The same gate
+    // `read_output` carries, and the exemption `docs/specs/permission-modes.md` MODE-4 states from
+    // the other side. The vouch offer in `read_file` keeps the plain one: no screening answers it,
+    // so under bypass nothing reads that word whatever was asked for.
+    let spec = match tools
+        .permission_mode
+        .checks_before_promoting(tools.auto_vetting)
+    {
+        false => None,
+        true => match policy.before_vetting(&slot, Some(&expects), tools.slots) {
             Ok(spec) => Some(spec),
             Err(denial) => return problem(format!("refused: {denial}")),
         },
@@ -3915,6 +3933,10 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         // display release cannot feed an effect, and both of these feed a screen. Inside the
         // branch because there is no screen on the other one: releasing for a display nobody is
         // looking at would put a declassification in the trail with no audience for it.
+        //
+        // Bypassing is the standing exception, as it was before screening existed: the mode answers
+        // this without drawing anything, so the branch means a prompt would be drawn wherever there
+        // is anybody to draw it for, and never that somebody read what was released.
         let shown = {
             let content = match policy.resolve("vet_content", &slot, tools.slots) {
                 Ok(content) => content,
@@ -3962,11 +3984,14 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
 
         counted = request.lines();
 
+        // Says the bytes are not coming and not who decided that, for the reason `read_output`
+        // carries: under bypass with screening asked for the answer came from a check rather than
+        // from a person, and neither fact is the planner's to be told.
         if confirmer.confirm_vetted_read(&request) == Decision::Reject {
             return problem(format!(
-                "refused: the user did not let you read {slot}. Do not ask for it again. Work \
-                 with what you have, pass {slot} to spawn_processor, or say in your reply what \
-                 you needed from it."
+                "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
+                 you have, pass {slot} to spawn_processor, or say in your reply what you needed \
+                 from it."
             ))
             .costing(spent)
             .waiting(waited);
