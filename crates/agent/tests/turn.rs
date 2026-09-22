@@ -17613,6 +17613,178 @@ fn asking_about_a_job_that_does_not_exist_says_so() {
     );
 }
 
+/// Every detail the trail recorded for one gate, in the order the gates passed.
+fn details_of<'e>(events: &'e [Event], gate: &str) -> Vec<&'e str> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: passed,
+                detail,
+            } if *passed == gate => Some(detail.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A URL the planner proposed is searched by the driver: `host_of` runs over it and the turn takes
+/// an early return when it names no host. So what authorises holding those bytes has to be the gate
+/// that says the planner's own words may be read, and the trail has to say a read happened
+/// (LABEL-6). A witness minted for a person's screen records a screen and authorises nothing that
+/// is done to the bytes on the way there.
+#[test]
+fn a_proposed_url_is_read_through_the_argument_gate() {
+    let scratch = Scratch::new("url-read-not-displayed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // A relative path names no host, which is the branch the driver takes on what it found in
+    // these bytes: it never reaches a person, so nothing here rests on what a confirmer answers.
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("fetch_url", r#"{"url":"/wiki/page"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("fetch it"),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("names no host"),
+        "the driver did not reach the branch it takes on what the URL says: {second}"
+    );
+
+    let read = details_of(sink.events(), "argument");
+    assert!(
+        read.iter().any(|detail| detail.contains("fetch_url.url")),
+        "the URL the driver searched was not read through the argument gate: {read:?}"
+    );
+    let shown = details_of(sink.events(), "display");
+    assert!(
+        !shown.iter().any(|detail| detail.contains("proposed url")),
+        "the URL was released for a screen, which is not permission to inspect it: {shown:?}"
+    );
+}
+
+/// A job name is compared against the map of names the driver handed out and the turn returns
+/// early on the answer. That comparison is a read of the planner's words however small it is, so
+/// it goes through the gate that records one rather than under a witness for a screen (LABEL-6).
+#[test]
+fn a_job_name_is_read_through_the_argument_gate() {
+    let scratch = Scratch::new("job-name-read-not-displayed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("job_output", r#"{"job":"job:9"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("look at it"),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("no background job"),
+        "the driver did not reach the branch it takes on the lookup: {second}"
+    );
+
+    let read = details_of(sink.events(), "argument");
+    assert!(
+        read.iter().any(|detail| detail.contains("job_output.job")),
+        "the job name the driver looked up was not read through the argument gate: {read:?}"
+    );
+    let shown = details_of(sink.events(), "display");
+    assert!(
+        !shown.iter().any(|detail| detail.contains("job name")),
+        "the job name was released for a screen, which is not permission to compare it: {shown:?}"
+    );
+}
+
+/// Both of `run`'s untrusted fields are examined by the driver before anything is approved: the
+/// command line is compiled, which searches it and whose refusal is an early return, and the
+/// directory is resolved and tested for being one. Each is read through the argument gate, so the
+/// trail carries a read for each rather than two witnesses saying bytes reached a screen
+/// (LABEL-6). A person still sees both at the approval prompt; that is the destination, and it is
+/// not what authorises the inspection.
+#[test]
+fn a_command_line_and_its_directory_are_read_through_the_argument_gate() {
+    let scratch = Scratch::new("run-fields-read-not-displayed");
+    std::fs::create_dir(scratch.path.join("sub")).expect("a directory to run in");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"echo built","directory":"sub"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+    assert!(outcome.clean, "no gate should have refused");
+
+    // The line was compiled and the directory resolved, so both were examined rather than only
+    // carried: a person was asked about the plan the two of them produced.
+    let asked = confirmer.seen.lock().expect("the requests").clone();
+    assert_eq!(asked.len(), 1, "the person was not asked about the run");
+
+    let read = details_of(sink.events(), "argument");
+    assert!(
+        read.iter().any(|detail| detail.contains("run.command")),
+        "the command line the driver compiled was not read through the argument gate: {read:?}"
+    );
+    assert!(
+        read.iter().any(|detail| detail.contains("run.directory")),
+        "the directory the driver resolved was not read through the argument gate: {read:?}"
+    );
+    let shown = details_of(sink.events(), "display");
+    assert!(
+        !shown
+            .iter()
+            .any(|detail| detail.contains("proposed command line")
+                || detail.contains("proposed run directory")),
+        "a field the driver searched was released for a screen instead: {shown:?}"
+    );
+}
+
 /// A line with joins or redirection is refused rather than half-honoured. Nothing waits on a
 /// background job, so there is nothing to decide `&&` from, and no reader for a redirection.
 #[test]

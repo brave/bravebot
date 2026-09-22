@@ -4007,9 +4007,9 @@ fn remembered_record(tools: &Tools<'_>) -> Option<crate::remembered::Store> {
 ///    shape, the directory and the files it writes, not the argv alone.
 /// 5. `before_plan` consumes it, and only then does anything execute, by the resolved path.
 ///
-/// Nothing here branches on untrusted content. The argv is released for display, which is what a
-/// person reading it is; what comes back from the program is never read by the driver or the
-/// planner, and goes into a slot at the label the kernel fixed before it ran.
+/// Nothing here branches on untrusted content. The argv is the planner's own words, read through
+/// the gate that says so and records it; what comes back from the program is never read by the
+/// driver or the planner, and goes into a slot at the label the kernel fixed before it ran.
 fn run<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -4063,12 +4063,16 @@ fn run<S: Sink, C: Confirmer>(
         );
     }
 
-    // Assembled from the planner's own words, which are untrusted. Released through one witness,
-    // so the trail records that a command line was released rather than leaving it to happen
-    // implicitly. A person reading it is the legitimate destination: their reading it is what an
-    // approval is.
-    let proof = policy.authorise_display_release("a proposed command line");
-    let line = line.declassify(&proof);
+    // Assembled from the planner's own words, which are untrusted. A person reading the line at
+    // the approval prompt is one destination for it, but it is not the only thing that happens to
+    // it: `cmdline::compile` below searches these bytes and its refusal is an early return. A
+    // witness saying the bytes may reach a screen does not say they may be examined on the way
+    // (LABEL-6), so the gate here is the one that says the planner's own words may be read, and
+    // records the read.
+    let line = match policy.read_planner_argument("run", "command", &line) {
+        Ok(line) => line,
+        Err(denial) => return problem(format!("refused: {denial}")),
+    };
 
     // Present but not a string is refused rather than dropped. A field the driver quietly ignored
     // would run the line wherever the last call left off, which is the one place a planner that
@@ -4087,11 +4091,15 @@ fn run<S: Sink, C: Confirmer>(
 
     let directory = match named {
         Some(proposed) => {
-            // Released through a display witness for the same reason the command line is: a
-            // directory is a routing field shown in the approval prompt and endorsed with the plan
-            // (CMDLINE-12), and a person reading it is what an approval is.
-            let proof = policy.authorise_display_release("a proposed run directory");
-            let dir = proposed.declassify(&proof);
+            // Read through the same gate the command line is, for the same reason: this is
+            // resolved against the workspace and the driver branches on whether what it found is
+            // a directory, which is a read rather than a delivery (LABEL-6). That it is also a
+            // routing field shown in the approval prompt and endorsed with the plan (CMDLINE-12)
+            // is what the prompt is for, not what authorises the inspection here.
+            let dir = match policy.read_planner_argument("run", "directory", &proposed) {
+                Ok(dir) => dir,
+                Err(denial) => return problem(format!("refused: {denial}")),
+            };
             // An effect, not a read. A program's relative writes land in the directory it runs in,
             // so a tree an `Edit` rule protects is not protected by a check that consults only the
             // `Read` rules: `npm install` in `vendor` writes throughout it without naming a file.
@@ -4474,10 +4482,14 @@ fn fetch_url<S: Sink, C: Confirmer>(
         );
     };
 
-    // The planner's own words, so untrusted. Released through one witness, because the legitimate
-    // destination is a person reading it: their reading it is what the approval is.
-    let proof = policy.authorise_display_release("a proposed url");
-    let url = proposed.declassify(&proof);
+    // The planner's own words, so untrusted. Read rather than released for a screen: `host_of`
+    // below searches these bytes and the else arm is an early return, and LABEL-6 says minting a
+    // display witness is not permission to inspect. The person still sees the URL at the approval
+    // prompt; that is a destination, and this is the read.
+    let url = match policy.read_planner_argument("fetch_url", "url", &proposed) {
+        Ok(url) => url,
+        Err(denial) => return problem(format!("refused: {denial}")),
+    };
 
     // Worked out here rather than in the prompt, so what a person is asked about is the host the
     // request will reach and not whatever the string looks like it names.
@@ -4581,10 +4593,14 @@ fn job_output<S: Sink>(
         return problem("error: 'job' is required and must be a job name, e.g. \"job:1\"");
     };
 
-    // Released for a lookup against names the driver handed out, which is the same treatment a
-    // reference gets. Nothing is decided from it beyond whether it is one of ours.
-    let proof = policy.authorise_display_release("a job name the planner asked about");
-    let name = named.declassify(&proof);
+    // Looked up against names the driver handed out, which is the same treatment a reference
+    // gets. Nothing is decided from it beyond whether it is one of ours, but that lookup is a
+    // comparison against the released bytes and an early return on the answer, so it is a read and
+    // goes through the gate that records one (LABEL-6).
+    let name = match policy.read_planner_argument("job_output", "job", &named) {
+        Ok(name) => name,
+        Err(denial) => return problem(format!("refused: {denial}")),
+    };
 
     let kill = arguments
         .get("kill")
