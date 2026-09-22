@@ -128,7 +128,7 @@ Seven things end a watch, and each of them says so:
 | you interrupt | Ctrl-C with nothing nearer to stop, which ends every live watch |
 | a firing's turn is stopped | the watch that fired ends with it, and the others stand |
 | you ask for a loop or a goal | every live watch ends, since a session does one of the three at a time |
-| the path stops being readable | the answer that armed it no longer holds |
+| the path stops being readable | the answer that armed it no longer holds, which includes `/cd` moving the working directory a relative path was armed under |
 | the session moves on | `/clear`, and leaving |
 | age | 7 days after it was armed |
 

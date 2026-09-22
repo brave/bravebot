@@ -3613,7 +3613,10 @@ fn watch_file<S: Sink>(
              changed inside one is a name off the filesystem, and a fire may not carry one.",
         );
     }
-    if !matches!(workspace.look(&path), crate::watch::Looked::Saw(_)) {
+    if !matches!(
+        workspace.look(&path, workspace.root()),
+        crate::watch::Looked::Saw(_)
+    ) {
         return problem(
             "refused: that path cannot be looked at, so there is nothing for a later look to be \
              compared against.",

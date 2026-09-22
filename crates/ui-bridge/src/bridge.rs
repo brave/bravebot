@@ -877,7 +877,7 @@ impl Bridge {
             if !watches.live().iter().any(|w| w.path() == path) {
                 let workspace = Workspace::new(open.project.clone())
                     .map_err(|_| Failure::bad_request("Project unavailable."))?;
-                watches.arm(path.clone(), 0, workspace.look(&path), std::time::Instant::now())
+                watches.arm(path.clone(), workspace.root().to_path_buf(), 0, workspace.look(&path, workspace.root()), std::time::Instant::now())
                     .map_err(|_| Failure::bad_request("Cannot watch this file. It must exist inside the project, with fewer than eight active watches."))?;
             }
         } else if request.method == "watches.stop" {
@@ -940,7 +940,7 @@ impl Bridge {
                 let Ok(mut watches) = open.watches.lock() else {
                     continue;
                 };
-                let ended = watches.look(now, |path| workspace.look(path));
+                let ended = watches.look(now, |path, under| workspace.look(path, under));
                 for (number, reason) in ended {
                     self.emitter.send(Event::new("watch.ended", &handle, json!({"number": number, "reason": match reason {
                         bravebot_agent::watch::Reaped::Aged => "expired", bravebot_agent::watch::Reaped::OutOfReach => "out-of-reach",
@@ -1175,8 +1175,9 @@ fn work(work: Work) {
                     if !watches.live().iter().any(|w| w.path() == path) {
                         let _ = watches.arm(
                             path.clone(),
+                            workspace.root().to_path_buf(),
                             turn,
-                            workspace.look(path),
+                            workspace.look(path, workspace.root()),
                             std::time::Instant::now(),
                         );
                     }
@@ -1393,7 +1394,13 @@ mod watch_tests {
         let mut watches = bravebot_agent::watch::Watches::new();
         let workspace = Workspace::new(root.clone()).unwrap();
         watches
-            .arm("watched".into(), 1, workspace.look("watched"), now)
+            .arm(
+                "watched".into(),
+                workspace.root().to_path_buf(),
+                1,
+                workspace.look("watched", workspace.root()),
+                now,
+            )
             .unwrap();
         let watches = Arc::new(Mutex::new(watches));
         let handle = bridge.mint(Open {
@@ -1438,6 +1445,7 @@ mod watch_tests {
         let first = watches
             .arm(
                 "first".into(),
+                project.clone(),
                 1,
                 bravebot_agent::watch::Looked::Saw("a".into()),
                 now,
@@ -1446,6 +1454,7 @@ mod watch_tests {
         let second = watches
             .arm(
                 "second".into(),
+                project.clone(),
                 1,
                 bravebot_agent::watch::Looked::Saw("b".into()),
                 now,
@@ -1496,11 +1505,13 @@ mod watch_tests {
         std::fs::write(root.join("file"), "original").unwrap();
         let now = Instant::now();
         let mut watches = bravebot_agent::watch::Watches::new();
+        let workspace = Workspace::new(root.clone()).unwrap();
         watches
             .arm(
                 "file".into(),
+                workspace.root().to_path_buf(),
                 1,
-                Workspace::new(root.clone()).unwrap().look("file"),
+                workspace.look("file", workspace.root()),
                 now,
             )
             .unwrap();

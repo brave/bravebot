@@ -690,6 +690,7 @@ mod tests {
         watches
             .arm(
                 "notes/plan.md".to_string(),
+                std::path::PathBuf::from("/work"),
                 3,
                 watch::Looked::Saw("first".to_string()),
                 std::time::Instant::now(),

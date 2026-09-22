@@ -9,6 +9,7 @@ governs:
   - crates/tui/src/status.rs
   - crates/agent/src/watch.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/workspace.rs
 documented-by: docs/website/docs/using/watches.md
 ---
 
@@ -237,8 +238,23 @@ has already answered the first.
 keep a question alive past the moment it was agreed to, and the answers this program keeps do
 expire.
 
+**The working directory moving is one of the ways it stops holding.** A watch names the path as the
+turn spelled it, which for this tool is a relative one, and a relative path means the working
+directory. Moving closes the directory left behind ([trust-map.md](trust-map.md)), so the promotion
+that allowed the watch is gone, and the same string now names a file in the new directory that
+nobody armed a watch on. So the move ends them as it happens, and every look is taken against the
+directory its watch was armed under rather than against wherever the session is now: a watch that
+has already seen a change is a fire waiting to go out, and a look is due at most every five
+seconds. A path named absolutely is not a path the working directory decides, so a watch on one
+inside an added directory that survived the move survives with it.
+
 `verified-by: bravebot_agent::tools::a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be`
 `verified-by: bravebot_agent::watch::a_path_the_session_no_longer_reaches_ends_its_watch_and_says_so`
+`verified-by: bravebot_agent::watch::each_look_is_asked_for_the_directory_that_watch_was_armed_under`
+`verified-by: bravebot_agent::watch::a_move_ends_a_watch_that_has_a_fire_waiting_rather_than_letting_it_go_out`
+`verified-by: bravebot_agent::workspace::a_relative_look_is_out_of_reach_once_the_working_directory_has_moved`
+`verified-by: bravebot_agent::workspace::an_absolute_look_into_a_directory_that_survived_the_move_still_sees_it`
+`verified-by: bravebot_tui::app::changing_directory_ends_a_watch_armed_in_the_one_left_behind`
 `verified-by: bravebot_tui::state::a_watch_that_ends_itself_says_which_of_the_two_endings_it_was`
 
 ## The bounds

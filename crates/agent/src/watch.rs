@@ -17,6 +17,7 @@
 //! an effect nobody is watching": an age, a count, a floor between two fires, and an interval
 //! between two looks.
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Whether this turn may arm a standing watch, and why not where it may not.
@@ -94,6 +95,23 @@ pub fn fired(number: usize, path: &str) -> String {
     )
 }
 
+/// Whether a watch's path still names the file it was armed on, with the working directory at
+/// `root`.
+///
+/// A relative path means the working directory, so moving it leaves the string naming a file in
+/// the new one that nobody armed a watch on. An absolute path does not mean the working directory:
+/// it is legal only inside a directory added by name, so whether it is still reachable is what
+/// resolving it answers, and a watch on a file in a directory that survived the move survives with
+/// it.
+///
+/// One function because two callers ask it: the look, which has to answer about the directory the
+/// watch was armed under rather than about wherever the session is now, and the pass that ends
+/// watches when the working directory moves. Two spellings of this would be two answers waiting to
+/// differ, and a watch that one of them ended and the other went on looking at.
+pub fn names_the_same_file(path: &str, under: &Path, root: &Path) -> bool {
+    Path::new(path).is_absolute() || under == root
+}
+
 /// How long a watch lives before it ends itself.
 ///
 /// The number a loop already uses. A session left open for a week is one nobody is sitting at, and
@@ -152,6 +170,13 @@ pub struct Watch {
     /// As the turn that armed it named the file, which is what the workspace takes a look by and
     /// what a person reads off the screen.
     path: String,
+    /// The working directory the watch was armed under, which every later look is taken against.
+    ///
+    /// Kept because the path above is usually a relative one, and a relative path means whatever
+    /// the working directory is now. Without this, moving the working directory leaves the string
+    /// naming a different file, and the watch goes on reporting movement on that one instead of
+    /// ending: the answer that allowed it was about the directory it was armed in.
+    under: PathBuf,
     /// Which turn of the conversation armed it, so a prompt arriving hours later has a cause a
     /// person can read it against.
     armed_by: usize,
@@ -232,6 +257,7 @@ impl Watches {
     pub fn arm(
         &mut self,
         path: String,
+        under: PathBuf,
         armed_by: usize,
         first: Looked,
         now: Instant,
@@ -247,6 +273,7 @@ impl Watches {
         self.live.push(Watch {
             number,
             path,
+            under,
             armed_by,
             began: now,
             seen,
@@ -262,12 +289,14 @@ impl Watches {
     /// it.
     ///
     /// The look is the caller's, because what the session may reach is the caller's question and
-    /// not this file's. What comes back is the whole of what this pass decided: a change seen is
-    /// kept here until the caller is ready to fire.
+    /// not this file's. It is asked for the working directory the watch was armed under as well as
+    /// for the path, since a relative path is only the file it was armed on while that is still
+    /// the working directory. What comes back is the whole of what this pass decided: a change
+    /// seen is kept here until the caller is ready to fire.
     pub fn look(
         &mut self,
         now: Instant,
-        mut look: impl FnMut(&str) -> Looked,
+        mut look: impl FnMut(&str, &Path) -> Looked,
     ) -> Vec<(usize, Reaped)> {
         let mut ended = Vec::new();
         self.live.retain_mut(|watch| {
@@ -278,7 +307,7 @@ impl Watches {
             if now.saturating_duration_since(watch.looked) < BETWEEN_LOOKS {
                 return true;
             }
-            match look(&watch.path) {
+            match look(&watch.path, &watch.under) {
                 Looked::Saw(token) => {
                     watch.looked = now;
                     if token != watch.seen {
@@ -356,6 +385,26 @@ impl Watches {
         before != self.live.len()
     }
 
+    /// End every watch whose path no longer names the file it was armed on, the working directory
+    /// having moved to `root`, and give back their numbers.
+    ///
+    /// Asked as the move happens rather than left to the next look, and both are needed. A look is
+    /// due at most every five seconds, so a watch that has already seen a change is due to fire in
+    /// that window: the fire would go out naming a relative path the turn reading it resolves in
+    /// the new directory, which is the whole of what a watch armed somewhere else must not do.
+    /// Ending them here also means `/status` stops listing a watch the move has ended.
+    pub fn stop_moved(&mut self, root: &Path) -> Vec<usize> {
+        let mut ended = Vec::new();
+        self.live.retain(|watch| {
+            if names_the_same_file(&watch.path, &watch.under, root) {
+                return true;
+            }
+            ended.push(watch.number);
+            false
+        });
+        ended
+    }
+
     /// End every live watch, and give back how many there were.
     pub fn stop_all(&mut self) -> usize {
         let stopped = self.live.len();
@@ -372,9 +421,14 @@ mod tests {
         Looked::Saw(token.to_string())
     }
 
+    /// The working directory the tests below arm under, and take their looks against.
+    fn here() -> PathBuf {
+        PathBuf::from("/work")
+    }
+
     fn armed(watches: &mut Watches, path: &str, now: Instant) -> usize {
         watches
-            .arm(path.to_string(), 1, saw("first"), now)
+            .arm(path.to_string(), here(), 1, saw("first"), now)
             .expect("a watch")
     }
 
@@ -387,7 +441,7 @@ mod tests {
         armed(&mut watches, "a.txt", now);
 
         let later = now + BETWEEN_LOOKS;
-        assert!(watches.look(later, |_| saw("second")).is_empty());
+        assert!(watches.look(later, |_, _| saw("second")).is_empty());
         assert_eq!(
             watches.due(later).map(Watch::number),
             Some(1),
@@ -404,7 +458,7 @@ mod tests {
         armed(&mut watches, "a.txt", now);
 
         let later = now + BETWEEN_LOOKS;
-        watches.look(later, |_| saw("first"));
+        watches.look(later, |_, _| saw("first"));
         assert!(watches.due(later).is_none());
     }
 
@@ -416,11 +470,11 @@ mod tests {
         let mut watches = Watches::new();
         let now = Instant::now();
         watches
-            .arm("a.txt".to_string(), 1, saw("steady"), now)
+            .arm("a.txt".to_string(), here(), 1, saw("steady"), now)
             .expect("a watch");
 
         let later = now + BETWEEN_LOOKS;
-        watches.look(later, |_| saw("steady"));
+        watches.look(later, |_, _| saw("steady"));
         assert!(watches.due(later).is_none());
     }
 
@@ -434,12 +488,12 @@ mod tests {
         armed(&mut watches, "a.txt", now);
 
         let second = now + BETWEEN_LOOKS;
-        watches.look(second, |_| saw("moved"));
+        watches.look(second, |_, _| saw("moved"));
         watches.dispatched(1);
         watches.turn_ended(second);
 
         let third = second + BETWEEN_LOOKS + BETWEEN_FIRES;
-        watches.look(third, |_| saw("moved"));
+        watches.look(third, |_, _| saw("moved"));
         assert!(
             watches.due(third).is_none(),
             "the first look was still what a later one was compared against"
@@ -455,12 +509,12 @@ mod tests {
         armed(&mut watches, "a.txt", now);
 
         let mut looks = 0;
-        watches.look(now + BETWEEN_LOOKS - Duration::from_secs(1), |_| {
+        watches.look(now + BETWEEN_LOOKS - Duration::from_secs(1), |_, _| {
             looks += 1;
             saw("second")
         });
         assert_eq!(looks, 0);
-        watches.look(now + BETWEEN_LOOKS, |_| {
+        watches.look(now + BETWEEN_LOOKS, |_, _| {
             looks += 1;
             saw("second")
         });
@@ -478,7 +532,7 @@ mod tests {
         let mut at = now;
         for token in ["second", "third", "fourth"] {
             at += BETWEEN_LOOKS;
-            watches.look(at, |_| saw(token));
+            watches.look(at, |_, _| saw(token));
         }
         assert_eq!(watches.due(at).map(Watch::number), Some(1));
 
@@ -498,13 +552,13 @@ mod tests {
         let now = Instant::now();
         armed(&mut watches, "a.txt", now);
 
-        watches.look(now + BETWEEN_LOOKS, |_| saw("second"));
+        watches.look(now + BETWEEN_LOOKS, |_, _| saw("second"));
         watches.dispatched(1);
         let ended = now + BETWEEN_LOOKS;
         watches.turn_ended(ended);
 
         let changed = ended + BETWEEN_LOOKS;
-        watches.look(changed, |_| saw("third"));
+        watches.look(changed, |_, _| saw("third"));
         assert!(
             watches
                 .due(ended + BETWEEN_FIRES - Duration::from_secs(1))
@@ -521,10 +575,10 @@ mod tests {
         let now = Instant::now();
         armed(&mut watches, "a.txt", now);
 
-        watches.look(now + BETWEEN_LOOKS, |_| saw("second"));
+        watches.look(now + BETWEEN_LOOKS, |_, _| saw("second"));
         watches.dispatched(1);
         let more = now + 2 * BETWEEN_LOOKS;
-        watches.look(more, |_| saw("third"));
+        watches.look(more, |_, _| saw("third"));
         assert!(watches.due(more).is_none());
     }
 
@@ -536,11 +590,11 @@ mod tests {
 
         assert!(
             watches
-                .look(now + MAX_AGE - Duration::from_secs(1), |_| saw("first"))
+                .look(now + MAX_AGE - Duration::from_secs(1), |_, _| saw("first"))
                 .is_empty()
         );
         assert_eq!(
-            watches.look(now + MAX_AGE, |_| saw("first")),
+            watches.look(now + MAX_AGE, |_, _| saw("first")),
             vec![(1, Reaped::Aged)]
         );
         assert!(watches.is_empty());
@@ -555,10 +609,97 @@ mod tests {
         armed(&mut watches, "a.txt", now);
 
         assert_eq!(
-            watches.look(now + BETWEEN_LOOKS, |_| Looked::OutOfReach),
+            watches.look(now + BETWEEN_LOOKS, |_, _| Looked::OutOfReach),
             vec![(1, Reaped::OutOfReach)]
         );
         assert!(watches.is_empty());
+    }
+
+    /// Each look is asked for the directory its own watch was armed under, which is what lets the
+    /// caller answer the reach question against the directory the answer was given about. Asked
+    /// for whatever the working directory is now, a relative path would be looked up under a
+    /// directory nobody armed a watch in.
+    #[test]
+    fn each_look_is_asked_for_the_directory_that_watch_was_armed_under() {
+        let mut watches = Watches::new();
+        let now = Instant::now();
+        watches
+            .arm(
+                "a.txt".to_string(),
+                PathBuf::from("/one"),
+                1,
+                saw("first"),
+                now,
+            )
+            .expect("a watch");
+        watches
+            .arm(
+                "b.txt".to_string(),
+                PathBuf::from("/two"),
+                1,
+                saw("first"),
+                now,
+            )
+            .expect("a watch");
+
+        let mut asked = Vec::new();
+        watches.look(now + BETWEEN_LOOKS, |path, under| {
+            asked.push((path.to_string(), under.to_path_buf()));
+            saw("first")
+        });
+
+        assert_eq!(
+            asked,
+            vec![
+                ("a.txt".to_string(), PathBuf::from("/one")),
+                ("b.txt".to_string(), PathBuf::from("/two")),
+            ]
+        );
+    }
+
+    /// A change already seen is a fire waiting to go out, and it goes out naming the path as the
+    /// turn wrote it. Left for the next look, which is up to five seconds away, that fire would
+    /// arrive about a relative path the session now resolves in the directory it moved to.
+    #[test]
+    fn a_move_ends_a_watch_that_has_a_fire_waiting_rather_than_letting_it_go_out() {
+        let mut watches = Watches::new();
+        let now = Instant::now();
+        armed(&mut watches, "a.txt", now);
+
+        let seen = now + BETWEEN_LOOKS;
+        watches.look(seen, |_, _| saw("second"));
+        assert!(watches.due(seen).is_some(), "the change was not seen");
+
+        assert_eq!(watches.stop_moved(Path::new("/elsewhere")), vec![1]);
+        assert!(watches.due(seen).is_none(), "the fire still went out");
+        assert!(watches.is_empty());
+    }
+
+    /// A path named absolutely is not a path the working directory decides, so a watch on one in a
+    /// directory the user opened by name is left alone by a move. Ending every watch on a move
+    /// would take this one with it, and the answer that allowed it still holds.
+    #[test]
+    fn a_move_leaves_a_watch_on_an_absolutely_named_path_alone() {
+        let mut watches = Watches::new();
+        let now = Instant::now();
+        watches
+            .arm("/opened/a.txt".to_string(), here(), 1, saw("first"), now)
+            .expect("a watch");
+
+        assert!(watches.stop_moved(Path::new("/elsewhere")).is_empty());
+        assert_eq!(watches.live().len(), 1);
+    }
+
+    /// The pass ends the watches the move closed the answer for and no others, which is what makes
+    /// the ending it reports true of each watch it names.
+    #[test]
+    fn a_move_back_to_where_a_watch_was_armed_leaves_it_alone() {
+        let mut watches = Watches::new();
+        let now = Instant::now();
+        armed(&mut watches, "a.txt", now);
+
+        assert!(watches.stop_moved(&here()).is_empty());
+        assert_eq!(watches.live().len(), 1);
     }
 
     /// A file somebody deleted has neither of the two facts a watch compares, so there is nothing
@@ -571,12 +712,12 @@ mod tests {
         armed(&mut watches, "a.txt", now);
 
         let gone = now + BETWEEN_LOOKS;
-        assert!(watches.look(gone, |_| Looked::Absent).is_empty());
+        assert!(watches.look(gone, |_, _| Looked::Absent).is_empty());
         assert!(watches.due(gone).is_none());
         assert_eq!(watches.live().len(), 1);
 
         let back = gone + BETWEEN_LOOKS;
-        watches.look(back, |_| saw("different"));
+        watches.look(back, |_, _| saw("different"));
         assert!(watches.due(back).is_some());
     }
 
@@ -591,7 +732,7 @@ mod tests {
             armed(&mut watches, &format!("{n}.txt"), now);
         }
         assert_eq!(
-            watches.arm("ninth.txt".to_string(), 1, saw("first"), now),
+            watches.arm("ninth.txt".to_string(), here(), 1, saw("first"), now),
             Err(Refused::Full)
         );
         assert_eq!(watches.live().len(), MAX_LIVE);
@@ -605,7 +746,7 @@ mod tests {
         let now = Instant::now();
         for first in [Looked::Absent, Looked::OutOfReach] {
             assert_eq!(
-                watches.arm("a.txt".to_string(), 1, first, now),
+                watches.arm("a.txt".to_string(), here(), 1, first, now),
                 Err(Refused::NothingToLookAt)
             );
         }
@@ -662,7 +803,7 @@ mod tests {
         armed(&mut watches, "a.txt", now);
         armed(&mut watches, "b.txt", now);
 
-        watches.look(now + BETWEEN_LOOKS, |path| {
+        watches.look(now + BETWEEN_LOOKS, |path, _| {
             saw(if path == "a.txt" { "second" } else { "first" })
         });
         watches.dispatched(1);
@@ -690,7 +831,7 @@ mod tests {
         let mut watches = Watches::new();
         let now = Instant::now();
         watches
-            .arm("/work/a.txt".to_string(), 7, saw("first"), now)
+            .arm("/work/a.txt".to_string(), here(), 7, saw("first"), now)
             .expect("a watch");
 
         let watch = &watches.live()[0];
