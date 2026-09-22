@@ -155,10 +155,13 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
 
     let text: Vec<&str> = said
         .iter()
-        .map(|entry| match entry {
-            bravebot_agent::conversation::Said::User(t) => t.as_str(),
-            bravebot_agent::conversation::Said::Assistant(t) => t.as_str(),
-            bravebot_agent::conversation::Said::Tool(t) => t.as_str(),
+        .filter_map(|entry| match entry {
+            bravebot_agent::conversation::Said::User(t)
+            | bravebot_agent::conversation::Said::Assistant(t)
+            | bravebot_agent::conversation::Said::Tool(t) => Some(t.as_str()),
+            // A message the agent composed reports the tag it was recorded with beside its words.
+            // Nothing in this conversation is one.
+            bravebot_agent::conversation::Said::Composed { .. } => None,
         })
         .collect();
 

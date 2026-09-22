@@ -190,7 +190,7 @@ fn what_a_command_printed_reaches_the_planners_context() {
     let said = conversation
         .messages()
         .iter()
-        .map(|m| m.content.text())
+        .map(|m| m.message.content.text())
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
@@ -215,7 +215,11 @@ fn the_command_is_recorded_as_something_the_user_did() {
     let ran = run("echo hi", &scratch.path).expect("it runs");
     shell::record("echo hi", &ran, &mut conversation, &mut sink).expect("it is recorded");
 
-    let roles: Vec<Role> = conversation.messages().iter().map(|m| m.role).collect();
+    let roles: Vec<Role> = conversation
+        .messages()
+        .iter()
+        .map(|m| m.message.role)
+        .collect();
     assert_eq!(roles, vec![Role::User]);
 }
 
@@ -259,7 +263,7 @@ fn a_failing_commands_output_still_reaches_the_planner() {
     .expect("it is recorded");
 
     assert!(!recorded.succeeded);
-    let said = conversation.messages()[0].content.text();
+    let said = conversation.messages()[0].message.content.text();
     assert!(said.contains("the-error"), "stderr was dropped: {said}");
     assert!(
         said.contains("exited 1"),
@@ -306,6 +310,7 @@ fn what_is_shown_is_what_the_gate_released() {
     assert!(recorded.text.contains("shown-and-said"));
     assert!(
         conversation.messages()[0]
+            .message
             .content
             .text()
             .contains(&recorded.text)

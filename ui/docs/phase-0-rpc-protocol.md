@@ -258,7 +258,7 @@ implementation should have one serialisation function per row and a round-trip t
 | `report::Reach` | `"not_the_planner"` \| `"no_model"` | |
 | `report::Landing` | `"context"` \| `"quarantined"` \| `"reserved"` | |
 | `todo::Status` | `"pending"` \| `"active"` \| `"done"` | |
-| `conversation::Said` | `{"kind":"user"\|"assistant"\|"tool","text":"…"}` | from `recounted()`, §7.1 |
+| `conversation::Said` | `{"kind":"user"\|"assistant"\|"tool","text":"…"}`, `{"kind":"attached","path":"…"}` or `{"kind":"watch","number":N,"path":"…"}` | from `recounted()`, §7.1 |
 | `core::event::Event` | as `audit::as_json` already produces | **reuse verbatim**, do not re-derive |
 | `label::Label` | `{"integrity":"trusted"\|"untrusted","confidentiality":"public"\|"private"}` | as `audit::label_json` |
 | `SystemTime` seconds | JSON number, seconds since epoch | matches `Record::started`/`updated` |
@@ -320,7 +320,7 @@ Loads the `Record` via `sessions::load` and the trail and todos via `sessions::r
   "record": { "id": "…", "directory": "…", "branch": "main", "title": "…",
               "started": 1756200000, "updated": 1756300000,
               "turns": 4, "tokens": 51234, "build": "0.1.0 (abcdef1)" },
-  "said": [ { "kind": "user"|"assistant"|"tool", "text": "…" } ],
+  "said": [ { "kind": "user"|"assistant"|"tool", "text": "…" }, { "kind": "attached", "path": "…" } ],
   "context": "trusted",
   "todos":  { "1": [ { "content": "…", "status": "done" } ] },
   "audit":  { "1": [ { "at": 1756200003, "event": { "kind": "gate_passed", … } } ] },
@@ -343,6 +343,14 @@ Loads the `Record` via `sessions::load` and the trail and todos via `sessions::r
   does not store what came of it**, so the client must not render a result or a status
   beside a replayed tool line. Live turns get `tool.started`/`tool.finished` with a
   `note`; replayed ones do not, and inventing an outcome would be worse than the gap.
+- **A message the agent composed carries a tag and no text.** A file somebody named arrives as
+  `{"kind":"attached","path":"…"}` and a watch that fired as
+  `{"kind":"watch","number":N,"path":"…"}`. Both are user-role messages in the request, because
+  that is how a file reaches a planner, and neither is a prompt: the client writes its own row
+  from the fields. The text is withheld rather than merely unused. The words of an attached
+  message are a line the agent wrote followed by **the file's own bytes**, so a client that read
+  them back to decide what to draw would let whoever wrote that file choose which row it appears
+  as, the interface's own rows included. Rule 1 of §6, applied where it matters most.
 - `context` is `Snapshot::context`, the word for what the conversation has met.
 - `todos` and `audit` are keyed by turn number as strings, because JSON object keys are
   strings; the Rust side is a `BTreeMap<usize, _>`.
@@ -378,7 +386,7 @@ located.
 ```json
 { "id": 5, "ok": {
   "session": "s7", "id": "1756300000-4711", "directory": "…", "branch": "main",
-  "said": [ { "kind": "user"|"assistant"|"tool", "text": "…" } ],
+  "said": [ { "kind": "user"|"assistant"|"tool", "text": "…" }, { "kind": "attached", "path": "…" } ],
   "prefill": "make it handle quotes",
   "context": "trusted",
   "turns": 2,
@@ -392,20 +400,26 @@ Begins a session holding everything the parent said *before* one of its prompts.
 that prompt, handed back rather than kept, because the point of forking is to ask it
 differently: the front-end puts it in the composer and the person edits it.
 
-- `prompt` is a **0-based ordinal over `Said::User`** — the prompts a transcript drew — and not
-  a turn number. `text` is what that prompt said. Both are sent because they check each other:
+- `prompt` is a **0-based ordinal over `Said::User`**, the prompts a transcript drew, and not a
+  turn number. `text` is what that prompt said. Both are sent because they check each other:
   the ordinal says where to cut, and the text says the front-end's idea of where agrees with the
-  conversation's. They can disagree. The agent writes user-role messages of its own that
-  `recounted` does not filter — a context file arrives as `Contents of …`, and a turn that
-  spends its tool budget is nudged with one — so a window that never drew them counts
-  differently from the conversation that holds them. A mismatch is `bad_request`; a fork taken
-  one prompt away from where somebody pointed is worse than one that did not happen.
-- The ordinal is turned back into a message index by walking `archive ++ messages` and consuming
-  the drawn prompts in order, matching on text. That is an **alignment, not a second copy of
-  `recounted`'s rules**: those rules drop a user message on what its text starts with, so a
-  message whose text equals a prompt the transcript showed cannot have been one of the dropped
-  ones. If a later build filters on something the text does not carry, the walk runs out of
-  matches and the fork is refused rather than cut somewhere else.
+  conversation's. They can disagree. A window draws some user-role messages as something other
+  than a prompt: this app's own consolidation turns, which it marks in the prose because it wrote
+  them. Those are still messages the conversation counts, so a window that leaves one out of its
+  count is a prompt out of step for the rest of the session. A mismatch is `bad_request`; a fork
+  taken one prompt away from where somebody pointed is worse than one that did not happen.
+- **A message the agent composed is not a prompt on either side.** It is tagged in the record and
+  reported as `attached` or `watch`, so neither the window nor the cut has to recognise one by its
+  wording. That is what keeps the two counts aligned rather than approximately aligned: while an
+  attachment was recognised by its first line, a file whose own first line read `Contents of x:`
+  moved every later ordinal in the session, and one that did not read that way moved none.
+- The ordinal is turned back into a message index by walking `archive ++ messages`, skipping
+  anything tagged, and consuming the drawn prompts in order, matching on text. That is an
+  **alignment, not a second copy of `recounted`'s rules**: those rules drop an untagged user
+  message on what its text starts with, so a message whose text equals a prompt the transcript
+  showed cannot have been one of the dropped ones. If a later build filters on something neither
+  the tag nor the text carries, the walk runs out of matches and the fork is refused rather than
+  cut somewhere else.
 - **The cut is a well-formed request by construction.** It lands in front of a prompt, which is
   the same boundary compaction uses, so it cannot come between a call and its result; and
   `Conversation::with_system` answers any call left unanswered anyway. Nothing here re-implements
@@ -508,9 +522,10 @@ and in nothing else: `files` is workspace-relative and read inside the project, 
 `dropped` may name anything on the disk — upstream calls it the read that is not confined
 to the workspace, because a dropped path came from a gesture rather than from anything a
 model said. Both are trusted for the same reason, both are vouched for by being named
-(`policy.vouch_for_named_path`), and both land in the conversation as ordinary user
-messages reading `Contents of <path>: …`, which means **they accumulate**: a file attached
-to every turn is a copy of that file per turn.
+(`policy.vouch_for_named_path`), and both land in the conversation as user messages reading
+`Contents of <path>: …`, which means **they accumulate**: a file attached to every turn is a
+copy of that file per turn. Each is recorded with the tag §7.1 describes, so a transcript
+drawn from the record names the file without reading the body back to find out what it is.
 
 A path that cannot be read as text ends the turn — `turn.error` with `kind: "workspace"` —
 rather than being skipped. A caller that attaches a file it maintains has to make sure the

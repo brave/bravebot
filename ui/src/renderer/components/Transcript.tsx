@@ -272,7 +272,7 @@ export function Transcript({
     if (!live || live.focus === null) return null
     let seen = 0
     for (const entry of live.entries) {
-      if (entry.kind !== 'user') continue
+      if (!t.isPrompt(entry)) continue
       if (seen === live.focus) return entry.id
       seen += 1
     }

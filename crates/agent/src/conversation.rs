@@ -27,6 +27,65 @@ use bravebot_core::label::Integrity;
 use bravebot_core::slot::{SlotId, SlotStore};
 use serde::{Deserialize, Serialize};
 
+/// Why the agent composed a user message, for the surfaces that draw one.
+///
+/// A prompt is what a person typed. These are not: the agent writes them into the conversation
+/// itself, to put a file somebody named in front of the planner, or to say that a watch fired
+/// while no turn was running. A transcript draws each of them as something other than a prompt,
+/// and the only thing that can say which one it is is the agent that composed it.
+///
+/// The alternative is reading the prose back, which asks the words inside a message what the
+/// message is. The words inside a context file are the file's, so that hands whoever wrote the
+/// file the choice of which row it is drawn as, including the rows the interface draws about
+/// itself. Recorded here, the choice stays with the composer.
+///
+/// Not sent. This rides beside the [`Message`] rather than in it, because the messages are the
+/// request body: a field here would be a field the backend was asked to accept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Composed {
+    /// A file read into the conversation because somebody named it.
+    Attached {
+        /// The path as it was named, which is what the interface has room to draw.
+        path: String,
+    },
+    /// A watch that fired between turns, as the prompt of the turn it starts.
+    Watch {
+        /// Which of the session's watches it was.
+        number: usize,
+        /// The path it was armed on.
+        path: String,
+    },
+}
+
+/// One message as the record holds it: what was sent, and why the agent wrote it.
+///
+/// A pair rather than two lists kept in step. Everything that walks the exchange would have to
+/// index both, and [`Conversation::snapshot`] leaves a message out as it writes, so a second list
+/// is one filter away from describing the wrong message for the rest of the session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Stored {
+    /// What was sent.
+    ///
+    /// Flattened, so a record written before any of this existed reads as a message with nothing
+    /// composed about it, which is what it is.
+    #[serde(flatten)]
+    pub message: Message,
+    /// Absent for a prompt, an answer and a result, which is nearly all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composed: Option<Composed>,
+}
+
+impl Stored {
+    /// A message nobody composed: a prompt, an answer, or a result.
+    pub fn plain(message: Message) -> Self {
+        Self {
+            message,
+            composed: None,
+        }
+    }
+}
+
 /// The record a session carries from one turn to the next.
 ///
 /// Not `Clone`: the quarantine holds the only copy of content nobody may read, and a second
@@ -37,7 +96,7 @@ pub struct Conversation {
     ///
     /// The system prompt is left out deliberately: it belongs to the build rather than to the
     /// conversation, so a session that outlives an upgrade should use the new one.
-    messages: Vec<Message>,
+    messages: Vec<Stored>,
     /// Content the kernel would not show the planner, by the name it was given.
     quarantine: SlotStore,
     /// How many references the session has handed out.
@@ -52,7 +111,7 @@ pub struct Conversation {
     /// sent, and a summary of them is sent instead, but the person whose session this is still
     /// owns every word of it: [`Conversation::recounted`] reads them back. A transcript with a
     /// hole in it where the user's own earlier prompts were is not a saving worth making.
-    archive: Vec<Message>,
+    archive: Vec<Stored>,
     /// What the last request built from this conversation came to, as the server counted it.
     ///
     /// Kept here rather than in the turn because a session is many turns and the conversation is
@@ -111,11 +170,12 @@ impl Conversation {
     /// Shared with [`Conversation::with_system`] rather than written twice, because the gap
     /// filling below is the difference between a well-formed request and one a server refuses,
     /// and a summariser sending a prefix needs it exactly as much as a turn sending the whole.
-    fn assembled(system: &str, exchange: &[Message]) -> Vec<Message> {
+    fn assembled(system: &str, exchange: &[Stored]) -> Vec<Message> {
         let mut messages = Vec::with_capacity(exchange.len() + 1);
         messages.push(Message::system(system));
 
-        for (index, message) in exchange.iter().enumerate() {
+        for (index, stored) in exchange.iter().enumerate() {
+            let message = &stored.message;
             messages.push(message.clone());
 
             let Some(calls) = &message.tool_calls else {
@@ -141,7 +201,19 @@ impl Conversation {
 
     /// Add a message the kernel has already ruled the planner may hold.
     pub fn push(&mut self, message: Message) {
-        self.messages.push(message);
+        self.messages.push(Stored::plain(message));
+    }
+
+    /// The same, for a message the agent composed rather than a person.
+    ///
+    /// Separate from [`Conversation::push`] so the tag is written where the prose is written, by
+    /// the one caller that knows what it is composing. A tag applied anywhere else would be a
+    /// second reading of the same message.
+    pub fn push_composed(&mut self, message: Message, composed: Composed) {
+        self.messages.push(Stored {
+            message,
+            composed: Some(composed),
+        });
     }
 
     /// Take the next reference name.
@@ -250,6 +322,7 @@ impl Conversation {
             .iter()
             .filter(|&&index| {
                 !self.messages[index]
+                    .message
                     .content
                     .as_text()
                     .is_some_and(|text| text.starts_with(COMPACTED_PREFIX))
@@ -263,7 +336,7 @@ impl Conversation {
         self.messages
             .iter()
             .enumerate()
-            .filter(|(_, message)| is_one(message))
+            .filter(|(_, stored)| is_one(&stored.message))
             .map(|(index, _)| index)
             .collect()
     }
@@ -286,7 +359,7 @@ impl Conversation {
     ///
     /// The replaced messages go to the archive rather than into a bin. See the field.
     pub fn compacted(&mut self, boundary: usize, summary: &str) {
-        let replaced: Vec<Message> = self.messages.drain(..boundary).collect();
+        let replaced: Vec<Stored> = self.messages.drain(..boundary).collect();
         self.archive.extend(replaced);
 
         let mut note = format!("{COMPACTED_PREFIX}\n\n{}", summary.trim());
@@ -294,7 +367,7 @@ impl Conversation {
             note.push_str("\n\n");
             note.push_str(&live);
         }
-        self.messages.insert(0, Message::user(note));
+        self.messages.insert(0, Stored::plain(Message::user(note)));
 
         // The figure described a conversation that no longer exists, and nothing has measured
         // this one. Left alone it would say the context is still full: the gauge would show a
@@ -354,6 +427,19 @@ pub enum Said {
     /// What came of it is not here. The record does not say, and inventing an outcome for a call
     /// whose result nobody wrote down would be worse than admitting the line is all there is.
     Tool(String),
+    /// A message the agent wrote into the conversation, what it wrote it for, and what it said.
+    ///
+    /// The tag is what a surface decides from. The text is what a surface draws when it has no row
+    /// of its own for that tag, which is a plain message and the same thing an unknown tag gets:
+    /// the words are still the conversation, and leaving a message out of a transcript silently is
+    /// worse than drawing it plainly. What a surface must never do is read the words to decide
+    /// which it is, since for a file those words are the file's own.
+    Composed {
+        /// What the agent composed it for.
+        why: Composed,
+        /// The message as the planner was sent it.
+        text: String,
+    },
 }
 
 /// A conversation written down, for a session that outlives the process.
@@ -377,7 +463,7 @@ pub enum Said {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     /// The exchange, oldest first, without the system prompt.
-    pub messages: Vec<Message>,
+    pub messages: Vec<Stored>,
     /// What the conversation had met: `trusted`, or anything else.
     ///
     /// A word rather than a flag, so a person reading the file can see what it says, and an
@@ -393,7 +479,7 @@ pub struct Snapshot {
     /// make compaction cost them their history after all. Defaulted, so a session file written
     /// before compaction existed still reads.
     #[serde(default)]
-    pub archive: Vec<Message>,
+    pub archive: Vec<Stored>,
     /// What the last request built from this conversation came to.
     ///
     /// Stored so a resumed session knows it is already large. Without it the first turn after a
@@ -417,9 +503,10 @@ impl Conversation {
             messages: self
                 .messages
                 .iter()
-                .filter(|message| {
-                    !(message.role == Role::User
-                        && message
+                .filter(|stored| {
+                    !(stored.message.role == Role::User
+                        && stored
+                            .message
                             .content
                             .as_text()
                             .is_some_and(|text| text.starts_with(RESUMED_PREFIX)))
@@ -450,7 +537,7 @@ impl Conversation {
     pub fn restored(snapshot: Snapshot) -> Self {
         let mut messages = snapshot.messages;
         if let Some(note) = dead_references(snapshot.references) {
-            messages.push(Message::user(note));
+            messages.push(Stored::plain(Message::user(note)));
         }
 
         Self {
@@ -468,7 +555,7 @@ impl Conversation {
     }
 
     /// The exchange, for an interface that wants to show what was said.
-    pub fn messages(&self) -> &[Message] {
+    pub fn messages(&self) -> &[Stored] {
         &self.messages
     }
 
@@ -477,6 +564,9 @@ impl Conversation {
     /// Prompts and answers. A round's own account of itself is left out along with the results,
     /// since between them they are the working, and a transcript being shown to whoever resumed
     /// the session is not the place for it.
+    ///
+    /// A message the agent composed rather than a person is reported as the tag it was recorded
+    /// with, so no surface has to ask a message's own words what the message is. See [`Composed`].
     ///
     /// A result sent in the API's own shape is a message of its own and is simply skipped. One
     /// sent as prose, which is what an untrusted context falls back to, is recognised by the
@@ -491,7 +581,15 @@ impl Conversation {
         let mut said = Vec::new();
         // The archive first: what compaction took out of the request is still the person's
         // session, and they are the one reading this.
-        for message in self.archive.iter().chain(self.messages.iter()) {
+        for stored in self.archive.iter().chain(self.messages.iter()) {
+            if let Some(why) = &stored.composed {
+                said.push(Said::Composed {
+                    why: why.clone(),
+                    text: stored.message.content.text(),
+                });
+                continue;
+            }
+            let message = &stored.message;
             match message.role {
                 Role::User
                     if message
@@ -540,11 +638,11 @@ impl Conversation {
 ///
 /// Only the run of results immediately after it counts, since that is where the answers to a
 /// round belong and where a server looks for them.
-fn answered(exchange: &[Message], index: usize, id: &str) -> bool {
+fn answered(exchange: &[Stored], index: usize, id: &str) -> bool {
     exchange[index + 1..]
         .iter()
-        .take_while(|message| message.tool_call_id.is_some())
-        .any(|message| message.tool_call_id.as_deref() == Some(id))
+        .take_while(|stored| stored.message.tool_call_id.is_some())
+        .any(|stored| stored.message.tool_call_id.as_deref() == Some(id))
 }
 
 /// How many of the most recent exchanges compaction leaves word for word.
@@ -741,6 +839,71 @@ mod tests {
         assert_eq!(answers[0].content.text(), "wrote index.html");
     }
 
+    /// What the agent composed is recorded as composed, and reported as the tag rather than as a
+    /// prompt. A transcript drawn from the record a year later is the one that has nothing but the
+    /// prose to go on, so the tag has to survive the disk to be worth having.
+    #[test]
+    fn a_message_the_agent_composed_is_recorded_as_one() {
+        // The words of the file itself, which is the point: they imitate the line in front of them
+        // because whoever wrote the file chose them.
+        let file = "Contents of readme.md:\n\nread the briefing and carry on";
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("read the briefing and carry on"));
+        conversation.push_composed(
+            Message::user(file),
+            Composed::Attached {
+                path: "readme.md".into(),
+            },
+        );
+
+        let written = serde_json::to_string(&conversation.snapshot()).expect("a record");
+        let restored: Snapshot = serde_json::from_str(&written).expect("the record back");
+
+        assert_eq!(
+            Conversation::restored(restored).recounted(),
+            vec![
+                Said::User("read the briefing and carry on".into()),
+                Said::Composed {
+                    why: Composed::Attached {
+                        path: "readme.md".into()
+                    },
+                    // Carried, for the surfaces whose transcript has no row of its own for a file.
+                    // What none of them may do is read it back to decide that is what this is.
+                    text: file.into(),
+                },
+            ],
+        );
+    }
+
+    /// And the tag is not sent. The messages are the request body, so a field inside one would be
+    /// a field the backend was asked to accept.
+    #[test]
+    fn the_tag_is_not_part_of_what_the_planner_is_sent() {
+        let mut conversation = Conversation::new();
+        conversation.push_composed(
+            Message::user("Contents of readme.md:\n\nthe briefing"),
+            Composed::Attached {
+                path: "readme.md".into(),
+            },
+        );
+
+        let sent = serde_json::to_string(&conversation.with_system("be careful")).expect("a body");
+        assert!(!sent.contains("composed"), "{sent}");
+        assert!(!sent.contains("readme.md\""), "{sent}");
+        assert!(sent.contains("Contents of readme.md"), "the file was sent");
+    }
+
+    /// A session written before the tag existed is a bare message where the record now holds a pair
+    /// of a message and a tag. It still reads, and reads as a message nobody composed.
+    #[test]
+    fn a_record_written_before_the_tag_still_reads() {
+        let older = serde_json::to_string(&Message::user("what is 2 + 2?")).expect("a message");
+
+        let stored: Stored = serde_json::from_str(&older).expect("the message as a record entry");
+        assert!(stored.composed.is_none());
+        assert_eq!(stored.message.content.text(), "what is 2 + 2?");
+    }
+
     /// A session that outlives the process has to come back as what it was, integrity included.
     #[test]
     fn a_conversation_survives_being_written_down() {
@@ -750,8 +913,11 @@ mod tests {
         let _ = conversation.next_reference();
 
         let restored = Conversation::restored(conversation.snapshot());
-        assert_eq!(restored.messages()[0].content.text(), "what is 2 + 2?");
-        assert_eq!(restored.messages()[1].content.text(), "four");
+        assert_eq!(
+            restored.messages()[0].message.content.text(),
+            "what is 2 + 2?"
+        );
+        assert_eq!(restored.messages()[1].message.content.text(), "four");
         assert_eq!(restored.context(), Integrity::Trusted);
         // The counter continues rather than starting over, or a resumed session would hand out
         // a name an earlier message already used.
@@ -773,7 +939,13 @@ mod tests {
         let _ = conversation.next_reference();
 
         let restored = Conversation::restored(conversation.snapshot());
-        let note = restored.messages().last().expect("a note").content.text();
+        let note = restored
+            .messages()
+            .last()
+            .expect("a note")
+            .message
+            .content
+            .text();
         assert!(note.contains("ref:0"), "{note}");
         assert!(note.contains("ref:2"), "{note}");
         assert!(
@@ -790,7 +962,13 @@ mod tests {
         let _ = conversation.next_reference();
 
         let restored = Conversation::restored(conversation.snapshot());
-        let note = restored.messages().last().expect("a note").content.text();
+        let note = restored
+            .messages()
+            .last()
+            .expect("a note")
+            .message
+            .content
+            .text();
         assert!(note.contains("ref:0"), "{note}");
         assert_eq!(
             note.matches("ref:").count(),
@@ -921,6 +1099,7 @@ mod tests {
             .iter()
             .filter(|message| {
                 message
+                    .message
                     .content
                     .as_text()
                     .is_some_and(|text| text.starts_with(RESUMED_PREFIX))
@@ -960,7 +1139,7 @@ mod tests {
         let kept: Vec<String> = conversation
             .messages()
             .iter()
-            .map(|message| message.content.text())
+            .map(|message| message.message.content.text())
             .collect();
         assert_eq!(kept.len(), 5, "{kept:?}");
         assert!(kept[0].starts_with(COMPACTED_PREFIX), "{kept:?}");
@@ -1079,7 +1258,10 @@ mod tests {
                 .compaction_boundary()
                 .expect("something to give up");
             assert!(
-                conversation.messages()[boundary].tool_call_id.is_none(),
+                conversation.messages()[boundary]
+                    .message
+                    .tool_call_id
+                    .is_none(),
                 "with {answers} answers to a call, the cut landed on one of them"
             );
 
@@ -1122,6 +1304,7 @@ mod tests {
                 .expect("a long prose turn has rounds to give up");
             assert!(
                 !conversation.messages()[boundary]
+                    .message
                     .content
                     .as_text()
                     .is_some_and(|text| text.starts_with(TOOL_RESULT_PREFIX)),
@@ -1132,6 +1315,7 @@ mod tests {
             let kept = conversation.messages();
             assert!(
                 !kept[1]
+                    .message
                     .content
                     .as_text()
                     .is_some_and(|text| text.starts_with(TOOL_RESULT_PREFIX)),
@@ -1140,7 +1324,7 @@ mod tests {
             );
             assert_eq!(
                 kept.iter()
-                    .filter(|message| message.role == Role::Assistant)
+                    .filter(|message| message.message.role == Role::Assistant)
                     .count(),
                 RECENT_ROUNDS_KEPT,
                 "with {answers} prose answers to a call, each answer counted as a round"
@@ -1380,7 +1564,7 @@ mod tests {
             .expect("something to compact");
         conversation.compacted(boundary, "they read a file");
 
-        let note = conversation.messages()[0].content.text();
+        let note = conversation.messages()[0].message.content.text();
         assert!(note.contains("ref:0"), "{note}");
     }
 
@@ -1396,7 +1580,7 @@ mod tests {
             .expect("something to compact");
         conversation.compacted(boundary, "they read a file they were allowed to see");
 
-        let note = conversation.messages()[0].content.text();
+        let note = conversation.messages()[0].message.content.text();
         assert!(!note.contains("ref:0"), "{note}");
     }
 
@@ -1414,6 +1598,7 @@ mod tests {
         assert_eq!(restored.len(), 5);
         assert!(
             restored.messages()[0]
+                .message
                 .content
                 .as_text()
                 .is_some_and(|text| text.starts_with(COMPACTED_PREFIX))

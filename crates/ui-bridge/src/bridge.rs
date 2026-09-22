@@ -512,6 +512,20 @@ impl Bridge {
     /// began, because a turn takes as long as a model does and a front-end that blocked
     /// on it would show nothing until it ended.
     fn send_turn(&mut self, request: &Request) -> Result<Value, Failure> {
+        self.start_turn(request, None)
+    }
+
+    /// The same, for a turn this crate asked for and knows what it composed.
+    ///
+    /// The tag is a parameter here and not a field of the request, and that is the point: a front
+    /// end able to say a prompt was composed by the agent would be a front end able to have a
+    /// transcript draw the interface's own rows around a line a person typed, which is the thing
+    /// the tag exists to stop anyone doing.
+    fn start_turn(
+        &mut self,
+        request: &Request,
+        composed: Option<bravebot_agent::conversation::Composed>,
+    ) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let prompt = request.string("prompt")?;
         let requested_model = crate::models::selection(request.params.get("model"))?;
@@ -651,6 +665,7 @@ impl Bridge {
                 attribution,
                 workspace,
                 prompt,
+                composed,
                 files,
                 dropped,
                 recall,
@@ -961,7 +976,13 @@ impl Bridge {
             }
             let request = Request::parse(&json!({"id": 0, "method": "turn.send", "params": {"session": handle, "prompt": prompt, "recall": false}}).to_string());
             if let Ok(request) = request
-                && let Err(error) = self.send_turn(&request)
+                && let Err(error) = self.start_turn(
+                    &request,
+                    Some(bravebot_agent::conversation::Composed::Watch {
+                        number,
+                        path: path.clone(),
+                    }),
+                )
             {
                 if let Some(open) = self.open.get(&handle)
                     && let Ok(mut watches) = open.watches.lock()
@@ -1061,6 +1082,8 @@ struct Work {
     model: Option<String>,
     workspace: Workspace,
     prompt: String,
+    /// What the agent composed this prompt for, where nobody typed it.
+    composed: Option<bravebot_agent::conversation::Composed>,
     files: Vec<String>,
     dropped: Vec<String>,
     /// Whether this prompt joins the shared recall history, and may name the session.
@@ -1089,6 +1112,7 @@ fn work(work: Work) {
         model,
         workspace,
         prompt,
+        composed,
         files,
         dropped,
         recall,
@@ -1112,6 +1136,9 @@ fn work(work: Work) {
         .with_home(bravebot_agent::home::directory())
         .with_model(model)
         .with_attribution(attribution);
+    if let Some(composed) = composed {
+        task = task.composed_by_the_agent(composed);
+    }
     for file in &files {
         task = task.with_file(file);
     }

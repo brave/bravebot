@@ -263,7 +263,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
     let restored = Conversation::restored(record.conversation);
     assert_eq!(restored.len(), 2);
     assert_eq!(
-        restored.messages()[0].content.text(),
+        restored.messages()[0].message.content.text(),
         "make a space invaders game"
     );
 
@@ -1474,7 +1474,7 @@ fn a_question_asked_beside_the_work_survives_a_resume() {
     let said: Vec<String> = restored
         .messages()
         .iter()
-        .filter_map(|message| message.content.as_text().map(str::to_string))
+        .filter_map(|message| message.message.content.as_text().map(str::to_string))
         .collect();
     assert!(
         !said.iter().any(|text| text.contains("recursive")),
@@ -1534,10 +1534,12 @@ fn a_pasted_picture_is_kept_with_the_session_and_comes_back_on_a_resume() {
     let parts = restored
         .messages()
         .iter()
-        .find_map(|message| match (&message.role, &message.content) {
-            (Role::User, Content::Parts(parts)) => Some(parts.clone()),
-            _ => None,
-        })
+        .find_map(
+            |message| match (&message.message.role, &message.message.content) {
+                (Role::User, Content::Parts(parts)) => Some(parts.clone()),
+                _ => None,
+            },
+        )
         .expect("the prompt came back carrying parts");
 
     assert!(
