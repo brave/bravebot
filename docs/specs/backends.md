@@ -201,6 +201,9 @@ another it will never call.
 `verified-by: bravebot_agent::backend::without_bedrock_configured_nothing_needs_a_sign_in`
 `verified-by: bravebot_agent::backend::signing_in_for_a_model_no_aws_account_serves_does_nothing`
 `verified-by: bravebot_agent::backend::a_gateway_model_never_needs_an_aws_sign_in`
+`verified-by: bravebot_agent::backend::a_model_an_aws_block_named_needs_a_sign_in_of_its_own`
+`verified-by: bravebot_agent::backend::signing_in_for_a_model_an_aws_block_named_reaches_that_account`
+`verified-by: bravebot_agent::backend::an_aws_block_leaves_the_other_rosters_needing_no_sign_in`
 
 <a id="BACKEND-10"></a>
 ### BACKEND-10: asking whether a session is good costs nothing once it is known to be
