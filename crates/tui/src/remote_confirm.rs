@@ -120,6 +120,10 @@ pub enum ToMain {
     Started(Activity),
     /// The tool call last announced has finished. No reply.
     Finished(Activity),
+    /// A check has begun over this many lines of quarantined content. No reply.
+    CheckStarted(usize),
+    /// The check last announced is over, whatever it decided. No reply.
+    CheckFinished,
     /// Quarantined content, for the person watching to read. No reply.
     Quarantined(Shown),
     /// What a command printed, for the view a person can open over it. No reply.
@@ -327,6 +331,15 @@ impl Reporter for RemoteReporter {
     fn tool_finished(&mut self, activity: Activity) {
         let _ = self.outbound.send(ToMain::Finished(activity));
     }
+
+    fn check_started(&mut self, lines: usize) {
+        let _ = self.outbound.send(ToMain::CheckStarted(lines));
+    }
+
+    fn check_finished(&mut self) {
+        let _ = self.outbound.send(ToMain::CheckFinished);
+    }
+
     fn quarantined(&mut self, shown: Shown) {
         let _ = self.outbound.send(ToMain::Quarantined(shown));
     }
@@ -776,6 +789,8 @@ mod tests {
         reporter.streaming("nor this".into());
         reporter.tool_started(Activity::running("Read", "a.rs"));
         reporter.tool_finished(Activity::running("Read", "a.rs").done("1 line"));
+        reporter.check_started(40);
+        reporter.check_finished();
     }
 
     /// Both handles share one channel, and a write still gets its answer with reports interleaved.
@@ -809,6 +824,8 @@ mod tests {
                     ToMain::Streaming(_) => seen.push("streaming"),
                     ToMain::Started(_) => seen.push("started"),
                     ToMain::Finished(_) => seen.push("finished"),
+                    ToMain::CheckStarted(_) => seen.push("check started"),
+                    ToMain::CheckFinished => seen.push("check finished"),
                     ToMain::Quarantined(_) => seen.push("quarantined"),
                     ToMain::Printed(_) => seen.push("printed"),
                     ToMain::Landed(_) => seen.push("landed"),

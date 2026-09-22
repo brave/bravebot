@@ -27,6 +27,11 @@ about which actions to ask them about and which to refuse outright. The same thr
 Code keeps, with the same spellings, so a block copied out of `~/.claude/settings.json` governs
 this agent unedited.
 
+A checkout carries settings files too, and they are not the same claim: whoever wrote the checkout
+wrote them. `deny` and `ask` are read from every layer because both only narrow what would
+otherwise happen. `allow` is the one list that grants, and [PERM-14](#PERM-14) says which layers it
+is read from.
+
 What a rule may decide is narrow, and the boundary is the point. A rule decides **whether a person
 is asked** and **whether an action happens at all**. It never decides what a value is trusted for,
 which is [labels.md](labels.md), and never what is reachable, which is
@@ -212,6 +217,10 @@ It stops the asking. It does **not** make a program's output trusted, and it doe
 label: output carries what it would have carried, which is untrusted unless a person vouched for
 every stage.
 
+The rule is the person's own, which [PERM-14](#PERM-14) is what decides: stopping the asking is a
+capability, and this clause is about a rule that reached the gate rather than about every line
+spelling `allow` in every file that was read.
+
 **Why.** Vouching at a prompt grants those two things together because a person is looking at one
 command and can answer for both. A pattern covers commands nobody has read, so it cannot carry the
 second claim. If a rule could trust output, one line in a settings file would turn fetched bytes
@@ -275,8 +284,9 @@ directory a person typed from being reachable on different terms.
 ### PERM-11: an unreadable rule is dropped, named, and takes nothing with it
 
 A line that is not a rule, names no family this agent has, or has no anchor to resolve is dropped,
-and the rest of the file still applies. Every one dropped is reported: on `doctor`, and in the
-session where the file was read.
+and the rest of the file still applies. So is an entry that is not a line at all: a number, or a
+rule nested one array too deep. Every one dropped is reported: on `doctor`, and in the session
+where the file was read, named in the spelling the file used.
 
 **Why.** A misspelled deny rule reads as protection that is not there, which is the one failure
 here worth interrupting somebody over. Refusing the whole file instead would mean a typo in an
@@ -284,9 +294,15 @@ allow rule quietly removed a deny rule's protection.
 
 `verified-by: bravebot_core::permissions::a_rule_that_cannot_be_read_is_dropped_and_reported`
 `verified-by: bravebot_core::permissions::one_unreadable_rule_does_not_discard_the_others`
-`verified-by: bravebot_config::settings::an_entry_that_is_not_a_rule_is_left_out`
+`verified-by: bravebot_config::settings::an_entry_that_is_not_a_rule_is_carried_out_to_be_reported`
+`verified-by: bravebot_config::settings::an_unreadable_entry_is_carried_out_of_whichever_rule_list_held_it`
 `verified-by: bravebot_config::settings::a_malformed_permissions_block_carries_no_rules`
 `verified-by: bravebot_agent::permissions::a_line_that_is_not_a_rule_is_reported`
+`verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported`
+`verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported_to_a_run_nobody_is_watching`
+`verified-by: bravebot_agent::permissions::a_blank_rule_is_reported_as_empty`
+`verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
+`verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`
 
 <a id="PERM-12"></a>
 ### PERM-12: no rules means no change
@@ -321,6 +337,48 @@ train the habit of answering without reading, which is the whole of what asking 
 `verified-by: bravebot_tui::app::a_directory_two_layers_both_named_is_asked_about_once`
 `verified-by: bravebot_tui::app::a_name_that_cannot_be_opened_is_said_so_rather_than_asked_about`
 
+## Which file a rule may be written in
+
+<a id="PERM-14"></a>
+### PERM-14: only the person's own file may write a rule that grants
+
+An `allow` rule is read from `~/.bravebot/settings.json`, and from a file `--settings` named that
+resolves outside the workspace. An `allow` rule in `.bravebot/settings.json`, in
+`.bravebot/settings.local.json`, or in a `--settings` file that resolves inside the workspace is
+dropped: it answers no prompt and permits no fetch. Every one dropped is reported, with the file it
+was written in, on `doctor` and in the session that read the file.
+
+`deny` and `ask` are read from every layer and are unaffected. So are the names in
+`additionalDirectories`, which [PERM-10](#PERM-10) already puts to the person one question at a
+time. An entry that is not a rule at all is reported under [PERM-11](#PERM-11) whatever layer wrote
+it, and is not also reported here: a rule nothing can act on is nobody's grant.
+
+**Why.** Every other list narrows; this one grants. A settings file in a checkout arrives with the
+checkout, so an `allow` entry read out of one would let whoever last edited the repository answer an
+approval prompt on behalf of whoever cloned it: a `Bash` entry runs a program with that person's
+privileges, an `Edit` entry writes without the question, and a `WebFetch` entry turns a redirect to
+a host nobody was shown from a refusal into a success. That is the capability
+[backends.md](backends.md#BACKEND-1) says no settings file grants, and it is the reading
+[#140](https://github.com/brave/bravebot/issues/140) already settled for `additionalDirectories`: a
+name in a checkout's file is a request, not a grant. The local layer is the same file under another
+name, since nothing stops one being committed, which is why `vetting` reads the two identically. A
+`--settings` file is a path somebody typed at this invocation, which is their own claim, but the
+flag can name a file inside the checkout and a README saying so would be the same grant by another
+route. The report is [PERM-11](#PERM-11)'s reasoning applied to a readable rule: a rule dropped in
+silence reads to whoever wrote it as one in force.
+
+`verified-by: bravebot_config::settings::a_project_layer_allow_rule_is_not_granted`
+`verified-by: bravebot_config::settings::the_local_layer_allow_rule_is_not_granted_either`
+`verified-by: bravebot_config::settings::the_home_layer_may_write_an_allow_rule`
+`verified-by: bravebot_config::settings::a_project_layer_does_not_add_to_the_home_layers_allow_rules`
+`verified-by: bravebot_config::settings::a_project_layers_deny_and_ask_rules_still_apply`
+`verified-by: bravebot_config::settings::a_project_layer_may_still_name_a_directory_to_ask_about`
+`verified-by: bravebot_config::settings::a_named_layer_outside_the_workspace_may_write_an_allow_rule`
+`verified-by: bravebot_config::settings::a_named_layer_inside_the_workspace_is_the_checkouts_file_under_another_name`
+`verified-by: bravebot_agent::permissions::a_checkout_cannot_write_a_rule_that_answers_a_prompt`
+`verified-by: bravebot_config::settings::a_blank_allow_entry_is_not_reported_as_a_rule_that_was_withheld`
+`verified-by: bravebot_cli::running::doctor_names_an_allow_rule_a_checkout_wrote`
+
 ## Known costs
 
 - **How many questions a session opens with is the file's to choose.** Every name in
@@ -329,6 +387,14 @@ train the habit of answering without reading, which is the whole of what asking 
   Ctrl-C, which starts no session. A cap would be worse: the names past it would be dropped in
   silence, which reads as a setting that does nothing. What limits the damage is that no box grants
   anything by itself.
+- **A rule that waives a prompt for one checkout has to be written in the home file.** PERM-14
+  leaves `allow` readable from the person's own file and from one `--settings` names, so somebody
+  who wants `Bash(cargo test)` waived while working in one repository writes it where it applies to
+  every session they open, or passes a file on the command line for the run. A checkout proposing a
+  rule and the person granting it is the shape that gives the per-project answer back, and it needs
+  a question that lists the rules it would grant: gating on the startup trust answer as that
+  question stands would collect an answer about a tree's content and spend it on capability.
+  [#626](https://github.com/brave/bravebot/issues/626) is where that is written down.
 - **A rule is matched against argv, not against what a program does.** `Bash(git *)` covers
   `git -c core.fsmonitor=<script> diff`, which runs a program the rule never named, and
   `Bash(devbox run *)` covers whatever follows `run`. A pattern constraining arguments is weaker

@@ -6,6 +6,7 @@ governs:
   - crates/core/src/vetting.rs
   - crates/core/src/policy.rs
   - crates/agent/src/vet.rs
+  - crates/agent/src/report.rs
   - crates/session/src/store.rs
   - crates/tui/src/status.rs
   - crates/ui-bridge/src/wire.rs
@@ -289,6 +290,8 @@ filled in and it is `inconclusive`, which claims nothing.
 `verified-by: bravebot_agent::turn::a_vouch_offer_carries_what_a_check_said_about_the_whole_file`
 `verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
 `verified-by: bravebot_agent::turn::content_a_person_reads_after_a_check_reaches_the_planner`
+`verified-by: bravebot_agent::turn::bypassing_makes_no_check_before_promoting_content`
+`verified-by: bravebot_agent::turn::bypassing_records_no_verdict_a_check_never_gave`
 `verified-by: bravebot_core::policy::a_check_before_a_vouch_carries_the_file_and_claims_no_expectation`
 
 <a id="CHECK-11"></a>
@@ -439,6 +442,36 @@ person's answer.
 `verified-by: bravebot_ui_bridge::refusal::vetted_content_never_approves_itself_or_consumes_another_kind_of_reply`
 `verified-by: bravebot_ui_bridge::refusal::vetted_content_requires_its_own_explicit_approval`
 `verified-by: bravebot_ui_bridge::refusal::an_approval_cannot_be_replayed`
+
+
+<a id="CHECK-14"></a>
+### CHECK-14: a check says that it is running, and says when it is over
+
+A check is announced as it begins, with how many lines it was given, and announced as over however
+it ended. Neither half carries anything else: not a fragment of the content, not the verdict, not
+the sentence. The count is the shape of what was sent rather than any part of what it holds, and it
+is the one figure that predicts how long the wait will be.
+
+The end is announced on every way out, the failure that becomes a verdict nobody could read
+included. A display left saying a check is running because the backend was down is the state this
+pair exists to remove, and it is exactly the state a surface that only ever hears the beginning
+ends in.
+
+**Why.** A whole model call runs inside a tool call, and the verb already on the screen names the
+thing that has not happened yet: somebody watching `Read output` cannot tell a check that is working
+from a backend that is hanging. Where auto-vetting is on and the verdict is safe, no prompt is drawn
+for it either ([CHECK-12](#CHECK-12)), so without this the wait is silent from end to end.
+
+**This is not what [CHECK-9](#CHECK-9) keeps back.** Saying that a check is running is not showing
+what it says. What reaches a person here is that one is in flight and how much it was given; the
+verdict reaches them on the prompt it is drawn on and reaches no model at all. Nor does any of it
+ask them anything: progress announces, and a listener that has gone away is not an error.
+
+`verified-by: bravebot_agent::turn::a_check_says_how_many_lines_it_is_reading_and_then_that_it_is_over`
+`verified-by: bravebot_agent::turn::a_check_whose_call_fails_still_says_it_is_over`
+`verified-by: bravebot_tui::state::a_running_check_names_the_indicator_ahead_of_the_phase`
+`verified-by: bravebot_tui::state::a_check_that_is_over_gives_the_word_back_to_the_phase`
+`verified-by: bravebot_tui::state::a_finished_turn_leaves_no_check_running`
 
 ## Known costs
 

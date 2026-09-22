@@ -1,14 +1,16 @@
-//! What running the built binary does: the status a failure exits with, and the one command an
-//! incognito session refuses.
+//! What running the built binary does: the status a failure exits with, the one command an
+//! incognito session refuses, and what `doctor` says about the settings file a process found.
 //!
 //! [CLI-6] and [INCOG-7] are the clauses, and both are properties of a process rather than of a
 //! function. `main` returns an `ExitCode` that nothing in the same process can read back, and
 //! asking for a session that leaves nothing behind is a one-way door for the life of a process,
 //! so a test that engaged it would make every other test in its binary incognito too. Running the
-//! binary answers both.
+//! binary answers both. [PERM-11] is here for a different reason: the report it requires is made
+//! out of two crates and printed by a third, and a process is what puts the three together.
 //!
 //! [CLI-6]: ../../../docs/specs/cli.md
 //! [INCOG-7]: ../../../docs/specs/incognito.md
+//! [PERM-11]: ../../../docs/specs/permissions.md
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -44,8 +46,9 @@ impl Scratch {
 
     /// Write the settings file this home's runs read, and return this scratch for chaining.
     ///
-    /// A `provider` block is the only thing a test here configures with one, and it cannot be
-    /// stated in the environment: gateways are a block rather than a variable.
+    /// What a test writes here is what cannot be stated in the environment: a `provider` block,
+    /// because a gateway is a block rather than a variable, and a `permissions` block, because a
+    /// rule is one too.
     fn with_settings(self, json: &str) -> Self {
         let directory = self.path.join(".bravebot");
         std::fs::create_dir_all(&directory).expect("create the state directory");
@@ -78,7 +81,31 @@ impl Drop for Scratch {
 /// asserted on. The variable is `bravebot_i18n::LOCALE`, named here as the string a person would
 /// export, since a binary is being run rather than a crate called.
 fn bravebot(home: &Path, environment: &[(&str, &str)], arguments: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_bravebot"))
+    run(home, None, environment, arguments)
+}
+
+/// The same, started in a directory of the test's choosing.
+///
+/// The working directory is where a checkout's `.bravebot` is found, and [`bravebot`] leaves it
+/// wherever the test runner was started, which is this crate's own directory. A test about what a
+/// project layer does has to put one somewhere no other test is reading.
+fn bravebot_started_in(
+    home: &Path,
+    cwd: &Path,
+    environment: &[(&str, &str)],
+    arguments: &[&str],
+) -> Output {
+    run(home, Some(cwd), environment, arguments)
+}
+
+fn run(
+    home: &Path,
+    cwd: Option<&Path>,
+    environment: &[(&str, &str)],
+    arguments: &[&str],
+) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bravebot"));
+    command
         .env_clear()
         .env("HOME", home)
         .env("BRAVEBOT_LOCALE", "en-US")
@@ -86,9 +113,11 @@ fn bravebot(home: &Path, environment: &[(&str, &str)], arguments: &[&str]) -> Ou
         .args(arguments)
         // Not a terminal, and carrying nothing: a run that reads a pipe reads the end of the
         // input rather than waiting on whatever started the tests.
-        .stdin(Stdio::null())
-        .output()
-        .expect("the built binary runs")
+        .stdin(Stdio::null());
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    command.output().expect("the built binary runs")
 }
 
 /// What a run said, as the two streams it says it on.
@@ -605,6 +634,93 @@ fn a_settings_file_named_on_the_command_line_is_read_above_the_ones_found() {
     assert!(
         stdout.contains("AWS_PROFILE, AWS_REGION"),
         "a fourth layer replaced the one below it instead of overriding a name: {stdout}"
+    );
+}
+
+/// PERM-11's first reporting site, from the file on disk to the words `doctor` prints: a deny rule
+/// nested one array too deep, which is the ordinary way this key is mistyped.
+///
+/// Running the binary because the report is assembled out of two places that only meet here. The
+/// settings layer cannot hand on an entry that is not a line, the rule parser names only what it
+/// was handed, and `doctor` prints the one list the two of them make. A fix that stops short of
+/// the command leaves somebody believing `.env` is denied, and that is what this sees and a test
+/// of either half does not.
+#[test]
+fn doctor_names_a_permission_entry_that_is_not_a_rule() {
+    let scratch = Scratch::new("cli-running-unreadable-rule")
+        .with_settings(r#"{"permissions": {"deny": [["Read(./.env)"]]}}"#);
+
+    let output = bravebot(
+        &scratch.path,
+        // A configuration with nothing else wrong with it, for the reason the layers test above
+        // states: a build with no credentials baked in would otherwise stop at that instead.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains(r#"["Read(./.env)"]"#),
+        "doctor did not name the entry it dropped: {stdout}{stderr}"
+    );
+    assert!(
+        !output.status.success(),
+        "a rule this build cannot act on was reported and the run still passed: {stdout}"
+    );
+}
+
+/// PERM-14's report, from the process that reads the file: a checkout's `allow` entry is dropped,
+/// and `doctor` names the rule and the file it was written in.
+///
+/// Running the binary rather than calling the crate, because the report crosses three of them: the
+/// entry that drops the rule is `bravebot-config`'s, the words are `bravebot-i18n`'s, and the line
+/// is printed by `bravebot-cli`. A rule dropped and reported nowhere reads to whoever wrote it as
+/// one in force, which is the failure this rejects, and an in-process test of the config crate
+/// cannot tell a missing line from a line nobody prints.
+#[test]
+fn doctor_names_an_allow_rule_a_checkout_wrote() {
+    let scratch = Scratch::new("cli-running-checkout-allow");
+    let cwd = scratch.path.join("checkout");
+    let project = cwd.join(".bravebot");
+    std::fs::create_dir_all(&project).expect("create the project directory");
+    std::fs::write(
+        project.join("settings.json"),
+        r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"], "deny": ["Read(.env)"]}}"#,
+    )
+    .expect("write the project layer");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        // A configuration with nothing wrong with it, for the reason the named-settings test above
+        // states: a run that stopped at the configuration would never reach the settings section.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+    assert!(
+        stdout.contains("Bash(bash scripts/check.sh)"),
+        "the dropped rule was not named: {stdout}"
+    );
+    assert!(
+        stdout.contains(&project.join("settings.json").display().to_string()),
+        "the file the dropped rule was written in was not named: {stdout}"
+    );
+    // The same file's `deny` rule is still in force, so the report is about the one list that
+    // grants rather than about the file. One rule, which is that one.
+    assert!(
+        stdout.contains("1 rule"),
+        "the project layer's deny rule stopped applying: {stdout}"
     );
 }
 

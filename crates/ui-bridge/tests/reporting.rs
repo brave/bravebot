@@ -116,3 +116,50 @@ fn every_other_report_is_passed_through_unfiltered() {
         "repeats here are real repeats"
     );
 }
+
+/// A check is a whole model call inside the tool call already reported, and an interface told
+/// nothing about it draws a finished-looking row for as long as the check takes. Both halves
+/// cross, and the end crosses however the check ended: a front-end told only that one began has
+/// no event that takes the screen back out of checking.
+#[test]
+fn a_check_crosses_as_a_pair_carrying_only_its_size() {
+    let (mut reporter, events) = harness();
+
+    reporter.check_started(3);
+    reporter.check_finished();
+
+    assert_eq!(names(&events), vec!["check.started", "check.finished"]);
+    let events = events.lock().expect("not poisoned");
+    // Whole and equal, not a key lookup: what this pins is that nothing else is in it. A
+    // fragment of the content or the verdict reaching a program here is the one thing a check
+    // must not do, and an assertion that only reads `lines` would pass with either alongside it.
+    assert_eq!(
+        events[0].data,
+        serde_json::json!({ "lines": 3 }),
+        "a check said more than how much it was given"
+    );
+    assert_eq!(events[1].data, serde_json::json!({}));
+}
+
+/// What a call spent at a model of its own, on the event drawing that call. A front-end has no
+/// clock of its own on a tool call, so without this a call that was slow because a model was slow
+/// is indistinguishable from a slow program, which is what the figure exists to answer.
+#[test]
+fn what_a_call_spent_at_a_model_reaches_a_front_end() {
+    let (mut reporter, events) = harness();
+
+    reporter.tool_finished(
+        Activity::running("read_output", "ref:1")
+            .done("3 lines, read")
+            .after_waiting(Some(std::time::Duration::from_secs(4))),
+    );
+    reporter.tool_finished(Activity::running("read", "a.rs").done("2 lines"));
+
+    let events = events.lock().expect("not poisoned");
+    assert_eq!(events[0].data["waitedSeconds"], serde_json::json!(4));
+    assert_eq!(
+        events[1].data["waitedSeconds"],
+        serde_json::json!(null),
+        "a call that asked no model was credited with one"
+    );
+}

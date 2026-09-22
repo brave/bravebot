@@ -301,3 +301,104 @@ fn a_turn_on_another_backend_is_not_told_about_an_unusable_batch() {
         );
     });
 }
+
+/// PREM-5: a delegate's turn does not read the credential store at all.
+///
+/// The store is one file and a spend reaches it only when the wallet is written back (PREM-6), so
+/// a second wallet opened inside a run reads every credential that run has already spent as
+/// unspent. A delegate spends what the turn lent it, which means the turn is the only run that
+/// looks: the wallet here is the one there is, and a delegate handed none has none rather than
+/// one of its own.
+///
+/// Asserted through the warning an unreadable batch produces, which is what a read of the store
+/// leaves behind. It is also the warning's own rule: the line sends somebody to re-import a
+/// subscription, and a turn that started three delegates would say it four times.
+#[test]
+fn a_delegate_does_not_open_a_wallet_of_its_own() {
+    with_temp_home("delegate-reads-no-store", |home| {
+        let path = bravebot_skus::store::path().expect("a scratch home");
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the state directory");
+        std::fs::write(&path, "").expect("a file holding nothing");
+
+        let config = premium_and_bedrock();
+        let egress = bravebot_net::Egress::new();
+        let workspace = bravebot_agent::Workspace::new(home).expect("a workspace");
+
+        // The turn's own look, which is the one that reports. Asserted rather than assumed: a
+        // store this build could not read at all would leave the delegate's half of this test
+        // passing for the wrong reason.
+        let mut watching = bravebot_agent::report::RecordingReporter::default();
+        bravebot_agent::turn::discover_subscription(
+            &config,
+            &egress,
+            Some(bravebot_config::DEFAULT_MODEL),
+            &mut watching,
+        );
+        assert_eq!(
+            watching.notices.len(),
+            1,
+            "the turn's own look at the store said nothing: {:?}",
+            watching.notices
+        );
+
+        // Cancelled before it starts, so the delegate's turn gets as far as the store and no
+        // further: what is being asked is whether it looks, not what it would send.
+        let cancel = bravebot_core::cancel::Cancel::new();
+        cancel.cancel();
+
+        let mut trail = bravebot_core::event::RecordingSink::new();
+        let mut routing = bravebot_core::Routing::new();
+        routing.insert_trusted("task", "ask a delegate");
+        let mut policy = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+                bravebot_core::capability::Capability::FileRead,
+            ]),
+            &mut trail,
+        )
+        .expect("a policy");
+        let spec = policy
+            .before_delegate(
+                bravebot_core::delegate::DelegateId::nth(1),
+                &bravebot_core::value::Labelled::new(
+                    "reader".to_string(),
+                    bravebot_core::label::Label::untrusted_public(),
+                ),
+                &bravebot_core::value::Labelled::new(
+                    "look at it".to_string(),
+                    bravebot_core::label::Label::untrusted_public(),
+                ),
+            )
+            .expect("a delegate the gate allows");
+        let seeded = bravebot_agent::delegate::seed(&policy, spec, None);
+        policy.finish();
+
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        bravebot_agent::delegate::run(
+            &seeded,
+            &config,
+            &egress,
+            &workspace,
+            None,
+            None,
+            None,
+            bravebot_agent::PermissionMode::Ask,
+            &bravebot_config::Attribution::default(),
+            &cancel,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut sink,
+            // The turn found nothing to lend, which is what an unreadable batch leaves it with.
+            None,
+        );
+
+        assert!(
+            reporter.notices.is_empty(),
+            "a delegate read the credential store: {:?}",
+            reporter.notices
+        );
+    });
+}

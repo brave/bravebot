@@ -143,7 +143,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
     for problem in &rejected {
         asking.say(&t!(
             session_permission_rule_ignored,
-            problem = problem.to_string()
+            problem = bravebot_agent::permissions::describe(problem)
         ));
     }
 

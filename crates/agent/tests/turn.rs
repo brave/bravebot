@@ -511,6 +511,15 @@ fn serve_sequence_answering_checks_with(
     serve_sequence_answering_checks(checks, 0, replies)
 }
 
+/// As [`serve_sequence`], hanging up on every check unanswered.
+///
+/// What a backend that is down looks like to a check, which is not the same failure as a check
+/// that answered something no verdict could be read out of: no reply arrives at all, every
+/// attempt is lost, and the call itself fails.
+fn serve_sequence_losing_every_check(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
+    serve_sequence_answering(Vec::new(), 0, replies, true)
+}
+
 /// As [`serve_sequence`], with the first `dropped` connections hung up on unanswered.
 ///
 /// What a connection that died looks like from the client's side: the request went out and
@@ -526,6 +535,15 @@ fn serve_sequence_answering_checks(
     checks: Vec<String>,
     dropped: usize,
     replies: Vec<String>,
+) -> (String, mpsc::Receiver<String>) {
+    serve_sequence_answering(checks, dropped, replies, false)
+}
+
+fn serve_sequence_answering(
+    checks: Vec<String>,
+    dropped: usize,
+    replies: Vec<String>,
+    lose_every_check: bool,
 ) -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
@@ -579,7 +597,11 @@ fn serve_sequence_answering_checks(
                 .filter(|(asked, _)| *asked == body)
                 .map(|(_, reply)| reply.clone());
 
-            let reply = if resent.is_some() {
+            // Every attempt, not only the first: a resend is not remembered, so the client
+            // exhausts its attempts and the call fails rather than succeeding on the second.
+            let reply = if body.contains(A_CHECK_ASKING) && lose_every_check {
+                None
+            } else if resent.is_some() {
                 resent
             } else if body.contains(A_CHECK_ASKING) {
                 let reply = checks.next().unwrap_or_else(a_check_finding_nothing);
@@ -11994,6 +12016,150 @@ fn with_auto_vetting_a_check_that_could_not_be_made_still_asks() {
     );
 }
 
+/// Bypassing draws no prompt, so `vet_content` makes no check: the one exemption
+/// `docs/specs/vetting.md` CHECK-10 admits, stated from the other side by
+/// `docs/specs/permission-modes.md` MODE-4. A check here would send a whole quarantined slot to a
+/// second model to produce a word nobody would read, and the run would pay for it.
+///
+/// The mode is given to both halves, as a caller must: the task carries it and the confirmer is
+/// wrapped in it. The script answers a check with a safe verdict, so a check that did run would be
+/// answered rather than failing on an unscripted request and reading as a different fault.
+#[test]
+fn bypassing_makes_no_check_before_promoting_content() {
+    let scratch = Scratch::new("vet-content-bypass");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut shown = ShownAfterAVet::new(false);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut shown, bravebot_agent::PermissionMode::Bypass);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    assert!(
+        !sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "a check was made for a prompt that is not drawn"
+    );
+    assert!(
+        !sent
+            .iter()
+            .any(|body| body.contains(A_CHECK_ASKING) && body.contains("SENTINEL-XYZZY")),
+        "quarantined content was sent to a second model in the mode that reads no verdict"
+    );
+    assert!(
+        sent.last()
+            .is_some_and(|last| last.contains("SENTINEL-XYZZY")),
+        "the mode answered the prompt yes and the content still did not reach the planner"
+    );
+}
+
+/// The verdict filled in where no check was made claims nothing, so nothing downstream reads it as
+/// a check having found something. The reading that proves it is the trail: a `safe` filled in here
+/// would meet auto-vetting and record that a check found nothing, crediting a call that was never
+/// placed.
+///
+/// Auto-vetting on is what makes the difference reach a record. With it off both verdicts fall
+/// through to the same prompt, which this mode answers yes either way, and the two are
+/// indistinguishable from outside.
+#[test]
+fn bypassing_records_no_verdict_a_check_never_gave() {
+    let scratch = Scratch::new("vet-content-bypass-auto");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut shown = ShownAfterAVet::new(false);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut shown, bravebot_agent::PermissionMode::Bypass);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out")
+            .with_auto_vetting(true)
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let promotions: Vec<&String> = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "vet_content",
+                detail,
+            } => Some(detail),
+            _ => None,
+        })
+        .collect();
+    let promoted = promotions
+        .first()
+        .expect("the promotion was not recorded in the trail");
+    assert!(
+        !promoted.contains("the check found nothing"),
+        "the trail credits a check that was never made: {promoted}"
+    );
+    assert!(
+        promoted.contains("the user read it and vouched for it"),
+        "the trail does not say who answered: {promoted}"
+    );
+}
+
 /// The mode covers both routes that promote one slot's bytes on somebody's say-so, so a check that
 /// finds nothing answers the output prompt in the person's place too. The grant is the same shape
 /// as the other route's: one slot, once, with no trust rule written.
@@ -12053,6 +12219,176 @@ fn with_auto_vetting_a_safe_verdict_releases_command_output_unasked() {
     assert!(
         third.contains("SENTINEL-XYZZY"),
         "a safe verdict with auto-vetting on did not release the output to the planner"
+    );
+}
+
+/// The wait a person is left with. Reading one slot runs a whole model call over the whole of it,
+/// and with auto-vetting on and a safe verdict no prompt is ever drawn, so the verb on the row
+/// naming the thing that has not happened yet used to be all there was to look at. The count comes
+/// with it because it is what predicts the wait, and the end is announced separately: a check is
+/// not a phase of the turn, and nothing else marks the moment it stops.
+#[test]
+fn a_check_says_how_many_lines_it_is_reading_and_then_that_it_is_over() {
+    let scratch = Scratch::new("read-output-check-announced");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "one\ntwo\nthree\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "three words and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(false);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        reporter.checks,
+        vec![3],
+        "the check did not say how much it was given"
+    );
+    assert_eq!(
+        reporter.checks_finished, 1,
+        "the check never said it was over, so whatever was drawn for it stays drawn"
+    );
+}
+
+/// What the check cost, on the row the call drew. The interval was already measured for the turn's
+/// own clock and went no further, so nobody could say how long a check took or tell a slow check
+/// from a slow round. Carried per call rather than as a total, because a total cannot answer which
+/// of a round's calls was the slow one.
+#[test]
+fn what_a_check_cost_reaches_the_row_the_call_drew() {
+    let scratch = Scratch::new("read-output-check-timed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "one\ntwo\nthree\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "three words and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(false);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let row = |tool: &str| {
+        reporter
+            .finished
+            .iter()
+            .find(|activity| activity.tool == tool)
+            .unwrap_or_else(|| panic!("no finished row for {tool}"))
+            .clone()
+    };
+    assert!(
+        row("read_output").waited.is_some(),
+        "the check was timed and the row says nothing about it"
+    );
+    // The other half of the claim: a call that asked no model is not credited with a wait it did
+    // not have, which is what filling this from the call's own elapsed time would do.
+    assert_eq!(
+        row("run").waited,
+        None,
+        "a call that ran a program was credited with waiting on a model"
+    );
+}
+
+/// A check whose call never comes back is the case the pair exists for. The verdict falls back to
+/// the prompt, which is drawn while the interface would still be saying a check was running: the
+/// one state a person cannot tell from a check that is working is a backend that is hanging, and
+/// the failure has to close the pair the success closes.
+#[test]
+fn a_check_whose_call_fails_still_says_it_is_over() {
+    let scratch = Scratch::new("read-output-check-failed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "one\ntwo\nthree\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_losing_every_check(vec![
+        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(false);
+    let shown = confirmer.shown.clone();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    assert!(
+        !shown.lock().unwrap().is_empty(),
+        "the person was not asked, so this is not the failing check it is about"
+    );
+    assert_eq!(
+        reporter.checks,
+        vec![3],
+        "the check did not say how much it was given"
+    );
+    assert_eq!(
+        reporter.checks_finished, 1,
+        "a check whose call failed never said it was over"
     );
 }
 
@@ -14956,6 +15292,126 @@ fn two_delegates_work_at_the_same_time() {
                 .is_some(),
         "a delegate the turn started was never collected: {:?}",
         reporter.lines()
+    );
+}
+
+/// One credential store for the whole run, standing in for the wallet a turn opens.
+///
+/// Hands out a different value each time it is asked, so what was spent says which spend it was.
+/// A run that opened a wallet of its own would ask this one nothing; a run handed a copy of the
+/// batch would be given the first value a second time.
+#[derive(Default)]
+struct OneWallet {
+    handed: std::sync::Mutex<Vec<String>>,
+}
+
+impl bravebot_agent::shared::Spends for OneWallet {
+    fn spend_one(&self) -> Result<bravebot_aichat::SubscriptionCredential, String> {
+        let mut handed = self.handed.lock().expect("the wallet");
+        let value = format!("credential-{}", handed.len() + 1);
+        handed.push(value.clone());
+        Ok(bravebot_aichat::SubscriptionCredential {
+            cookie_name: "creds".to_string(),
+            cookie_value: value,
+        })
+    }
+}
+
+/// A build that knows a premium host, both hosts being the mock server, so a request that spends
+/// a credential is answered here rather than reaching the deployment that issued it.
+fn premium_config_for(endpoint: &str) -> Config {
+    Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.to_string()),
+        "BRAVE_AI_CHAT_PREMIUM_ENDPOINT" => Some(endpoint.to_string()),
+        _ => None,
+    })
+    .expect("config")
+}
+
+/// Everything the kernel settles about a delegate before it exists, for a reader asked one thing.
+fn seeded_reader(task: &str) -> bravebot_agent::delegate::Seeded {
+    let mut trail = RecordingSink::new();
+    let mut routing = bravebot_core::Routing::new();
+    routing.insert_trusted("task", "ask a delegate");
+    let mut policy = bravebot_core::policy::Policy::begin(
+        routing,
+        bravebot_core::policy::ReleasePlan::new(),
+        bravebot_core::capability::CapabilitySet::from_iter([
+            bravebot_core::capability::Capability::WebFetch,
+            bravebot_core::capability::Capability::FileRead,
+        ]),
+        &mut trail,
+    )
+    .expect("a policy")
+    .with_trust(trusting_the_workspace());
+
+    // Through the gate rather than assembled, so the delegate holds what a delegate holds: its
+    // kind's capabilities narrowed by the run's, and its kind's bound.
+    let spec = policy
+        .before_delegate(
+            bravebot_core::delegate::DelegateId::nth(1),
+            &bravebot_core::value::Labelled::new("reader".to_string(), Label::untrusted_public()),
+            &bravebot_core::value::Labelled::new(task.to_string(), Label::untrusted_public()),
+        )
+        .expect("a delegate the gate allows");
+    let seeded = bravebot_agent::delegate::seed(&policy, spec, None);
+    policy.finish();
+    seeded
+}
+
+/// PREM-5: the credential a delegate spends comes from the turn's wallet, and is the one after
+/// whatever the turn has already presented.
+///
+/// A spend is held in memory until the wallet is written back (PREM-6), so a delegate that opened
+/// a second wallet over the same file would read every credential the turn had spent as unspent
+/// and present the one the turn is presenting right now. The wallet here hands out a different
+/// value per call, so the two ways of getting this wrong are told apart: a delegate that opened
+/// its own asks this wallet nothing and its request goes out on the free tier, and a delegate
+/// handed a copy of the batch is given `credential-1` a second time.
+#[test]
+fn a_delegate_spends_the_wallet_the_turn_lent_it() {
+    let scratch = Scratch::new("delegate-one-wallet");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![(
+        "REPORT-BACK",
+        vec![reply_with("the delegate answered")],
+    )]);
+    let config = premium_config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    let wallet = OneWallet::default();
+    // The turn's own first round, made before it starts a delegate. What the delegate is offered
+    // afterwards is the question.
+    bravebot_agent::shared::Spends::spend_one(&wallet).expect("the turn spends first");
+
+    let mut sink = RecordingSink::new();
+    let ended = bravebot_agent::delegate::run(
+        &seeded_reader("REPORT-BACK"),
+        &config,
+        &egress,
+        &workspace,
+        None,
+        None,
+        None,
+        bravebot_agent::PermissionMode::Ask,
+        &bravebot_config::Attribution::default(),
+        &bravebot_core::cancel::Cancel::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        Some(&wallet),
+    );
+
+    assert!(
+        ended.delegated.is_ok(),
+        "the delegate never answered, so nothing it spent can be read"
+    );
+    assert_eq!(
+        *wallet.handed.lock().expect("the wallet"),
+        vec!["credential-1".to_string(), "credential-2".to_string()],
+        "the delegate's request did not spend the wallet the turn lent it"
     );
 }
 

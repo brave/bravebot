@@ -90,9 +90,14 @@ pub struct Checked {
 /// content, and every one of them has to land on the prompt that says the check did not complete.
 /// Handing a caller an error would leave that conversion to a `?`, which is how a rule stops
 /// holding, and there is a prompt waiting for a word either way.
-pub fn run<S: Sink>(
+///
+/// Announced as it goes, because every way this can end is slow: the whole slot is sent, on the
+/// session's own model, uncached. The pair of reports is made here rather than at the three call
+/// sites so that a fourth caller cannot forget one half of it.
+pub fn run<S: Sink, R: crate::report::Reporter>(
     policy: &mut Policy<'_, S>,
     chat: &mut Chat<'_>,
+    reporter: &mut R,
     spec: &VettingSpec,
 ) -> Checked {
     // Assembled inside the kernel, so the bytes are never in a variable this function could
@@ -119,7 +124,15 @@ pub fn run<S: Sink>(
         client = client.with_subscription(subscription);
     }
 
-    let completion = match client.complete_streaming(policy, &request, |_| {}) {
+    // Nothing watches the pieces go by: a checker's reply is two fields for a person to read at
+    // the prompt, and showing it as it arrived would put the answer on the screen before the
+    // question. Saying that a check is running is not showing what it says.
+    reporter.check_started(spec.lines());
+    let answered = client.complete_streaming(policy, &request, |_| {});
+    // Before the branch, so the failure that becomes an inconclusive verdict closes the pair too.
+    reporter.check_finished();
+
+    let completion = match answered {
         Ok(completion) => completion,
         Err(_) => {
             return Checked {

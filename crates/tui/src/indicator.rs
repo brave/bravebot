@@ -178,6 +178,25 @@ pub fn format_elapsed(elapsed: Duration) -> String {
     )
 }
 
+/// What a finished call spent at a model, for the end of the line saying what came of it.
+///
+/// Empty for a call that asked none, which is nearly all of them, and empty for a wait under a
+/// second: `0s at the model` answers nothing, and what this is here for is a call that took long
+/// enough that somebody wants to know where the time went.
+///
+/// Here rather than beside either caller because both surfaces draw it, and the second a wait has
+/// to reach before it is worth a word is one decision: two copies of it drift, and a terminal run
+/// and an interactive one disagreeing about whether a call was slow is a bug nobody can see.
+pub fn format_waited(waited: Option<Duration>) -> String {
+    match waited.filter(|waited| waited.as_secs() >= 1) {
+        Some(waited) => format!(
+            " · {}",
+            t!(transcript_waited, elapsed = format_elapsed(waited))
+        ),
+        None => String::new(),
+    }
+}
+
 /// Format a token count compactly.
 ///
 /// Thousands are abbreviated with one decimal, because the exact figure is noise at that scale

@@ -47,15 +47,22 @@
 //! would be. Nothing a turn produces can write one, and no model output reaches one.
 //!
 //! A project file is a file in a checkout, which is a weaker claim than a file in a home directory:
-//! whoever wrote the checkout wrote it. Nothing here distinguishes them for the blocks above,
-//! because the resolution this copies does not. What that costs is written down under Known costs in
-//! `docs/specs/backends.md` rather than mitigated here.
+//! whoever wrote the checkout wrote it. Nothing here distinguishes them for most of the blocks
+//! above, because the resolution this copies does not. What that costs is written down under Known
+//! costs in `docs/specs/backends.md` rather than mitigated here.
 //!
-//! `vetting` is the exception, and it is the exception because of what it decides. Every other name
-//! here configures where a request goes or how the interface behaves; that one says whether a person
-//! is asked before content nobody vouched for reaches the planner, so a line in a checkout's file
-//! could turn the asking off for whoever opened the checkout. It is read from the home layer alone,
-//! and a project file naming it is reported rather than obeyed.
+//! Two names are the exception, and they are the exception because of what they decide. Every other
+//! name here configures where a request goes or how the interface behaves.
+//!
+//! - `vetting.auto` says whether a person is asked before content nobody vouched for reaches the
+//!   planner, so a line in a checkout's file could turn the asking off for whoever opened the
+//!   checkout. It is read from the home layer alone, and every other layer naming it is reported
+//!   rather than obeyed.
+//! - `permissions.allow` answers an approval prompt, so a line in a checkout's file could run a
+//!   program, write a file or fetch a URL without the question anybody would otherwise have seen.
+//!   It is read from the home layer, and from a file the command line named that sits outside the
+//!   workspace; a checkout's entry is dropped and reported. `deny` and `ask` are read from every
+//!   layer, because both only narrow. See [`grants`] and `docs/specs/permissions.md`.
 //!
 //! They do not become the process environment. Values are consulted where a variable would be
 //! consulted, and handed to a subprocess only where that subprocess is the thing they configure.
@@ -154,6 +161,13 @@ pub struct Settings {
     /// the one worth saying out loud. Somebody who wrote it into a checkout has to be told it was
     /// ignored, not left to wonder why the prompt still appears.
     vetting_ignored: Vec<PathBuf>,
+    /// The `allow` entries a layer not entitled to grant one wrote, with the file each came from.
+    ///
+    /// Kept for the reason `vetting_ignored` is kept, and it matters more: an `allow` entry is the
+    /// one thing in a settings file that stops a question being asked, so a person who wrote one
+    /// into a checkout and is still asked has to be told it was dropped rather than conclude the
+    /// rule is in force and the prompt is a separate fault.
+    allow_ignored: Vec<(PathBuf, String)>,
     keybindings: BTreeMap<String, String>,
     attribution: Attribution,
     search: SearchCaps,
@@ -219,15 +233,27 @@ pub struct PermissionLists {
     pub allow: Vec<String>,
     /// Directories a file asks to have opened, alongside the working directory.
     pub additional_directories: Vec<String>,
+    /// Entries of the three rule lists that were not text at all, in the spelling the file used.
+    ///
+    /// A rule is a line, so an entry that is not a string is nothing this layer can hand on as
+    /// one. Carried out beside the lists rather than dropped here, because PERM-11 has every
+    /// entry that was dropped named where a person reads it, and a drop that ends inside the
+    /// parser is a deny rule that reads as protection and is not there.
+    pub unreadable: Vec<String>,
 }
 
 impl PermissionLists {
     /// Whether the block said anything.
+    ///
+    /// An entry nothing can act on still said something: a file whose only deny rule is mistyped
+    /// is a file with a `permissions` block, and reading it as absence would have `doctor` report
+    /// no settings one line above the rule it could not read.
     pub fn is_empty(&self) -> bool {
         self.deny.is_empty()
             && self.ask.is_empty()
             && self.allow.is_empty()
             && self.additional_directories.is_empty()
+            && self.unreadable.is_empty()
     }
 }
 
@@ -286,6 +312,11 @@ impl Settings {
         // file a name came from and this is the one name where that decides whether it is obeyed.
         let mut vetting = None;
         let mut vetting_ignored = Vec::new();
+        // Settled per layer for the same reason, and for a stronger one: the merge unions every
+        // list, so an `allow` entry a checkout wrote would otherwise be indistinguishable from one
+        // the person wrote in their own file. See [`Settings::allow_ignored`].
+        let mut allow = Vec::new();
+        let mut allow_ignored = Vec::new();
         for path in paths.into_iter().flatten() {
             // A file already read as a layer above is not read again. Naming one of the three
             // explicitly is an ordinary thing to do, and reading it twice would report every name
@@ -299,6 +330,17 @@ impl Settings {
                 match Some(&path) == home_layer.as_ref() {
                     true => vetting = auto_vetting(&root),
                     false => vetting_ignored.push(path.clone()),
+                }
+            }
+            let granting = grants(&path, home_layer.as_deref(), named, cwd);
+            for rule in permission_lists(&root).allow {
+                // A blank entry goes through whatever layer wrote it. It grants nothing whoever
+                // wrote it, since the rule language calls an empty rule empty and refuses it, and
+                // reporting it here would say a rule was withheld where PERM-11 is already about
+                // to say there was no rule.
+                match granting || rule.trim().is_empty() {
+                    true => allow.push(rule),
+                    false => allow_ignored.push((path.clone(), rule)),
                 }
             }
             for name in env_names(&root) {
@@ -320,6 +362,11 @@ impl Settings {
         // cannot reach this even where the home layer said nothing.
         settings.vetting = vetting;
         settings.vetting_ignored = vetting_ignored;
+        // Overwritten for the same reason, and the merged block is what it replaces: `deny` and
+        // `ask` keep every layer's entries because both only ever narrow, and this one is put back
+        // to the entries a layer entitled to grant wrote.
+        settings.permissions.allow = allow;
+        settings.allow_ignored = allow_ignored;
         settings
     }
 
@@ -372,6 +419,10 @@ impl Settings {
             // from and so the only one entitled to answer.
             vetting: auto_vetting(root),
             vetting_ignored: Vec::new(),
+            // Empty here, and filled by [`Settings::layered`] for the same reason: one root does
+            // not say which file it was read out of, and that is the whole of what decides whether
+            // an `allow` entry in it grants anything.
+            allow_ignored: Vec::new(),
             keybindings: keybindings_block(root),
             attribution: attribution_block(root),
             search: search_caps(root),
@@ -427,6 +478,22 @@ impl Settings {
         self.vetting_ignored.iter().map(PathBuf::as_path)
     }
 
+    /// The `allow` entries that were dropped, and the file each was written in, weakest first.
+    ///
+    /// An `allow` entry answers a prompt, so reading one is granting a capability rather than
+    /// narrowing one, and a checkout's file is not a claim this program lets anybody make on the
+    /// person running it. The entries are dropped from [`Settings::permissions`] and reported
+    /// here: on `doctor`, and in the session that read the file.
+    ///
+    /// The rule text as the file spelled it, because that is what the person who wrote it will
+    /// search for. `deny` and `ask` are not here and never will be: both only ever narrow, so
+    /// every layer's entries still hold.
+    pub fn allow_ignored(&self) -> impl Iterator<Item = (&Path, &str)> {
+        self.allow_ignored
+            .iter()
+            .map(|(path, rule)| (path.as_path(), rule.as_str()))
+    }
+
     /// What the settings in force say a commit message and a pull request may carry.
     ///
     /// A name the block set is an answer even when it is empty, empty being how a file says to
@@ -460,6 +527,10 @@ impl Settings {
             // `doctor` reports both facts about it. Reading it as absence would print "no
             // settings.json" one line above the path of the file that holds it.
             && self.vetting_ignored.is_empty()
+            // And a file whose only `permissions` entry was an `allow` one that was dropped, for
+            // the same reason: `doctor` names that file, so reporting it as no settings at all
+            // would contradict the line under it.
+            && self.allow_ignored.is_empty()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -576,6 +647,50 @@ fn auto_vetting(root: &serde_json::Map<String, serde_json::Value>) -> Option<boo
     }
 }
 
+/// Whether a rule that *grants* may be read from this layer.
+///
+/// True for the home layer, and for a file the command line named that sits outside the workspace.
+/// False for `.bravebot/settings.json`, for `.bravebot/settings.local.json`, and for a named file
+/// that resolves inside the workspace.
+///
+/// The home layer is the person's own, on the footing this module's own note on what these files
+/// are trusted for already states. A file the command line named is a path somebody typed at this
+/// invocation, which is the same claim: the flag is how one run is configured differently from the
+/// next. But it can name a file inside the checkout, which
+/// `a_command_line_file_that_is_already_a_layer_is_read_once` exists because people do, so a README
+/// saying `--settings ./tooling/bravebot.json` would be a route back in. A named file that resolves
+/// inside the workspace is therefore the checkout's file under another name.
+///
+/// The local layer is a checkout's file too. Nothing stops one being committed, and its being
+/// conventionally private is not a property this can rely on, which is the same reading `vetting`
+/// already gives the pair.
+fn grants(
+    path: &Path,
+    home_layer: Option<&Path>,
+    named: Option<&Path>,
+    cwd: Option<&Path>,
+) -> bool {
+    if Some(path) == home_layer {
+        return true;
+    }
+    Some(path) == named && !inside(cwd, path)
+}
+
+/// Whether `path` resolves to somewhere under `cwd`.
+///
+/// Both sides resolved, because the question is where the file *is* and not how it was spelled: a
+/// link, a `..`, or a relative name reaches the same file under a different string, and comparing
+/// the strings would answer about the spelling. A resolution that fails is read as inside, which is
+/// the answer that grants nothing; a working directory nobody could name bounds nothing, so a file
+/// is not inside it.
+fn inside(cwd: Option<&Path>, path: &Path) -> bool {
+    let Some(cwd) = cwd else { return false };
+    match (std::fs::canonicalize(cwd), std::fs::canonicalize(path)) {
+        (Ok(cwd), Ok(path)) => path.starts_with(cwd),
+        _ => true,
+    }
+}
+
 /// The variables one layer's `env` block sets, for working out which layer won a name.
 fn env_names(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
     match root.get("env") {
@@ -647,6 +762,10 @@ fn merge(
 /// A rule is added by a layer and never removed by one, so `deny` still holds whatever the weakest
 /// file said. `additionalDirectories` unions for the same reason it exists: a layer asks for
 /// somewhere to work, and the strongest file asking for one place should not un-ask another.
+///
+/// `allow` unions here and is then replaced by [`Settings::layered`], which is the only caller that
+/// knows which layer each entry came from. Unioning it and no more would let a checkout's file
+/// answer a prompt, which [`grants`] is the rule against.
 fn merge_permissions(
     under: &mut serde_json::Map<String, serde_json::Value>,
     above: serde_json::Map<String, serde_json::Value>,
@@ -768,9 +887,10 @@ fn search_caps(root: &serde_json::Map<String, serde_json::Value>) -> SearchCaps 
 
 /// The `permissions` block: three lists of rule text, and the directories to open.
 ///
-/// Strings only, and a malformed entry is dropped rather than refused, on the same footing as
-/// everything else here. A rule that is not a string cannot be matched against anything, and
-/// refusing the file over one would take away the rules that were readable.
+/// A malformed entry is dropped rather than refused, on the same footing as everything else here:
+/// refusing the file over one would take away the rules that were readable. Dropped from the list
+/// and not from the block, though: an entry that is not text lands in
+/// [`PermissionLists::unreadable`], so that whoever reads the rules can name it (PERM-11).
 ///
 /// `defaultMode` is read by nothing yet. A file setting it is not an error and not a warning here:
 /// [`Settings::parse`] reads what the file says and reports it, and which modes exist is a
@@ -779,12 +899,45 @@ fn permission_lists(root: &serde_json::Map<String, serde_json::Value>) -> Permis
     let Some(serde_json::Value::Object(block)) = root.get("permissions") else {
         return PermissionLists::default();
     };
+    let mut unreadable = Vec::new();
+    let deny = rule_texts(block, "deny", &mut unreadable);
+    let ask = rule_texts(block, "ask", &mut unreadable);
+    let allow = rule_texts(block, "allow", &mut unreadable);
     PermissionLists {
-        deny: strings(block, "deny"),
-        ask: strings(block, "ask"),
-        allow: strings(block, "allow"),
+        deny,
+        ask,
+        allow,
+        // Strings only, and silently: a directory is not a rule, and a name that is not text is
+        // nothing to put to a person as a directory to open. PERM-10 answers for this key.
         additional_directories: strings(block, "additionalDirectories"),
+        unreadable,
     }
+}
+
+/// One array of rule text out of a block, with every entry that is not text put in `unreadable`.
+///
+/// Blank text is carried rather than filtered, because the rule language already has a word for
+/// it: `Rule::parse` calls an empty rule empty, and a filter here is what stopped it ever being
+/// asked. Nothing that reaches a list here is a rule yet, since which of them is one is the
+/// kernel's question, and this drops only what could not be put to it.
+fn rule_texts(
+    block: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+    unreadable: &mut Vec<String>,
+) -> Vec<String> {
+    let Some(serde_json::Value::Array(entries)) = block.get(name) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            serde_json::Value::String(text) => Some(text.clone()),
+            other => {
+                unreadable.push(other.to_string());
+                None
+            }
+        })
+        .collect()
 }
 
 /// One array of non-empty strings out of a block, or empty for every other shape.
@@ -1177,14 +1330,42 @@ mod tests {
         assert!(!settings.is_empty());
     }
 
-    /// A rule is a string. An entry that is not one cannot be matched against anything, and
-    /// dropping it keeps the rules that were readable rather than losing the file over one.
+    /// A rule is a line. An entry that is not one cannot be matched against anything, and dropping
+    /// it keeps the rules that were readable rather than losing the file over one. It is dropped
+    /// from the list and not from the block, though, because the rule nobody can act on is exactly
+    /// the one PERM-11 has named where a person reads it.
+    ///
+    /// Blank text is carried on into the list instead. It is a line, and what an empty rule is
+    /// belongs to the language rather than to the reader.
     #[test]
-    fn an_entry_that_is_not_a_rule_is_left_out() {
+    fn an_entry_that_is_not_a_rule_is_carried_out_to_be_reported() {
         let settings = Settings::parse(
-            r#"{"permissions": {"deny": ["Read(./.env)", 1, true, null, "", "  ", []]}}"#,
+            r#"{"permissions":
+                 {"deny": ["Read(./.env)", 1, true, null, "", "  ", ["Read(./.env)"]]}}"#,
         );
-        assert_eq!(settings.permissions().deny, ["Read(./.env)"]);
+        let permissions = settings.permissions();
+        assert_eq!(permissions.deny, ["Read(./.env)", "", "  "]);
+        assert_eq!(
+            permissions.unreadable,
+            ["1", "true", "null", r#"["Read(./.env)"]"#]
+        );
+    }
+
+    /// One report for the three rule lists, since one is what `doctor` and a session print. A
+    /// directory is not a rule and stays out of it: an entry that is not text is nothing to put to
+    /// a person as a directory to open, and PERM-10 rather than PERM-11 answers for that key.
+    ///
+    /// A file whose every rule is mistyped still said something. Reading it as an empty block
+    /// would have `doctor` report no settings one line above the rules it could not read.
+    #[test]
+    fn an_unreadable_entry_is_carried_out_of_whichever_rule_list_held_it() {
+        let settings = Settings::parse(
+            r#"{"permissions": {"deny": [1], "ask": [2], "allow": [3],
+                                "additionalDirectories": [4]}}"#,
+        );
+        assert_eq!(settings.permissions().unreadable, ["1", "2", "3"]);
+        assert!(!settings.permissions().is_empty());
+        assert!(!settings.is_empty());
     }
 
     /// Every shape that is not a block of lists reads as no rules at all, on the same footing as
@@ -1315,6 +1496,16 @@ mod tests {
                 .expect("the scratch root")
                 .join("named.json");
             std::fs::write(&path, text).expect("named layer");
+            self.named = Some(path);
+            self
+        }
+
+        /// A file the command line named that sits inside the workspace without being one of the
+        /// three found layers, which is what a README saying `--settings ./tooling/bravebot.json`
+        /// produces.
+        fn named_inside_the_workspace(mut self, text: &str) -> Self {
+            let path = self.cwd.join("tooling.json");
+            std::fs::write(&path, text).expect("named layer inside the workspace");
             self.named = Some(path);
             self
         }
@@ -1784,6 +1975,162 @@ mod tests {
             Settings::parse(r#"{"vetting": {"auto": false}}"#).auto_vetting(),
             Some(false)
         );
+    }
+
+    /// The home layer may write an allow rule, which is the whole point of the list: a person
+    /// decides once that they do not want to be asked about a command, in their own file.
+    #[test]
+    fn the_home_layer_may_write_an_allow_rule() {
+        let settings = Layers::new("allow-home")
+            .global(r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#)
+            .read();
+        assert_eq!(
+            settings.permissions().allow,
+            ["Bash(bash scripts/check.sh)"]
+        );
+        assert_eq!(settings.allow_ignored().count(), 0);
+    }
+
+    /// PERM-14: a checkout must not be able to stop whoever cloned it being asked. The entry is
+    /// dropped however the file spells it, and the rule and its file are named so the person who
+    /// wrote it is told rather than left reading the prompt as a second fault.
+    ///
+    /// The rule this rejects is the merge as it stood: `permissions` unions every list across every
+    /// layer, so a project file's `allow` entry arrived in the same vector as a home file's and
+    /// answered the Run prompt for a script the checkout shipped.
+    #[test]
+    fn a_project_layer_allow_rule_is_not_granted() {
+        let settings = Layers::new("allow-project")
+            .project(r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#)
+            .read();
+        assert!(
+            settings.permissions().allow.is_empty(),
+            "a checkout answered an approval prompt"
+        );
+        let ignored: Vec<_> = settings.allow_ignored().collect();
+        assert_eq!(ignored.len(), 1);
+        assert_eq!(ignored[0].1, "Bash(bash scripts/check.sh)");
+        assert!(ignored[0].0.ends_with(SETTINGS_FILE));
+    }
+
+    /// The machine-local layer is a checkout's file under another name. Nothing stops one being
+    /// committed, so reading it would make the rule above depend on which of the two somebody
+    /// picked, which is the same reading `vetting` already gives the pair.
+    #[test]
+    fn the_local_layer_allow_rule_is_not_granted_either() {
+        let settings = Layers::new("allow-local")
+            .local(r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#)
+            .read();
+        assert!(settings.permissions().allow.is_empty());
+        let ignored: Vec<_> = settings.allow_ignored().collect();
+        assert_eq!(ignored.len(), 1);
+        assert!(ignored[0].0.ends_with(LOCAL_SETTINGS_FILE));
+    }
+
+    /// Only the list that grants. A checkout saying what to refuse and what to ask about is
+    /// narrowing what would otherwise happen, which is a claim it is entitled to make, and dropping
+    /// the whole block would take away protection a project wrote for whoever works in it.
+    #[test]
+    fn a_project_layers_deny_and_ask_rules_still_apply() {
+        let settings = Layers::new("allow-narrowing-survives")
+            .project(
+                r#"{"permissions": {
+                     "deny": ["Read(./.env)"],
+                     "ask": ["Bash(git push *)"],
+                     "allow": ["Bash(rm -rf *)"]
+                   }}"#,
+            )
+            .read();
+        assert_eq!(settings.permissions().deny, ["Read(./.env)"]);
+        assert_eq!(settings.permissions().ask, ["Bash(git push *)"]);
+        assert!(settings.permissions().allow.is_empty());
+    }
+
+    /// `additionalDirectories` is untouched by this, because it is already a request rather than a
+    /// grant: PERM-10 puts each name to the person when the session opens. Dropping a checkout's
+    /// entries here would silently remove the question instead of the grant.
+    #[test]
+    fn a_project_layer_may_still_name_a_directory_to_ask_about() {
+        let settings = Layers::new("allow-directories-survive")
+            .project(r#"{"permissions": {"additionalDirectories": ["../shared"]}}"#)
+            .read();
+        assert_eq!(settings.permissions().additional_directories, ["../shared"]);
+        assert_eq!(settings.allow_ignored().count(), 0);
+    }
+
+    /// The home layer's own rules are not reduced by a checkout writing some of its own, and the
+    /// checkout's are not added to them. The mistake this rejects is a fix that kept the union
+    /// whenever the home layer had said anything at all.
+    #[test]
+    fn a_project_layer_does_not_add_to_the_home_layers_allow_rules() {
+        let settings = Layers::new("allow-not-added")
+            .global(r#"{"permissions": {"allow": ["Bash(git diff *)"]}}"#)
+            .project(r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#)
+            .read();
+        assert_eq!(settings.permissions().allow, ["Bash(git diff *)"]);
+        assert_eq!(settings.allow_ignored().count(), 1);
+    }
+
+    /// A file the command line named is a path somebody typed at this invocation, so its rules are
+    /// theirs. This is where `allow` parts company with `vetting`, which excludes the named layer
+    /// outright: that key decides whether a person is asked at all, which is a larger claim than
+    /// one rule.
+    #[test]
+    fn a_named_layer_outside_the_workspace_may_write_an_allow_rule() {
+        let settings = Layers::new("allow-named")
+            .named(r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#)
+            .read();
+        assert_eq!(
+            settings.permissions().allow,
+            ["Bash(bash scripts/check.sh)"]
+        );
+        assert_eq!(settings.allow_ignored().count(), 0);
+    }
+
+    /// The flag can name a file inside the checkout, which is why
+    /// `a_command_line_file_that_is_already_a_layer_is_read_once` exists. A README saying
+    /// `--settings ./tooling/bravebot.json` would otherwise be a route back in for the rules the
+    /// two layers above cannot carry.
+    #[test]
+    fn a_named_layer_inside_the_workspace_is_the_checkouts_file_under_another_name() {
+        let settings = Layers::new("allow-named-inside")
+            .named_inside_the_workspace(
+                r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#,
+            )
+            .read();
+        assert!(
+            settings.permissions().allow.is_empty(),
+            "a file inside the checkout answered an approval prompt"
+        );
+        let ignored: Vec<_> = settings.allow_ignored().collect();
+        assert_eq!(ignored.len(), 1);
+        assert!(ignored[0].0.ends_with("tooling.json"));
+    }
+
+    /// A blank entry is nobody's grant, so which layer wrote it decides nothing. It goes through
+    /// to the rule language, which calls an empty rule empty and reports it under PERM-11.
+    /// Reporting it here instead would say a rule was withheld one line above the report saying
+    /// there was no rule.
+    #[test]
+    fn a_blank_allow_entry_is_not_reported_as_a_rule_that_was_withheld() {
+        let settings = Layers::new("allow-blank")
+            .project(r#"{"permissions": {"allow": ["   ", "Bash(bash scripts/check.sh)"]}}"#)
+            .read();
+        assert_eq!(settings.permissions().allow, ["   "]);
+        let ignored: Vec<_> = settings.allow_ignored().collect();
+        assert_eq!(ignored.len(), 1);
+        assert_eq!(ignored[0].1, "Bash(bash scripts/check.sh)");
+    }
+
+    /// A file that carried nothing but a dropped allow rule still said something, and `doctor`
+    /// names it. Reading it as absence would print "no settings.json" one line above the path of
+    /// the file that holds the rule.
+    #[test]
+    fn a_dropped_allow_rule_is_not_an_empty_settings() {
+        let settings = Layers::new("allow-not-empty")
+            .project(r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#)
+            .read();
+        assert!(!settings.is_empty());
     }
 
     /// A value that is not a boolean is absence. A file that meant to turn this on and mistyped it

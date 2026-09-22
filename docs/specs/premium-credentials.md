@@ -10,6 +10,8 @@ governs:
   - crates/agent/src/subscription.rs
   - crates/agent/src/backend.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/delegate.rs
+  - crates/agent/src/shared.rs
   - crates/tui/src/status.rs
   - crates/tui/src/logo.rs
 documented-by: docs/website/docs/customize/premium.md
@@ -92,12 +94,22 @@ Credentials arrive in batches covering a few days and are spent one per request.
 never offered again, consecutive spends hand out different credentials, and spending past the end
 of a batch is refused. A moment outside every validity window yields no credential.
 
+A run holds one wallet, which the turn opens and lends to every delegate it starts. A delegate
+opens none of its own and reads the store not at all.
+
+**Why.** A spend reaches the file only when the wallet is written back (PREM-6), so a second
+wallet over the same batch reads every spend the first has made as unspent and offers the
+credential that one is presenting right now.
+
 `verified-by: bravebot_skus::store::a_spent_credential_is_never_offered_again`
 `verified-by: bravebot_skus::store::consecutive_spends_hand_out_different_credentials`
 `verified-by: bravebot_skus::store::spending_past_the_end_of_the_batch_is_refused`
 `verified-by: bravebot_skus::store::the_next_usable_credential_is_the_one_valid_at_that_moment`
 `verified-by: bravebot_skus::store::a_moment_outside_every_window_yields_no_credential`
 `verified-by: bravebot_skus::store::a_window_does_not_include_its_own_end`
+`verified-by: bravebot_agent::shared::two_runs_holding_one_wallet_are_never_offered_the_same_credential`
+`verified-by: bravebot_agent::turn::a_delegate_spends_the_wallet_the_turn_lent_it`
+`verified-by: bravebot_agent::home::a_delegate_does_not_open_a_wallet_of_its_own`
 
 <a id="PREM-6"></a>
 ### PREM-6: nothing is written back unless a credential was actually spent

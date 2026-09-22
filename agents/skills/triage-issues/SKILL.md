@@ -253,7 +253,9 @@ comment which claims were removed and why. A body nobody can trust is worse than
 rescoped one, because the next person re-derives the whole thing before finding out.
 
 Rewriting means: drop the false claims, keep the ask, and state what is genuinely left.
-Retitle where the title itself is now false.
+Retitle where the title itself is now false, to one that carries what
+[docs/development/labelling-issues.md](../../../docs/development/labelling-issues.md) says a title
+carries. A title that is merely awkward is left alone, since a retitle reaches everybody subscribed.
 
 ---
 

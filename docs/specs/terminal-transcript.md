@@ -542,3 +542,24 @@ The live session's export includes its failure and cancellation entries.
 `verified-by: bravebot_tui::outcome_colours::what_a_successful_turn_cost_is_not_drawn_in_the_failure_colour`
 `verified-by: bravebot_tui::outcome_colours::failure_label_uses_failure_colour`
 `verified-by: bravebot_tui::frame::cancellation_has_its_own_status_even_when_the_prompt_returns`
+
+
+<a id="VIEW-23"></a>
+### VIEW-23: a call that ran a model inside itself says how long it waited there
+
+Where a call made a request of its own, what it spent waiting on the answer is drawn on that call's
+own line, beside what came of it. Two kinds of call do: a confined check before quarantined content
+may be read ([vetting.md](vetting.md)), and a processor's own round ([processors.md](processors.md)).
+Every other call waited on this machine and says nothing, because a figure under every row
+distinguishes nothing and crowds out the rows that do.
+
+Per call rather than as a total. The turn's own clock already separates what it spent at a model from
+what it spent working, and that total cannot answer which call was the slow one, which is the
+question somebody watching a call take eight seconds is asking.
+
+A wait too short to state is left off rather than drawn as zero.
+
+`verified-by: bravebot_tui::render::a_call_that_waited_on_a_model_says_how_long`
+`verified-by: bravebot_tui::render::a_call_that_asked_no_model_says_nothing_about_one`
+`verified-by: bravebot_tui::render::a_wait_under_a_second_is_left_off`
+`verified-by: bravebot_agent::turn::what_a_check_cost_reaches_the_row_the_call_drew`

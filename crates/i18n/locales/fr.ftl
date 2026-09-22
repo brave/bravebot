@@ -207,6 +207,9 @@ doctor-settings-ignored = ignoré
 doctor-settings-vetting-ignored =
     vetting.auto dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json
+doctor-settings-allow-ignored =
+    la règle allow { $rule } dans { $path } n'est pas accordée : une règle allow répond à une
+    invite, elle n'est donc lue que depuis ~/.bravebot/settings.json
 doctor-managed = géré
 doctor-managed-pinned = { $names } depuis { $path }
 doctor-managed-nothing = { $path }, n'épinglant rien
@@ -249,6 +252,22 @@ doctor-proxy-in-force = { $proxy }
 doctor-proxy-authenticated = { $proxy } (avec un identifiant, jamais affiché)
 doctor-proxy-unsupported = { $protocol } n'est pas pris en charge par cette version, les requêtes sont directes
 doctor-no-proxy = sans proxy
+
+
+## Une règle de permission que cette version n'a pas pu appliquer
+
+# Dit partout où une règle écartée est signalée : par `doctor`, sous l'étiquette ci-dessus, et
+# comme note dans la session qui a lu le fichier. L'entrée est citée telle que le fichier l'a
+# écrite, parce que la retrouver est tout l'intérêt d'en être averti.
+permission-rule-unreadable = '{ $rule }' { $problem }
+permission-rule-not-a-line = n'est pas une règle ; une règle est une ligne de texte
+permission-rule-empty = est vide
+permission-rule-unclosed-bracket = n'a pas sa parenthèse fermante
+permission-rule-unknown-family = ne nomme aucune famille d'outils de cet agent ; utilisez Read, Edit ou Bash
+permission-rule-empty-brackets = a des parenthèses vides ; enlevez-les pour viser toute utilisation
+permission-rule-unanchored = a besoin d'un répertoire personnel ou d'un répertoire de réglages pour indiquer vers quoi elle pointe
+permission-rule-not-a-domain-rule = a besoin d'un domaine ; écrivez WebFetch(domain:example.com)
+permission-rule-no-domain-named = ne nomme aucun domaine après 'domain:'
 
 
 ## Importer un abonnement Leo Premium
@@ -720,6 +739,10 @@ elapsed-seconds = { $seconds } s
 elapsed-minutes = { $minutes } min { $seconds } s
 indicator-tokens-read = ↓ { $tokens } jetons
 indicator-tokens-written = ↑ { $tokens }
+indicator-checking = { $lines ->
+    [one] Vérification de { $lines } ligne
+   *[other] Vérification de { $lines } lignes
+    }
 tokens-thousands = { $thousands } k
 tokens-millions = { $millions } M
 turn-done = tour { $turn } terminé
@@ -785,6 +808,7 @@ transcript-unchanged = { $count ->
     [one] … { $count } ligne inchangée
    *[other] … { $count } lignes inchangées
     }
+transcript-waited = { $elapsed } auprès du modèle
 
 
 ## Relire la transcription
@@ -827,7 +851,7 @@ command-rename = Appeler cette conversation autrement
 command-compact = Résumer la conversation jusqu'ici, en gardant la partie récente
 command-btw = Demander quelque chose à côté du travail, sans le mettre dans la conversation
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
-command-loop = Renvoyer une consigne encore et encore, à votre intervalle ou au rythme de chaque tour
+command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, ou l'arrêter
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
@@ -871,6 +895,9 @@ session-directory-changed = travail désormais dans { $directory }, et approuvé
 session-directory-closed = { $directory } fermé ; rouvrez-le avec /add-dir { $directory }
 session-directory-not-changed = impossible de passer à { $directory } : { $problem }
 session-permission-rule-ignored = règle de permission ignorée dans settings.json : { $problem }
+session-permission-allow-ignored =
+    la règle allow { $rule } de { $path } n'est pas accordée : une règle allow répond à une
+    invite, elle n'est donc lue que depuis ~/.bravebot/settings.json
 session-permissions-skipped =
     --dangerously-skip-permissions : rien ne sera demandé avant une écriture, une commande, ou la
     lecture d'un fichier que personne n'a approuvé. shift-tab pour changer
@@ -939,9 +966,23 @@ failure-with-attempts = { $what }, après { $attempts } tentatives
 loop-needs-a-prompt =
     /loop demande quelque chose à répéter, comme /loop 5m vérifie le déploiement, ou
     /loop surveille la compilation pour laisser chaque tour dire quand recommencer
-loop-started-every = répétition toutes les { $every } ; ctrl-c l'arrête, et partir aussi
+loop-started-every =
+    répétition toutes les { $every } ; /loop stop l'arrête, comme ctrl-c ou partir
 loop-started-self-paced =
-    répétition au rythme que fixe chaque tour ; ctrl-c l'arrête, et partir aussi
+    répétition au rythme que fixe chaque tour ; /loop stop l'arrête, comme ctrl-c ou partir
+# La réponse à la commande nue. La consigne en fait partie parce que la note ci-dessus a défilé,
+# et qui demande ce qui se répète a le plus souvent perdu de vue ce qu'il avait lancé.
+loop-active = répétition : { $prompt } · { $pace } · { $when }
+loop-ends-with = /loop stop l'arrête, comme ctrl-c ou partir
+loop-none =
+    rien ne se répète. /loop 5m vérifie le déploiement envoie une ligne toutes les cinq minutes,
+    /loop surveille la compilation laisse chaque tour dire quand recommencer, et /loop stop arrête
+    l'une comme l'autre
+# La partie de la ligne sous la zone de saisie qui dit qu'une boucle tourne, la seule chose à
+# l'écran qui le dise entre deux passages. Courte exprès : elle partage cette ligne avec le mode et
+# les mesures, et une partie qui ne tient pas dans le terminal est une partie que la ligne laisse.
+loop-hint = en boucle
+loop-hint-next = en boucle, prochaine dans { $next }
 loop-interval-raised = l'intervalle a été relevé à { $every }, le plus rapide qu'une boucle aille
 loop-interval-capped = l'intervalle a été plafonné à { $every }, le plus long qu'une boucle vive
 loop-replaced = la boucle qui tournait a été remplacée
@@ -957,8 +998,8 @@ loop-busy = /loop commence par un tour à lui, il attend donc la fin de celui-ci
 loop-replaces-goal =
     l'objectif qui était fixé a été retiré : une session ne travaille qu'à une chose à la fois
 loop-armed-by-the-turn =
-    nouveau regard dans { $after }, en répétant ce que vous avez demandé ; ctrl-c l'arrête, et
-    partir aussi
+    nouveau regard dans { $after }, en répétant ce que vous avez demandé ; /loop stop l'arrête,
+    comme ctrl-c ou partir
 loop-not-armed-under-a-goal =
     un regard plus tard a été demandé sans être lancé : cette session travaille vers un objectif,
     et elle fait une chose à la fois

@@ -2198,6 +2198,13 @@ mod preserved_history {
     use bravebot_agent::{Category, Diagnosis, Ending, Spent};
     use bravebot_tui::state::{Session, Speaker};
 
+    /// The request in a `/loop` argument, for the two tests here that need a loop running.
+    fn loop_request(argument: &str) -> bravebot_tui::loops::Request {
+        bravebot_tui::loops::parse(argument)
+            .started()
+            .unwrap_or_else(|| panic!("{argument:?} started no loop"))
+    }
+
     fn save(
         root: &std::path::Path,
         session: &Session,
@@ -3558,10 +3565,7 @@ mod preserved_history {
         session.complete("done", vec![], 0);
         let before = session.history.entries().to_vec();
         let prompt = session
-            .start_loop(
-                bravebot_tui::loops::parse("1m check again").unwrap(),
-                Vec::new(),
-            )
+            .start_loop(loop_request("1m check again"), Vec::new())
             .unwrap();
         session.stopped(Some(0));
         session.restore(prompt);
@@ -3582,10 +3586,7 @@ mod preserved_history {
             None,
         ));
         let prompt = session
-            .start_loop(
-                bravebot_tui::loops::parse("1m check again").unwrap(),
-                Vec::new(),
-            )
+            .start_loop(loop_request("1m check again"), Vec::new())
             .unwrap();
         session.stopped(Some(0));
         session.restore(prompt);

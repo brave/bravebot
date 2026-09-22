@@ -2898,27 +2898,37 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             message: format!("{slot}: {e}"),
         })?;
 
-        // The driver's own record of where the bytes came from, never the bytes. A command is
-        // said as what it printed, since that is what a person is being asked about rather than
-        // the line itself; everything else is the sentence the driver wrote when it quarantined
-        // the bytes, or the path a deferred read was reserved against. A slot from neither has
-        // only its own name to offer, which is a poor thing to put in front of somebody and is
-        // better than inventing one.
-        //
-        // A path is where it came from even where a quarantined listing is what named the file,
-        // which is the same address `Policy::before_vetting_a_path` already says on the vouch
-        // offer for a read through such a reference. It goes on a screen and into the check's
-        // metadata and is decided from nowhere.
-        let origin = match (
+        let origin = self.where_a_slot_came_from(slot, slots);
+
+        Ok(self.fix_check(content, slot.to_string(), origin, expects))
+    }
+
+    /// The driver's own record of where a slot's bytes came from, never the bytes.
+    ///
+    /// A command is said as what it printed, since that is what a person is being asked about
+    /// rather than the line itself; everything else is the sentence the driver wrote when it
+    /// quarantined the bytes, or the path a deferred read was reserved against. A slot from
+    /// neither has only its own name to offer, which is a poor thing to put in front of somebody
+    /// and is better than inventing one.
+    ///
+    /// A path is where it came from even where a quarantined listing is what named the file,
+    /// which is the same address [`Policy::before_vetting_a_path`] already says on the vouch
+    /// offer for a read through such a reference. It goes on a screen and into a check's
+    /// metadata and is decided from nowhere.
+    ///
+    /// Answered on its own as well as inside [`Policy::before_vetting`], because the prompt is
+    /// built whether or not a check was made: bypassing mode makes none and still has a request
+    /// to fill in, and a second copy of this match in the caller would be a second answer to
+    /// where a slot came from.
+    pub fn where_a_slot_came_from(&self, slot: &SlotId, slots: &crate::slot::SlotStore) -> String {
+        match (
             slots.command_of(slot),
             slots.origin_of(slot, &PathAuthority::mint()),
         ) {
             (Some(command), _) => format!("what {command} printed"),
             (None, Some(origin)) => origin.to_string(),
             (None, None) => slot.to_string(),
-        };
-
-        Ok(self.fix_check(content, slot.to_string(), origin, expects))
+        }
     }
 
     /// Fix a check over a file's contents, before anybody is asked to vouch for its path.
@@ -3719,19 +3729,42 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.root.as_deref() == Some(plan.directory.as_path())
     }
 
+    /// Whether the file a step will execute lives in the project being worked on.
+    ///
+    /// The audited table's entries are claims about the programs a system provides, and a file inside
+    /// the project is never one of those whatever it is called. So a name is not enough to reach an
+    /// entry: `$PATH` decides what a name means, so a project directory on it makes a file a
+    /// contributor added answer to `pwd`, and `PATH_add bin` in a project's own `.envrc` puts one
+    /// there. Refused here, so such a line falls through to the run prompt and the untrusted output
+    /// every unproven line gets. `run.md`'s [RUN-8] states the same identity rule for the road a
+    /// person vouches on, where an assertion must not follow a name onto a different binary.
+    ///
+    /// The path compared is the one the driver resolved and will execute, canonicalised before it
+    /// was returned, so a symlink into the project is compared as the file it is. False when no root
+    /// is known, which costs nothing: [`Policy::read_proven`] has already refused the plan by then,
+    /// since it is asked whether the line runs at a root that does not exist.
+    ///
+    /// [RUN-8]: ../../../docs/specs/tools/run.md
+    fn resolves_inside_the_project(&self, resolved: &std::path::Path) -> bool {
+        self.root
+            .as_deref()
+            .is_some_and(|root| resolved.starts_with(root))
+    }
+
     /// The paths every step of the plan reads, or `None` where any step proves nothing.
     ///
-    /// A step is read-proven when the line named a program rather than a path, the audited table
-    /// answers for what that name resolved to and for the exact argv, the step carries no
-    /// environment assignment, and it opens no file for a stream. `2>&1` renames a descriptor and
-    /// opens nothing, so it is not one.
+    /// A step is read-proven when the line named a program rather than a path, the file that name
+    /// resolved to lies outside the workspace, the audited table answers for that file's name and
+    /// for the exact argv, the step carries no environment assignment, and it opens no file for a
+    /// stream. `2>&1` renames a descriptor and opens nothing, so it is not one.
     ///
-    /// The table's entries are claims about the programs a system provides under those names, and
-    /// it matches on the file name a program resolved to, so a line naming a path would let a file
-    /// called `wc` anywhere a name can reach answer as the audited one. An assignment in front of a
-    /// program decides what that program loads and reads before its own arguments are looked at,
-    /// and a redirection opens a file the argv does not name, so neither is covered by an audit of
-    /// an option surface.
+    /// The table's entries are claims about the programs a system provides under those names, and it
+    /// matches on the file name a program resolved to, which names no particular file: so a `wc` in
+    /// the tree being inspected would answer as the audited one, and it reaches that answer whether
+    /// the line pointed at it or a name in the user's own `$PATH` did
+    /// ([`Policy::resolves_inside_the_project`]). An assignment in front of a program decides what
+    /// that program loads and reads before its own arguments are looked at, and a redirection opens a
+    /// file the argv does not name, so neither is covered by an audit of an option surface.
     ///
     /// Every step, not any step: one step nothing can account for is a transformation the answer
     /// does not cover, and its output is what the next step reads. A plan with no steps proves
@@ -3758,7 +3791,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 .routes
                 .iter()
                 .any(|route| !matches!(route, crate::command::Route::StderrToStdout));
-            if names_a_path(&step.program) || !step.environment.is_empty() || opens_a_file {
+            if names_a_path(&step.program)
+                || self.resolves_inside_the_project(&step.resolved)
+                || !step.environment.is_empty()
+                || opens_a_file
+            {
                 return None;
             }
             paths.extend(crate::pure::read_set(
@@ -6284,19 +6321,62 @@ five
     /// The hole a file name alone would leave open. The table matches the name a program resolved
     /// to, so a `wc` in the directory the line runs in would answer as the audited one and run
     /// without anybody seeing it. A name is looked up in the user's own `$PATH`; a path is not.
+    ///
+    /// Each spelling resolves outside the workspace, so the refusal can only come from the spelling
+    /// itself: where a name lands is a separate condition with a test of its own
+    /// ([`a_program_resolving_inside_the_project_is_not_proven`]), and a fixture answering to both
+    /// at once would pass with either guard gone.
     #[test]
     fn a_program_named_by_path_is_not_proven() {
         let mut sink = RecordingSink::new();
         let mut policy = in_a_project(&mut sink, &[]);
 
-        for spelling in ["./wc", "/work/wc", "../bin/wc"] {
+        for spelling in ["./wc", "/opt/tools/wc", "../bin/wc"] {
             let mut step = step_named("wc", &["-l", "Cargo.toml"]);
             step.program = spelling.to_string();
+            step.resolved = std::path::PathBuf::from("/opt/tools/wc");
             assert!(
                 policy.plan_needs_approval(&plan_of(vec![step])),
                 "a program named as {spelling} ran unasked"
             );
         }
+    }
+
+    /// A name is not a program: `$PATH` decides which file it means, so a project directory on it
+    /// makes a file a contributor added answer to an audited name, and `PATH_add bin` in a project's
+    /// own `.envrc` puts one there. The table's entries are claims about the programs a system
+    /// provides, so a file inside the project is never one of them however it is spelled.
+    ///
+    /// Asked of the label as well as of the prompt, since they are two separate consequences and a
+    /// fix that shut only the prompt would leave the bytes reaching the planner as trusted. Against
+    /// a control resolving under `/usr/bin`, which establishes that the proof road is otherwise open
+    /// for this line: without it a proof that had stopped working everywhere would pass.
+    #[test]
+    fn a_program_resolving_inside_the_project_is_not_proven() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &[]);
+
+        let system = plan_of(vec![step_named("pwd", &[])]);
+        assert!(
+            !policy.plan_needs_approval(&system),
+            "the proof road is shut for the line this test contrasts with"
+        );
+        assert!(
+            label_of(&mut policy, &system).is_trusted(),
+            "the proof road is shut for the line this test contrasts with"
+        );
+
+        let mut step = step_named("pwd", &[]);
+        step.resolved = std::path::PathBuf::from("/work/bin/pwd");
+        let shadowed = plan_of(vec![step]);
+        assert!(
+            policy.plan_needs_approval(&shadowed),
+            "a program resolving to a file in the project ran unasked"
+        );
+        assert!(
+            !label_of(&mut policy, &shadowed).is_trusted(),
+            "a project file's output came back as the audited program's"
+        );
     }
 
     /// An assignment in front of a program decides what that program loads and reads before its own

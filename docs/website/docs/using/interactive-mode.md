@@ -251,7 +251,8 @@ what they mean everywhere else while it is up. It folds into as many columns as 
 no row runs past the edge.
 
 The row beneath the box carries what the session is doing (the mode in force where it is not just
-asking, how full the context is, the trail, and the key that opens the delegates and the commands
+asking, how full the context is, the trail, a [`/loop`](../reference/commands.md#loop-interval-prompt)
+that is running and when its next tick is due, and the key that opens the delegates and the commands
 once the session has anything to open), and then `? for shortcuts`. It names no other binding of its
 own.
 
@@ -294,9 +295,9 @@ answered, since which one arrives is the terminal's choice rather than yours.
 The mode leads the row beneath the box and is the only part of it drawn in a colour. Asking about
 everything takes no room at all: what is drawn is a mode somebody chose. When the terminal is too
 narrow, the parts are given up whole and in order (a reading with no figure in it, then the way to the
-bindings, then the trail key, then the figures), and the mode is the last to go. A note about what a
-press just did is drawn at the right of the same row and takes its room ahead of all of them, since a
-part fitted against the whole width is one the note writes over.
+bindings, then the trail key, then the figures, and a running loop after all of them), and the mode is
+the last to go. A note about what a press just did is drawn at the right of the same row and takes its
+room ahead of all of them, since a part fitted against the whole width is one the note writes over.
 
 See [modes](../security/permissions.md#answering-in-advance-modes) for what each one answers and what
 choosing one costs.

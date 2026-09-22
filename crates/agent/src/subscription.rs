@@ -92,7 +92,7 @@ impl ImportedSubscription {
     /// Exists so the spending behaviour can be tested without touching the real store, which would
     /// overwrite the credentials of whoever ran the suite.
     #[cfg(test)]
-    fn detached(batch: bravebot_skus::StoredCredentials) -> Self {
+    pub(crate) fn detached(batch: bravebot_skus::StoredCredentials) -> Self {
         Self {
             wallet: bravebot_skus::store::Wallet::detached(batch),
             now: current_timestamp,

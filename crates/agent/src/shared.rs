@@ -1,14 +1,17 @@
-//! Lending one confirmer, one reporter and one audit trail to several runs at once.
+//! Lending one confirmer, one reporter, one audit trail and one wallet to several runs at once.
 //!
-//! A turn and the delegates it spawned run at the same time and each of the three is single: one
-//! person answers the questions, one screen shows the lines, one trail records the decisions.
-//! What they need is not a copy each but a turn each, which is what this is.
+//! A turn and the delegates it spawned run at the same time and each of the four is single: one
+//! person answers the questions, one screen shows the lines, one trail records the decisions, one
+//! subscription pays for the requests. What they need is not a copy each but a turn each, which is
+//! what this is.
 //!
 //! # Why a lock and not a copy
 //!
-//! Copying is wrong for all three. Two trails leave a hole in the record exactly over the part of
+//! Copying is wrong for all four. Two trails leave a hole in the record exactly over the part of
 //! the turn nobody watched. Two reporters interleave half-written lines. Two confirmers put two
-//! questions on one screen, and a person cannot answer either without reading both.
+//! questions on one screen, and a person cannot answer either without reading both. Two wallets
+//! over one batch hand out the same credential twice, which is the one thing a credential may
+//! never be.
 //!
 //! Holding the lock for the whole of one question is deliberate rather than a cost. A person is
 //! asked one thing at a time, and a delegate that wants an answer while somebody is reading
@@ -27,6 +30,7 @@ use crate::confirm::{
 use crate::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Shown,
 };
+use bravebot_aichat::{Subscription, SubscriptionCredential};
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::event::{Event, Sink};
 use bravebot_core::todo::Row;
@@ -70,10 +74,11 @@ impl<'a, T: ?Sized> Lent<'a, T> {
     /// Take the lock.
     ///
     /// A delegate that panicked leaves it poisoned, and the turn is still running and still owns
-    /// the screen. What is behind the lock is a confirmer, a reporter or a trail, and a panic
-    /// leaves none of the three half written: each method here is one call that either happened
-    /// or did not. So the turn carries on with what it was lent rather than dying of somebody
-    /// else's failure.
+    /// the screen. What is behind the lock is a confirmer, a reporter, a trail or a wallet, and a
+    /// panic leaves none of the four half written: each method here is one call that either
+    /// happened or did not, and a spend is recorded before the credential it produced is handed
+    /// back. So the turn carries on with what it was lent rather than dying of somebody else's
+    /// failure.
     fn hold(&self) -> MutexGuard<'_, &'a mut T> {
         self.inner.lock().unwrap_or_else(|held| held.into_inner())
     }
@@ -87,6 +92,47 @@ impl<'a, T: ?Sized> Lent<'a, T> {
             Err(std::sync::TryLockError::Poisoned(held)) => Some(held.into_inner()),
             Err(std::sync::TryLockError::WouldBlock) => None,
         }
+    }
+}
+
+/// The one credential store a run spends from.
+///
+/// A trait rather than [`Lent`] itself, because `Lent` is invariant in the lifetime of the borrow
+/// it holds: a run that has to carry either the wallet it opened or the one it was handed cannot
+/// name both in a single type, and every signature between the turn and its delegates would
+/// otherwise state the turn's own borrow.
+///
+/// Spending, and nothing else. A run is told what the next credential is and never which batch it
+/// came from, how many are left, or whether the wallet has been written back: those belong to the
+/// run that opened it, which is the only one that closes it.
+pub trait Spends: Sync {
+    /// Take the lock and spend the next credential.
+    fn spend_one(&self) -> Result<SubscriptionCredential, String>;
+}
+
+impl<T: Subscription + Send + ?Sized> Spends for Lent<'_, T> {
+    fn spend_one(&self) -> Result<SubscriptionCredential, String> {
+        self.hold().next_credential()
+    }
+}
+
+/// One run's handle on the wallet.
+///
+/// A handle rather than a copy, for the reason a credential exists at all: it is single-use, so
+/// a second wallet over the same batch hands the next run a credential the first has already
+/// presented. Every handle reaches the one wallet, and a spend made through any of them is a
+/// spend every other one can see (PREM-5).
+pub struct Spending<'a>(&'a dyn Spends);
+
+impl<'a> Spending<'a> {
+    pub fn new(wallet: &'a dyn Spends) -> Self {
+        Self(wallet)
+    }
+}
+
+impl Subscription for Spending<'_> {
+    fn next_credential(&mut self) -> Result<SubscriptionCredential, String> {
+        self.0.spend_one()
     }
 }
 
@@ -161,6 +207,8 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn landed(&mut self, landing: Landing);
         fn tool_started(&mut self, activity: Activity);
         fn tool_finished(&mut self, activity: Activity);
+        fn check_started(&mut self, lines: usize);
+        fn check_finished(&mut self);
         fn interjected(&mut self, said: String);
         fn delegate_started(&mut self, delegation: Delegation);
         fn delegate_waiting(&mut self, delegate: DelegateId);
@@ -288,6 +336,51 @@ mod tests {
             recording.spent,
             vec![a_total(1_000), a_total(1_200)],
             "a delegate's own total was reported as the turn's"
+        );
+    }
+
+    /// PREM-5, over the wallet a run actually spends rather than a stand-in for one: two runs
+    /// holding handles on one wallet are never offered the same credential.
+    ///
+    /// The turn and its delegates are the two runs, and a credential is single-use. What makes
+    /// that hold is the lock and the single wallet behind it: a spend is recorded in memory until
+    /// the wallet is written back (PREM-6), so two wallets over one batch (a copy each, or a
+    /// second read of the same file) would each hand out the first unspent credential they can
+    /// see, which is the same one.
+    #[test]
+    fn two_runs_holding_one_wallet_are_never_offered_the_same_credential() {
+        use bravebot_aichat::Subscription;
+
+        let batch = bravebot_skus::StoredCredentials {
+            order_id: "order".to_string(),
+            environment: bravebot_skus::Environment::Production,
+            item_id: "item".to_string(),
+            issuer: "brave.com?sku=brave-leo-premium".to_string(),
+            // Two, so running out is not what makes the second answer differ from the first, and
+            // real ones, since a credential that cannot be presented never reaches a cookie.
+            credentials: std::iter::repeat_with(|| bravebot_skus::store::Credential {
+                unblinded: bravebot_skus::device::test_credential(),
+                valid_from: "2000-01-01T00:00:00".to_string(),
+                valid_to: "2999-01-01T00:00:00".to_string(),
+                spent: false,
+                rfc: true,
+            })
+            .take(2)
+            .collect(),
+        };
+
+        let mut wallet = crate::ImportedSubscription::detached(batch);
+        let lent = Lent::new(&mut wallet);
+        let turns = Spending::new(&lent)
+            .next_credential()
+            .expect("the turn spends one");
+        let delegates = Spending::new(&lent)
+            .next_credential()
+            .expect("the delegate spends the next");
+
+        assert_ne!(
+            turns.cookie_value, delegates.cookie_value,
+            "a credential the turn had already presented was offered to a delegate"
         );
     }
 

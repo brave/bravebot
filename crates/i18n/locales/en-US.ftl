@@ -223,6 +223,12 @@ doctor-settings-overridden = { $name } from { $path }
 doctor-settings-ignored = ignored
 doctor-settings-vetting-ignored =
     vetting.auto in { $path } is not obeyed: it is read from ~/.bravebot/settings.json only
+# An allow rule a layer that may not grant one wrote. Named one at a time and with its file, for
+# the reason the vetting line gives: a rule that looks like configuration and does nothing is the
+# one worth saying out loud.
+doctor-settings-allow-ignored =
+    the allow rule { $rule } in { $path } is not granted: an allow rule answers a prompt, so it is
+    read from ~/.bravebot/settings.json only
 # The machine-level layer, above everything a person can set. The names rather than the values, for
 # the reason the settings lines give, and the path because a pin somebody wants lifted is lifted by
 # whoever can write that file.
@@ -286,6 +292,22 @@ doctor-proxy-in-force = { $proxy }
 doctor-proxy-authenticated = { $proxy } (with a credential, never printed)
 doctor-proxy-unsupported = { $protocol } is not supported by this build, so requests go direct
 doctor-no-proxy = not proxied
+
+
+## A permission rule this build could not act on
+
+# Said wherever a dropped rule is reported: by `doctor`, under the label above, and as a note in
+# the session that read the file. The entry is quoted as the file spelled it, because finding it
+# again is the whole point of being told.
+permission-rule-unreadable = '{ $rule }' { $problem }
+permission-rule-not-a-line = is not a rule; a rule is written as a line of text
+permission-rule-empty = is empty
+permission-rule-unclosed-bracket = is missing its closing bracket
+permission-rule-unknown-family = names no family of tools this agent has; use Read, Edit or Bash
+permission-rule-empty-brackets = has empty brackets; drop them to mean every use
+permission-rule-unanchored = needs a home directory or a settings directory to say where it points
+permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:example.com)
+permission-rule-no-domain-named = names no domain after 'domain:'
 
 
 ## Importing a Leo Premium subscription
@@ -802,6 +824,13 @@ elapsed-minutes = { $minutes }m { $seconds }s
 # Beside a figure already labelled in tokens, so the unit is not repeated.
 indicator-tokens-read = ↓ { $tokens } tokens
 indicator-tokens-written = ↑ { $tokens }
+# Said while a confined check reads quarantined content, before any of it may be read. The count
+# is what the check was given, which is the one thing that predicts how long it will take. Not a
+# word about what it decided: that reaches a person on the prompt and nothing else.
+indicator-checking = { $lines ->
+    [one] Checking { $lines } line
+   *[other] Checking { $lines } lines
+    }
 # Abbreviated counts, already rounded to one place.
 tokens-thousands = { $thousands }k
 tokens-millions = { $millions }M
@@ -865,6 +894,11 @@ transcript-unchanged = { $count ->
     [one] … { $count } unchanged line
    *[other] … { $count } unchanged lines
     }
+# Said after what a finished call produced, where the call ran a model of its own inside itself: a
+# confined check over quarantined content, or a processor's own round. How long it waited there and
+# nothing about what came back. Without it a call that was slow because a model was slow reads as a
+# slow program, and the figure that tells them apart was already measured.
+transcript-waited = { $elapsed } at the model
 
 
 ## Reading back through the transcript
@@ -937,7 +971,7 @@ command-rename = Call this conversation something else
 command-compact = Summarise the conversation so far, keeping the recent part
 command-btw = Ask something beside the work, without putting it in the conversation
 command-clear = Start a new session here, keeping this one resumable
-command-loop = Send a prompt again and again, on your interval or at a pace each turn sets
+command-loop = Send a prompt again and again, say what is repeating, or stop it
 command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
@@ -983,6 +1017,12 @@ session-directory-changed = now working in { $directory }, and trusting it for t
 session-directory-closed = closed { $directory }; open it again with /add-dir { $directory }
 session-directory-not-changed = could not move to { $directory }: { $problem }
 session-permission-rule-ignored = ignoring a permission rule in settings.json: { $problem }
+# An allow rule written in a checkout's settings file. It answers an approval prompt, which is a
+# capability rather than a narrowing, so it is read from the person's own file only. Named rather
+# than counted: whoever wrote it is looking for their own line.
+session-permission-allow-ignored =
+    not granting the allow rule { $rule } from { $path }: an allow rule answers a prompt, so it is
+    read from ~/.bravebot/settings.json only
 # Said once, at the top of a session the flag was given for. A person who did not mean to pass it
 # should find out before the first write rather than after it, and the words name the flag so they
 # can tell what to take off the command line. The line under the box says so for as long as it holds;
@@ -1073,9 +1113,22 @@ failure-with-attempts = { $what }, after { $attempts } attempts
 loop-needs-a-prompt =
     /loop needs something to repeat, as in /loop 5m check the deploy, or /loop watch the build to
     let each turn say when to run again
-loop-started-every = repeating every { $every }; ctrl-c stops it, and so does leaving
+loop-started-every =
+    repeating every { $every }; /loop stop ends it, and so does ctrl-c or leaving
 loop-started-self-paced =
-    repeating at a pace each turn sets; ctrl-c stops it, and so does leaving
+    repeating at a pace each turn sets; /loop stop ends it, and so does ctrl-c or leaving
+# The answer to the bare command. The line is in it because the note above scrolls away, and
+# somebody asking what is repeating has usually lost sight of what they set going.
+loop-active = repeating: { $prompt } · { $pace } · { $when }
+loop-ends-with = /loop stop ends it, and so does ctrl-c or leaving
+loop-none =
+    nothing is repeating. /loop 5m check the deploy sends a line every five minutes, /loop watch the
+    build lets each turn say when to run again, and /loop stop ends either of them
+# The part of the row under the box that says a loop is live, which between ticks is the only thing
+# on the screen that does. Short on purpose: it shares that row with the mode and the readings, and
+# a part a narrow terminal has no room for is a part the row gives up.
+loop-hint = looping
+loop-hint-next = looping, next in { $next }
 loop-interval-raised = the interval was raised to { $every }, which is as fast as a loop goes
 loop-interval-capped = the interval was capped at { $every }, which is as long as a loop lives
 loop-replaced = the loop that was running has been replaced
@@ -1091,7 +1144,8 @@ loop-busy = /loop starts with a turn of its own, so it waits until this one is d
 loop-replaces-goal =
     the goal that was set has been cleared: a session works towards one thing at a time
 loop-armed-by-the-turn =
-    looking again in { $after }, repeating what you asked; ctrl-c stops it, and so does leaving
+    looking again in { $after }, repeating what you asked; /loop stop ends it, and so does ctrl-c
+    or leaving
 loop-not-armed-under-a-goal =
     a later look was asked for and not started: this session is working towards a goal, and it
     does one thing at a time

@@ -1109,6 +1109,13 @@ pub struct Session {
     /// Cleared between turns. `None` before the first request goes out, which is the only
     /// moment the generic word is all there is to say.
     pub phase: Option<Phase>,
+    /// How many lines the check in flight was given, while one is in flight.
+    ///
+    /// Separate from [`Session::phase`] because a check is not a phase of the turn: it runs inside
+    /// a tool call, the phase the round is in does not change while it runs, and it ends at a
+    /// moment of its own. A phase is replaced by the next phase, and the moment this has to stop
+    /// being drawn is the moment before a prompt is put up, which no phase is announced at.
+    checking: Option<usize>,
     /// The points this session can be put back to, oldest first.
     ///
     /// Private, because the depth and the budget hold over the whole list rather than over any
@@ -1362,6 +1369,7 @@ impl Session {
             progress: Default::default(),
             todos: Vec::new(),
             phase: None,
+            checking: None,
             running: None,
             queued: Vec::new(),
             looping: None,
@@ -1525,10 +1533,19 @@ impl Session {
 
     /// What the indicator should call what is happening, most specific first.
     ///
-    /// A call in flight is the most immediate answer, then the task the model says it is on,
+    /// A check in flight is the most immediate answer, then the task the model says it is on,
     /// then the phase it is waiting in. `None` only before the first request goes out, when
     /// there is genuinely nothing to say yet and the turn's own word is all there is.
     fn what_is_happening(&self) -> Option<String> {
+        // A check first, and ahead of every phase: it is a whole model call inside the tool call
+        // on the row above, so the round's own word is the one thing here that is not what the
+        // session is waiting on. With auto-vetting on and a safe verdict no prompt is ever drawn
+        // for it either, so without this the two words on that row are the whole of what a person
+        // sees for the whole wait.
+        if let Some(lines) = self.checking {
+            return Some(t!(indicator_checking, lines = lines).to_string());
+        }
+
         // Only the phases that say something a person cannot see elsewhere. Planning is the
         // first call, before any line has appeared, and reconnecting is a pause that looks
         // exactly like thinking and is not: nothing is being worked out and what the model had
@@ -1803,6 +1820,7 @@ impl Session {
         self.progress = Default::default();
         self.todos.clear();
         self.phase = None;
+        self.checking = None;
         self.running = None;
         self.started = None;
         self.scroll = 0;
@@ -1875,6 +1893,20 @@ impl Session {
         // sent afresh. Either way what was on the screen belongs to a reply that is over or to
         // one that has been thrown away, so the tail starts empty.
         self.streaming.clear();
+    }
+
+    /// Record that a check is running over this many lines.
+    ///
+    /// The tail is left alone, unlike [`Session::set_phase`]: a check runs in the middle of a
+    /// round, so the reply the round has written so far is still the reply, and clearing it here
+    /// would take a visible answer off the screen because a tool call went to a model.
+    pub fn checking(&mut self, lines: usize) {
+        self.checking = Some(lines);
+    }
+
+    /// Record that the check is over.
+    pub fn checked(&mut self) {
+        self.checking = None;
     }
 
     /// Add what the model has written since the last frame to the reply taking shape.
@@ -4617,6 +4649,7 @@ impl Session {
         self.status = Status::Idle;
         self.started = None;
         self.phase = None;
+        self.checking = None;
         self.running = None;
         // A prompt is English and a command line is not, so the line coming back must not land
         // behind a marker that would run it. Belt and braces with the guard in
@@ -5267,6 +5300,31 @@ impl Session {
         self.note(t!(loop_armed_by_the_turn, after = after));
     }
 
+    /// Say what is repeating and when the next tick is due, or that nothing is.
+    ///
+    /// What the bare command answers. The line is part of it because a loop is announced once, at
+    /// the top of a session that has since scrolled, and somebody who has come back to a room with
+    /// a loop running in it is asking what they set going as much as when it next goes.
+    ///
+    /// Its first line only, the way `/status` carries it: a prompt is whatever somebody typed, and
+    /// the rest of a pasted one would arrive as a wall of transcript nobody asked for.
+    pub fn report_loop(&mut self) {
+        let Some(running) = self.looping.as_ref() else {
+            self.note(t!(loop_none));
+            return;
+        };
+        let prompt = crate::render::one_line(running.prompt());
+        let pace = running.pace();
+        let when = running.when(Instant::now());
+        self.note(t!(
+            loop_active,
+            prompt = &prompt,
+            pace = &pace,
+            when = &when
+        ));
+        self.note(t!(loop_ends_with));
+    }
+
     /// Stop the loop, and say whether there was one.
     pub fn stop_loop(&mut self) -> bool {
         let stopped = self.looping.take().is_some();
@@ -5751,6 +5809,7 @@ impl Session {
         self.written = 0;
         self.progress = Default::default();
         self.phase = None;
+        self.checking = None;
         self.running = None;
         self.started = Some(Instant::now());
         prompt
@@ -5774,6 +5833,7 @@ impl Session {
             u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
         self.started = None;
         self.phase = None;
+        self.checking = None;
         self.running = None;
         self.streaming.clear();
     }
@@ -6007,6 +6067,7 @@ impl Session {
         self.status = Status::Working;
         self.back_to_the_tail();
         self.phase = None;
+        self.checking = None;
         self.running = None;
         self.started = Some(Instant::now());
     }
@@ -6035,6 +6096,7 @@ impl Session {
         let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.started = None;
         self.phase = None;
+        self.checking = None;
         self.running = None;
         self.tokens += tokens;
         // Zero before the first turn, which is the leading entry: whatever is spent there is spent
@@ -6064,6 +6126,7 @@ impl Session {
         let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.started = None;
         self.phase = None;
+        self.checking = None;
         self.running = None;
         self.tokens += tokens;
         // To the leading entry before the first turn, for the reason an aside is.
@@ -8920,7 +8983,7 @@ mod tests {
     #[test]
     fn the_first_tick_of_a_loop_goes_immediately() {
         let mut s = session();
-        let request = crate::loops::parse("5m check the deploy").expect("a request");
+        let request = crate::loops::request("5m check the deploy");
 
         assert_eq!(
             s.start_loop(request, Vec::new()).as_deref(),
@@ -8950,7 +9013,7 @@ mod tests {
         assert_eq!(commanded.line, "/loop 15m look at [Image #1]");
 
         let sent = s.start_loop(
-            crate::loops::parse("15m look at [Image #1]").expect("a request"),
+            crate::loops::request("15m look at [Image #1]"),
             commanded.pasted,
         );
 
@@ -8981,7 +9044,7 @@ mod tests {
         s.attach(picture(b"pixels"));
         let commanded = s.take_command();
         s.start_loop(
-            crate::loops::parse("15m look at [Image #1]").expect("a request"),
+            crate::loops::request("15m look at [Image #1]"),
             commanded.pasted,
         );
         s.complete("the first answer", Vec::new(), 0);
@@ -9054,7 +9117,7 @@ mod tests {
             ("8d watch", t!(loop_interval_capped, every = "7d")),
         ] {
             let mut s = session();
-            s.start_loop(crate::loops::parse(typed).expect("a request"), Vec::new());
+            s.start_loop(crate::loops::request(typed), Vec::new());
 
             assert!(
                 s.transcript.iter().any(|entry| entry.text == said),
@@ -9072,7 +9135,7 @@ mod tests {
     #[test]
     fn a_loop_whose_prompt_looks_like_a_command_still_sends_it_as_a_prompt() {
         let mut s = session();
-        let request = crate::loops::parse("5m /status").expect("a request");
+        let request = crate::loops::request("5m /status");
 
         assert_eq!(
             s.start_loop(request, Vec::new()).as_deref(),
@@ -9161,10 +9224,7 @@ mod tests {
     #[test]
     fn a_watch_asked_for_under_a_loop_or_a_goal_is_refused_and_says_why() {
         let mut under_a_loop = session();
-        under_a_loop.start_loop(
-            crate::loops::parse("5m watch").expect("a request"),
-            Vec::new(),
-        );
+        under_a_loop.start_loop(crate::loops::request("5m watch"), Vec::new());
         under_a_loop.arm_watch("notes.md", ARMED_IN, saw("first"));
         assert!(under_a_loop.watches().is_empty());
         assert!(
@@ -9195,10 +9255,7 @@ mod tests {
     fn a_person_starting_a_loop_or_a_goal_is_told_the_watches_have_ended() {
         for start in [
             &mut (|s: &mut Session| {
-                s.start_loop(
-                    crate::loops::parse("5m watch").expect("a request"),
-                    Vec::new(),
-                );
+                s.start_loop(crate::loops::request("5m watch"), Vec::new());
             }) as &mut dyn FnMut(&mut Session),
             &mut |s: &mut Session| s.start_goal("cargo test exits 0".to_string()),
         ] {
@@ -9252,10 +9309,7 @@ mod tests {
         assert_eq!(s.arming(), Arming::Allowed { free: 7 });
 
         let mut looping = session();
-        looping.start_loop(
-            crate::loops::parse("5m watch").expect("a request"),
-            Vec::new(),
-        );
+        looping.start_loop(crate::loops::request("5m watch"), Vec::new());
         assert_eq!(looping.arming(), Arming::UnderALoop);
 
         let mut goal = session();
@@ -9409,10 +9463,7 @@ mod tests {
     #[test]
     fn a_tick_waits_for_the_turn_in_flight_and_for_what_is_queued() {
         let mut s = session();
-        s.start_loop(
-            crate::loops::parse("5m watch").expect("a request"),
-            Vec::new(),
-        );
+        s.start_loop(crate::loops::request("5m watch"), Vec::new());
         s.complete("done", Vec::new(), 0);
 
         // Due, but the person has started something of their own.
@@ -9435,7 +9486,7 @@ mod tests {
     #[test]
     fn a_prompt_typed_during_a_loop_is_not_a_tick_of_it() {
         let mut s = session();
-        s.start_loop(crate::loops::parse("watch").expect("a request"), Vec::new());
+        s.start_loop(crate::loops::request("watch"), Vec::new());
         assert!(s.looping().expect("a loop").ticking());
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(120, false)));
@@ -9458,10 +9509,7 @@ mod tests {
     #[test]
     fn a_tick_that_says_when_to_wake_arms_the_next_one() {
         let mut s = session();
-        s.start_loop(
-            crate::loops::parse("watch the build").expect("a request"),
-            Vec::new(),
-        );
+        s.start_loop(crate::loops::request("watch the build"), Vec::new());
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(900, false)));
 
@@ -9480,10 +9528,7 @@ mod tests {
     #[test]
     fn clearing_the_session_ends_the_loop() {
         let mut s = session();
-        s.start_loop(
-            crate::loops::parse("5m watch").expect("a request"),
-            Vec::new(),
-        );
+        s.start_loop(crate::loops::request("5m watch"), Vec::new());
         s.clear();
         assert!(s.looping().is_none());
     }
@@ -9494,12 +9539,76 @@ mod tests {
         assert!(!s.stop_loop());
         assert!(s.transcript.is_empty());
 
-        s.start_loop(
-            crate::loops::parse("5m watch").expect("a request"),
-            Vec::new(),
-        );
+        s.start_loop(crate::loops::request("5m watch"), Vec::new());
         assert!(s.stop_loop());
         assert!(s.looping().is_none());
+    }
+
+    /// What somebody asks who has come back to a session with a loop running in it. The transcript
+    /// cannot answer it: the note that announced the loop has scrolled away, and the next tick has
+    /// not happened yet.
+    #[test]
+    fn the_loop_report_says_what_is_repeating_and_how_to_end_it() {
+        let mut s = session();
+        s.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        s.transcript.clear();
+
+        s.report_loop();
+        let said: Vec<&str> = s
+            .transcript
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(said[0].contains("check the deploy"), "{said:?}");
+        assert!(
+            said[0].contains(&t!(status_loop_every, every = "5m")),
+            "{said:?}"
+        );
+        // The wording that introduces the countdown rather than the number, which moves while the
+        // test runs.
+        assert!(
+            said[0].contains(t!(status_loop_next, next = "").trim()),
+            "{said:?}"
+        );
+        assert_eq!(said[1], t!(loop_ends_with), "{said:?}");
+    }
+
+    /// A prompt is whatever somebody typed, and a turn may repeat one they pasted. Four rows of it
+    /// would push the sentence that says how to end the loop off the bottom of the answer.
+    #[test]
+    fn the_loop_report_carries_the_first_line_of_a_prompt() {
+        let mut s = session();
+        s.watch_again(
+            "tell me when a.txt changes\nand say what changed",
+            crate::loops::Wakeup::asked(900, false),
+        );
+        s.transcript.clear();
+
+        s.report_loop();
+        assert!(
+            s.transcript[0].text.contains("tell me when a.txt changes"),
+            "{}",
+            s.transcript[0].text
+        );
+        assert!(
+            !s.transcript[0].text.contains("and say what changed"),
+            "{}",
+            s.transcript[0].text
+        );
+    }
+
+    /// Nothing repeating is an answer rather than silence, and it is where the two forms of the
+    /// command are taught: somebody typing the bare word with no loop running is asking what it
+    /// does.
+    #[test]
+    fn a_session_with_no_loop_says_so_when_asked() {
+        let mut s = session();
+        s.report_loop();
+        assert_eq!(s.transcript.len(), 1);
+        assert_eq!(s.transcript[0].text, t!(loop_none));
     }
 
     /// A goal is a stopping condition. Arming one that also started work would send a line
@@ -9546,20 +9655,14 @@ mod tests {
     #[test]
     fn a_goal_and_a_loop_are_never_both_running() {
         let mut s = session();
-        s.start_loop(
-            crate::loops::parse("5m watch").expect("a request"),
-            Vec::new(),
-        );
+        s.start_loop(crate::loops::request("5m watch"), Vec::new());
         s.start_goal("cargo test exits 0".to_string());
         assert!(s.looping().is_none(), "the loop outlived the goal");
         assert!(s.goal().is_some());
 
         let mut s = session();
         s.start_goal("cargo test exits 0".to_string());
-        s.start_loop(
-            crate::loops::parse("5m watch").expect("a request"),
-            Vec::new(),
-        );
+        s.start_loop(crate::loops::request("5m watch"), Vec::new());
         assert!(s.goal().is_none(), "the goal outlived the loop");
         assert!(s.looping().is_some());
     }
@@ -11473,6 +11576,53 @@ mod tests {
             assert_eq!(s.indicator().expect("working").verb, "Planning");
             s.set_phase(Phase::Reconnecting);
             assert_eq!(s.indicator().expect("working").verb, "Reconnecting");
+        }
+
+        /// A check takes it from every phase, which is the whole point of the pair. The phase the
+        /// round is in does not change while a check runs, so a session waiting on a confined
+        /// model call reads as one waiting on the round it is in the middle of.
+        #[test]
+        fn a_running_check_names_the_indicator_ahead_of_the_phase() {
+            let mut s = working();
+            s.set_phase(Phase::Planning);
+            s.checking(3);
+            assert_eq!(s.indicator().expect("working").verb, "Checking 3 lines");
+        }
+
+        /// And gives it back. The word is drawn while the status is Working, which a prompt about
+        /// the verdict does not change, so a label with no end would still be claiming a check was
+        /// running with the question about what it found already on the screen.
+        #[test]
+        fn a_check_that_is_over_gives_the_word_back_to_the_phase() {
+            let mut s = working();
+            s.set_phase(Phase::Planning);
+            s.checking(3);
+            s.checked();
+            assert_eq!(s.indicator().expect("working").verb, "Planning");
+        }
+
+        /// A check runs in the middle of a round, not at the top of one, so what the round has
+        /// written so far is still the reply. Clearing the tail here would take a visible answer
+        /// off the screen because a tool call went to a model.
+        #[test]
+        fn a_check_leaves_what_the_round_has_written() {
+            let mut s = working();
+            s.streaming("half an answer");
+            s.checking(3);
+            assert!(
+                !s.streaming.is_empty(),
+                "a check wiped the reply the round had written"
+            );
+        }
+
+        /// A check whose end was never heard must not outlive the turn: nothing after this draws
+        /// it, and the next turn would open claiming a check nobody started was running.
+        #[test]
+        fn a_finished_turn_leaves_no_check_running() {
+            let mut s = working();
+            s.checking(3);
+            s.complete("done", Vec::new(), 0);
+            assert!(s.checking.is_none(), "a check outlived the turn");
         }
 
         /// One turn's calls must not appear under the next one's prompt.

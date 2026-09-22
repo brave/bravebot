@@ -587,7 +587,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             "{}",
             t!(
                 session_permission_rule_ignored,
-                problem = problem.to_string()
+                problem = bravebot_agent::permissions::describe(problem)
             )
         );
     }
@@ -1744,6 +1744,21 @@ fn doctor() -> ExitCode {
                 );
             }
 
+            // The same, for the other name a checkout cannot answer: an `allow` entry stops a
+            // prompt, so one read out of a file that arrived with a clone would run a program
+            // nobody was asked about. Named one rule at a time rather than counted, because the
+            // person who wrote it is looking for their own line and a count tells them nothing.
+            for (path, rule) in settings.allow_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_allow_ignored,
+                        rule = rule,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+
             // After the layers a person owns, because it is what answers for a name none of them
             // explains: a value they set and cannot see taking effect is pinned above all of them.
             for line in managed_layer(&managed) {
@@ -1767,7 +1782,10 @@ fn doctor() -> ExitCode {
             );
             for problem in &rejected {
                 ok = false;
-                fact(t!(doctor_permissions_unreadable), problem.to_string());
+                fact(
+                    t!(doctor_permissions_unreadable),
+                    bravebot_agent::permissions::describe(problem),
+                );
             }
 
             // Both, where both are reachable, because both are offered to a person choosing and a
