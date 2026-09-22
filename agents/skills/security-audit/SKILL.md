@@ -256,7 +256,7 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 | Lane | The question | Starts from |
 |---|---|---|
 | `laundering` | does the label a value is built with dominate every input's label? | every `Labelled::new` and `Labelled::trusted` outside `crates/core`, and every `into_trusted` |
-| `decisions-after-release` | is the released value carried and handed to an effect, or does control flow depend on it? | every `Labelled::declassify` site and its enclosing function |
+| `decisions-after-release` | is the released value carried and handed to an effect, or does control flow depend on it, and is that effect the one somebody approved? | every `Labelled::declassify` site and its enclosing function |
 | `gates` | can a witness be minted outside the four gates, or read as permission to inspect? | every `Declassification::authorise` and every use of the four `Policy` gates |
 | `known-costs` | is the enumerated attacker gain still complete against the code as it stands? | each entry under `## Known costs` in `labels.md` |
 | `entry-to-planner` | can these bytes reach a model's context or steer a turn already running? | each road in from the `LABEL-8` table |
