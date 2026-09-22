@@ -450,6 +450,8 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::policy::a_plan_with_no_steps_proves_nothing`
 `verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
 `verified-by: bravebot_core::policy::a_line_reading_a_directory_holding_the_project_answers_for_the_project`
+`verified-by: bravebot_core::policy::a_line_reading_a_tree_the_map_says_nothing_about_still_asks`
+`verified-by: bravebot_core::policy::a_line_reading_a_vouched_for_tree_above_the_project_does_not_ask`
 `verified-by: bravebot_core::policy::a_climbing_operand_is_untrusted_under_a_root_spelled_with_a_climb`
 
 <a id="CMDLINE-9"></a>
@@ -480,6 +482,8 @@ trip; what this clause adds is the first prompt, not the readable output.
 `verified-by: bravebot_core::policy::a_line_reading_an_unvouched_path_still_asks`
 `verified-by: bravebot_core::policy::a_recursive_search_takes_its_label_from_the_whole_subtree`
 `verified-by: bravebot_core::policy::a_path_climbing_out_of_the_project_still_asks`
+`verified-by: bravebot_core::policy::a_line_reading_a_tree_the_map_says_nothing_about_still_asks`
+`verified-by: bravebot_core::policy::a_line_reading_a_vouched_for_tree_above_the_project_does_not_ask`
 `verified-by: bravebot_core::policy::a_read_proven_line_that_also_writes_still_asks`
 `verified-by: bravebot_core::policy::private_input_still_asks_about_a_read_proven_line`
 `verified-by: bravebot_core::policy::an_ask_rule_still_asks_about_a_read_proven_line`

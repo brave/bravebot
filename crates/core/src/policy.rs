@@ -3800,7 +3800,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 true => Integrity::Untrusted,
                 false => keys_for_the_map(&plan.directory, path)
                     .iter()
-                    .filter_map(|key| self.integrity_beneath_in_force(key))
+                    // A key nothing answers is the answer "nobody has said", which is the weakest
+                    // of them and not an absence to skip over. Dropping it would let one name's
+                    // rule decide for a name it was never written about: an operand holding the
+                    // workspace is asked about the project as well, and the project's rule alone
+                    // would hand back a tree nobody vouched for as trusted.
+                    .map(|key| {
+                        self.integrity_beneath_in_force(key)
+                            .unwrap_or(Integrity::Untrusted)
+                    })
                     .reduce(Integrity::meet)
                     .unwrap_or(Integrity::Untrusted),
             };
@@ -6481,6 +6489,60 @@ five
         assert!(
             !label_of(&mut policy, &the_directory_above).is_trusted(),
             "a walk over the added directory laundered the distrusted tree inside the project"
+        );
+    }
+
+    /// The map answers about the paths somebody vouched for and says nothing about the rest, and
+    /// "nobody has said" is the weakest answer there is rather than an answer to pass over. An
+    /// operand holding the workspace is asked about the project too, so a project rule left to
+    /// answer alone would run a walk over every file beside the project, and over the whole
+    /// filesystem, with nobody asked and the bytes readable by the planner.
+    #[test]
+    fn a_line_reading_a_tree_the_map_says_nothing_about_still_asks() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting("/work/project", &["."], &[]))
+            .with_root(std::path::Path::new("/work/project"));
+
+        let the_directory_above = reading_in("/work/project", "/work");
+        assert!(
+            policy.plan_needs_approval(&the_directory_above),
+            "a walk over the directory holding the project ran unasked though nobody vouched for it"
+        );
+        assert!(
+            !label_of(&mut policy, &the_directory_above).is_trusted(),
+            "bytes from a tree nobody vouched for came back trusted, from the project's own rule"
+        );
+
+        let the_whole_filesystem = reading_in("/work/project", "/");
+        assert!(
+            policy.plan_needs_approval(&the_whole_filesystem),
+            "a walk over the whole filesystem ran unasked"
+        );
+        assert!(
+            !label_of(&mut policy, &the_whole_filesystem).is_trusted(),
+            "bytes from the whole filesystem came back trusted, from the project's own rule"
+        );
+    }
+
+    /// The other direction of the same rule, which is what keeps it a meet rather than a refusal of
+    /// every absolute name: a directory the user did add answers for itself, and a walk over it that
+    /// meets no weaker rule underneath is ordinary work the proof road exists to spare a person.
+    #[test]
+    fn a_line_reading_a_vouched_for_tree_above_the_project_does_not_ask() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting("/work/project", &[".", "/work"], &[]))
+            .with_root(std::path::Path::new("/work/project"));
+
+        let the_directory_above = reading_in("/work/project", "/work");
+        assert!(
+            !policy.plan_needs_approval(&the_directory_above),
+            "a walk over a directory the user added asked anyway"
+        );
+        assert!(
+            label_of(&mut policy, &the_directory_above).is_trusted(),
+            "a walk over a directory the user added came back untrusted"
         );
     }
 
