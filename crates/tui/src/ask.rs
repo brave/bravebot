@@ -41,6 +41,40 @@ fn own_words() -> &'static str {
     t!(ask_own_words)
 }
 
+/// How many rows of the box a line takes once the paragraph has wrapped it.
+///
+/// Through the wrapping that will draw it, so the budget and the drawing agree. They did not:
+/// the budget counted lines, and a question sentence or an option label that wrapped cost the
+/// box a row nothing had reserved, which the paragraph then clipped in silence.
+fn drawn_rows(line: &Line<'_>, inside: u16) -> usize {
+    crate::render::rows_of(line, inside) as usize
+}
+
+/// The free-text field as it is drawn: the prompt, what has been typed, and the caret.
+///
+/// One place, so what the budget measures is what the box draws. They were two, and the budget's
+/// copy was the constant 2 whatever had been typed.
+fn typed_line(text: &str) -> Vec<Span<'_>> {
+    vec![
+        Span::styled(
+            "  > ",
+            Style::default()
+                .fg(theme::brand_primary())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(text),
+        Span::styled("▏", Style::default().fg(theme::brand_primary())),
+    ]
+}
+
+/// A row of the list as it will be drawn: the marker's four columns, then the text.
+///
+/// Every marker is [`MARKER_WIDTH`] columns and ends on a space, and a detail sits at the same
+/// indent, so this wraps where the row it stands for will wrap.
+fn indented(text: &str) -> Line<'_> {
+    Line::from(vec![Span::raw(" ".repeat(MARKER_WIDTH)), Span::raw(text)])
+}
+
 /// Widest a tag is drawn, in characters.
 ///
 /// Capped here rather than in the kernel because it is a fact about the box, not about the
@@ -304,29 +338,39 @@ impl<'a> Picker<'a> {
         // tail itself. With the field open that is the field and its own keys; otherwise it is
         // the free-text row, whatever space is kept above it, and the key hints.
         //
-        // The hints are measured rather than assumed to be one line. On a narrow box they wrap,
-        // and the line they wrap onto has to be counted or the way out is drawn off the bottom.
-        let inside = (area.width as usize).saturating_sub(2).max(1);
-        let hint: usize = self
-            .keys()
-            .iter()
-            .map(|span| span.content.chars().count())
-            .sum();
-        let tail = if self.here.typed.is_some() {
-            2
-        } else {
-            hint.div_ceil(inside).max(1) + 1 + gap
+        // Every one of these is measured in the rows the box will draw it as rather than in the
+        // lines it was written as. The hints wrap on a narrow box, and so does the question
+        // sentence; a line counted as a row is a line whose second row lands on something else.
+        let inside = area.width.saturating_sub(2).max(1);
+        let tail = match &self.here.typed {
+            // The field is one line and, past a sentence or so, several rows. Counted as one, a
+            // person typing pushes their own way out of the field off the bottom of the box.
+            Some(text) => {
+                drawn_rows(&Line::from(typed_line(text)), inside)
+                    + drawn_rows(&Line::from(self.field_keys()), inside)
+            }
+            None => drawn_rows(&Line::from(self.keys()), inside) + 1 + gap,
         };
-        let reserved = lines.len() + 3 + tail;
+        let reserved = lines
+            .iter()
+            .map(|line| drawn_rows(line, inside))
+            .sum::<usize>()
+            + 3
+            + tail;
         let budget = (area.height as usize).saturating_sub(reserved).max(1);
+        // An option costs the rows its label wraps onto, not one. Costed at one apiece, a list of
+        // ordinary sentences fits twice over and the half that does not fit is drawn past the
+        // bottom border: neither on screen, nor counted in `hidden`, nor reachable by scrolling.
         let height = |row: &Row, first: bool| {
-            1 + usize::from(row.detail.is_some()) + if first { 0 } else { gap }
+            drawn_rows(&indented(&row.label), inside)
+                + row
+                    .detail
+                    .as_deref()
+                    .map_or(0, |detail| drawn_rows(&indented(detail), inside))
+                + if first { 0 } else { gap }
         };
 
-        // Scrolled against the tallest an option can be, so the estimate is never larger than
-        // what actually fits and the cursor cannot land below the last drawn line.
-        let tallest = 1 + gap + gap;
-        self.scroll_to_cursor((budget / tallest).max(1));
+        self.scroll_to_cursor(budget, height);
 
         // Twice, because the line saying how many options were cut is itself a line, and it
         // exists only once something has been cut. Fitting the list first and then discovering
@@ -426,16 +470,7 @@ impl<'a> Picker<'a> {
         lines.push(Line::raw(""));
         match &self.here.typed {
             Some(text) => {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "  > ",
-                        Style::default()
-                            .fg(theme::brand_primary())
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(text.clone()),
-                    Span::styled("▏", Style::default().fg(theme::brand_primary())),
-                ]));
+                lines.push(Line::from(typed_line(text)));
                 // The field needs its own keys. Drawing none, as this did, leaves a person who
                 // opened it with no way out that they can see, and the way out is the hint they
                 // most need.
@@ -553,18 +588,56 @@ impl<'a> Picker<'a> {
         visible
     }
 
-    fn scroll_to_cursor(&mut self, visible: usize) {
-        if visible == 0 {
+    /// Move the window as little as it takes to put the cursor in it.
+    ///
+    /// Row by row rather than against an estimate of how many options fit, because once a label
+    /// wraps they are of different heights and how many fit depends on which ones. An estimate
+    /// taken from the tallest of them scrolls a list of short options that had room for all of
+    /// them; one taken from the average leaves the cursor below the last drawn row.
+    fn scroll_to_cursor(&mut self, budget: usize, height: impl Fn(&Row, bool) -> usize) {
+        let rows = &self.asking.prompts[self.at].rows;
+        if rows.is_empty() {
             return;
         }
+
+        // Room for the whole list is the one case measured against the whole budget: nothing is
+        // hidden, so no line is spent saying what was cut, and there is nothing to scroll.
+        let whole: usize = rows
+            .iter()
+            .enumerate()
+            .map(|(nth, row)| height(row, nth == 0))
+            .sum();
+        if whole <= budget {
+            self.here.offset = 0;
+            return;
+        }
+        // Otherwise something is hidden whatever the window is, so the list is fitted a line
+        // shorter to leave room for saying so, and the window is measured against that.
+        let budget = budget.saturating_sub(1);
+
         // The free-text row is drawn below the list rather than in it, so a cursor resting there
         // scrolls the list to its end and no further.
-        let cursor = self.here.cursor.min(self.own_words().saturating_sub(1));
+        let cursor = self.here.cursor.min(rows.len() - 1);
         if cursor < self.here.offset {
             self.here.offset = cursor;
-        } else if cursor >= self.here.offset + visible {
-            self.here.offset = cursor + 1 - visible;
+            return;
         }
+
+        // Backwards from the cursor, to the earliest row the window can start at and still reach
+        // it. Taking in the row before costs that row, and costs the row it displaces the spacer
+        // that every row but the first carries.
+        let mut earliest = cursor;
+        let mut used = height(&rows[cursor], true);
+        while earliest > 0 {
+            let displaced = height(&rows[earliest], false) - height(&rows[earliest], true);
+            let cost = used + displaced + height(&rows[earliest - 1], true);
+            if cost > budget {
+                break;
+            }
+            used = cost;
+            earliest -= 1;
+        }
+        self.here.offset = self.here.offset.max(earliest);
     }
 }
 
@@ -1445,6 +1518,170 @@ mod tests {
         let x = column_of(&rows[y as usize], "in front of the handler") as u16;
         assert_eq!(buffer[(x, y)].symbol(), "i", "not the start of the detail");
         assert_eq!(buffer[(x, y)].fg, theme::muted());
+    }
+
+    /// Eight options whose labels are each long enough to wrap at 80 columns, which is an
+    /// ordinary sentence a planner writes rather than a pathological string.
+    fn wrapping_labels() -> Prompt {
+        bravebot_core::ask::prompt(&Question::new(
+            "Cache layer",
+            "Which approach should I take?",
+            (0..8)
+                .map(|i| Choice::new(format!("Option {i}: refactor the cache layer to use a bounded LRU, keep the existing interface, and add a metrics hook so the hit rate is visible"), None))
+                .collect(),
+            false,
+        ))
+    }
+
+    /// The question sentence is one line and several rows, and the room kept for what sits below
+    /// the list has to allow for the rows. Counted as one line, the list is given the two rows
+    /// the sentence took, and the line saying how to answer is drawn past the bottom border.
+    #[test]
+    fn a_question_sentence_that_wraps_keeps_the_room_it_takes() {
+        let long = bravebot_core::ask::prompt(&Question::new(
+            "Cache layer",
+            "Which of these approaches should I take, bearing in mind that the interface is public and the hit rate is something we would like to be able to watch afterwards?",
+            (0..60)
+                .map(|i| Choice::new(format!("file-{i}.rs"), None))
+                .collect(),
+            false,
+        ));
+        let rows = screen_rows(&long, 80, 24);
+        assert!(
+            rows.iter().any(|row| row.contains("esc")),
+            "the keys were pushed off the box by the wrapped question:\n{}",
+            rows.join("\n")
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("more, use the arrow keys")),
+            "the list was cut short without saying so:\n{}",
+            rows.join("\n")
+        );
+    }
+
+    /// A list the box has room for is drawn whole, wherever the cursor is in it. Scrolled
+    /// against an estimate of how many options fit, one wrapping label makes the estimate stand
+    /// for every row, and moving to the end of a list that fitted comfortably hides the start of
+    /// it behind a count of options that were never cut.
+    #[test]
+    fn a_list_the_box_has_room_for_is_not_scrolled() {
+        let mixed = bravebot_core::ask::prompt(&Question::new(
+            "Cache layer",
+            "Which approach should I take?",
+            vec![
+                Choice::new("alpha.rs", None),
+                Choice::new("beta.rs", None),
+                Choice::new(
+                    "a label long enough to wrap onto a second row of the box, which is an ordinary sentence",
+                    None,
+                ),
+                Choice::new("delta.rs", None),
+                Choice::new("epsilon.rs", None),
+            ],
+            false,
+        ));
+        let rows = rows_after(&one(&mixed), &[KeyCode::Down; 4], 80, 24);
+        assert!(
+            rows.iter().any(|row| row.contains("alpha.rs")),
+            "the list scrolled although the box had room for all of it:\n{}",
+            rows.join("\n")
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.contains("more, use the arrow keys")),
+            "options were reported hidden that the box had room for:\n{}",
+            rows.join("\n")
+        );
+    }
+
+    /// The field is one line and several rows once a sentence has been typed into it, and the
+    /// room kept below the list has to allow for the rows. Counted as one line, what a person
+    /// types pushes the only hint saying how to leave the field off the bottom of the box.
+    #[test]
+    fn a_field_that_wraps_keeps_its_own_keys_on_screen() {
+        let many = bravebot_core::ask::prompt(&Question::new(
+            "File",
+            "Which file?",
+            (0..20)
+                .map(|i| Choice::new(format!("file-{i}.rs"), None))
+                .collect(),
+            false,
+        ));
+        let mut keys = vec![KeyCode::Char('o')];
+        keys.extend([KeyCode::Char('x'); 140]);
+        let rows = rows_after(&one(&many), &keys, 80, 24);
+        assert!(
+            rows.iter().any(|row| row.contains("back to the options")),
+            "the way out of the field was pushed off the box by what was typed into it:\n{}",
+            rows.join("\n")
+        );
+    }
+
+    /// The option under the cursor has to be on screen, or Enter answers with something the
+    /// person cannot read. The list is fitted a line shorter once anything is hidden, to make
+    /// room for the line saying so, and an estimate that does not allow for that line scrolls
+    /// the list one option short of the one being moved onto.
+    #[test]
+    fn the_option_under_the_cursor_is_drawn_at_the_end_of_a_long_list() {
+        let many = bravebot_core::ask::prompt(&Question::new(
+            "File",
+            "Which file?",
+            (0..60)
+                .map(|i| Choice::new(format!("file-{i}.rs"), None))
+                .collect(),
+            false,
+        ));
+        let rows = rows_after(&one(&many), &[KeyCode::Down; 59], 80, 24);
+        assert!(
+            rows.iter().any(|row| row.contains("file-59.rs")),
+            "the last option is off the box after moving onto it:\n{}",
+            rows.join("\n")
+        );
+    }
+
+    /// A label long enough to wrap costs two rows of the box, and the budget has to count them.
+    /// Counted as one apiece, eight options are fitted into a box with room for six and the last
+    /// two are drawn past the bottom border: options the routing gate approved, which the planner
+    /// is told the person was shown, and which nothing on screen accounts for.
+    #[test]
+    fn options_whose_labels_wrap_are_fitted_by_the_rows_they_draw() {
+        let rows = screen_rows(&wrapping_labels(), 80, 24);
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("more, use the arrow keys")),
+            "the list was cut short without saying so:\n{}",
+            rows.join("\n")
+        );
+        assert!(
+            rows.iter().any(|row| row.contains(own_words())),
+            "the free-text row was pushed off the box:\n{}",
+            rows.join("\n")
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("esc")),
+            "the keys were pushed off the box:\n{}",
+            rows.join("\n")
+        );
+    }
+
+    /// Scrolling is driven by the same count, so a cursor moved past the last drawn option has to
+    /// bring it into view. Estimated from unwrapped labels the estimate covers the whole list, the
+    /// offset never moves, and the cursor leaves the screen with the option it is on.
+    #[test]
+    fn a_wrapping_list_scrolls_to_the_option_under_the_cursor() {
+        let rows = rows_after(&one(&wrapping_labels()), &[KeyCode::Down; 7], 80, 24);
+        assert!(
+            rows.iter().any(|row| row.contains("Option 7:")),
+            "the option under the cursor is off the box:\n{}",
+            rows.join("\n")
+        );
+        assert!(
+            rows.iter().any(|row| row.contains('\u{203a}')),
+            "the cursor is off the box:\n{}",
+            rows.join("\n")
+        );
     }
 
     /// A tall option list still has to leave room for the keys. If the height of the details were
