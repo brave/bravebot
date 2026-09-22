@@ -1243,6 +1243,8 @@ paste-with-the-first-tick =
     that picture goes with the first tick of this loop; the ones after it say it was pasted
 paste-too-large = that picture is { $size }, and a paste carries at most { $limit }
 paste-nothing-on-clipboard = there is nothing on the clipboard to paste
+return-not-pressed =
+    another program typed that into the terminal: press Enter yourself to send it, or Escape to clear it
 paste-folded = { $lines ->
     [one] [Pasted text #{ $number } +{ $lines } line]
    *[other] [Pasted text #{ $number } +{ $lines } lines]

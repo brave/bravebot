@@ -1057,6 +1057,19 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             session.type_newline();
             Action::Redraw
         }
+        // Before every arm that takes the line anywhere, shell mode and the command arms included.
+        // A return that arrived with other keys was part of a write rather than a press: an editor
+        // typing a virtualenv activation into the terminal ends the line with one, and taking it sent
+        // a line nobody wrote to the planner and spent a turn on it (#403). The same rule the question
+        // at startup keeps and the rung that leaves keeps, for the same reason (INPUT-34).
+        //
+        // The line stays exactly where it is, so somebody can read it and send it themselves or clear
+        // it. Said rather than ignored, since a key that does nothing and explains nothing reads as an
+        // interface that has stopped answering.
+        KeyCode::Enter if !session.key_arrived_alone => {
+            session.note_once(t!(return_not_pressed));
+            Action::Redraw
+        }
         // Before every command arm, because in shell mode the line is a command and nothing else.
         // `/status` is a path to a program somebody might have, and `!` is how they said so.
         KeyCode::Enter if session.shell => match session.submit_command() {
@@ -1602,6 +1615,13 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // prompt somebody wants back mid-turn is the one the turn they are watching came from.
     if session.bindings().is_history(&key) {
         session.open_history_search();
+        return Action::Redraw;
+    }
+
+    // For the reason the idle ladder refuses first: queueing is sending with a wait in front of it,
+    // so a return another program wrote would reach the planner when the turn in flight ended.
+    if key.code == KeyCode::Enter && !session.key_arrived_alone {
+        session.note_once(t!(return_not_pressed));
         return Action::Redraw;
     }
 
@@ -8171,6 +8191,64 @@ mod tests {
         session.key_arrived_alone = true;
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
+    }
+
+    /// The half of #403 that reaches the box rather than the question. The activation arrives after
+    /// somebody has answered, so its characters are typed into the live box and its trailing return
+    /// sent them: a line nobody wrote reached the planner and spent a turn on it.
+    #[test]
+    fn a_return_that_arrived_with_other_keys_does_not_send() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "source /tmp/x/env/bin/activate");
+
+        session.key_arrived_alone = false;
+        let action = handle_key(&mut session, key(KeyCode::Enter));
+
+        assert!(
+            !matches!(action, Action::Submit(_)),
+            "a return out of a write sent the line: {action:?}"
+        );
+        assert_eq!(
+            session.input(),
+            "source /tmp/x/env/bin/activate",
+            "the line went somewhere instead of staying to be read"
+        );
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|line| line.text.contains("another program")),
+            "the refusal explained nothing"
+        );
+    }
+
+    /// And a person's own return still sends, which is the half that has to keep working.
+    #[test]
+    fn a_return_of_its_own_still_sends() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "work");
+        assert!(matches!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit(_)
+        ));
+    }
+
+    /// The bypass a review found in the mark this replaces: a program wrote an arrow to make the line
+    /// look touched and a return to send it, in one four-byte write. Both arrive with each other, so
+    /// neither the arrow nor the return is a press, and the return no longer sends.
+    #[test]
+    fn a_program_cannot_send_its_own_line_with_an_arrow_and_a_return() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "source /tmp/x/env/bin/activate");
+
+        session.key_arrived_alone = false;
+        handle_key(&mut session, key(KeyCode::Left));
+        let action = handle_key(&mut session, key(KeyCode::Enter));
+
+        assert!(
+            !matches!(action, Action::Submit(_)),
+            "an arrow and a return in one write sent the line"
+        );
     }
 
     /// The reported case. VS Code writes a bare interrupt into the terminal before the virtualenv

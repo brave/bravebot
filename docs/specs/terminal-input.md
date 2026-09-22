@@ -1573,10 +1573,19 @@ one read and the next. Two or more were available at the same instant, so **no o
 separate from the rest**, whatever they are: a key beside a resize is no more a separate press than two
 keys are.
 
-**One decision asks, and nothing else does.** A gesture that asks for a second press is asking for a
-second press, and two bytes in one write are no harder to send than one, so `\x03\x03` would otherwise
-arm the way out and take it. [INPUT-4](#INPUT-4) is where that is spent. Every other reader answers the
-event it was given, exactly as before this existed.
+**What asks for it is anything that decides, and nothing else.** The rung that ends a session
+([INPUT-4](#INPUT-4)), the question a session opens with ([PROMPT-7](prompting.md#PROMPT-7)), and the
+return that takes the line out of the box. Each of those grants or spends something a person cannot get
+back, and a program able to write bytes at the terminal writes the key that does it: an editor typing a
+virtualenv activation ends its line with a return, and taking that return sent a line nobody wrote to
+the planner. Every other reader answers the event it was given, exactly as before this existed, because
+moving the caret or narrowing a list costs nothing if a program does it.
+
+**The line stays where it is when the return is refused**, and the refusal is said. Words that vanish
+leave somebody with no account of what happened, and a key that does nothing without a word reads as an
+interface that has stopped answering. So the text can be read and then sent deliberately or cleared,
+which is also why a program cannot make it look touched: an arrow and a return in one write are two
+keys that arrived with each other, so neither is a press.
 
 **Why it is one reader.** What arrived together can only be seen where the whole of it is visible. A
 prompt reading the terminal itself takes the first key of a burst with nothing behind it and believes
@@ -1596,3 +1605,6 @@ available, spent in the one place where a second press is the whole of what is b
 `verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
+`verified-by: bravebot_tui::app::a_return_that_arrived_with_other_keys_does_not_send`
+`verified-by: bravebot_tui::app::a_return_of_its_own_still_sends`
+`verified-by: bravebot_tui::app::a_program_cannot_send_its_own_line_with_an_arrow_and_a_return`

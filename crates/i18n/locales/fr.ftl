@@ -1103,6 +1103,8 @@ paste-with-the-first-tick =
     collée
 paste-too-large = cette image fait { $size }, et un collage en porte au plus { $limit }
 paste-nothing-on-clipboard = il n'y a rien à coller dans le presse-papiers
+return-not-pressed =
+    un autre programme a écrit cela dans le terminal : appuyez vous-même sur Entrée pour l'envoyer, ou Échap pour l'effacer
 paste-folded = { $lines ->
     [one] [Texte collé #{ $number } +{ $lines } ligne]
    *[other] [Texte collé #{ $number } +{ $lines } lignes]
