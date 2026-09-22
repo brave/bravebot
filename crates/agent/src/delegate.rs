@@ -207,12 +207,13 @@ pub fn seed<S: Sink>(
 
 /// Run one delegate to completion.
 ///
-/// Takes nothing belonging to the run that spawned it. The trail, the reporter and the confirmer
-/// are lent rather than owned, because there is one of each however many runs are going: one
-/// trail records them all, one screen shows them all, and one person answers for them all.
+/// Takes nothing belonging to the run that spawned it. The trail, the reporter, the confirmer and
+/// the wallet are lent rather than owned, because there is one of each however many runs are
+/// going: one trail records them all, one screen shows them all, one person answers for them all,
+/// and one subscription pays for them all.
 ///
-/// Takes the three by trait object rather than by type parameter. A delegate is a turn, and a
-/// turn lends these three to the delegates it starts, so a type parameter here would describe a
+/// Takes all four by trait object rather than by type parameter. A delegate is a turn, and a
+/// turn lends these four to the delegates it starts, so a type parameter here would describe a
 /// tower of lenders one level deeper for every level of nesting: a type the compiler builds for
 /// ever and a program that cannot be compiled. A delegate cannot delegate, so the tower is one
 /// level tall whatever the types say, and saying so here is what makes that true of the types.
@@ -237,6 +238,12 @@ pub fn run(
     confirmer: &mut (dyn Confirmer + Send),
     reporter: &mut (dyn Reporter + Send),
     sink: &mut (dyn Sink + Send),
+    // The credential store the spawning turn is spending from, where it found one. Lent for the
+    // same reason the three above are, and it is the one that would cost the person money twice:
+    // a spend is held in memory until the wallet is written back, so a delegate that opened its
+    // own would read the file as the turn found it and present the credential the turn is
+    // presenting right now (PREM-5).
+    wallet: Option<&dyn crate::shared::Spends>,
 ) -> Ended {
     // The mode is the spawning turn's, and inherited rather than chosen: a delegate is that turn's
     // own work done elsewhere, so a session that is planning must not have writes happening inside
@@ -282,6 +289,7 @@ pub fn run(
         cancel,
         &mut vouched,
         &mut notices,
+        wallet,
     ) {
         Ok(outcome) => outcome,
         // Nothing to report and nothing it cost that the parent can use, but the answers a

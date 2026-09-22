@@ -1143,6 +1143,8 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         None,
         // A turn a person asked for reads what its hooks said off the [`Outcome`].
         None,
+        // And it opens the run's wallet rather than being lent one: it is the run.
+        None,
     )
 }
 
@@ -1184,6 +1186,8 @@ pub fn run_cancellable<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         None,
         // A turn a person asked for reads what its hooks said off the [`Outcome`].
         None,
+        // And it opens the run's wallet rather than being lent one: it is the run.
+        None,
     )
 }
 
@@ -1213,6 +1217,9 @@ pub(crate) fn delegated(
     // delegate's outcome dies at the boundary, so this is the only copy the parent can fold into
     // the account of itself a run with nowhere to draw reads (HOOK-7).
     notices: &mut Vec<String>,
+    // The wallet the turn that started this one is spending from, where it found one. A delegate
+    // opens none of its own (PREM-5).
+    wallet: Option<&dyn crate::shared::Spends>,
 ) -> Result<Outcome, TurnError> {
     if task.delegate.is_none() {
         return Err(TurnError::Precommit(
@@ -1237,6 +1244,7 @@ pub(crate) fn delegated(
         cancel,
         Some(vouched),
         Some(notices),
+        wallet,
     )
 }
 
@@ -1270,6 +1278,8 @@ pub fn run_with_trust<S: Sink + Send, C: Confirmer + Send>(
         &Cancel::new(),
         None,
         // A turn a person asked for reads what its hooks said off the [`Outcome`].
+        None,
+        // And it opens the run's wallet rather than being lent one: it is the run.
         None,
     )
 }
@@ -1976,6 +1986,12 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // asked for hands these back on its [`Outcome`], and a delegate's outcome dies at the
     // boundary while the hooks it fired are still the person's own to hear about (HOOK-7).
     said_about_hooks: Option<&mut Vec<String>>,
+    // The credential store the run that started this one is spending from. Only a delegate's
+    // caller passes one, and a delegate spends nothing else: there is one subscription per
+    // process and a credential is single-use, so a second wallet opened here would re-read a
+    // file the parent's spends have not reached and hand out the credential it is already
+    // presenting (PREM-5).
+    lent_wallet: Option<&dyn crate::shared::Spends>,
 ) -> Result<Outcome, TurnError> {
     // Read once, here, rather than at each moment. What the file says is a property of the machine
     // and not of a round, and a turn whose hooks changed halfway through would be the harder thing
@@ -2018,6 +2034,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         &hooks,
         vouched,
         &mut fired,
+        lent_wallet,
     );
 
     let ended = match own {
@@ -2070,6 +2087,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // Written as the rounds go rather than gathered from the outcome, so that a turn which ends
     // in an error has still said what it found (HOOK-7).
     hook_notices: &mut Vec<String>,
+    // The wallet the run that started this one is spending from, where this is a delegate's turn.
+    // See [`run_inner`].
+    lent_wallet: Option<&dyn crate::shared::Spends>,
 ) -> Result<Outcome, TurnError> {
     // First thing in the turn, so the wall figure covers the work that happens before the first
     // request goes out. Skill discovery and the preamble read files, and a turn in a large tree can
@@ -2345,14 +2365,33 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     }
 
     // Premium is used when a subscription has been imported and this build knows the premium
-    // host. Discovery happens per turn so an import mid-session takes effect on the next one.
+    // host. Discovery happens per turn so an import mid-session takes effect on the next one, and
+    // only for a turn a person asked for: a delegate spends the wallet that turn lent it and never
+    // looks for one. One wallet per process is what makes a credential single-use in a run with
+    // delegates in it, since a spend is recorded in memory until the wallet is written back
+    // (PREM-5, PREM-6) and a second wallet over the same file would read every one of them as
+    // unspent.
     //
     // A batch that exists and could not be read is reported rather than skipped. It used to be
     // silent, and the only symptom was the endpoint substituting a weaker model for the premium one
     // that was asked for, which reads as the model getting worse for no reason: nobody attributes a
-    // worse answer to an unreadable credential file.
-    let mut subscription =
-        discover_subscription(config, egress, task.model.as_deref(), &mut reporter);
+    // worse answer to an unreadable credential file. Said once, by the run that looked: a delegate
+    // repeating it would say it again for every delegate the turn started.
+    let mut discovered = match task.delegate.is_some() {
+        true => None,
+        false => discover_subscription(config, egress, task.model.as_deref(), &mut reporter),
+    };
+
+    // Lent for the same reason the confirmer, the reporter and the trail above are, and it is the
+    // one of the four whose copies would be spending the user's money twice.
+    let opened = discovered.as_mut().map(crate::shared::Lent::new);
+    let wallet: Option<&dyn crate::shared::Spends> = match lent_wallet {
+        Some(lent) => Some(lent),
+        None => opened
+            .as_ref()
+            .map(|lent| lent as &dyn crate::shared::Spends),
+    };
+    let mut subscription = wallet.map(crate::shared::Spending::new);
 
     // The tool that says when this turn is asked again is offered to every turn except a tick the
     // person timed, and describes a different job on either side of that. Nothing else changes.
@@ -2922,6 +2961,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 &mut confirmer,
                                 &mut reporter,
                                 &mut sink,
+                                wallet,
                             );
                             (ended, reporter.last_spent(), reporter.take_inference())
                         });
