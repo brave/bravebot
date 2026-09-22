@@ -1182,6 +1182,10 @@ watches-replaced = { $count ->
 paste-arrived-empty =
     that paste arrived empty: the terminal hands over text only, so a picture needs { $chord }
 paste-not-a-command = a picture is not a command: leave shell mode to paste one
+paste-not-with-a-command =
+    a picture does not go with that command: send it in a prompt for it to be seen
+paste-with-the-first-tick =
+    that picture goes with the first tick of this loop; the ones after it say it was pasted
 paste-too-large = that picture is { $size }, and a paste carries at most { $limit }
 paste-nothing-on-clipboard = there is nothing on the clipboard to paste
 paste-folded = { $lines ->

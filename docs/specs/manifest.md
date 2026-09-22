@@ -36,10 +36,13 @@ what changes is the scope of the precommitment, from one turn to a whole run.
 <a id="MANIFEST-1"></a>
 ### MANIFEST-1: planning is gated, not counted
 
-A plan may be asked for only from a planner whose context holds the task string and the driver's
-own words, and has been shown nothing else. That is already true everywhere, since untrusted
-content is never shown to the planner. The gate is that invariant written where a change has to
-pass it.
+A plan may be asked for only from a planner whose context holds the task string, the pictures pasted
+into it, and the driver's own words, and has been shown nothing else. A paste is a keystroke of the
+person's own and says nothing about content anybody else wrote
+([pasting.md](pasting.md#PASTE-5)), which is why a screenshot of the thing to be built goes in with
+the words it was pasted beside while a pipe is still refused (MANIFEST-9). Everything else is already
+excluded everywhere, since untrusted content is never shown to the planner. The gate is that
+invariant written where a change has to pass it.
 
 Two calls happen: the goal in plain words, then the same work fitted to the tool set. What is
 forbidden is a re-plan: a plan that fails validation fails the run, and nothing plans again once
@@ -49,6 +52,7 @@ a step has read something.
 `verified-by: bravebot_core::policy::a_planner_shown_untrusted_content_may_not_plan`
 `verified-by: bravebot_agent::manifest::the_audit_trail_records_each_planning_call`
 `verified-by: bravebot_agent::manifest::a_manifest_that_is_not_json_fails_without_another_call`
+`verified-by: bravebot_agent::manifest::a_picture_pasted_into_the_task_reaches_the_planner`
 
 <a id="MANIFEST-2"></a>
 ### MANIFEST-2: a plan that is not trusted is refused

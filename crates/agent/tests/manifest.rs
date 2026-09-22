@@ -424,6 +424,109 @@ fn the_planner_is_shown_capabilities_and_no_tool_names() {
     );
 }
 
+/// A screenshot of the thing to be built is the task, so it goes to the planner with the words it
+/// was pasted beside. Both calls carry it: the plan comes out of the second, and a planner fitting
+/// steps to a picture it had been shown and then had taken away would be planning from a memory of
+/// one. What keeps this from being observed context is where it came from, a keystroke of the
+/// person's own, which is also why a pipe is still refused.
+#[test]
+fn a_picture_pasted_into_the_task_reaches_the_planner() {
+    let scratch = Scratch::new("pasted-task");
+    std::fs::write(scratch.path.join("a.md"), "the colours").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+            {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let task = Task::new("make the screen in [Image #1] use the colours in a.md").with_image(
+        bravebot_agent::turn::PastedImage {
+            media_type: "image/png",
+            bytes: b"pixels".to_vec(),
+        },
+    );
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        skipping_permissions!(),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+
+    let shaping = received.recv().expect("the shape request");
+    let planning = received.recv().expect("the fit request");
+    for body in [&shaping, &planning] {
+        assert!(
+            body.contains("make the screen in [Image #1] use the colours in a.md"),
+            "the task was lost: {body}"
+        );
+        assert!(
+            body.contains("data:image/png;base64,cGl4ZWxz"),
+            "the picture did not reach the planner: {body}"
+        );
+    }
+}
+
+/// A picture is an input, and the record says what arrived however it arrived. A plan is the one
+/// place a picture is read by something that cannot be asked about it afterwards, so the trail is
+/// the only account of what the plan was made from.
+#[test]
+fn a_picture_pasted_into_the_task_is_named_in_the_audit_trail() {
+    let scratch = Scratch::new("pasted-task-trail");
+    std::fs::write(scratch.path.join("a.md"), "the colours").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+            {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let task = Task::new("make the screen in [Image #1] use the colours in a.md").with_image(
+        bravebot_agent::turn::PastedImage {
+            media_type: "image/png",
+            bytes: b"pixels".to_vec(),
+        },
+    );
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        skipping_permissions!(),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "provenance", detail }
+                if detail.contains("image/png") && detail.contains("pasted by the user")
+        )),
+        "the paste left no trace: {:?}",
+        sink.events()
+    );
+}
+
 /// The property the mode exists for. A file that tries to add a step cannot: the transform sees
 /// the text, has no tool to act on it, and the driver has already run out of plan.
 #[test]

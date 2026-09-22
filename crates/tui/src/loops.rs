@@ -227,6 +227,15 @@ fn multiply(count: &str, worth: u64) -> Option<Duration> {
 pub struct Running {
     /// The line every tick sends. Settled when it was typed and never written to again.
     prompt: String,
+    /// The pictures pasted into the line, which the first tick takes and no later one has.
+    ///
+    /// Emptied by that tick, so the rule holds because there is nothing left to carry rather than
+    /// because something counted the ticks.
+    pasted: Vec<crate::state::AttachedImage>,
+    /// What a later tick sends instead, with those pictures put back to words.
+    ///
+    /// `None` where the line named none, which is every loop but one somebody pasted into.
+    settled: Option<String>,
     pacing: Pacing,
     began: Instant,
     /// When the next tick is due, or `None` while a tick is in flight or a self-paced turn has
@@ -247,6 +256,8 @@ impl Running {
     pub fn begin(request: Request) -> Self {
         Self {
             prompt: request.prompt,
+            pasted: Vec::new(),
+            settled: None,
             pacing: request.pacing,
             began: Instant::now(),
             due: None,
@@ -255,6 +266,21 @@ impl Running {
             ticks: 0,
             quiet: 0,
         }
+    }
+
+    /// Carry the pictures pasted into the line, for the first tick and no other.
+    ///
+    /// `settled` is the same line with their markers put back to words, and is what every tick after
+    /// the first sends. The picture belongs to the line the person pressed Enter on, so the first
+    /// tick is a turn like any other prompt with a paste in it; a later tick has nothing to carry,
+    /// and a marker left in one would name a screenshot nothing came with.
+    ///
+    /// Only called where something was pasted, which is why nothing here asks: see
+    /// [`crate::state::Session::start_loop`], where the same question decides what is said about it.
+    pub fn carrying(mut self, pasted: Vec<crate::state::AttachedImage>, settled: String) -> Self {
+        self.pasted = pasted;
+        self.settled = Some(settled);
+        self
     }
 
     /// Start a loop a turn asked for, with the next look already armed.
@@ -269,6 +295,10 @@ impl Running {
     pub fn armed(prompt: String, wakeup: Wakeup, now: Instant) -> Self {
         Self {
             prompt,
+            // Nothing pasted, and nothing to settle: what a turn asks to look at again is a line
+            // out of the conversation, and no box was open for anybody to paste into.
+            pasted: Vec::new(),
+            settled: None,
             pacing: Pacing::SelfPaced,
             began: now,
             due: now.checked_add(wakeup.after),
@@ -334,11 +364,22 @@ impl Running {
         !self.running && self.due.is_some_and(|due| due <= now)
     }
 
-    /// Record that a tick has been sent.
-    pub fn dispatched(&mut self) {
+    /// Record that a tick is going out, and give up what it sends.
+    ///
+    /// The first tick after a paste sends the line as it was typed, marker and picture together,
+    /// which is what any prompt with a paste in it sends. Every tick after it sends the settled line
+    /// and carries nothing, because the pictures left with the tick that took them.
+    pub fn dispatching(&mut self) -> (String, Vec<crate::state::AttachedImage>) {
         self.ticks += 1;
         self.running = true;
         self.due = None;
+        match std::mem::take(&mut self.pasted) {
+            carried if carried.is_empty() => (
+                self.settled.clone().unwrap_or_else(|| self.prompt.clone()),
+                Vec::new(),
+            ),
+            carried => (self.prompt.clone(), carried),
+        }
     }
 
     /// Arm the next tick from the turn that has just ended, and say whether the loop goes on.
@@ -562,16 +603,43 @@ mod tests {
     fn a_paced_loop_ignores_what_a_turn_asked_for() {
         let mut running = Running::begin(parse("5m watch").expect("a request"));
         let now = Instant::now();
-        running.dispatched();
+        running.dispatching();
         assert!(running.ended(Some(Wakeup::asked(3_600, false)), now,));
         assert_eq!(running.until(now), Some(Duration::from_secs(300)));
+    }
+
+    /// The pictures are handed over once and then there are none left to hand over, so "the first
+    /// tick and no other" holds because the loop no longer has them rather than because something
+    /// counted the ticks. What the ticks after it send is the line with the markers put back.
+    #[test]
+    fn a_pasted_picture_goes_to_one_tick_and_the_settled_line_to_every_other() {
+        let picture = crate::state::AttachedImage {
+            marker: "[Image #1]".to_string(),
+            media_type: "image/png",
+            bytes: b"pixels".to_vec(),
+        };
+        let mut running = Running::begin(parse("5m look at [Image #1]").expect("a request"))
+            .carrying(vec![picture.clone()], "look at the picture".to_string());
+
+        assert_eq!(
+            running.dispatching(),
+            ("look at [Image #1]".to_string(), vec![picture])
+        );
+        assert_eq!(
+            running.dispatching(),
+            ("look at the picture".to_string(), Vec::new())
+        );
+        assert_eq!(
+            running.dispatching(),
+            ("look at the picture".to_string(), Vec::new())
+        );
     }
 
     #[test]
     fn a_self_paced_loop_waits_as_long_as_the_turn_asked() {
         let mut running = Running::begin(parse("watch").expect("a request"));
         let now = Instant::now();
-        running.dispatched();
+        running.dispatching();
         assert!(running.ended(Some(Wakeup::asked(900, false)), now,));
         assert_eq!(running.until(now), Some(Duration::from_secs(900)));
     }
@@ -616,7 +684,7 @@ mod tests {
         for (asked, held) in [(0, Wakeup::FLOOR), (86_400, Wakeup::CEILING)] {
             let mut running = Running::begin(parse("watch").expect("a request"));
             let now = Instant::now();
-            running.dispatched();
+            running.dispatching();
             running.ended(Some(Wakeup::asked(asked, false)), now);
             assert_eq!(running.until(now), Some(held), "{asked}");
         }
@@ -629,11 +697,11 @@ mod tests {
         let mut running = Running::begin(parse("watch").expect("a request"));
         let now = Instant::now();
 
-        running.dispatched();
+        running.dispatching();
         assert!(running.ended(None, now));
         assert_eq!(running.until(now), Some(KEEPALIVE));
 
-        running.dispatched();
+        running.dispatching();
         assert!(!running.ended(None, now));
     }
 
@@ -643,12 +711,12 @@ mod tests {
         let mut running = Running::begin(parse("watch").expect("a request"));
         let now = Instant::now();
 
-        running.dispatched();
+        running.dispatching();
         running.ended(None, now);
-        running.dispatched();
+        running.dispatching();
         running.ended(Some(Wakeup::asked(120, false)), now);
 
-        running.dispatched();
+        running.dispatching();
         assert!(running.ended(None, now));
     }
 
@@ -657,11 +725,11 @@ mod tests {
         let mut running = Running::begin(parse("watch").expect("a request"));
         let now = Instant::now();
         for expected in [1, 2, 3] {
-            running.dispatched();
+            running.dispatching();
             running.ended(Some(Wakeup::asked(60, true)), now);
             assert_eq!(running.quiet(), expected);
         }
-        running.dispatched();
+        running.dispatching();
         running.ended(Some(Wakeup::asked(60, false)), now);
         assert_eq!(running.quiet(), 0);
     }
@@ -672,11 +740,11 @@ mod tests {
     fn a_tick_in_flight_is_not_due_again() {
         let mut running = Running::begin(parse("5m watch").expect("a request"));
         let now = Instant::now();
-        running.dispatched();
+        running.dispatching();
         running.ended(None, now);
         let due = now + Duration::from_secs(600);
         assert!(running.due(due));
-        running.dispatched();
+        running.dispatching();
         assert!(!running.due(due));
     }
 
