@@ -7,6 +7,7 @@ governs:
   - crates/agent/src/outcome.rs
   - crates/agent/src/subscription.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/plain.rs
   - crates/bedrock/src/credentials.rs
   - crates/tui/src/app.rs
   - crates/tui/src/status.rs
@@ -1446,6 +1447,8 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::running::a_configured_gateway_is_not_refused`
 `verified-by: bravebot_cli::running::a_service_configured_with_no_model_of_its_own_named_says_to_name_one`
 `verified-by: bravebot_cli::running::a_model_named_on_the_command_line_is_not_refused`
+`verified-by: bravebot_cli::running::a_session_in_lines_with_no_service_configured_says_how_to_configure_one`
+`verified-by: bravebot_cli::running::a_session_in_lines_with_a_configured_gateway_opens`
 
 <a id="BACKEND-40"></a>
 ### BACKEND-40: completed replies keep reported usage even when their content is unusable

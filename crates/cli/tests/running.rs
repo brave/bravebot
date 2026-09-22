@@ -665,6 +665,150 @@ fn a_session_in_lines_is_refused_where_its_input_is_not_a_terminal() {
     );
 }
 
+/// Run the built binary with a terminal for its input, and read back everything it wrote to one.
+///
+/// A session in lines refuses a pipe before it does anything else, so nothing it decides after
+/// that is reachable from a run whose stdin is a file or a socket. `script` gives a process a
+/// terminal of its own, which is the one way to reach those decisions without a dependency of this
+/// tree's own to allocate a pty with.
+///
+/// Both streams come back as one, because the terminal they were written to is one device. The end
+/// of the input is what the run reads at its first question, so a session that opens ends itself
+/// rather than waiting for as long as the suite is allowed to run.
+///
+/// Linux, because the two `script` commands in the world take different arguments and report the
+/// child's status differently, and the job that runs this suite is Linux.
+#[cfg(target_os = "linux")]
+fn in_a_terminal(home: &Path, environment: &[(&str, &str)], arguments: &[&str]) -> Output {
+    let quoted = format!("'{}'", env!("CARGO_BIN_EXE_bravebot"));
+    let command = std::iter::once(quoted)
+        .chain(arguments.iter().map(|argument| argument.to_string()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Command::new("script")
+        .env_clear()
+        .env("HOME", home)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .envs(environment.iter().copied())
+        // `-q` leaves out the banner script would otherwise write into what is asserted on, `-e`
+        // reports the status the binary exited with rather than script's own, and the transcript
+        // file is not wanted: what is read here is what script copies to its own stdout.
+        .args(["-qec", &command, "/dev/null"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("script runs the built binary in a terminal")
+}
+
+/// A session in lines is a session, so it does not open on a machine with no service configured to
+/// serve a turn: the three ways to configure one are said instead, and the status is the
+/// configuration one.
+///
+/// The surface that is easiest to leave out, because it is the one that draws nothing and so the
+/// one a person testing a refusal never sees. Left out, the fourth way of starting a session takes
+/// prompts and sends them to an endpoint with no subscription to spend on them, and what comes
+/// back reads as the agent being poor rather than as a configuration nobody has written yet.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_with_no_service_configured_says_how_to_configure_one() {
+    let scratch = Scratch::new("cli-running-plain-no-service");
+    let output = in_a_terminal(
+        &scratch.path,
+        // Brave's own hosts with nothing imported under this home, which is what a released
+        // binary arrives as.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+            (
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+                "https://ai-chat-premium.bsg.brave.com",
+            ),
+        ],
+        &["--plain"],
+    );
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    for route in ["amazon-bedrock", "OpenRouter", "bravebot import-leo-creds"] {
+        assert!(
+            transcript.contains(route),
+            "the run refused without saying that {route} is a way to configure one: {transcript}"
+        );
+    }
+    // The session did not open, which is the half of the clause a refusal printed after the
+    // opening line would not satisfy: what is forbidden is starting the work, not staying quiet
+    // about the configuration.
+    assert!(
+        !transcript.contains("in lines"),
+        "the session opened before it refused: {transcript}"
+    );
+    assert!(
+        !transcript.contains("trust this directory?"),
+        "the startup question was put on a machine with nothing to answer a turn: {transcript}"
+    );
+}
+
+/// And a session in lines on a machine that has configured a service opens: the refusal is about
+/// what is configured, not about the way the session was started.
+///
+/// The half worth pinning, since a gate in front of a session takes the agent away from everybody
+/// who set a service up. The session ends at once because the end of the input is the answer to
+/// its first question, and that it got as far as asking is what says it was not refused.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_with_a_configured_gateway_opens() {
+    let scratch = Scratch::new("cli-running-plain-gateway").with_settings(
+        // The `model` key is what puts this session on the gateway rather than on Brave's
+        // endpoint. Nothing is ever asked of the gateway here: the session ends at the startup
+        // question, before a prompt is read.
+        r#"{
+            "provider": {
+                "openrouter": {
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            },
+            "model": "openrouter/z-ai/glm-4.6"
+        }"#,
+    );
+
+    let output = in_a_terminal(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+            (
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+                "https://ai-chat-premium.bsg.brave.com",
+            ),
+            ("OPENROUTER_API_KEY", "a-token"),
+        ],
+        &["--plain"],
+    );
+
+    let (transcript, _) = said(&output);
+    assert!(
+        transcript.contains("trust this directory?"),
+        "a configured gateway was refused as no service at all: {transcript}"
+    );
+    assert!(
+        !transcript.contains("bravebot import-leo-creds"),
+        "somebody who has configured a service was sent to configure another: {transcript}"
+    );
+    // The end of the input in place of an answer to the startup question starts no session and
+    // is not a failure, so anything else here is a session that opened and then fell over.
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    // Nothing was asked of the terminal on the way, which is the claim the mode exists for and
+    // which only a session that opens can be held to: the alternate screen, mouse reporting and
+    // bracketed paste are each a `\x1b[?` away.
+    assert!(
+        !transcript.contains('\x1b'),
+        "something was asked of the terminal: {transcript:?}"
+    );
+}
+
 /// An import is a write by definition, so an incognito session refuses it rather than doing it
 /// and discarding the result: that would mint a batch on Brave's service that nothing could ever
 /// spend. Refused before the device is registered, which is what the empty reply stream says:
