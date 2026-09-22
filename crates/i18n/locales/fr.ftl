@@ -251,6 +251,22 @@ doctor-proxy-unsupported = { $protocol } n'est pas pris en charge par cette vers
 doctor-no-proxy = sans proxy
 
 
+## Une règle de permission que cette version n'a pas pu appliquer
+
+# Dit partout où une règle écartée est signalée : par `doctor`, sous l'étiquette ci-dessus, et
+# comme note dans la session qui a lu le fichier. L'entrée est citée telle que le fichier l'a
+# écrite, parce que la retrouver est tout l'intérêt d'en être averti.
+permission-rule-unreadable = '{ $rule }' { $problem }
+permission-rule-not-a-line = n'est pas une règle ; une règle est une ligne de texte
+permission-rule-empty = est vide
+permission-rule-unclosed-bracket = n'a pas sa parenthèse fermante
+permission-rule-unknown-family = ne nomme aucune famille d'outils de cet agent ; utilisez Read, Edit ou Bash
+permission-rule-empty-brackets = a des parenthèses vides ; enlevez-les pour viser toute utilisation
+permission-rule-unanchored = a besoin d'un répertoire personnel ou d'un répertoire de réglages pour indiquer vers quoi elle pointe
+permission-rule-not-a-domain-rule = a besoin d'un domaine ; écrivez WebFetch(domain:example.com)
+permission-rule-no-domain-named = ne nomme aucun domaine après 'domain:'
+
+
 ## Importer un abonnement Leo Premium
 
 leo-no-premium-endpoint =

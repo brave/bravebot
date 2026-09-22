@@ -1,14 +1,16 @@
-//! What running the built binary does: the status a failure exits with, and the one command an
-//! incognito session refuses.
+//! What running the built binary does: the status a failure exits with, the one command an
+//! incognito session refuses, and what `doctor` says about the settings file a process found.
 //!
 //! [CLI-6] and [INCOG-7] are the clauses, and both are properties of a process rather than of a
 //! function. `main` returns an `ExitCode` that nothing in the same process can read back, and
 //! asking for a session that leaves nothing behind is a one-way door for the life of a process,
 //! so a test that engaged it would make every other test in its binary incognito too. Running the
-//! binary answers both.
+//! binary answers both. [PERM-11] is here for a different reason: the report it requires is made
+//! out of two crates and printed by a third, and a process is what puts the three together.
 //!
 //! [CLI-6]: ../../../docs/specs/cli.md
 //! [INCOG-7]: ../../../docs/specs/incognito.md
+//! [PERM-11]: ../../../docs/specs/permissions.md
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -44,8 +46,9 @@ impl Scratch {
 
     /// Write the settings file this home's runs read, and return this scratch for chaining.
     ///
-    /// A `provider` block is the only thing a test here configures with one, and it cannot be
-    /// stated in the environment: gateways are a block rather than a variable.
+    /// What a test writes here is what cannot be stated in the environment: a `provider` block,
+    /// because a gateway is a block rather than a variable, and a `permissions` block, because a
+    /// rule is one too.
     fn with_settings(self, json: &str) -> Self {
         let directory = self.path.join(".bravebot");
         std::fs::create_dir_all(&directory).expect("create the state directory");
@@ -605,6 +608,42 @@ fn a_settings_file_named_on_the_command_line_is_read_above_the_ones_found() {
     assert!(
         stdout.contains("AWS_PROFILE, AWS_REGION"),
         "a fourth layer replaced the one below it instead of overriding a name: {stdout}"
+    );
+}
+
+/// PERM-11's first reporting site, from the file on disk to the words `doctor` prints: a deny rule
+/// nested one array too deep, which is the ordinary way this key is mistyped.
+///
+/// Running the binary because the report is assembled out of two places that only meet here. The
+/// settings layer cannot hand on an entry that is not a line, the rule parser names only what it
+/// was handed, and `doctor` prints the one list the two of them make. A fix that stops short of
+/// the command leaves somebody believing `.env` is denied, and that is what this sees and a test
+/// of either half does not.
+#[test]
+fn doctor_names_a_permission_entry_that_is_not_a_rule() {
+    let scratch = Scratch::new("cli-running-unreadable-rule")
+        .with_settings(r#"{"permissions": {"deny": [["Read(./.env)"]]}}"#);
+
+    let output = bravebot(
+        &scratch.path,
+        // A configuration with nothing else wrong with it, for the reason the layers test above
+        // states: a build with no credentials baked in would otherwise stop at that instead.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains(r#"["Read(./.env)"]"#),
+        "doctor did not name the entry it dropped: {stdout}{stderr}"
+    );
+    assert!(
+        !output.status.success(),
+        "a rule this build cannot act on was reported and the run still passed: {stdout}"
     );
 }
 

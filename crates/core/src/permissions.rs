@@ -187,55 +187,45 @@ impl Rule {
     /// so `doctor` can name it. Guessing would be worse than ignoring: a misread deny rule reads
     /// as protection that is not there.
     pub fn parse(text: &str, anchors: &Anchors) -> Result<Self, Rejected> {
-        let text = text.trim();
-        if text.is_empty() {
-            return Err(Rejected::new(text, "is empty"));
+        let rule = text.trim();
+        if rule.is_empty() {
+            // The spelling the file used, not the nothing that is left of it. A line of three
+            // spaces and a line of none are two entries somebody has to find in their file, and a
+            // report calling both of them `''` names neither.
+            return Err(Rejected::new(text, Unreadable::Empty));
         }
+        let text = rule;
 
         let (name, specifier) = match text.split_once('(') {
             None => (text, None),
             Some((name, rest)) => match rest.strip_suffix(')') {
-                None => return Err(Rejected::new(text, "is missing its closing bracket")),
+                None => return Err(Rejected::new(text, Unreadable::UnclosedBracket)),
                 Some(specifier) => (name.trim_end(), Some(specifier.trim())),
             },
         };
 
         let Some(subject) = Subject::parse(name) else {
-            return Err(Rejected::new(
-                text,
-                "names no family of tools this agent has; use Read, Edit or Bash",
-            ));
+            return Err(Rejected::new(text, Unreadable::UnknownFamily));
         };
 
         let pattern = match specifier {
             // A bare family name, and `(*)`, are the same rule and cover every use of it.
             None | Some("*") => Pattern::Everything,
             Some("") => {
-                return Err(Rejected::new(
-                    text,
-                    "has empty brackets; drop them to mean every use",
-                ));
+                return Err(Rejected::new(text, Unreadable::EmptyBrackets));
             }
             Some(specifier) if subject.takes_a_path() => path_pattern(specifier, anchors)
-                .ok_or_else(|| {
-                    Rejected::new(
-                        text,
-                        "needs a home directory or a settings directory to say where it points",
-                    )
-                })?,
+                .ok_or_else(|| Rejected::new(text, Unreadable::Unanchored))?,
             Some(specifier) if subject == Subject::WebFetch => {
                 // Claude Code's spelling, and the only one: a URL prefix would read as covering a
                 // path, and a rule about a path on a host it does not also pin is not a rule
                 // anybody could rely on.
                 let Some(domain) = specifier.strip_prefix("domain:") else {
-                    return Err(Rejected::new(
-                        text,
-                        "needs a domain, written WebFetch(domain:example.com)",
-                    ));
+                    return Err(Rejected::new(text, Unreadable::NotADomainRule));
                 };
                 let domain = domain.trim().trim_start_matches('.').to_ascii_lowercase();
                 if domain.is_empty() {
-                    return Err(Rejected::new(text, "names no domain after 'domain:'"));
+                    return Err(Rejected::new(text, Unreadable::NoDomainNamed));
                 }
                 Pattern::Domain(domain)
             }
@@ -301,21 +291,51 @@ impl Rule {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejected {
     pub text: String,
-    pub reason: &'static str,
+    pub reason: Unreadable,
+}
+
+/// What was wrong with an entry of a permissions list, for whoever is going to say so.
+///
+/// Named rather than worded, because this is read by a person and what a person reads comes from a
+/// catalog (LOCALE-1), which this crate has none of and prints nothing through. A front end turns
+/// each of these into a sentence in the reader's language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unreadable {
+    /// Not a line of text at all: a number, or a rule nested one array too deep.
+    NotALine,
+    /// A line with nothing on it.
+    Empty,
+    /// An opening bracket and no closing one.
+    UnclosedBracket,
+    /// A family of tools this build does not have.
+    UnknownFamily,
+    /// `Read()`, which says nothing that `Read` alone does not.
+    EmptyBrackets,
+    /// A path rule in a run with no home or settings directory to resolve it against.
+    Unanchored,
+    /// A `WebFetch` rule whose specifier does not begin `domain:`.
+    NotADomainRule,
+    /// `WebFetch(domain:)`, which names no host.
+    NoDomainNamed,
 }
 
 impl Rejected {
-    fn new(text: &str, reason: &'static str) -> Self {
+    fn new(text: &str, reason: Unreadable) -> Self {
         Self {
             text: text.to_string(),
             reason,
         }
     }
-}
 
-impl fmt::Display for Rejected {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "'{}' {}", self.text, self.reason)
+    /// An entry of a permissions list that was never a line, so [`Rule::parse`] never saw it.
+    ///
+    /// A rule is text, and a settings file is JSON, so an entry can be a number, a boolean, or a
+    /// rule nested one array too deep, which is the ordinary way this key is mistyped. Whoever
+    /// read the file has the spelling it used and hands it here, because the reason belongs to the
+    /// rule language rather than to the reader, and because a rule that went missing between the
+    /// file and the parser has to arrive in the same report as one the parser refused (PERM-11).
+    pub fn not_a_line(text: &str) -> Self {
+        Self::new(text, Unreadable::NotALine)
     }
 }
 

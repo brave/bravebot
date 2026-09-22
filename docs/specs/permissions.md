@@ -275,8 +275,9 @@ directory a person typed from being reachable on different terms.
 ### PERM-11: an unreadable rule is dropped, named, and takes nothing with it
 
 A line that is not a rule, names no family this agent has, or has no anchor to resolve is dropped,
-and the rest of the file still applies. Every one dropped is reported: on `doctor`, and in the
-session where the file was read.
+and the rest of the file still applies. So is an entry that is not a line at all: a number, or a
+rule nested one array too deep. Every one dropped is reported: on `doctor`, and in the session
+where the file was read, named in the spelling the file used.
 
 **Why.** A misspelled deny rule reads as protection that is not there, which is the one failure
 here worth interrupting somebody over. Refusing the whole file instead would mean a typo in an
@@ -284,9 +285,15 @@ allow rule quietly removed a deny rule's protection.
 
 `verified-by: bravebot_core::permissions::a_rule_that_cannot_be_read_is_dropped_and_reported`
 `verified-by: bravebot_core::permissions::one_unreadable_rule_does_not_discard_the_others`
-`verified-by: bravebot_config::settings::an_entry_that_is_not_a_rule_is_left_out`
+`verified-by: bravebot_config::settings::an_entry_that_is_not_a_rule_is_carried_out_to_be_reported`
+`verified-by: bravebot_config::settings::an_unreadable_entry_is_carried_out_of_whichever_rule_list_held_it`
 `verified-by: bravebot_config::settings::a_malformed_permissions_block_carries_no_rules`
 `verified-by: bravebot_agent::permissions::a_line_that_is_not_a_rule_is_reported`
+`verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported`
+`verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported_to_a_run_nobody_is_watching`
+`verified-by: bravebot_agent::permissions::a_blank_rule_is_reported_as_empty`
+`verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
+`verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`
 
 <a id="PERM-12"></a>
 ### PERM-12: no rules means no change
