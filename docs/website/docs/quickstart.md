@@ -51,7 +51,7 @@ configuration OK
   endpoint  https://ai-chat.bsg.brave.com/v1/chat/completions
   premium   https://ai-chat-premium.bsg.brave.com/v1/chat/completions
   key id    …
-  model     automatic-brave-bot (default)
+  model     automatic-bravebot (default)
   key       … (never transmitted)
 
 state directory ~/.bravebot, from HOME

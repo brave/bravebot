@@ -226,6 +226,7 @@ look at what a delegate was doing is not asking for the turn to end when they co
 watching is also the mode most likely to be open while something is going wrong.
 
 `verified-by: bravebot_tui::app::a_typed_character_does_not_reach_the_box_while_a_delegate_is_watched`
+`verified-by: bravebot_tui::app::a_paste_and_a_drop_do_not_reach_the_line_while_the_view_is_open`
 `verified-by: bravebot_tui::app::q_goes_back_to_the_list_before_it_closes`
 `verified-by: bravebot_tui::app::q_closes_outright_where_there_is_no_list_to_go_back_to`
 `verified-by: bravebot_tui::app::escape_leaves_the_view_the_way_q_does`

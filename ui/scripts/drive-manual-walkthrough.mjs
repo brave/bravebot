@@ -146,7 +146,7 @@ try {
   console.log('PASS: real diagnostics, override selection/validation/clearing, keyboard tabs and focus')
 
   // Simulate a gateway settings file without a model selection: it retains the Brave default.
-  writeFixtureSettings('automatic-brave-bot')
+  writeFixtureSettings('automatic-bravebot')
   await app.evaluate((_, path) => { globalThis.walkthroughPicker.path = path }, project)
   await page.getByRole('button', { name: 'Open project', exact: true }).click()
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()

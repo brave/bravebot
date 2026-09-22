@@ -116,7 +116,7 @@ answering it with whatever was configured is the substitution this flag exists t
 whether the flag, your recorded choice or a settings file named it. Where `--model` named it, the run
 also **exits non-zero**, which is the part a script is certain to read. A run that named no model
 takes whatever was recorded or configured and does not fail over it. Two cases are neither reported
-nor failed: an entry that resolves per request, such as `automatic-brave-bot`, and a backend asked by
+nor failed: an entry that resolves per request, such as `automatic-bravebot`, and a backend asked by
 an opaque handle, which never reports back the name it was given.
 
 ## `--add-dir <path>`
