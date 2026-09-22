@@ -47,6 +47,14 @@ pub mod vet;
 pub mod watch;
 pub mod workspace;
 
+/// What a crash of this process may leave behind, re-exported for the front ends.
+///
+/// A rule about a process that holds a credential is addressed to every such process, and the
+/// graphical front end's transport binary is one of them. Its crate reaches the sandbox only
+/// through this one, and a manifest edit to give it a second path to the same function would be a
+/// widening of what that crate depends on for no gain.
+pub use bravebot_sandbox::crash;
+
 pub use confirm::{
     Confirmer, Decision, Intent, Remark, RunDecision, RunRequest, Unattended, WriteRequest,
 };

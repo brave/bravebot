@@ -120,7 +120,10 @@ pub fn name_a_settings_file(path: PathBuf) {
 /// environment and the built-in values still describe a working backend. A file nobody can parse
 /// is reported by `doctor` rather than at startup, where the person who mistyped it is not
 /// necessarily the person watching.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// Not comparable, because a gateway block it read may carry a token and [`crate::Secret`]
+/// refuses equality. What a test wants of one of these is a field of it rather than the whole.
+#[derive(Debug, Clone, Default)]
 pub struct Settings {
     env: BTreeMap<String, String>,
     scrub: Vec<String>,

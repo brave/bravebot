@@ -40,7 +40,7 @@ pub fn list(config: &Config) -> Value {
             continue;
         }
         let credential = provider.credential(|name| std::env::var(name).ok());
-        if credential == Credential::Absent {
+        if matches!(credential, Credential::Absent) {
             warnings.push(format!(
                 "No credential configured for {}.",
                 provider.display_name()
@@ -152,6 +152,7 @@ fn model_request(url: &str, credential: &Credential) -> Option<Request> {
     let request = Request::get(url).header("accept", "application/json");
     match credential {
         Credential::Token(token) => {
+            let token = token.expose();
             Some(request.header("authorization", format!("Bearer {token}")))
         }
         Credential::NotNeeded => Some(request),
@@ -287,7 +288,11 @@ mod tests {
             public.headers,
             vec![("accept".into(), "application/json".into())]
         );
-        let authenticated = model_request(url, &Credential::Token("test-token".into())).unwrap();
+        let authenticated = model_request(
+            url,
+            &Credential::Token(bravebot_config::Secret::new("test-token")),
+        )
+        .unwrap();
         assert!(
             authenticated
                 .headers

@@ -209,6 +209,13 @@ Leo Premium credentials live in a mode-0600 file under `~/.bravebot`, readable o
 not encrypted at rest, which is what the browser they are imported from does with the same secret.
 See [Leo Premium](../customize/premium.md#where-they-are-kept).
 
+The credentials Brave Bot reaches a model with are overwritten in memory when the value holding
+them goes, rather than handed back to the allocator with the bytes still in them, and the process
+turns off its own core dump before it reads the first one, so a crash leaves no file with a key in
+it. Two things are not covered: swap, because keeping pages out of it needs the allocator those
+buffers come from, and the single-use credentials of an imported Leo Premium subscription, which
+are still ordinary strings while a run holds them.
+
 ## Reporting a problem
 
 Brave Bot is experimental and developed in the open. Please report security issues through the

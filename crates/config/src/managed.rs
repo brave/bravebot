@@ -62,7 +62,10 @@ const PINNABLE: [&str; 8] = [
 const PROVIDER_BLOCK: &str = "provider";
 
 /// What the managed layer pinned, or nothing where there is no such file.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// Not comparable, because a gateway it pinned may carry a token and [`crate::Secret`] refuses
+/// equality. What a test wants of one of these is a field of it rather than the whole.
+#[derive(Debug, Clone, Default)]
 pub struct Managed {
     /// The pinnable variables the file set, blank ones left out.
     pins: BTreeMap<String, String>,
@@ -268,7 +271,10 @@ mod tests {
     #[test]
     fn an_empty_gateway_block_says_there_are_no_gateways() {
         let managed = scratch("managed-no-gateways", r#"{"provider": {}}"#);
-        assert_eq!(managed.gateways(), Some(&[][..]));
+        assert!(
+            managed.gateways().is_some_and(<[_]>::is_empty),
+            "an empty block is a block saying there are none"
+        );
         assert_eq!(
             managed.pinned().collect::<Vec<_>>(),
             vec![PROVIDER_BLOCK],
@@ -284,7 +290,7 @@ mod tests {
             "managed-gateways-unmentioned",
             r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://approved.example"}}"#,
         );
-        assert_eq!(managed.gateways(), None);
+        assert!(managed.gateways().is_none());
     }
 
     /// The gateways an organisation approves are the ones in force, so the block is read as a
@@ -333,7 +339,7 @@ mod tests {
             r#"{"provider": 1}"#,
         ] {
             let managed = scratch("managed-provider-mistyped", spelling);
-            assert_eq!(managed.gateways(), None, "{spelling} decided something");
+            assert!(managed.gateways().is_none(), "{spelling} decided something");
         }
     }
 
@@ -350,7 +356,7 @@ mod tests {
         );
         let gateways = managed.gateways().expect("a block");
         assert_eq!(gateways.len(), 1);
-        assert_eq!(gateways[0].api_key, None);
+        assert!(gateways[0].api_key.is_none());
         assert_eq!(gateways[0].base_url, "https://gateway.example/v1");
     }
 
