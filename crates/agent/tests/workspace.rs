@@ -3072,6 +3072,93 @@ fn moving_leaves_an_unrelated_added_directory_open() {
     assert_eq!(workspace.added_directories(), [added]);
 }
 
+/// A watch is armed on a workspace-relative path, and a relative path means whatever the working
+/// directory is. Once it has moved, looking the same string up against the new one reports
+/// movement on a file nobody armed a watch on, so the answer has to be that the path is out of
+/// reach and the watch over. The two files are different sizes, which is what a wrong answer here
+/// looks like: a change token for the new directory's file rather than an ending.
+#[test]
+fn a_relative_look_is_out_of_reach_once_the_working_directory_has_moved() {
+    let scratch = Scratch::new("look-moved");
+    let elsewhere = outside("look-moved-target");
+    std::fs::write(scratch.path.join("notes.md"), "the watched one").unwrap();
+    std::fs::write(
+        elsewhere.path.join("notes.md"),
+        "a different file, of another size",
+    )
+    .unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let armed_in = workspace.root().to_path_buf();
+    assert!(
+        matches!(
+            workspace.look("notes.md", &armed_in),
+            bravebot_agent::watch::Looked::Saw(_)
+        ),
+        "the file a watch would be armed on was not seen in the first place"
+    );
+
+    workspace
+        .change_root(elsewhere.path.to_str().expect("utf-8 path"))
+        .expect("the working directory moves");
+
+    assert_eq!(
+        workspace.look("notes.md", &armed_in),
+        bravebot_agent::watch::Looked::OutOfReach,
+        "a look after the move answered about the new directory's file"
+    );
+}
+
+/// The other half of it: a look in the directory the watch was armed in is the ordinary case, and
+/// a change there is what a watch exists to report. An answer that ended every watch on every
+/// look would satisfy the test above and serve nobody.
+#[test]
+fn a_relative_look_sees_a_change_while_the_working_directory_stands() {
+    let scratch = Scratch::new("look-standing");
+    std::fs::write(scratch.path.join("notes.md"), "as armed").unwrap();
+
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let armed_in = workspace.root().to_path_buf();
+    let first = workspace.look("notes.md", &armed_in);
+    assert!(matches!(first, bravebot_agent::watch::Looked::Saw(_)));
+
+    std::fs::write(scratch.path.join("notes.md"), "longer than it was").unwrap();
+    let second = workspace.look("notes.md", &armed_in);
+    assert!(matches!(second, bravebot_agent::watch::Looked::Saw(_)));
+    assert_ne!(first, second, "a change in the file did not move the token");
+}
+
+/// An absolute path does not mean the working directory: it is legal only inside a directory the
+/// user added by name, so a directory that survived the move survives with its watch. Ending
+/// every watch on a move would take this one with it, and the answer that allowed it still holds.
+#[test]
+fn an_absolute_look_into_a_directory_that_survived_the_move_still_sees_it() {
+    let scratch = Scratch::new("look-added");
+    let other = outside("look-added-open");
+    let elsewhere = outside("look-added-target");
+    std::fs::write(other.path.join("notes.md"), "in the added directory").unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(other.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let watched = added.join("notes.md").display().to_string();
+    let armed_in = workspace.root().to_path_buf();
+
+    workspace
+        .change_root(elsewhere.path.to_str().expect("utf-8 path"))
+        .expect("the working directory moves");
+    assert_eq!(workspace.added_directories(), [added]);
+
+    assert!(
+        matches!(
+            workspace.look(&watched, &armed_in),
+            bravebot_agent::watch::Looked::Saw(_)
+        ),
+        "a watch on a directory that is still open was ended by a move elsewhere"
+    );
+}
+
 /// Moving to where the session already is is a slip worth a word, not a no-op: it would otherwise
 /// close the directory and reopen it as itself, and report that nothing had happened.
 #[test]

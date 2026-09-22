@@ -2448,7 +2448,9 @@ fn event_loop(
             // filesystem change is the one event in this program that nobody presses a key for.
             // Only one of the two can produce a turn, and a session holds only one kind at a
             // time, so the order between them decides nothing.
-            None => match session.watch_fired(Instant::now(), |path| workspace.look(path)) {
+            None => match session
+                .watch_fired(Instant::now(), |path, under| workspace.look(path, under))
+            {
                 Some(prompt) => Action::Submit(prompt),
                 // Then what the queue is holding, before the interface settles down to wait, for
                 // the reason a tick is looked at here.
@@ -3090,6 +3092,11 @@ fn change_directory(
             directory = closed.display().to_string()
         ));
     }
+    // And the watches armed in the directory left behind, for the reason the servers go: what a
+    // person agreed to was a standing report about a file in *that* tree. Ended here rather than
+    // left to the next look, which is up to five seconds away and would let a watch that has
+    // already seen a change fire about a path this directory resolves elsewhere.
+    session.end_watches_left_behind(&moved.root);
     true
 }
 
@@ -5450,7 +5457,11 @@ fn fold_outcome(
             // through; what is left is the session's own question, which is whether it has room
             // and whether the first look sees anything.
             for path in &outcome.watches {
-                session.arm_watch(path, workspace.look(path));
+                // The working directory the look was taken in travels with the watch, because a
+                // relative path is the file it was armed on only while that is still the working
+                // directory: after a `/cd` the same string names a file in the new one.
+                let under = workspace.root();
+                session.arm_watch(path, under, workspace.look(path, under));
             }
 
             if session.looping().is_some() {
@@ -9536,10 +9547,11 @@ mod tests {
         let mut session = Session::new("none");
         session.arm_watch(
             "notes.md",
+            "/work",
             bravebot_agent::watch::Looked::Saw("first".to_string()),
         );
         session
-            .watch_fired(Instant::now() + Duration::from_secs(6), |_| {
+            .watch_fired(Instant::now() + Duration::from_secs(6), |_, _| {
                 bravebot_agent::watch::Looked::Saw("second".to_string())
             })
             .expect("a fire");
@@ -9588,10 +9600,12 @@ mod tests {
         let mut session = Session::new("none");
         session.arm_watch(
             "a.md",
+            "/work",
             bravebot_agent::watch::Looked::Saw("first".to_string()),
         );
         session.arm_watch(
             "b.md",
+            "/work",
             bravebot_agent::watch::Looked::Saw("first".to_string()),
         );
 
@@ -9612,6 +9626,7 @@ mod tests {
         let mut session = Session::new("none");
         session.arm_watch(
             "a.md",
+            "/work",
             bravebot_agent::watch::Looked::Saw("first".to_string()),
         );
 
@@ -12806,6 +12821,67 @@ mod tests {
         assert!(
             trust.is_trusted("."),
             "the directory moved to was not vouched for"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A watch is armed on a workspace-relative path, so moving the working directory closes the
+    /// directory the answer that allowed it was about. The watch has to end with the move and say
+    /// so, for the reason the servers are dropped and the directories closed: nothing here is
+    /// still the thing anybody agreed to. With the move rather than at the next look, which is up
+    /// to five seconds away and long enough for a fire to go out in.
+    ///
+    /// The directory moved to holds a `notes.md` of its own, of another size, which is what the
+    /// watch reported movement on while a look was resolved against whatever the working
+    /// directory happened to be. So a wrong answer here is a fire, on a file nothing in the
+    /// session wrote and nobody armed a watch on.
+    #[test]
+    fn changing_directory_ends_a_watch_armed_in_the_one_left_behind() {
+        let root = crate::testutil::scratch_dir("bravebot-cd-watch-test");
+        let project = root.join("project");
+        let other = root.join("other");
+        std::fs::create_dir_all(&project).expect("scratch");
+        std::fs::create_dir_all(&other).expect("scratch");
+        std::fs::write(project.join("notes.md"), "the watched one").expect("scratch");
+        std::fs::write(other.join("notes.md"), "a different file, of another size")
+            .expect("scratch");
+
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let mut session = Session::new("none");
+        let mut trust = TrustStore::new(workspace.root());
+        let under = workspace.root();
+        session.arm_watch("notes.md", under, workspace.look("notes.md", under));
+        assert_eq!(session.watches().len(), 1, "the watch was not armed");
+
+        assert!(change_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            &mut None,
+            other.to_str().expect("utf-8 path")
+        ));
+
+        assert!(
+            session.watches().is_empty(),
+            "the watch outlived the directory it was armed in"
+        );
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_out_of_reach, number = 1)),
+            "the watch ended without saying so"
+        );
+
+        // And nothing is left to fire on the next pass, which is where the fire about the other
+        // directory's file went out from.
+        let later = Instant::now() + Duration::from_secs(6);
+        assert!(
+            session
+                .watch_fired(later, |path, under| workspace.look(path, under))
+                .is_none(),
+            "a fire went out about the file in the directory the session moved to"
         );
 
         std::fs::remove_dir_all(&root).ok();

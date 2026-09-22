@@ -5225,7 +5225,18 @@ impl Session {
     /// asks a second time. What is decided here is what only the session can decide: whether it
     /// is already doing something that happens without anybody typing, whether it has room, and
     /// what the first look at the path saw.
-    pub fn arm_watch(&mut self, path: &str, first: watch::Looked) {
+    ///
+    /// `under` is the working directory the first look was taken in, and it travels with the
+    /// watch so that every later look is taken against the same directory. Taken from the caller
+    /// that took the look rather than from this session's own record of where it is working: one
+    /// fact read twice is two answers waiting to differ, and the one that matters is the
+    /// workspace's.
+    pub fn arm_watch(
+        &mut self,
+        path: &str,
+        under: impl Into<std::path::PathBuf>,
+        first: watch::Looked,
+    ) {
         if self.looping.is_some() {
             self.note(t!(watch_not_armed_under_a_loop));
             return;
@@ -5234,10 +5245,13 @@ impl Session {
             self.note(t!(watch_not_armed_under_a_goal));
             return;
         }
-        match self
-            .watches
-            .arm(path.to_string(), self.turns, first, Instant::now())
-        {
+        match self.watches.arm(
+            path.to_string(),
+            under.into(),
+            self.turns,
+            first,
+            Instant::now(),
+        ) {
             Ok(number) => self.note(t!(watch_armed, number = number, path = path)),
             Err(watch::Refused::Full) => {
                 self.note(t!(watch_not_armed_full, count = watch::MAX_LIVE))
@@ -5259,13 +5273,15 @@ impl Session {
     /// session.
     ///
     /// `look` is the caller's, because what this session may still reach is the workspace's
-    /// question rather than this one's. `now` is the caller's for the same reason the registry
+    /// question rather than this one's, and it is handed the working directory each watch was
+    /// armed under along with the path: a relative path is the file it was armed on only while
+    /// that is still the working directory. `now` is the caller's for the same reason the registry
     /// takes one: the interval between two looks is five seconds, and a test that had to wait
     /// them out would be a test nobody runs.
     pub fn watch_fired(
         &mut self,
         now: Instant,
-        look: impl FnMut(&str) -> watch::Looked,
+        look: impl FnMut(&str, &std::path::Path) -> watch::Looked,
     ) -> Option<String> {
         for (number, why) in self.watches.look(now, look) {
             match why {
@@ -5331,6 +5347,20 @@ impl Session {
             self.note(t!(watches_stopped, count = stopped));
         }
         stopped > 0
+    }
+
+    /// End every watch the working directory moving has closed the answer for, and say so.
+    ///
+    /// A watch is armed on the path as the turn wrote it, which for the tool that arms one is a
+    /// relative path, and a relative path means the working directory. So a move leaves it naming
+    /// a file in the new directory that nobody armed a watch on, and the answer that allowed it
+    /// was about the directory that has just closed. Said one watch at a time, as the closed
+    /// directories are, because each one is something the session was going to tell the person
+    /// about and now will not.
+    pub fn end_watches_left_behind(&mut self, root: &std::path::Path) {
+        for number in self.watches.stop_moved(root) {
+            self.note(t!(watch_out_of_reach, number = number));
+        }
     }
 
     /// End every live watch because the session is about to do one of the other two things that
@@ -8800,16 +8830,21 @@ mod tests {
         watch::Looked::Saw(token.to_string())
     }
 
+    /// The working directory the watches below are armed under. What it is does not matter here:
+    /// whether a later look is still taken in it is the workspace's question, and the looks in
+    /// these tests are stubs.
+    const ARMED_IN: &str = "/work";
+
     /// The whole of what this feature is for. Nothing is running, nobody typed anything, and a
     /// file that moved still begins a turn.
     #[test]
     fn a_change_begins_a_turn_with_no_turn_running_to_notice_it() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
 
         let later = Instant::now() + Duration::from_secs(6);
         let prompt = s
-            .watch_fired(later, |_| saw("second"))
+            .watch_fired(later, |_, _| saw("second"))
             .expect("a change with nothing running did not begin a turn");
 
         assert!(prompt.contains("notes.md"), "{prompt}");
@@ -8822,10 +8857,10 @@ mod tests {
     #[test]
     fn a_fires_prompt_carries_the_watch_and_the_path_and_nothing_else() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
 
         let later = Instant::now() + Duration::from_secs(6);
-        let prompt = s.watch_fired(later, |_| saw("second")).expect("a fire");
+        let prompt = s.watch_fired(later, |_, _| saw("second")).expect("a fire");
 
         assert_eq!(prompt, watch::fired(1, "notes.md"));
         let sent = s
@@ -8841,7 +8876,7 @@ mod tests {
     #[test]
     fn a_fire_waits_for_the_turn_in_flight_and_for_what_is_queued() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
         let later = Instant::now() + Duration::from_secs(6);
 
         for c in "their own question".chars() {
@@ -8849,7 +8884,7 @@ mod tests {
         }
         s.submit();
         assert!(
-            s.watch_fired(later, |_| saw("second")).is_none(),
+            s.watch_fired(later, |_, _| saw("second")).is_none(),
             "a fire interrupted a running turn"
         );
 
@@ -8859,7 +8894,7 @@ mod tests {
         s.queue();
         s.complete("done", Vec::new(), 0);
         assert!(
-            s.watch_fired(later, |_| saw("second")).is_none(),
+            s.watch_fired(later, |_, _| saw("second")).is_none(),
             "a fire jumped the queue"
         );
     }
@@ -8870,7 +8905,7 @@ mod tests {
     fn a_watch_asked_for_under_a_loop_or_a_goal_is_refused_and_says_why() {
         let mut under_a_loop = session();
         under_a_loop.start_loop(crate::loops::parse("5m watch").expect("a request"));
-        under_a_loop.arm_watch("notes.md", saw("first"));
+        under_a_loop.arm_watch("notes.md", ARMED_IN, saw("first"));
         assert!(under_a_loop.watches().is_empty());
         assert!(
             under_a_loop
@@ -8882,7 +8917,7 @@ mod tests {
 
         let mut under_a_goal = session();
         under_a_goal.start_goal("cargo test exits 0".to_string());
-        under_a_goal.arm_watch("notes.md", saw("first"));
+        under_a_goal.arm_watch("notes.md", ARMED_IN, saw("first"));
         assert!(under_a_goal.watches().is_empty());
         assert!(
             under_a_goal
@@ -8905,7 +8940,7 @@ mod tests {
             &mut |s: &mut Session| s.start_goal("cargo test exits 0".to_string()),
         ] {
             let mut s = session();
-            s.arm_watch("notes.md", saw("first"));
+            s.arm_watch("notes.md", ARMED_IN, saw("first"));
             assert_eq!(s.watches().len(), 1);
 
             start(&mut s);
@@ -8925,7 +8960,7 @@ mod tests {
     #[test]
     fn a_later_look_a_turn_asked_for_is_refused_while_a_watch_is_live() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
         s.watch_again(
             "tell me when notes.md changes",
             crate::loops::Wakeup::asked(900, false),
@@ -8950,7 +8985,7 @@ mod tests {
         let mut s = session();
         assert_eq!(s.arming(), Arming::Allowed { free: 8 });
 
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
         assert_eq!(s.arming(), Arming::Allowed { free: 7 });
 
         let mut looping = session();
@@ -8970,11 +9005,11 @@ mod tests {
 
         let mut s = session();
         for n in 0..watch::MAX_LIVE {
-            s.arm_watch(&format!("{n}.md"), saw("first"));
+            s.arm_watch(&format!("{n}.md"), ARMED_IN, saw("first"));
         }
         assert_eq!(s.arming(), Arming::Full);
 
-        s.arm_watch("ninth.md", saw("first"));
+        s.arm_watch("ninth.md", ARMED_IN, saw("first"));
         assert_eq!(s.watches().len(), watch::MAX_LIVE);
         assert!(
             s.transcript
@@ -8989,7 +9024,7 @@ mod tests {
     #[test]
     fn a_path_that_cannot_be_looked_at_is_refused_and_said_so() {
         let mut s = session();
-        s.arm_watch("gone.md", watch::Looked::Absent);
+        s.arm_watch("gone.md", ARMED_IN, watch::Looked::Absent);
         assert!(s.watches().is_empty());
         assert!(
             s.transcript
@@ -9004,7 +9039,7 @@ mod tests {
     #[test]
     fn clearing_a_session_ends_every_watch() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
         s.clear();
         assert!(s.watches().is_empty());
     }
@@ -9013,8 +9048,8 @@ mod tests {
     #[test]
     fn a_watch_is_ended_by_the_number_the_report_gave_it() {
         let mut s = session();
-        s.arm_watch("a.md", saw("first"));
-        s.arm_watch("b.md", saw("first"));
+        s.arm_watch("a.md", ARMED_IN, saw("first"));
+        s.arm_watch("b.md", ARMED_IN, saw("first"));
 
         assert!(s.stop_watch(1));
         assert_eq!(
@@ -9035,9 +9070,11 @@ mod tests {
     #[test]
     fn stopping_a_fires_turn_ends_the_watch_that_fired() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
-        s.watch_fired(Instant::now() + Duration::from_secs(6), |_| saw("second"))
-            .expect("a fire");
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
+        s.watch_fired(Instant::now() + Duration::from_secs(6), |_, _| {
+            saw("second")
+        })
+        .expect("a fire");
 
         assert!(s.watch_is_firing());
         assert!(s.stop_firing_watch());
@@ -9048,7 +9085,7 @@ mod tests {
     #[test]
     fn stopping_a_turn_that_was_not_a_fire_ends_no_watch() {
         let mut s = session();
-        s.arm_watch("notes.md", saw("first"));
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
         s.set_input("their own question".to_string());
         s.submit();
 
@@ -9063,10 +9100,10 @@ mod tests {
     #[test]
     fn a_watch_that_ends_itself_says_which_of_the_two_endings_it_was() {
         let mut aged = session();
-        aged.arm_watch("notes.md", saw("first"));
+        aged.arm_watch("notes.md", ARMED_IN, saw("first"));
         aged.watch_fired(
             Instant::now() + Duration::from_secs(8 * 24 * 60 * 60),
-            |_| saw("first"),
+            |_, _| saw("first"),
         );
         assert!(aged.watches().is_empty());
         assert!(
@@ -9076,8 +9113,8 @@ mod tests {
         );
 
         let mut gone = session();
-        gone.arm_watch("notes.md", saw("first"));
-        gone.watch_fired(Instant::now() + Duration::from_secs(6), |_| {
+        gone.arm_watch("notes.md", ARMED_IN, saw("first"));
+        gone.watch_fired(Instant::now() + Duration::from_secs(6), |_, _| {
             watch::Looked::OutOfReach
         });
         assert!(gone.watches().is_empty());
