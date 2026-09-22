@@ -36,7 +36,7 @@ try {
       if (method === 'session.open') return { ok: { session: `s-${params.id}`, model: defaultModel,
         record: { ...rows.find((row) => row.id === params.id), started: 1, turns: 0, tokens: 0, build: 'fixture' },
         said: [], todos: {}, context: '', trust: { known: true, rules: [] }, archived: 0,
-        branchNote: null, buildNote: null } }
+        branchNote: null, buildNote: null, frontNote: null } }
       if (method === 'turn.send') {
         globalThis.modelTest.sent.push(params)
         return { ok: { turn: 1 } }

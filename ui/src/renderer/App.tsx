@@ -511,7 +511,7 @@ export function App(): React.JSX.Element {
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: opened.archived,
       })
-      const notes = [opened.branchNote, opened.buildNote].filter(Boolean) as string[]
+      const notes = [opened.branchNote, opened.buildNote, opened.frontNote].filter(Boolean) as string[]
       setProblem(notes.length ? notes.join(' · ') : null)
     } catch (error) {
       setProblem(String(error))

@@ -86,6 +86,8 @@ export interface SessionRecord {
   turns: number
   tokens: number
   build: string | null
+  /** Which front end wrote the record: `terminal`, `desktop`, or null for one written before this was kept. */
+  front: string | null
 }
 
 export interface OpenedSession {
@@ -99,6 +101,8 @@ export interface OpenedSession {
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
   branchNote: string | null
   buildNote: string | null
+  /** Said when the other front end wrote the transcript above: it drew it, and this one will not draw it the same way. */
+  frontNote: string | null
   /**
    * How many messages compaction has taken out of this conversation, in total.
    *

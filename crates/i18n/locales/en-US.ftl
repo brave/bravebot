@@ -871,6 +871,9 @@ session-branch-moved = this session ran on { $was }; this checkout is on { $now 
 session-branch-gone = this session ran on { $was }; this checkout is not on a branch
 session-branch-new = this session ran on no branch; this checkout is on { $now }
 session-build-differs = that session ran on bravebot { $was }; this is { $now }
+session-front-differs = that session was written in { $was }; this is { $now }
+session-front-terminal = the terminal
+session-front-desktop = the desktop app
 
 
 ## Themes

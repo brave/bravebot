@@ -64,7 +64,11 @@ fn a_record_written_here_is_read_back_by_the_agents_own_reader() {
         }],
     );
 
-    let mut handle = Handle::begin(&project, bravebot_ui_bridge::agent_build());
+    let mut handle = Handle::begin(
+        &project,
+        bravebot_ui_bridge::FRONT,
+        bravebot_ui_bridge::agent_build(),
+    );
     handle.save(
         "what does this do?",
         Standing {
@@ -127,7 +131,11 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
     conversation.push(Message::user("second question"));
     conversation.push(Message::assistant("second answer"));
 
-    let mut handle = Handle::begin(&project, bravebot_ui_bridge::agent_build());
+    let mut handle = Handle::begin(
+        &project,
+        bravebot_ui_bridge::FRONT,
+        bravebot_ui_bridge::agent_build(),
+    );
     handle.save(
         "first question",
         Standing {
@@ -205,7 +213,11 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
         },
     )]);
 
-    let mut handle = Handle::begin(&project, bravebot_ui_bridge::agent_build());
+    let mut handle = Handle::begin(
+        &project,
+        bravebot_ui_bridge::FRONT,
+        bravebot_ui_bridge::agent_build(),
+    );
     handle.save(
         "remember the word haddock",
         Standing {
@@ -349,7 +361,11 @@ fn two_prompt_session(project: &std::path::Path, trust: Option<&TrustStore>) -> 
     conversation.push(Message::assistant("forgotten"));
 
     let empty = TrustStore::new(project);
-    let mut handle = Handle::begin(project, bravebot_ui_bridge::agent_build());
+    let mut handle = Handle::begin(
+        project,
+        bravebot_ui_bridge::FRONT,
+        bravebot_ui_bridge::agent_build(),
+    );
     handle.save(
         "remember the word haddock",
         Standing {
@@ -614,7 +630,11 @@ fn a_fork_gets_an_id_of_its_own_rather_than_the_one_it_came_from() {
     let mut cut = record.conversation.clone();
     cut.messages.truncate(2);
     let mut state = bravebot_ui_bridge::running::State::forked(
-        Handle::begin(&project, bravebot_ui_bridge::agent_build()),
+        Handle::begin(
+            &project,
+            bravebot_ui_bridge::FRONT,
+            bravebot_ui_bridge::agent_build(),
+        ),
         cut,
         TrustStore::new(&project),
         TrustedPrograms::new(),
@@ -799,4 +819,99 @@ fn stamp(project: &std::path::Path, id: &str, updated: u64) {
     let mut value: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
     value["updated"] = serde_json::json!(updated);
     std::fs::write(&path, value.to_string()).expect("rewritten");
+}
+
+// ------------------------------------------------------- which surface wrote what is opened
+
+/// A session written the way `bravebot` writes one, with nothing of the bridge in it.
+fn a_session_written_by(project: &std::path::Path, front: sessions::Front) -> String {
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.push(Message::user("what does this do?"));
+    conversation.push(Message::assistant("it parses commas"));
+
+    let mut trust = TrustStore::new(project);
+    trust.trust(".");
+
+    let mut handle = Handle::begin(project, front, bravebot_ui_bridge::agent_build());
+    handle.save(
+        "what does this do?",
+        Standing {
+            history: None,
+            rewind: &[],
+            asides: &[],
+            conversation: &conversation.snapshot(),
+            turns: 1,
+            tokens: 10,
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            trust: &trust,
+            programs: &TrustedPrograms::new(),
+            directories: &[],
+            manifest: None,
+        },
+    );
+    handle.id().to_string()
+}
+
+/// The app opens sessions the terminal wrote, which is the whole point of one store, and the
+/// transcript it then shows was drawn by a program that is not this one. Saying so is the only
+/// thing that distinguishes "the agent behaved oddly here" from "the other surface renders this
+/// differently", and a reader with the session in front of them cannot tell those apart from the
+/// content. Opening one the app wrote itself must stay silent, or the caveat is on every session
+/// and means nothing.
+#[test]
+fn opening_a_session_the_terminal_wrote_says_which_surface_drew_it() {
+    let project = scratch("front-note");
+    clean_up(&project);
+
+    let from_the_terminal = a_session_written_by(&project, sessions::Front::Terminal);
+
+    let (mut bridge, _) = harness();
+    let opened = call(
+        &mut bridge,
+        "session.open",
+        serde_json::json!({
+            "directory": project.display().to_string(),
+            "id": &from_the_terminal,
+        }),
+    );
+
+    assert_eq!(
+        opened["record"]["front"].as_str(),
+        Some("terminal"),
+        "the record the app opened does not say which surface wrote it"
+    );
+    let note = opened["frontNote"]
+        .as_str()
+        .expect("opening the terminal's session says so");
+    assert!(
+        note.contains("terminal") && note.contains("desktop app"),
+        "the note names neither surface: {note}"
+    );
+
+    clean_up(&project);
+
+    let from_the_app = a_session_written_by(&project, bravebot_ui_bridge::FRONT);
+    let opened = call(
+        &mut bridge,
+        "session.open",
+        serde_json::json!({
+            "directory": project.display().to_string(),
+            "id": &from_the_app,
+        }),
+    );
+    assert_eq!(
+        opened["record"]["front"].as_str(),
+        Some("desktop"),
+        "a session the app wrote does not say the app wrote it"
+    );
+    assert!(
+        opened["frontNote"].is_null(),
+        "opening the app's own session is not worth a caveat: {}",
+        opened["frontNote"]
+    );
+
+    clean_up(&project);
 }
