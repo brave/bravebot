@@ -50,18 +50,30 @@ impl Scratch {
     /// because a gateway is a block rather than a variable, and a `permissions` block, because a
     /// rule is one too.
     fn with_settings(self, json: &str) -> Self {
-        let directory = self.path.join(".bravebot");
-        std::fs::create_dir_all(&directory).expect("create the state directory");
-        std::fs::write(directory.join("settings.json"), json).expect("write settings");
-        self
+        self.with_state("settings.json", json)
+    }
+
+    /// Declare hooks under this home, as writing the file by hand does, and return this scratch
+    /// for chaining.
+    ///
+    /// Gated with the one test that calls it, which is Unix only: an ungated helper is dead code on
+    /// Windows, where `-D warnings` makes that a failed build rather than a warning.
+    #[cfg(unix)]
+    fn with_hooks(self, json: &str) -> Self {
+        self.with_state("hooks.json", json)
     }
 
     /// Record an effort level under this home, as choosing one in the interface does, and return
     /// this scratch for chaining.
     fn with_effort(self, level: &str) -> Self {
+        self.with_state("effort", &format!("{level}\n"))
+    }
+
+    /// Write one file of the state a home keeps, creating the directory it lives in.
+    fn with_state(self, name: &str, contents: &str) -> Self {
         let directory = self.path.join(".bravebot");
         std::fs::create_dir_all(&directory).expect("create the state directory");
-        std::fs::write(directory.join("effort"), format!("{level}\n")).expect("write the level");
+        std::fs::write(directory.join(name), contents).expect("write the state file");
         self
     }
 }
@@ -463,6 +475,60 @@ fn a_turn_that_could_not_run_exits_non_zero() {
     );
 }
 
+/// A hook that went wrong is said even by a run whose turn then failed (HOOK-7), which is the one
+/// case where the outcome that would have carried the sentence never arrives.
+///
+/// Nothing a hook prints is read, so this report is the only way somebody learns their formatter has
+/// not run since they mistyped its path, and a turn failing is no reason for them not to hear it.
+/// A property of the process: the sentence is made by the agent, kept by the reporter the run built,
+/// and printed by the ending it reached, and only a run that has all three says whether they are
+/// joined up.
+///
+/// Unix only, for the path the declaration names: a `{:?}` of a Windows path is a JSON string of a
+/// different shape, and what the program is there is not this test's question.
+#[cfg(unix)]
+#[test]
+fn a_run_whose_turn_failed_still_says_what_its_hooks_said() {
+    let scratch = Scratch::new("cli-running-hook-notices");
+    // Attached to the end of the turn, which is the moment a failed turn reaches last and the one a
+    // caller is likeliest to leave out. The program does not exist, so firing it cannot start.
+    let missing = scratch.path.join("no-such-formatter");
+    let scratch = scratch.with_hooks(&format!(
+        r#"{{"hooks": [{{"on": "turn-finished", "run": [{missing:?}]}}]}}"#
+    ));
+
+    let output = bravebot(
+        &scratch.path,
+        // The configuration `a_turn_that_could_not_run_exits_non_zero` fails with: nothing wrong
+        // with it, naming a port nothing can be listening on, so the turn ends with no outcome at
+        // all rather than with a reply to carry the sentence.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !output.status.success(),
+        "the turn this is about did not fail, so it says nothing about a failed one: {stderr}"
+    );
+    assert!(
+        stderr.contains("127.0.0.1:1"),
+        "the run failed over something other than the backend it could not reach: {stderr}"
+    );
+    assert!(
+        stderr.contains("no-such-formatter"),
+        "the turn failed and nobody was told the hook could not start: {stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "the reply stream carried what the hook said: {stdout}"
+    );
+}
+
 /// The whole of the reported defect: a configuration that cannot be used, an argument the program
 /// does not have, and a backend nothing is listening on all exited 1, so a caller could not tell
 /// "fix the config" from "try again in a minute" without reading English.
@@ -721,6 +787,88 @@ fn doctor_names_an_allow_rule_a_checkout_wrote() {
     assert!(
         stdout.contains("1 rule"),
         "the project layer's deny rule stopped applying: {stdout}"
+    );
+}
+
+/// PERM-15: the other answer for the same rule. One the person granted for this directory is in
+/// force, and `doctor` says so and counts it, because a report calling it "not granted" one line
+/// above a session that honours it would send somebody looking for a fault that is not there.
+///
+/// The record is seeded rather than written by a session, because the answer is the person's and the
+/// question that collects it needs a terminal. What is under test here is the reading: that `doctor`
+/// looks in the record keyed on the directory it ran in, and reports and counts what it finds.
+#[test]
+fn doctor_says_an_allow_rule_a_checkout_wrote_is_granted_where_it_was() {
+    let scratch = Scratch::new("cli-running-granted-allow");
+    let cwd = scratch.path.join("checkout");
+    let project = cwd.join(".bravebot");
+    std::fs::create_dir_all(&project).expect("create the project directory");
+    let settings = project.join("settings.json");
+    std::fs::write(
+        &settings,
+        r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"], "deny": ["Read(.env)"]}}"#,
+    )
+    .expect("write the project layer");
+
+    // The record a session would have written on a yes: in the person's own directory, keyed on the
+    // workspace the answer was given about, holding the rule text and the file that proposed it.
+    let workspace = cwd.canonicalize().expect("canonical checkout");
+    let granted = scratch.path.join(".bravebot").join("granted");
+    std::fs::create_dir_all(&granted).expect("create the record directory");
+    let record = granted.join(format!(
+        "{}.jsonl",
+        bravebot_agent::home::key_for(&workspace)
+    ));
+    // Written out rather than encoded, since this crate's tests carry no JSON library. Both paths
+    // are under the scratch directory, so neither holds a character JSON would need escaped, and a
+    // path that did would produce a line the record skips rather than a wrong answer.
+    for path in [&workspace, &settings] {
+        let shown = path.display().to_string();
+        assert!(
+            !shown.contains(['"', '\\']),
+            "the scratch path needs JSON escaping, so this test would seed an unreadable line: {shown}"
+        );
+    }
+    std::fs::write(
+        &record,
+        format!(
+            concat!(
+                r#"{{"workspace":"{}","session":"an-earlier-session","#,
+                r#""rule":"Bash(bash scripts/check.sh)","path":"{}"}}"#,
+                "\n"
+            ),
+            workspace.display(),
+            settings.display(),
+        ),
+    )
+    .expect("seed the record");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+    assert!(
+        stdout.contains("is granted for this directory"),
+        "the granted rule was not reported as granted: {stdout}"
+    );
+    assert!(
+        !stdout.contains("is not granted"),
+        "a rule the person granted was reported as dropped: {stdout}"
+    );
+    // Two rules now: the `deny` entry the file could write on its own, and the `allow` entry the
+    // person granted. A count that left the grant out would say a session here has one.
+    assert!(
+        stdout.contains("2 rules"),
+        "the granted rule was not counted as a rule in force: {stdout}"
     );
 }
 

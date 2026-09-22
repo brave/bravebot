@@ -639,10 +639,14 @@ impl Server {
                 if error.code == CONTENT_MODIFIED {
                     return Ok(Value::Null);
                 }
+                // The code and the method are structure, and they are the whole of what is
+                // reported: the sentence the server sent with them is prose it composed, which
+                // LSP-5 keeps out of the planner's context. `RpcError` does not carry it here to
+                // be dropped, because it is never deserialised.
                 return Err(LspError::Server {
                     language: self.language,
                     code: error.code,
-                    message: error.message,
+                    method: method.to_string(),
                 });
             }
 
@@ -1614,9 +1618,11 @@ mod tests {
     /// each of the two bands it reserves them in: `textDocument/implementation` answers
     /// JSON-RPC's `MethodNotFound`, as a server without that operation does, and
     /// `textDocument/hover` answers LSP's own `RequestFailed`. Neither is a code any server here
-    /// answers an out-of-range position with. The index is reported settled as
-    /// the process comes up, in the words rust-analyzer uses, so nothing waits out LSP-7's
-    /// bound.
+    /// answers an out-of-range position with. The `MethodNotFound` message is the one here that is
+    /// constructed rather than copied from a server: it quotes the workspace file's own source
+    /// text, so that a test can tell whether the sentence a failure reports came from this crate or
+    /// from the server. The index is reported settled as the process comes up, in the words
+    /// rust-analyzer uses, so nothing waits out LSP-7's bound.
     #[cfg(unix)]
     const REJECTING_SERVER: &str = r#"#!/bin/sh
 reply() {
@@ -1624,7 +1630,7 @@ reply() {
 }
 out_of_range='{"code":0,"message":"line number 9999 out of range 0-8"}'
 its_own_fault='{"code":0,"message":"no views"}'
-unimplemented='{"code":-32601,"message":"method not found"}'
+unimplemented='{"code":-32601,"message":"no handler for textDocument/implementation: pub struct Held at src/a.rs:1"}'
 request_failed='{"code":-32803,"message":"request failed"}'
 invalid_offset='{"code":-32603,"message":"Invalid offset LineCol { line: 9999, col: 0 } (line index length: 17)"}'
 while IFS= read -r header; do
@@ -1672,6 +1678,9 @@ done
     #[cfg(unix)]
     const REJECTS_A_QUERY: &str = "bravebot-lsp-rejects-a-query";
 
+    #[cfg(unix)]
+    const REJECTS_WITH_PROSE: &str = "bravebot-lsp-rejects-with-prose";
+
     /// Serialises the tests that write a server and then launch it.
     ///
     /// Linux refuses to execute a file any process holds open for writing. A child forked while a
@@ -1698,6 +1707,11 @@ done
     #[cfg(unix)]
     fn the_server_that_rejects_a_query(_: &str) -> Option<PathBuf> {
         Some(crate::testutil::scratch_dir(REJECTS_A_QUERY).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_that_rejects_with_prose(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(REJECTS_WITH_PROSE).join("server"))
     }
 
     /// A workspace of one nine-line Rust file, with the script above beside it as its server.
@@ -1879,6 +1893,68 @@ done
                 matches!(refused, Err(LspError::Server { .. })),
                 "{}: a server that could not answer must not report nothing found, got {refused:?}",
                 operation.as_str()
+            );
+        }
+    }
+
+    /// LSP-5: a failure is reported in this crate's own words, and the server's sentence about it
+    /// is not among them.
+    ///
+    /// "A server that can read the disk is not a server that can put prose in the planner's
+    /// context", and a JSON-RPC error message is a place for prose to sit: it is free text the
+    /// server composes, and the fixture's `MethodNotFound` puts the workspace file's source text in
+    /// it. So the sentence a planner is handed must name the language, the method and the code, all
+    /// of it structure, and must not contain the server's own words.
+    ///
+    /// `textDocument/implementation` because its code is in [`NOT_AN_ABSENCE`], so this is the
+    /// ordinary path for a server that does not implement an operation rather than a corner: by
+    /// LSP-2 every other rejection of a position becomes nothing found and never renders at all.
+    ///
+    /// Driven against a process because the string under test is the one a server sends: an
+    /// [`LspError`] built in the test would only assert what the test itself put in it.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_failure_reports_a_code_and_not_the_servers_words() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(REJECTS_WITH_PROSE);
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_that_rejects_with_prose,
+            false,
+            Vec::new(),
+        );
+
+        let refused = ask_of_the_rejecting_server(
+            &mut servers,
+            &Question {
+                operation: Operation::Implementation,
+                path: file.to_str().expect("a utf-8 scratch path"),
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        );
+
+        let Err(error) = refused else {
+            panic!("a MethodNotFound is a failure, not nothing found: {refused:?}");
+        };
+        assert!(
+            matches!(error, LspError::Server { .. }),
+            "a server that answered and failed is reported as such, got {error:?}"
+        );
+
+        let said = error.to_string();
+        // The three facts the protocol gives, none of them composed by the server.
+        assert!(said.contains("Rust"), "{said}");
+        assert!(said.contains("-32601"), "{said}");
+        assert!(said.contains("textDocument/implementation"), "{said}");
+        // What the server wrote. The source text is the half that matters, since a server that
+        // can read the disk would otherwise be quoting the tree into the planner's context, and
+        // the opening of the message proves the sentence is not carried whole either.
+        for wrote in ["pub struct Held", "src/a.rs:1", "no handler"] {
+            assert!(
+                !said.contains(wrote),
+                "{said} repeats the server's own words: {wrote}"
             );
         }
     }

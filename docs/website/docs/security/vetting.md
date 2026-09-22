@@ -172,6 +172,14 @@ state is a line people learn to skim.
 Every other verdict falls back to the prompt, carrying the banner it would have carried anyway. Unsafe
 and a check that did not complete are still told apart on the screen.
 
+Where there is nobody to fall back to, the fallback is a refusal. A run started with
+`--dangerously-skip-permissions` puts no prompt to anybody, so with the mode on a verdict that is not safe
+keeps the bytes back instead of promoting them with a warning nobody is reading, and the planner is told
+the slot was kept from it and nothing more. A check that did not complete is answered the same way:
+content has some influence over the call that reads it, so promoting on a failure would be promoting on
+something an attacker can arrange. That is how a run nobody is watching is screened, and without the mode
+on the same run releases both slots unshown and makes no check at all.
+
 The line falls on the shape of the grant, not on which tool produced the bytes. Both promotions cover one
 slot's bytes once and leave nothing behind, so what a verdict can buy is bounded by a single slot either
 way. A trust rule is different in kind, being a standing decision about a whole path rather than about
@@ -206,3 +214,8 @@ who was never shown them would be the one record a reader cannot check.
   content, and a model's word is the whole of what stood between the planner's context and a fetched page.
   That is the mode working as asked rather than a flaw in it, and it is why it is off by default and why
   the key that turns it on is not readable from a checkout.
+- **A screened run with nobody to ask stops where you would have been asked.** Failing closed on a check
+  that did not complete means a rate-limited or unreachable backend keeps content back, so an unattended
+  run can refuse every release for a reason that has nothing to do with the bytes it was reading, and it
+  costs a model call per release on the way. What it buys is that the same run cannot be made to release
+  content by arranging for the check to fail.

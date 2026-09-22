@@ -167,11 +167,24 @@ is no longer there, nothing would match, and the session would resume behaving a
 vouched for anything. Recording the name and putting the directory back on it at load is what keeps
 a record about the same files.
 
+**What is not the map is not covered by this.** An `allow` rule a checkout proposed and a person
+granted is recorded per workspace, and a later session there honours it without asking
+([permissions.md](permissions.md#PERM-15)). That is not trust inferred from what a file said, which
+TRUST-1 rules out: it is an answer a person gave, about one rule text from one named file, and what a
+rule decides is whether they are asked rather than what is trusted. The map is still asked about
+afresh, so a session inheriting such a grant trusts no path nobody vouched for.
+
 **Why.** The question grants standing permission. Honouring last week's answer grants it on behalf
 of a user who was never asked, and trust assumed from silence is not trust granted. A resume is not
 an exception: the answer honoured is the one that session's own user gave, and it carries the rules
 that session's writes recorded, which is what stops a resumed turn reading back a file an earlier
 turn of the same session poisoned.
+
+**Why a granted rule may last where this answer may not.** This answer covers a whole tree and
+everything that appears in it afterwards, so there is no narrowing that would make keeping it worth
+the risk. A granted rule is the opposite shape: one text, from one file, in one workspace, lapsing
+the moment the checkout edits it. What a later session honours unasked is therefore exactly what
+somebody read, which is the property this answer cannot have.
 
 `verified-by: bravebot_session::sessions::a_record_resumes_its_rules_under_the_directory_it_is_read_in`
 `verified-by: bravebot_tui::app::a_fresh_session_is_asked_rather_than_inheriting_a_map`

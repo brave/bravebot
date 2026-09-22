@@ -40,6 +40,11 @@ function count(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 }
 
+/** What the turn said about itself, which both of the events ending a turn carry. */
+function noticesIn(data: Record<string, unknown>): string[] {
+  return Array.isArray(data.notices) ? data.notices.filter((line): line is string => typeof line === 'string') : []
+}
+
 /** This map belongs to one session handle. Only numbered events may change it. */
 export function receiveTurn(turns: Turns, message: BridgeEvent): Turns {
   if (!['turn.started', 'turn.done', 'turn.error', 'audit'].includes(message.event)) return turns
@@ -52,7 +57,7 @@ export function receiveTurn(turns: Turns, message: BridgeEvent): Turns {
     // A worker can emit audit records before its turn.started announcement reaches the UI.
     next.started = true
   } else if (message.event === 'turn.done') {
-    const notices = Array.isArray(data.notices) ? data.notices.filter((line): line is string => typeof line === 'string') : []
+    const notices = noticesIn(data)
     const prior = Object.values(turns).filter((turn) => turn.turn < number && turn.status === 'complete')
       .sort((a, b) => b.turn - a.turn)[0]
     next = { ...next, status: 'complete', notices,
@@ -61,7 +66,9 @@ export function receiveTurn(turns: Turns, message: BridgeEvent): Turns {
       tokens: count(data.tokens), outputTokens: count(data.outputTokens), steps: count(data.steps),
       clean: typeof data.clean === 'boolean' ? data.clean : undefined }
   } else if (message.event === 'turn.error') {
-    next.status = 'interrupted'
+    // A turn that failed produced no reply to carry these, so this event is where they arrive and
+    // the only place the reader can still be told a hook of theirs went wrong.
+    next = { ...next, status: 'interrupted', notices: noticesIn(data) }
   } else {
     const event = data.event
     if (!event || typeof event !== 'object' || Array.isArray(event)) return turns

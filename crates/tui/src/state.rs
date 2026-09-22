@@ -354,10 +354,17 @@ impl Entry {
     }
 }
 
+/// One replayed line.
+///
+/// A line the agent composed is drawn as the message it was, which is what this transcript has
+/// always drawn for one and what a file read for a turn has to keep being: the record says where
+/// the prompt was, so the context around it is drawn without asking what any of it says. There is
+/// no row of this interface's own to draw instead, and inventing one from a tag this build happens
+/// to know would put a line on the screen that the live session never had.
 fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Entry {
     use bravebot_agent::conversation::Said;
     match line {
-        Said::User(text) => Entry::user(text),
+        Said::User(text) | Said::Composed { text, .. } => Entry::user(text),
         Said::Assistant(text) => Entry::assistant(text, Vec::new()),
         Said::Tool(text) => Entry::recalled_tool(text),
     }
@@ -11692,6 +11699,38 @@ mod tests {
             let mut s = session();
             s.replay(&conversation, "a title", &recalled);
             s.transcript
+        }
+
+        /// A tag reaches this transcript two ways: the agent both interfaces share tags a file it
+        /// reads for a turn, and a record the desktop app wrote is resumed here. Either way the
+        /// line is drawn as the message it was. Dropped, a resumed session would be missing the
+        /// context its turn worked from, which is the one thing the record is relied on to put
+        /// back. Written from the tag instead, it would be a line of this program's own that the
+        /// live session never drew.
+        #[test]
+        fn a_replayed_composed_message_is_drawn_as_the_message_it_was() {
+            use bravebot_agent::conversation::{Composed, Said};
+
+            let file = "Contents of readme.md:\n\nread the briefing and carry on";
+            let attached = recalled_entry(&Said::Composed {
+                why: Composed::Attached {
+                    path: "readme.md".into(),
+                },
+                text: file.into(),
+            });
+            assert_eq!(attached.speaker, Speaker::User);
+            assert_eq!(attached.text, file);
+
+            let sentence = "Watch 7 fired: /etc/hosts looks written to since the last look.";
+            let fired = recalled_entry(&Said::Composed {
+                why: Composed::Watch {
+                    number: 7,
+                    path: "/etc/hosts".into(),
+                },
+                text: sentence.into(),
+            });
+            assert_eq!(fired.speaker, Speaker::User);
+            assert_eq!(fired.text, sentence);
         }
 
         /// The audit is written beside the record, so what a gate decided two sessions ago is on

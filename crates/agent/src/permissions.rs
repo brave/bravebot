@@ -30,11 +30,7 @@ pub fn from_settings(
     settings: &Settings,
     profile: Option<&std::path::Path>,
 ) -> (Permissions, Vec<Rejected>) {
-    let lists = settings.permissions();
-    let (permissions, mut rejected) =
-        Permissions::parse(&lists.deny, &lists.ask, &lists.allow, &anchors(profile));
-    rejected.extend(entries_that_are_not_lines(lists));
-    (permissions, rejected)
+    with_granted(settings, &[], profile)
 }
 
 /// The entries the settings layer could not hand over as rule text, as rejects.
@@ -122,6 +118,43 @@ fn anchors(profile: Option<&std::path::Path>) -> Anchors {
         settings_dir: home.as_ref().map(|home| format!("{home}/.bravebot")),
         home,
     }
+}
+
+/// The rules a checkout proposed and a person granted, added to the ones a settings file could
+/// write on its own.
+///
+/// [`from_settings`] is every rule that took effect on being read, which is `deny` and `ask` from
+/// every layer and `allow` from the person's own file alone ([PERM-14]). A checkout's `allow` entry
+/// is dropped there and reported, and this is the other half of the route: an entry the person was
+/// shown and accepted is a rule they wrote, so it is parsed with the rest and decides what any of
+/// them decides.
+///
+/// `granted` is the rule text as the file spelled it, which is what the question showed. So a rule
+/// nobody can read is dropped and reported here exactly as one in the person's own file is
+/// ([PERM-11]): granting it was granting a line, and what a line means is still the rule language's
+/// to say.
+///
+/// Takes the text rather than a [`crate::granted::Proposed`] because what reaches the rule parser is
+/// a line: which file proposed it decided whether to ask, and that question is answered by the time
+/// this is called. `profile` is the user's home directory, for the reason [`from_settings`] states.
+///
+/// [PERM-11]: ../../../docs/specs/permissions.md
+/// [PERM-14]: ../../../docs/specs/permissions.md
+pub fn with_granted(
+    settings: &Settings,
+    granted: &[String],
+    profile: Option<&std::path::Path>,
+) -> (Permissions, Vec<Rejected>) {
+    let lists = settings.permissions();
+    // Appended rather than prepended, and it decides nothing either way: PERM-2 puts `deny` before
+    // `ask` before `allow` and the first match in a list wins, so a granted rule cannot outrank a
+    // narrowing one however the list is ordered. The order the person read them in is the order they
+    // were proposed in, which is the order to report a bad one in.
+    let allow: Vec<String> = lists.allow.iter().chain(granted).cloned().collect();
+    let (permissions, mut rejected) =
+        Permissions::parse(&lists.deny, &lists.ask, &allow, &anchors(profile));
+    rejected.extend(entries_that_are_not_lines(lists));
+    (permissions, rejected)
 }
 
 /// The directories a settings file asked to have opened, in the order it named them.
@@ -338,6 +371,76 @@ mod tests {
             Decision::Ruled(Ruling::Allow),
             "the person's own allow rule stopped deciding"
         );
+    }
+
+    /// PERM-15 at the same boundary: the rule a checkout proposed decides once the person has
+    /// granted it, and the one they did not grant still decides nothing. Both directions in one
+    /// test, because a fix that installed every proposed rule would pass the first assertion alone,
+    /// which is the defect this whole route exists to close.
+    #[test]
+    fn a_rule_the_person_granted_answers_the_prompt_and_one_they_did_not_does_not() {
+        let block = r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#;
+        let checkout = layered_settings("granted-allow", Some(block), None);
+        let profile = PathBuf::from("/home/x");
+
+        let (permissions, rejected) = with_granted(
+            &checkout,
+            &["Bash(bash scripts/check.sh)".to_string()],
+            Some(&profile),
+        );
+        assert!(rejected.is_empty(), "{rejected:?}");
+        assert_eq!(
+            permissions.for_command("bash scripts/check.sh"),
+            Decision::Ruled(Ruling::Allow),
+            "a rule the person granted did not answer the run prompt"
+        );
+
+        let (ungranted, rejected) = with_granted(&checkout, &[], Some(&profile));
+        assert!(rejected.is_empty(), "{rejected:?}");
+        assert_eq!(
+            ungranted.for_command("bash scripts/check.sh"),
+            Decision::Unmatched,
+            "a rule nobody granted answered the run prompt"
+        );
+    }
+
+    /// PERM-2, PERM-15: a granted rule cannot outrank a narrowing one. Granting is the person
+    /// answering a prompt in advance, and a `deny` rule is the refusal that comes before there is a
+    /// prompt to answer, so the list a granted entry joins is still consulted last.
+    #[test]
+    fn a_granted_rule_does_not_beat_a_deny_rule() {
+        let block = r#"{"permissions": {"deny": ["Bash(bash scripts/check.sh)"]}}"#;
+        let checkout = layered_settings("granted-loses-to-deny", Some(block), None);
+
+        let (permissions, _) = with_granted(
+            &checkout,
+            &["Bash(bash scripts/check.sh)".to_string()],
+            Some(&PathBuf::from("/home/x")),
+        );
+        assert_eq!(
+            permissions.for_command("bash scripts/check.sh"),
+            Decision::Ruled(Ruling::Deny),
+            "a granted rule overrode a deny rule"
+        );
+    }
+
+    /// PERM-11, PERM-15: granting a line that is not a rule grants nothing and is reported, exactly
+    /// as an unreadable rule in the person's own file is. What the person accepted was the text on
+    /// the screen, and what a text means is still the rule language's to decide: a line reported
+    /// nowhere reads to whoever wrote it as one in force.
+    #[test]
+    fn a_granted_line_that_is_not_a_rule_is_reported_and_decides_nothing() {
+        let (permissions, rejected) = with_granted(
+            &Settings::default(),
+            &["Bash(bash scripts/check.sh".to_string()],
+            Some(&PathBuf::from("/home/x")),
+        );
+        assert!(
+            permissions.is_empty(),
+            "an unreadable rule decided something"
+        );
+        assert_eq!(rejected.len(), 1);
+        assert!(describe(&rejected[0]).contains("scripts/check.sh"));
     }
 
     /// A scratch home and working directory with the layers the arguments name, read the way a

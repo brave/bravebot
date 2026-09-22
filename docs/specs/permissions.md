@@ -30,7 +30,8 @@ this agent unedited.
 A checkout carries settings files too, and they are not the same claim: whoever wrote the checkout
 wrote them. `deny` and `ask` are read from every layer because both only narrow what would
 otherwise happen. `allow` is the one list that grants, and [PERM-14](#PERM-14) says which layers it
-is read from.
+is read from; a checkout's entry is a request the person grants at a question naming it, which is
+[PERM-15](#PERM-15).
 
 What a rule may decide is narrow, and the boundary is the point. A rule decides **whether a person
 is asked** and **whether an action happens at all**. It never decides what a value is trusted for,
@@ -217,9 +218,10 @@ It stops the asking. It does **not** make a program's output trusted, and it doe
 label: output carries what it would have carried, which is untrusted unless a person vouched for
 every stage.
 
-The rule is the person's own, which [PERM-14](#PERM-14) is what decides: stopping the asking is a
-capability, and this clause is about a rule that reached the gate rather than about every line
-spelling `allow` in every file that was read.
+The rule is the person's own, which [PERM-14](#PERM-14) and [PERM-15](#PERM-15) are what decide:
+stopping the asking is a capability, so the rule is one they wrote in their own file or one they
+granted at a question that named it. This clause is about a rule that reached the gate rather than
+about every line spelling `allow` in every file that was read.
 
 **Why.** Vouching at a prompt grants those two things together because a person is looking at one
 command and can answer for both. A pattern covers commands nobody has read, so it cannot carry the
@@ -344,9 +346,10 @@ train the habit of answering without reading, which is the whole of what asking 
 
 An `allow` rule is read from `~/.bravebot/settings.json`, and from a file `--settings` named that
 resolves outside the workspace. An `allow` rule in `.bravebot/settings.json`, in
-`.bravebot/settings.local.json`, or in a `--settings` file that resolves inside the workspace is
-dropped: it answers no prompt and permits no fetch. Every one dropped is reported, with the file it
-was written in, on `doctor` and in the session that read the file.
+`.bravebot/settings.local.json`, or in a `--settings` file that resolves inside the workspace takes
+effect on being read by nothing: it answers no prompt and permits no fetch. Every one is reported,
+with the file it was written in, on `doctor` and in the session that read the file: as dropped, or as
+granted where the person granted it at the question [PERM-15](#PERM-15) puts.
 
 `deny` and `ask` are read from every layer and are unaffected. So are the names in
 `additionalDirectories`, which [PERM-10](#PERM-10) already puts to the person one question at a
@@ -379,6 +382,88 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_config::settings::a_blank_allow_entry_is_not_reported_as_a_rule_that_was_withheld`
 `verified-by: bravebot_cli::running::doctor_names_an_allow_rule_a_checkout_wrote`
 
+<a id="PERM-15"></a>
+### PERM-15: a checkout proposes an allow rule, and a question naming every one grants them
+
+A checkout's `allow` entries are put to the person as one question when the session opens, after the
+workspace's own. It lists every rule it would grant, in the order the files wrote them, with the file
+each came from. Accepting grants exactly those rules, for this session and for later sessions opened
+in that workspace on the surface that asks; declining grants none and the session continues. Leaving
+at it starts no session.
+
+The surface that asks is the interface. A run nobody is watching installs no `allow` rule at all
+([PERM-8](#PERM-8)'s reasoning, as `for_an_unattended_run` applies it), and a session in lines asks
+nothing here and so grants nothing: a grant is read where it can be asked for, and neither of those
+is a place that could have collected it. Both are the direction that asks.
+
+One question for the list rather than one per rule. Nothing is asked where nothing is proposed, and
+nothing is asked again about a rule that workspace's own record already holds. A rule that cannot be
+read is reported under [PERM-11](#PERM-11) rather than offered, and a granted rule is reported as in
+force on `doctor` and in the session that read it, where [PERM-14](#PERM-14) reports a dropped one.
+
+**What the answer is recorded in.** `~/.bravebot/granted/<key>.jsonl`, one file per workspace, keyed
+as the remembered command lines are ([tools/run.md](tools/run.md)) and covered by
+[state-directory.md](state-directory.md). One JSON object per line, appended. An entry holds the rule
+text as the person saw it and the file that proposed it, so a checkout that edits its rule after a
+grant is asked about again. Everything degrades to asking. No home directory, an unreadable file, a
+line this build cannot account for, a failed write: each means the record says nothing, and a record
+that says nothing is a session that asks. An incognito session writes none of it
+([incognito.md](incognito.md)) and still reads what is there.
+
+The mode that answers every permission question answers this one, on the terms it answers the
+workspace's, and records nothing: a grant written down for somebody who was never asked would outlive
+the flag that made it. A session resumed with the map its own user left is asked nothing and holds
+what its workspace's record already says, which is [PERM-10](#PERM-10)'s treatment of a resume that
+brought its own map.
+
+**Why.** [PERM-14](#PERM-14) closes the hole and costs the per-project answer with it. This is the
+way back: the checkout proposes and the person grants, which is what [#140](https://github.com/brave/bravebot/issues/140)
+and [PERM-10](#PERM-10) already settled for `additionalDirectories`.
+
+The list is what makes trust an acceptable gate here. The startup question asks about a directory, so
+granting these on that answer alone would collect an answer about a tree's content and spend it on
+capability, which is the defect wearing a consent story rather than consent to it. Naming each rule
+makes the answer informed consent for specific grants, on the reasoning [PERM-13](#PERM-13) gives for
+resolving a directory before showing it.
+
+One question rather than thirty is the other half. A directory grants reach over a tree of its own,
+which is why [PERM-10](#PERM-10) asks about each; rules are a list a person reads at once, and the
+known cost recorded below about `additionalDirectories` opening thirty boxes is the thing not to
+repeat. A box about an empty list, or about a rule already answered, trains answering without
+reading, which is the whole of what asking is worth.
+
+Recording the rule text rather than the file's identity is what keeps the grant to what was on the
+screen. A checkout that changes its rule after a grant is proposing something nobody read, and the
+record in the person's own directory rather than in the tree it governs is [PERM-14](#PERM-14) one
+level up: a grant written inside the checkout could be committed.
+
+`verified-by: bravebot_tui::trust_prompt::the_rules_are_granted_only_where_the_person_accepts_them`
+`verified-by: bravebot_tui::trust_prompt::nothing_is_asked_where_there_is_nothing_to_grant`
+`verified-by: bravebot_tui::trust_prompt::leaving_at_the_rules_question_grants_nothing_and_starts_no_session`
+`verified-by: bravebot_tui::trust_prompt::the_rules_prompt_names_every_rule_and_the_file_it_came_from`
+`verified-by: bravebot_tui::trust_prompt::the_rules_prompt_explains_what_granting_does`
+`verified-by: bravebot_tui::app::a_person_asked_about_the_workspace_is_asked_about_the_rules_a_checkout_proposed`
+`verified-by: bravebot_tui::app::a_rule_granted_in_an_earlier_session_is_in_force_rather_than_asked_about_again`
+`verified-by: bravebot_tui::app::one_rule_text_in_two_files_is_granted_for_the_file_it_was_granted_in`
+`verified-by: bravebot_tui::app::bypassing_grants_the_rules_a_checkout_proposed_without_asking`
+`verified-by: bravebot_tui::app::a_resume_grants_only_the_rules_the_record_already_held`
+`verified-by: bravebot_agent::permissions::a_rule_the_person_granted_answers_the_prompt_and_one_they_did_not_does_not`
+`verified-by: bravebot_agent::permissions::a_granted_rule_does_not_beat_a_deny_rule`
+`verified-by: bravebot_agent::permissions::a_granted_line_that_is_not_a_rule_is_reported_and_decides_nothing`
+`verified-by: bravebot_agent::granted::a_rule_granted_by_one_session_is_read_back_by_another`
+`verified-by: bravebot_agent::granted::a_rule_granted_in_one_workspace_is_not_granted_in_another`
+`verified-by: bravebot_agent::granted::a_rule_edited_since_it_was_granted_is_not_granted`
+`verified-by: bravebot_agent::granted::a_grant_for_one_file_is_not_a_grant_for_another`
+`verified-by: bravebot_agent::granted::a_rule_the_record_does_not_hold_is_not_granted`
+`verified-by: bravebot_agent::granted::a_second_grant_is_added_rather_than_replacing_the_first`
+`verified-by: bravebot_agent::granted::a_workspace_sharing_a_key_with_another_is_not_answered_by_its_lines`
+`verified-by: bravebot_agent::granted::a_record_that_cannot_be_read_grants_nothing`
+`verified-by: bravebot_agent::granted::an_entry_this_build_does_not_fully_understand_grants_nothing`
+`verified-by: bravebot_agent::granted::a_line_nothing_can_read_leaves_the_rest_of_the_record_answering`
+`verified-by: bravebot_agent::incognito::no_granted_rule_is_written_down`
+`verified-by: bravebot_agent::incognito::a_rule_an_earlier_session_granted_is_still_honoured`
+`verified-by: bravebot_cli::running::doctor_says_an_allow_rule_a_checkout_wrote_is_granted_where_it_was`
+
 ## Known costs
 
 - **How many questions a session opens with is the file's to choose.** Every name in
@@ -387,14 +472,27 @@ silence reads to whoever wrote it as one in force.
   Ctrl-C, which starts no session. A cap would be worse: the names past it would be dropped in
   silence, which reads as a setting that does nothing. What limits the damage is that no box grants
   anything by itself.
-- **A rule that waives a prompt for one checkout has to be written in the home file.** PERM-14
-  leaves `allow` readable from the person's own file and from one `--settings` names, so somebody
-  who wants `Bash(cargo test)` waived while working in one repository writes it where it applies to
-  every session they open, or passes a file on the command line for the run. A checkout proposing a
-  rule and the person granting it is the shape that gives the per-project answer back, and it needs
-  a question that lists the rules it would grant: gating on the startup trust answer as that
-  question stands would collect an answer about a tree's content and spend it on capability.
-  [#626](https://github.com/brave/bravebot/issues/626) is where that is written down.
+- **A rule a checkout proposes is waived for that checkout only, and only where somebody grants
+  it.** PERM-15 is the per-project answer, so `Bash(cargo test)` waived in one repository is a box at
+  the first session there rather than a line in a file that applies to every session anywhere. What
+  it costs is the box: a checkout whose rules change gets another one, and a person who declines is
+  asked about each action as they were before. The way to waive a prompt everywhere is still the
+  person's own file, or a file `--settings` names for one run.
+- **A grant outlives the session that gave it, which no other answer here does.** PERM-15's record
+  makes a later session in that workspace honour a rule without asking, where the startup trust
+  answer is asked afresh every time ([trust-map.md](trust-map.md#TRUST-6)). The narrowness is what
+  makes it sound: an entry covers one rule text from one file in one workspace, so what a second
+  session honours unasked is exactly what a person read and accepted. Deleting the line, or the
+  file, is the way back, and `doctor` names both.
+- **A grant given at the interface is not read by a session in lines.** `bravebot -p` installs no
+  `allow` rule at all, and the session that puts its questions as lines rather than as panels
+  ([cli.md](cli.md)) asks nothing here, so a rule granted in the panel is a prompt again on either.
+  Both fail closed, and putting the question on a surface is what would fix it rather than reading the
+  record on one that cannot ask.
+- **Declining to trust the workspace still leads to the question.** The two are separate claims, so
+  somebody who said the tree's content is not theirs is still offered its rules, and may grant them.
+  That is the point of asking separately, and it is also the odd case: a person who has just said
+  they did not write this code has said something about whoever wrote the rules too.
 - **A rule is matched against argv, not against what a program does.** `Bash(git *)` covers
   `git -c core.fsmonitor=<script> diff`, which runs a program the rule never named, and
   `Bash(devbox run *)` covers whatever follows `run`. A pattern constraining arguments is weaker

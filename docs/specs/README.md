@@ -16,7 +16,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [labels.md](labels.md) | `LABEL` | 10 | the lattice, taint, who may read what, and how a first label is assigned |
 | [routing.md](routing.md) | `ROUTE` | 8 | where an effect may land and what may decide it |
 | [trust-map.md](trust-map.md) | `TRUST` | 19 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
-| [permissions.md](permissions.md) | `PERM` | 14 | rules written in advance about what to ask about and what to refuse |
+| [permissions.md](permissions.md) | `PERM` | 15 | rules written in advance about what to ask about and what to refuse |
 | [processors.md](processors.md) | `PROC` | 12 | the one component that reads untrusted content, and what it may do with it |
 | [vetting.md](vetting.md) | `CHECK` | 14 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
 | [delegation.md](delegation.md) | `DELEGATE` | 18 | a second planner, narrower than the first, and what crosses back from one |
@@ -53,7 +53,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
 | [trace.md](trace.md) | `TRACE` | 6 | what is recorded about every decision the system makes, and what that record may contain |
 | [localization.md](localization.md) | `LOCALE` | 7 | every word said to a person, and which of them change with the reader's language |
-| [layering.md](layering.md) | `LAYER` | 5 | which crate is allowed to do what |
+| [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |
 | [releases.md](releases.md) | `RELEASE` | 12 | what names a version, what starts a release, and what an installer trusts about what it fetched |
 | [updates.md](updates.md) | `UPDATE` | 10 | learning that a newer version is out, and the line that installs it |
 

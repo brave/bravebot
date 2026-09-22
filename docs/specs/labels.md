@@ -17,7 +17,7 @@ guards:
       - crates/agent/tests/workspace.rs: 27
       - crates/aichat/src/lib.rs: 4
       - crates/bedrock/src/lib.rs: 5
-      - crates/core/src/policy.rs: 83
+      - crates/core/src/policy.rs: 85
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
@@ -29,7 +29,7 @@ guards:
       - crates/agent/src/aside.rs: 2
       - crates/agent/src/manifest.rs: 4
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 29
+      - crates/agent/src/tools.rs: 25
       - crates/agent/src/turn.rs: 4
       - crates/agent/src/vet.rs: 1
       - crates/agent/src/workspace.rs: 2
@@ -100,7 +100,7 @@ guards:
       - crates/core/src/policy.rs: 4
   - symbol: Policy::read_planner_argument
     sites:
-      - crates/agent/src/tools.rs: 5
+      - crates/agent/src/tools.rs: 9
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 5
   - symbol: Policy::decode_transport
@@ -289,6 +289,9 @@ destination, and it is a read a driver may not do for itself.
 
 `verified-by: bravebot_agent::tools::a_call_line_names_its_reference_inside_the_kernel`
 `verified-by: bravebot_agent::tools::a_task_list_is_named_inside_the_reshape_that_builds_it`
+`verified-by: bravebot_agent::turn::a_proposed_url_is_read_through_the_argument_gate`
+`verified-by: bravebot_agent::turn::a_job_name_is_read_through_the_argument_gate`
+`verified-by: bravebot_agent::turn::a_command_line_and_its_directory_are_read_through_the_argument_gate`
 
 ## Which direction a label may move
 

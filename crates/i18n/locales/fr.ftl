@@ -87,8 +87,8 @@ cli-option-trace = Afficher le journal d'audit
 cli-option-json = Afficher un objet de résultat sur stdout au lieu de la réponse
 cli-option-incognito = Ne rien écrire dans ~/.bravebot : ni historique, ni session, ni préférence
 cli-option-vet =
-    Pour cette exécution, laisser une vérification sans rien trouver promouvoir du contenu sans
-    vous demander
+    Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
+    promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
 cli-option-dangerously-skip-permissions =
     Contourner toutes les vérifications de permission. Recommandé uniquement pour des bacs à sable
     sans accès à Internet
@@ -209,7 +209,10 @@ doctor-settings-vetting-ignored =
     ~/.bravebot/settings.json
 doctor-settings-allow-ignored =
     la règle allow { $rule } dans { $path } n'est pas accordée : une règle allow répond à une
-    invite, elle n'est donc lue que depuis ~/.bravebot/settings.json
+    invite, le fichier d'un projet la propose donc et vous l'accordez au démarrage d'une session
+doctor-settings-granted = accordée
+doctor-settings-allow-granted =
+    la règle allow { $rule } dans { $path } est accordée pour ce répertoire
 doctor-managed = géré
 doctor-managed-pinned = { $names } depuis { $path }
 doctor-managed-nothing = { $path }, n'épinglant rien
@@ -332,6 +335,22 @@ named-directory-regardless =
     sans lui ; /add-dir en ouvre un à tout moment.
 named-directory-yes = l'ouvrir
 named-directory-no = le laisser fermé
+
+
+## Accorder les règles allow proposées par le fichier de réglages d'un dépôt, demandé une seule fois
+
+granted-rules-title = accorder ces règles de permission ?
+granted-rules-question = Les réglages de ce projet demandent à ne plus vous interroger sur :
+granted-rules-explained =
+    Chacune de ces règles répond à une demande d'approbation que vous verriez autrement : lancer un
+    programme, écrire un fichier, ou récupérer une URL. Elles ont été écrites par l'auteur de ce
+    projet, pas par vous.
+granted-rules-regardless =
+    Un projet ne peut pas se les accorder lui-même. Répondez non et cette session vous interroge
+    sur chaque action comme d'habitude ; les règles de ~/.bravebot/settings.json sont les vôtres et
+    s'appliquent toujours.
+granted-rules-yes = les accorder
+granted-rules-no = continuer à me demander
 
 
 ## Choisir un thème, un modèle, ou une session à reprendre
@@ -896,8 +915,11 @@ session-directory-closed = { $directory } fermé ; rouvrez-le avec /add-dir { $d
 session-directory-not-changed = impossible de passer à { $directory } : { $problem }
 session-permission-rule-ignored = règle de permission ignorée dans settings.json : { $problem }
 session-permission-allow-ignored =
-    la règle allow { $rule } de { $path } n'est pas accordée : une règle allow répond à une
-    invite, elle n'est donc lue que depuis ~/.bravebot/settings.json
+    la règle allow { $rule } de { $path } n'est pas accordée : une règle allow répond à une invite,
+    le fichier d'un projet la propose donc et c'est vous qui l'accordez
+session-permission-allow-granted-before =
+    la règle allow { $rule } de { $path } est accordée : vous l'avez accordée à ce projet
+    auparavant ; cette réponse est conservée dans { $record }
 session-permissions-skipped =
     --dangerously-skip-permissions : rien ne sera demandé avant une écriture, une commande, ou la
     lecture d'un fichier que personne n'a approuvé. shift-tab pour changer

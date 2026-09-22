@@ -274,10 +274,18 @@ a server's output is untrusted, hover text is quarantined by the trust map, and 
 what lets a location through. None of those rest on confinement and none of them move. A server that
 can read the disk is not a server that can put prose in the planner's context.
 
+That covers a failure as well as an answer. The `message` a server sends with a JSON-RPC error is
+free text the server composes, with nothing in the protocol constraining what goes in it, so it is
+not [LSP-3](#LSP-3)'s kind of thing: that clause lets a location through on the argument that there
+is nowhere in it for prose to sit, and an error message is nowhere else. A failure is therefore
+reported in this crate's own words: which language, which method was put, and the code the protocol
+assigns. The server's sentence is not carried at all.
+
 `verified-by: bravebot_lsp::server::starting_a_server_is_put_to_a_person`
 `verified-by: bravebot_lsp::server::a_refused_server_does_not_start`
 `verified-by: bravebot_lsp::server::a_server_is_not_asked_about_twice_in_a_session`
 `verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next`
+`verified-by: bravebot_lsp::server::a_server_failure_reports_a_code_and_not_the_servers_words`
 
 <a id="LSP-6"></a>
 ### LSP-6: no server means no answer, and says which
@@ -441,6 +449,14 @@ trade incognito already makes for the session record.
   reason: not that the prose is known to be untrustworthy, but that its file is unknown, and a
   guess in the other direction is trusted bytes out of nowhere. It leaves `hover` the weakest
   operation here rather than the most useful one, and the open question below is the way out.
+
+- **A server's own explanation of a failure is not readable anywhere.** [LSP-5](#LSP-5) keeps the
+  `message` beside a JSON-RPC error out of this process entirely, so a server that fails for a
+  reason only its own sentence gives reports the method and the code and nothing else. Its own
+  diagnostics are not the way back to it either, since a server is started with its standard error
+  discarded. That is the same trade [LSP-2](#LSP-2) makes, where structure is read and prose is
+  not, and carrying the sentence under a label instead would put it behind the quarantine hover
+  text is behind, where a notice nobody may read tells nobody anything.
 
 - **A server runs the dependency tree's code, and that is the price of the tool working at all.**
   [LSP-5](#LSP-5) grants a server the user's own access, so for Rust `build.rs` and proc macros out of

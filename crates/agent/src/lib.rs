@@ -17,6 +17,7 @@ pub mod diff;
 pub mod exec;
 pub mod glob;
 pub mod goal;
+pub mod granted;
 pub mod home;
 pub mod hooks;
 pub mod lsp;

@@ -624,6 +624,18 @@ prompt.
 [vetting.md](vetting.md#CHECK-12) is what that covers and what it does not, and
 [vetting.md](vetting.md#CHECK-11) is the other two routes in and how they resolve against this one.
 
+**The other half of what it says, where nobody can be asked.** On a run that also bypasses
+permissions ([permission-modes.md](permission-modes.md#MODE-4)) the flag is what makes a verdict able
+to refuse: those two prompts are otherwise answered yes unshown, and with the flag a word that is not
+`safe` keeps the bytes back instead. Refusing covers a check that did not complete as well as one
+that objected. So an unattended run is screened rather than unscreened, which is the only reading
+under which asking for a check on a run with no prompts means anything.
+
+What it does not buy on that run: the bytes still reach the backend in the confined conversation,
+since making the check is what sends them, and each promotion costs a model call in the run's own
+critical path. Both are the price of the screening rather than side effects of it, and a run that
+wants neither leaves the flag off.
+
 The flag is taken out of the arguments before anything dispatches on them, so it composes with
 every way of starting and with the other three flags taken out there, `--plain` included. Given
 twice it is given once, which is asking for something that is already on rather than an error to

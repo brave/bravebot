@@ -384,7 +384,7 @@ one thing leaves everything else in force:
 |---|---|
 | `env`, `provider`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories` | every file's entries are kept |
-| `permissions.allow` | your own file's entries, and a `--settings` file outside the project |
+| `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
 | `model`, anything else | the closest file that set it wins |
 
 The lists are the exception because an entry in one only ever takes something away: a name under
@@ -393,13 +393,16 @@ something that was otherwise allowed. Overriding them would let a file closer to
 what a broader one withheld, and a permission removed by a file you never opened is the outcome
 worth ruling out.
 
-`allow` goes the other way, which is why it is the one list a checkout cannot write. An entry there
-stops a prompt appearing, so one in `.bravebot/settings.json` or `.bravebot/settings.local.json`
-would let whoever last edited the repository approve a command, a write or a fetch on your behalf.
-Entries in those two files are dropped, and each dropped entry is named on `bravebot doctor` and in
-the session that read it. A file `--settings` names is yours, since you typed the path, unless it
-resolves inside the project you are working in, which makes it the checkout's file under another
-name.
+`allow` goes the other way, which is why it is the one list a checkout cannot write by itself. An
+entry there stops a prompt appearing, so one in `.bravebot/settings.json` or
+`.bravebot/settings.local.json` would let whoever last edited the repository approve a command, a
+write or a fetch on your behalf. Entries in those two files are instead **proposed**: a session opening
+in the project lists them in one box with the file each came from, and only your yes puts them in
+force. The answer is kept per project in `~/.bravebot/granted/`, so you are asked once rather than at
+every launch, and a rule the project edits afterwards is asked about again. `bravebot doctor` names
+every such entry and says whether it is granted. A file `--settings` names is yours, since you typed
+the path, unless it resolves inside the project you are working in, which makes it the checkout's file
+under another name.
 
 **The project files are read from the directory you started bravebot in, and from no directory above
 it.** Searching upward would make what configures a session depend on which directory you happened to
@@ -452,8 +455,8 @@ the host every request goes to and the credential profile that signs it, and not
 says so. Your conversation reaching a host the repository chose is the cost to weigh: read a
 project's settings file before working in it, and `bravebot doctor` names the files in force. What
 it cannot do is grant a capability. The names that would (`permissions.allow`, and
-`permissions.additionalDirectories`) do not take effect on being read: the first is dropped and
-reported, and the second is a question you answer when the session opens.
+`permissions.additionalDirectories`) do not take effect on being read: each is a question you answer
+when the session opens, the rules in one box listing them and the directories one box apiece.
 :::
 
 :::note
@@ -466,9 +469,10 @@ the thing it configures.
 
 A [`permissions`](#permissions) block can refuse an action and it can answer a prompt, and it can do
 nothing else: no rule there makes a path reachable, and no rule makes a command's output trusted. Of
-the two things it can do, only refusing is a claim a checkout may make. `permissions.allow` answers
-a prompt, so it is read from your file and not from the project's, and `additionalDirectories` names
-directories you are asked about one at a time rather than ones a file opens.
+the two things it can do, only refusing is a claim a checkout may make on its own. `permissions.allow`
+answers a prompt, so a project's entries are rules you are shown and grant rather than rules its file
+puts in force, and `additionalDirectories` names directories you are asked about one at a time rather
+than ones a file opens.
 
 [`vetting`](#vetting) decides whether you are asked something at all, which is why it too is read
 from your home file alone and never from a checkout's.
@@ -551,8 +555,8 @@ never trust a command's output, is on
 [Approvals and permissions](../security/permissions.md#rules-you-write-down-in-advance).
 
 `deny` and `ask` work from any of the files. `allow` works from `~/.bravebot/settings.json` and from
-a `--settings` file outside your project, and nowhere else: see
-[how the files combine](#settingsjson) for why.
+a `--settings` file outside your project; a project's own entries are proposed to you in a box when
+the session opens, and work once you grant them. See [how the files combine](#settingsjson) for why.
 
 A rule is `Tool` or `Tool(specifier)`, and names one of four **families**:
 

@@ -168,6 +168,7 @@ macro_rules! skipping_permissions {
         &mut bravebot_agent::Confining::new(
             &mut bravebot_agent::confirm::Unattended,
             bravebot_agent::PermissionMode::Bypass,
+            false,
         )
     };
 }
@@ -601,6 +602,7 @@ fn plan_mode_refuses_a_plan_that_writes() {
         &mut bravebot_agent::Confining::new(
             &mut bravebot_agent::confirm::ApprovePlans,
             bravebot_agent::PermissionMode::Plan,
+            false,
         ),
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
@@ -643,6 +645,7 @@ fn plan_mode_runs_a_plan_that_writes_nothing() {
         &mut bravebot_agent::Confining::new(
             &mut bravebot_agent::confirm::ApprovePlans,
             bravebot_agent::PermissionMode::Plan,
+            false,
         ),
         &mut bravebot_agent::IgnoreReports,
         &mut sink,

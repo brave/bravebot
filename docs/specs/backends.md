@@ -58,17 +58,19 @@ gateway block names a variable holding a credential rather than a way to produce
 
 **Note.** A `permissions` block is not an exception, and the route is what makes it one rather than
 the prohibition alone. Its `deny` and `ask` rules only ever narrow what would otherwise be allowed,
-so every layer's are read. The two names in it that would grant do not take effect on being read:
-the directories it names are requests, each put to the person when the session opens, and one they
-decline is neither reachable nor vouched for; an `allow` rule answers an approval prompt, so a
-checkout's file cannot write one and every entry dropped is reported. Nothing in a block grants an
-effect that was refused without it. [permissions.md](permissions.md) is what a block may say, and
-where both of those routes are written down.
+so every layer's are read. The two names in it that would grant do not take effect on being read, and
+both take the same route: a request put to the person when the session opens. The directories it
+names are one question each, and one they decline is neither reachable nor vouched for; the `allow`
+rules a checkout wrote are one question listing every one, and a rule nobody granted answers no
+prompt. Nothing in a block grants an effect that was refused without it; only a person does.
+[permissions.md](permissions.md) is what a block may say, and where both of those routes are written
+down.
 
 `verified-by: by-construction (values are consulted by name and never exported; the only value handed to a subprocess is the AWS profile, passed as an argument to the tool that owns it; no field is read as a path to execute, and a gateway's pass-through options reach a request body and nothing else)`
 `verified-by: bravebot_tui::trust_prompt::a_directory_a_file_named_is_opened_only_where_the_person_accepts_it`
 `verified-by: bravebot_config::settings::a_project_layer_allow_rule_is_not_granted`
 `verified-by: bravebot_agent::permissions::a_checkout_cannot_write_a_rule_that_answers_a_prompt`
+`verified-by: bravebot_tui::trust_prompt::the_rules_are_granted_only_where_the_person_accepts_them`
 
 <a id="BACKEND-2"></a>
 ### BACKEND-2: configuring a second backend takes nothing away from the first

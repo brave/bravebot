@@ -52,7 +52,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
 | `--trace` | print the audit trail to stderr |
-| `--vet` | let a check that finds nothing release a quarantined slot, for this run ([below](#--vet)) |
+| `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
 | `--incognito` | write nothing to `~/.bravebot`: no history, no session record, no preference |
 | `--dangerously-skip-permissions` | bypass every permission check; recommended only for a sandbox with no internet access |
 | `-h`, `--help` | show the help |
@@ -237,6 +237,13 @@ A one-shot run has nobody to ask, so a check on this path would otherwise end in
 it found. The flag is what says in advance that a clean check may answer, and it is a narrower
 statement than `--dangerously-skip-permissions`: it answers one question, about one slot at a time,
 and only where a check completed and found nothing.
+
+Paired with `--dangerously-skip-permissions` it is also what lets a check refuse. That mode releases
+those two slots unshown on its own; with this flag the check's word is what answers instead, so a
+verdict that objects, or a check that did not complete, keeps the bytes back and the model is told the
+slot was kept from it. That is the way to screen a run nobody is watching. It costs a model call per
+release, in the run's own critical path, and the bytes reach the backend to be checked whether or not
+they are then released.
 
 It outranks both standing answers, a recorded `off` included, because it is the narrowest in time.
 There is no flag the other way: for one run without it, change the file the standing answer is kept

@@ -524,6 +524,10 @@ pub trait Reporter {
     /// the outcome draws them after every tool line, describing what the turn began with as
     /// though it were the last thing that happened.
     ///
+    /// Also what a hook that went wrong is said with, at the moment it goes wrong (HOOK-7). A turn
+    /// that fails produces no outcome at all, so a caller that reports at the end rather than
+    /// drawing as it goes has to keep these to have anything to say beside the failure.
+    ///
     /// The driver's own words about a file it enumerated, never anything read out of one, so
     /// there is nothing here for a display gate to release.
     fn notice(&mut self, _text: String) {}

@@ -648,7 +648,10 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     // is what stands between the flag and an effect.
     let attended = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
     let mut one_shot = OneShot::new(std::io::stdin(), std::io::stderr(), attended);
-    let mut confirmer = bravebot_agent::Confining::new(&mut one_shot, permission_mode);
+    // Screening off the task, so the answer the tools fill a verdict in under and the answer that
+    // decides whether a verdict which objects can refuse are the one value resolved above.
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut one_shot, permission_mode, task.auto_vetting);
     // On stderr, beside the progress lines, so a pipe of the reply is unaffected. Said even here,
     // where nobody may be reading: a run that wrote to the tree without asking should leave a record
     // of having been told not to ask.
@@ -830,6 +833,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         Err(bravebot_agent::TurnError::Manifest { attempt, cause }) => {
             let ending = exit::ending_of(&cause);
             let stopped = fail(ending, &cause);
+            say_notices(&mut std::io::stderr().lock(), reporter.notices());
             let report = attempt.describe();
             if !report.is_empty() {
                 eprintln!();
@@ -845,6 +849,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
                     &cause.to_string(),
                     reporter.calls(),
                     &refusals(&sink),
+                    reporter.notices(),
                 ));
             }
             stopped
@@ -852,12 +857,14 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         Err(err) => {
             let ending = exit::ending_of(&err);
             let stopped = fail(ending, &err);
+            say_notices(&mut std::io::stderr().lock(), reporter.notices());
             if as_json {
                 say_the_result(&what_ran(
                     ending,
                     &err.to_string(),
                     reporter.calls(),
                     &refusals(&sink),
+                    reporter.notices(),
                 ));
             }
             stopped
@@ -883,7 +890,7 @@ fn stopped_before_the_turn(
     let message = message.to_string();
     let stopped = fail(ending, &message);
     if as_json {
-        say_the_result(&what_ran(ending, &message, &[], &[]));
+        say_the_result(&what_ran(ending, &message, &[], &[], &[]));
     }
     stopped
 }
@@ -947,12 +954,14 @@ fn refusals(sink: &RecordingSink) -> Vec<json::Refusal> {
 /// Written even where nothing ran at all, because the alternative is a caller having to tell an
 /// empty stdout from a result, which is the prose surface again with an extra step. A run that
 /// failed part way through still says what it had done by then: the calls are what a caller needs
-/// to know which of them to undo.
+/// to know which of them to undo, and the notices are what it was told on the way, there being no
+/// outcome left to carry them (HOOK-7).
 fn what_ran(
     ending: Ending,
     message: &str,
     calls: &[json::Call],
     refusals: &[json::Refusal],
+    notices: &[String],
 ) -> String {
     json::render(&json::Report {
         ending,
@@ -963,7 +972,7 @@ fn what_ran(
         tokens: json::Tokens::default(),
         calls,
         refusals,
-        notices: &[],
+        notices,
     })
 }
 
@@ -1268,9 +1277,7 @@ struct Finished<'a> {
 /// back. A notice or an audit trail sharing the reply's stream would corrupt whatever the reply
 /// was piped into.
 fn report(reply: &mut impl Write, beside: &mut impl Write, run: &Finished<'_>) {
-    for notice in run.notices {
-        let _ = writeln!(beside, "{}", t!(cli_notice, notice = notice));
-    }
+    say_notices(beside, run.notices);
     if let Some(complaint) = run.not_served {
         let _ = writeln!(beside, "{complaint}");
     }
@@ -1287,6 +1294,18 @@ fn report(reply: &mut impl Write, beside: &mut impl Write, run: &Finished<'_>) {
     if !run.clean {
         let _ = writeln!(beside);
         let _ = writeln!(beside, "{}", t!(cli_something_was_refused));
+    }
+}
+
+/// Say what the turn said about itself as it ran: which standing instructions and skills loaded,
+/// and what a hook did that went wrong.
+///
+/// One function for all three surfaces that print these, so a turn that ended in a failure and one
+/// that answered cannot come to word the same sentence differently. Never on the reply's stream:
+/// these are the driver's own words and a pipe reading the reply must not pick them up.
+fn say_notices(beside: &mut impl Write, notices: &[String]) {
+    for notice in notices {
+        let _ = writeln!(beside, "{}", t!(cli_notice, notice = notice));
     }
 }
 
@@ -1744,19 +1763,52 @@ fn doctor() -> ExitCode {
                 );
             }
 
-            // The same, for the other name a checkout cannot answer: an `allow` entry stops a
-            // prompt, so one read out of a file that arrived with a clone would run a program
-            // nobody was asked about. Named one rule at a time rather than counted, because the
-            // person who wrote it is looking for their own line and a count tells them nothing.
-            for (path, rule) in settings.allow_ignored() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_allow_ignored,
-                        rule = rule,
-                        path = path.display().to_string()
+            // The same, for the other name a checkout cannot answer on its own: an `allow` entry
+            // stops a prompt, so one read out of a file that arrived with a clone would run a
+            // program nobody was asked about. A rule this workspace's own record says the person
+            // granted is in force and says so; every other one is dropped and says that. Named one
+            // rule at a time rather than counted, for the reason the vetting line gives and because
+            // the two answers are per rule rather than per file.
+            let proposed: Vec<bravebot_agent::granted::Proposed> = settings
+                .allow_ignored()
+                .map(|(path, rule)| bravebot_agent::granted::Proposed::new(path, rule))
+                .collect();
+            // The record is keyed on the workspace, so this answers about the directory `doctor` ran
+            // in. Canonicalized, because a session keys on the root the workspace resolved and a
+            // report keyed on the spelling would answer about a path that session never wrote: the
+            // two agree on Unix and do not on Windows, where resolving prefixes a name. No state
+            // directory, or one that cannot be read, is a record that says nothing, and a rule
+            // nobody granted is one that is dropped.
+            let here = std::env::current_dir().and_then(|cwd| cwd.canonicalize());
+            let granted: Vec<bravebot_agent::granted::Proposed> =
+                match (bravebot_agent::home::directory(), here) {
+                    (Some(home), Ok(cwd)) => bravebot_agent::granted::Store::new(&home, &cwd)
+                        .granted(&proposed)
+                        .into_iter()
+                        .cloned()
+                        .collect(),
+                    _ => Vec::new(),
+                };
+            for rule in &proposed {
+                let path = rule.path.display().to_string();
+                match granted.contains(rule) {
+                    true => fact(
+                        t!(doctor_settings_granted),
+                        t!(
+                            doctor_settings_allow_granted,
+                            rule = &rule.rule,
+                            path = path
+                        ),
                     ),
-                );
+                    false => fact(
+                        t!(doctor_settings_ignored),
+                        t!(
+                            doctor_settings_allow_ignored,
+                            rule = &rule.rule,
+                            path = path
+                        ),
+                    ),
+                }
             }
 
             // After the layers a person owns, because it is what answers for a name none of them
@@ -1769,8 +1821,14 @@ fn doctor() -> ExitCode {
             // nothing they cannot read in the file. What is worth saying is which of them this
             // build could not act on, because those are the ones that look like protection and
             // are not.
-            let (permissions, rejected) = bravebot_agent::permissions::from_settings(
+            // The granted rules are in the count, because they are rules in force: a report that
+            // left them out would say a workspace had one rule where a session there has two.
+            let (permissions, rejected) = bravebot_agent::permissions::with_granted(
                 &settings,
+                &granted
+                    .iter()
+                    .map(|rule| rule.rule.clone())
+                    .collect::<Vec<_>>(),
                 bravebot_agent::home::profile().as_deref(),
             );
             fact(
@@ -3106,6 +3164,26 @@ mod tests {
         assert!(beside.contains("note: a skill was loaded"), "got: {beside}");
         assert!(beside.contains("model: qwen-3-235b"), "got: {beside}");
         assert!(beside.contains("a policy gate refused"), "got: {beside}");
+    }
+
+    /// A caller reading the result object rather than stderr is a caller with nowhere to draw, and a
+    /// run that failed is the one whose sentences have no reply to arrive on (HOOK-7). Left out,
+    /// there is no surface at all on which that caller learns a hook of theirs is broken.
+    #[test]
+    fn a_result_object_for_a_failed_run_lists_what_the_turn_said() {
+        let object = what_ran(
+            Ending::Failed,
+            "BB1001: nothing answered",
+            &[],
+            &[],
+            &["hook turn-finished: /usr/bin/fmt could not be started".to_string()],
+        );
+
+        assert!(
+            object
+                .contains(r#""notices":["hook turn-finished: /usr/bin/fmt could not be started"]"#),
+            "got: {object}"
+        );
     }
 
     /// Without `--trace` the trail is not written at all, rather than written somewhere quieter.

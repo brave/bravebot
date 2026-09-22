@@ -31,7 +31,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::confirm::Confirmer;
-use crate::conversation::{Conversation, TOOL_RESULT_PREFIX};
+use crate::conversation::{Composed, Conversation, TOOL_RESULT_PREFIX};
 use crate::report::{DelegateId, IgnoreReports, Phase, Reporter};
 use crate::timing::{Elapsed, Timing};
 use crate::tools;
@@ -534,6 +534,12 @@ pub struct Attachment {
 pub struct Task {
     /// The user's instruction. The only trusted input.
     pub prompt: String,
+    /// Why this prompt exists, where nobody typed it.
+    ///
+    /// `None` for a line a person wrote, which is nearly every turn. A watch firing submits an
+    /// ordinary turn whose prompt the agent composed, and a transcript drawn later has nothing
+    /// but the sentence to go on unless the record says so. See [`Composed`].
+    pub composed: Option<Composed>,
     /// Workspace-relative files to include as context. Trusted because the user named
     /// them, not the model.
     pub files: Vec<String>,
@@ -740,6 +746,8 @@ impl Task {
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
             prompt: prompt.into(),
+            // A line somebody typed until a caller says what composed it.
+            composed: None,
             files: Vec::new(),
             attachments: Vec::new(),
             dropped_text: Vec::new(),
@@ -792,6 +800,16 @@ impl Task {
 
     pub fn with_file(mut self, path: impl Into<String>) -> Self {
         self.files.push(path.into());
+        self
+    }
+
+    /// Say that the agent composed this prompt, and what for.
+    ///
+    /// Only a caller that composed the prompt itself may say so, which is why this is a builder on
+    /// the task rather than anything a request can carry: a front end able to set it would be able
+    /// to have a transcript draw the interface's own rows about a line a person typed.
+    pub fn composed_by_the_agent(mut self, composed: Composed) -> Self {
+        self.composed = Some(composed);
         self
     }
 
@@ -1513,15 +1531,23 @@ fn admit_context_file<S: Sink>(
         .present("chat", slot, path, contents, conversation.quarantine())
         .map_err(|d| TurnError::Precommit(d.to_string()))?;
 
-    conversation.push(Message::user(match &presented {
-        Presentation::Visible(body) => format!("Contents of {path}:\n\n{body}"),
-        Presentation::Quarantined(reference) => {
-            format!(
-                "{path} could not be shown to you.\n\n{}",
-                reference.describe()
-            )
-        }
-    }));
+    match &presented {
+        // Tagged, because this is the one message in a conversation whose words are a file's.
+        // Recorded here and nowhere later: this is where the prose is composed, so this is the
+        // only place that knows the sentence in front of the body is the agent's own.
+        Presentation::Visible(body) => conversation.push_composed(
+            Message::user(format!("Contents of {path}:\n\n{body}")),
+            Composed::Attached {
+                path: path.to_string(),
+            },
+        ),
+        // Untagged: no byte of the file is in this, and what it says is something a person has to
+        // read. A reference with nothing drawn about it is a turn that quietly read nothing.
+        Presentation::Quarantined(reference) => conversation.push(Message::user(format!(
+            "{path} could not be shown to you.\n\n{}",
+            reference.describe()
+        ))),
+    }
 
     Ok(())
 }
@@ -2293,8 +2319,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // typed a line and dropped a file on it, or pasted a picture into it. Two messages would put
     // the picture somewhere other than the sentence asking about it.
     let prompt_at = conversation.recounted().len();
-    if task.attachments.is_empty() && task.images.is_empty() {
-        conversation.push(Message::user(task.prompt.clone()));
+    let submitted = if task.attachments.is_empty() && task.images.is_empty() {
+        Message::user(task.prompt.clone())
     } else {
         let mut parts = vec![Part::Text {
             text: task.prompt.clone(),
@@ -2355,7 +2381,14 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             parts.push(image.part());
         }
 
-        conversation.push(Message::user_parts(parts));
+        Message::user_parts(parts)
+    };
+
+    // A prompt nobody typed says so. Whoever asked for the turn is the only thing that knows,
+    // and by the time a transcript is being drawn the sentence is all that is left to go on.
+    match &task.composed {
+        Some(composed) => conversation.push_composed(submitted, composed.clone()),
+        None => conversation.push(submitted),
     }
 
     // A plain prompt can begin with an internal-note prefix that recounting omits.
@@ -2956,6 +2989,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 task.profile.as_deref(),
                                 task.model.as_deref(),
                                 task.permission_mode,
+                                task.auto_vetting,
                                 &task.attribution,
                                 cancel,
                                 &mut confirmer,
