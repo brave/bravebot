@@ -24,8 +24,13 @@ export interface Fork {
   child: SessionRef
   parent: SessionRef
   /**
-   * Which prompt of the parent the child was cut in front of, counted over what the transcript
-   * drew. The same coordinate `session.fork` cut on, which is what lets a link land on the row.
+   * Which of the parent's user messages the child was cut in front of, as the agent counts them.
+   *
+   * The same coordinate `session.fork` cut on, which is what lets a link land on the row. It is
+   * the agent's count and not a count of the rows a transcript drew: several things the agent
+   * stores as a user message are drawn as something else, and a fork whose ordinal disagreed
+   * with the agent's was refused rather than taken, so every entry written here is one the agent
+   * accepted.
    */
   prompt: number
   /** When the fork was taken, in milliseconds. */
