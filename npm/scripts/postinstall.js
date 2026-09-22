@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-// Downloads the release binary for this platform and verifies its checksum.
+// Downloads the release binary for this platform and verifies its checksum and, on Linux, its
+// detached GPG signature.
 //
 // The checksum check is not optional: without it, a network-fetched executable would
 // run on the strength of TLS alone, and a compromised or substituted release asset
@@ -8,6 +9,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const https = require("node:https");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
@@ -15,50 +17,7 @@ const { spawnSync } = require("node:child_process");
 const SKIP_ENV = "BRAVEBOT_INSTALL_SKIP_DOWNLOAD";
 const DEFAULT_REPO = "brave/bravebot";
 const MAX_REDIRECTS = 5;
-
-const repo = process.env.BRAVEBOT_REPO || DEFAULT_REPO;
-const pkg = require(path.join(__dirname, "../../package.json"));
-const tag = `v${pkg.version}`;
-
-// Lets the package install in CI or a sandbox with no network, and during local
-// development where the binary is built rather than downloaded.
-if (process.env[SKIP_ENV] === "1") {
-  console.log(`Skipping bravebot binary download because ${SKIP_ENV}=1`);
-  process.exit(0);
-}
-
-const target = resolveTarget(process.platform, process.arch);
-if (!target) {
-  console.error(`Unsupported platform/arch: ${process.platform}/${process.arch}`);
-  process.exit(1);
-}
-
-const baseUrl = `https://github.com/${repo}/releases/download/${tag}`;
-const destination = path.join(__dirname, "..", "bin", target.binaryName);
-
-install().catch((error) => {
-  console.error(`Failed to install the bravebot binary: ${error.message}`);
-  process.exit(1);
-});
-
-async function install() {
-  const expected = (await fetchToString(`${baseUrl}/${target.asset}.sha256`)).trim();
-  if (!/^[0-9a-f]{64}$/i.test(expected)) {
-    throw new Error(`Malformed checksum for ${target.asset}`);
-  }
-
-  const bytes = await fetchToBuffer(`${baseUrl}/${target.asset}`);
-  const actual = crypto.createHash("sha256").update(bytes).digest("hex");
-  if (actual !== expected.toLowerCase()) {
-    throw new Error(
-      `Checksum mismatch for ${target.asset}: expected ${expected}, got ${actual}`
-    );
-  }
-
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.writeFileSync(destination, bytes, { mode: 0o755 });
-  console.log(`Installed bravebot ${tag} (${target.asset})`);
-}
+const PUBKEY_URL = "https://brave-browser-downloads.s3.brave.com/keys/bravebot-release.asc";
 
 function resolveTarget(platform, arch) {
   const resolved = resolveArch(platform, arch);
@@ -153,3 +112,118 @@ function get(url, redirects, callback) {
     })
     .on("error", callback);
 }
+
+function hasGpg() {
+  const result = spawnSync("gpg", ["--version"]);
+  return result.status === 0;
+}
+
+// Verifies a detached signature over already checksum-verified bytes, in a throwaway keyring
+// that never touches anything else on the machine. Takes the exact bytes rather than fetching
+// or reconstructing anything itself, so it has no network dependency and is the seam a test
+// calls directly. Never throws for a bad signature or a missing gpg binary, only returns false.
+function verifySignature(shaBytes, ascBytes, publicKeyBytes) {
+  let gnupgHome;
+  try {
+    gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), "bravebot-gnupg-"));
+  } catch {
+    return false;
+  }
+  try {
+    const shaPath = path.join(gnupgHome, "checksum.sha256");
+    const ascPath = path.join(gnupgHome, "checksum.sha256.asc");
+    fs.writeFileSync(shaPath, shaBytes);
+    fs.writeFileSync(ascPath, ascBytes);
+
+    const env = { ...process.env, GNUPGHOME: gnupgHome };
+    const imported = spawnSync("gpg", ["--batch", "--quiet", "--import"], {
+      input: publicKeyBytes,
+      env,
+    });
+    if (imported.status !== 0) {
+      return false;
+    }
+    const verified = spawnSync("gpg", ["--batch", "--quiet", "--verify", ascPath, shaPath], { env });
+    return verified.status === 0;
+  } finally {
+    fs.rmSync(gnupgHome, { recursive: true, force: true });
+  }
+}
+
+async function install(tag, target, baseUrl, destination) {
+  const shaBytes = await fetchToBuffer(`${baseUrl}/${target.asset}.sha256`);
+  const expected = shaBytes.toString("utf8").trim();
+  if (!/^[0-9a-f]{64}$/i.test(expected)) {
+    throw new Error(`Malformed checksum for ${target.asset}`);
+  }
+
+  const bytes = await fetchToBuffer(`${baseUrl}/${target.asset}`);
+  const actual = crypto.createHash("sha256").update(bytes).digest("hex");
+  if (actual !== expected.toLowerCase()) {
+    throw new Error(
+      `Checksum mismatch for ${target.asset}: expected ${expected}, got ${actual}`
+    );
+  }
+
+  // Linux ships no code signature, unlike Darwin (notarized) and Windows (Authenticode), so its
+  // checksum carries a detached GPG signature instead. Best-effort: the checksum above is the
+  // one check every install enforces regardless of what is on this machine; this only adds to
+  // it when gpg is present, and never weakens or replaces it. Verified against the exact bytes
+  // fetched for the checksum, not a reconstructed string, since that is what was actually signed.
+  if (target.asset.includes("-linux-")) {
+    if (hasGpg()) {
+      const ascBytes = await fetchToBuffer(`${baseUrl}/${target.asset}.sha256.asc`);
+      const publicKeyBytes = await fetchToBuffer(PUBKEY_URL);
+      if (!verifySignature(shaBytes, ascBytes, publicKeyBytes)) {
+        throw new Error(
+          `Signature verification failed for ${target.asset}.sha256; refusing to install`
+        );
+      }
+    } else {
+      console.log(
+        "Note: gpg not found; skipping signature verification (the checksum above was still verified)."
+      );
+    }
+  }
+
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(destination, bytes, { mode: 0o755 });
+  console.log(`Installed bravebot ${tag} (${target.asset})`);
+}
+
+function main() {
+  const repo = process.env.BRAVEBOT_REPO || DEFAULT_REPO;
+  const pkg = require(path.join(__dirname, "../../package.json"));
+  const tag = `v${pkg.version}`;
+
+  // Lets the package install in CI or a sandbox with no network, and during local
+  // development where the binary is built rather than downloaded.
+  if (process.env[SKIP_ENV] === "1") {
+    console.log(`Skipping bravebot binary download because ${SKIP_ENV}=1`);
+    return;
+  }
+
+  const target = resolveTarget(process.platform, process.arch);
+  if (!target) {
+    console.error(`Unsupported platform/arch: ${process.platform}/${process.arch}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const baseUrl = `https://github.com/${repo}/releases/download/${tag}`;
+  const destination = path.join(__dirname, "..", "bin", target.binaryName);
+
+  install(tag, target, baseUrl, destination).catch((error) => {
+    console.error(`Failed to install the bravebot binary: ${error.message}`);
+    process.exitCode = 1;
+  });
+}
+
+// A test requires this file with BRAVEBOT_INSTALL_SH_TEST-style isolation via require.main, to
+// reach verifySignature/resolveTarget/resolveArch (none of which touch the network) without
+// running an install.
+if (require.main === module) {
+  main();
+}
+
+module.exports = { resolveTarget, resolveArch, verifySignature, install, main };
