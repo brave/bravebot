@@ -285,6 +285,9 @@ is that the service owns those names, and a renamed one is reset by the endpoint
 `verified-by: bravebot_config::lib::a_tier_alias_without_bedrock_resolves_against_the_brave_roster`
 `verified-by: bravebot_config::lib::an_alias_for_an_unconfigured_tier_falls_through_to_brave`
 `verified-by: bravebot_config::lib::without_brave_credentials_an_unconfigured_tier_stays_on_aws`
+`verified-by: bravebot_config::lib::a_tier_word_resolves_against_an_aws_account_a_provider_block_named`
+`verified-by: bravebot_config::lib::a_tier_word_resolves_to_a_model_the_block_actually_offers`
+`verified-by: bravebot_config::lib::with_brave_credentials_a_tier_word_still_falls_through_to_brave`
 `verified-by: bravebot_config::lib::a_model_that_is_not_a_tier_alias_is_used_as_written`
 `verified-by: bravebot_config::bedrock::every_tier_names_a_brave_model`
 `verified-by: bravebot_config::bedrock::the_tiers_name_different_brave_models`
