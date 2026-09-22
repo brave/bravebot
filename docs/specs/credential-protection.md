@@ -468,7 +468,9 @@ credential the person left and a credential a turn wrote.
 and no turn record, so `unknown` is a real answer. A diff names the turn that produced it, which is
 why this scan can refuse where the other can only inform. It is not authorship: a turn that
 reformats or moves a file already holding a key produces a diff carrying it without having written
-it, and that case is reported rather than refused.
+it, and that case is reported rather than refused. Interactive whole-file writes use that
+attribution only when the pre-image was trusted at capture. Untrusted prior bytes cannot excuse
+a finding in a proposed trusted body.
 
 **What is refused and what is asked about.** A value that declared itself a credential (a
 provider's prefix over its own alphabet at its own length, or the password field of a URL) is

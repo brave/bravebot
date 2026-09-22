@@ -262,18 +262,18 @@ file's bytes go into a program, so the plan reports it as private input and it t
 standard-input gate of [run.md](run.md#RUN-6) whichever file it names. `2>&1` renames a
 descriptor and touches no file.
 
-The map records what a destination holds afterwards, and records it one way. Where the line's
-output is untrusted, every file the line opened for writing becomes untrusted, which is what stops
-a program's output being read back as trusted; where it is trusted, the map is left as it was. A
-trusted line is no evidence about any one file: `>>` keeps what the file already held, and the
-label answers for the programs a person vouched for rather than for the contents of a file.
+Immediately before a destination may be opened for writing, the shared file authority marks
+it untrusted and reserves that path until the process has stopped. Reads during execution cannot
+use the old grant. Other paths remain available, and no lock spans the process wait. Every early
+exit stops already-started stages before releasing their reservations.
 
-What is recorded is what the run opened, never the write set. The set names every branch
-([CMDLINE-6](#CMDLINE-6)), so a branch the line decided against would have its destination
-recorded as holding bytes nothing wrote, and a path recorded untrusted can no longer be examined
-or edited. A destination is truncated as its step begins, so a step that failed and a line stopped
-part way through both record the files they had opened by then, and a target nothing could open
-records nothing.
+An untrusted line leaves its opened destinations untrusted. A complete successful trusted line
+may retain a destination's prior trust, but cannot raise it: `>>` can retain untrusted bytes.
+Failure, cancellation or an error after entry leaves explicit distrust. An untaken branch enters
+no effect and changes no decision. A failed attempt to open a destination is conservative about
+its possible effects; an approval alone changes nothing.
+
+`verified-by: bravebot_agent::turn::foreground_redirection_quarantines_live_reads_and_all_endings`
 
 **What the one direction costs.** A destination a vouched-for line overwrote stays untrusted until
 a person says otherwise, so reading it back is quarantined and costs a prompt. Recording a path as

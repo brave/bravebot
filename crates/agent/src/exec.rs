@@ -319,6 +319,22 @@ pub fn run_plan(
     Running::new(&plan.directory, cancel, limit, scratch, stdin).finish(&plan.steps, opened)
 }
 
+/// Run with notification immediately before each destination may be opened for writing.
+#[allow(clippy::too_many_arguments)]
+pub fn run_plan_observed(
+    plan: &Plan,
+    cancel: &Cancel,
+    limit: Duration,
+    opened: &mut Vec<std::path::PathBuf>,
+    scratch: Option<&std::path::Path>,
+    stdin: Option<&str>,
+    entering: &mut dyn FnMut(&std::path::Path) -> Result<(), ExecError>,
+) -> Result<Ran, ExecError> {
+    let mut running = Running::new(&plan.directory, cancel, limit, scratch, stdin);
+    running.entering = Some(entering);
+    running.finish(&plan.steps, opened)
+}
+
 /// Where one of a step's streams goes.
 enum Where {
     /// The stage before this one.
@@ -335,7 +351,10 @@ enum Where {
 
 /// One line's worth of running: its parts in order, what they printed, and one deadline over all
 /// of them.
+type Entering<'a> = &'a mut dyn FnMut(&std::path::Path) -> Result<(), ExecError>;
+
 struct Running<'a> {
+    entering: Option<Entering<'a>>,
     directory: &'a std::path::Path,
     cancel: &'a Cancel,
     started: Instant,
@@ -366,6 +385,7 @@ impl<'a> Running<'a> {
         stdin: Option<&'a str>,
     ) -> Self {
         Self {
+            entering: None,
             directory,
             cancel,
             started: Instant::now(),
@@ -432,7 +452,7 @@ impl<'a> Running<'a> {
             return Err(ExecError::Io("no stages to run".to_string()));
         }
 
-        let mut children: Vec<Child> = Vec::with_capacity(steps.len());
+        let mut children = ForegroundChildren(Vec::with_capacity(steps.len()));
         // Nothing is typed at a program bravebot started, so a step with nothing upstream reads an
         // empty stdin rather than the terminal's. Unless the policy layer supplied bytes for it,
         // which are taken here and given to the first step below: taken rather than borrowed, so
@@ -529,6 +549,11 @@ impl<'a> Running<'a> {
 
             // The duplicate is what `2>&1` needs: a second handle on wherever standard output is
             // going at that point, rather than a second place.
+            if let Where::File(path, _) = &out
+                && let Some(entering) = self.entering.as_mut()
+            {
+                entering(path)?;
+            }
             let (writing, reading, duplicate) = destination(&out)?;
             // Recorded once the file is open, so a target that could not be opened at all, a
             // directory among them, is not reported as a file this line wrote.
@@ -537,6 +562,9 @@ impl<'a> Running<'a> {
             }
             let (erring, err_reading) = match &err {
                 Where::File(path, append) => {
+                    if let Some(entering) = self.entering.as_mut() {
+                        entering(path)?;
+                    }
                     let file = for_writing(path, *append)?;
                     self.wrote.push(path.clone());
                     (Stdio::from(file), None)
@@ -667,6 +695,25 @@ fn destination(
             let duplicate = writer.try_clone().ok().map(Stdio::from);
             Ok((Stdio::from(writer), Some(reader), duplicate))
         }
+    }
+}
+
+/// Every error after spawning a stage must stop it before its file effects are released.
+struct ForegroundChildren(Vec<Child>);
+impl std::ops::Deref for ForegroundChildren {
+    type Target = Vec<Child>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for ForegroundChildren {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for ForegroundChildren {
+    fn drop(&mut self) {
+        stop(&mut self.0);
     }
 }
 

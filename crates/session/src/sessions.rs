@@ -428,18 +428,19 @@ impl StoredRewind {
                 .map(|backup| {
                     let relative = backup.path.strip_prefix(project).unwrap_or(&backup.path);
                     let path = relative.display().to_string();
-                    // What the file held is written down only where the map that stood before
-                    // the turn vouched for the path. The bytes are the file's contents from
-                    // before the write, so that map is the one that labelled them, and a path it
-                    // does not vouch for held bytes the planner was never allowed to see. Those
-                    // are kept in memory for a rewind in this session and go no further, which
-                    // leaves the record holding what the planner could have held.
+                    // The capture's own trust authorizes storage. A pre-turn snapshot may
+                    // predate another writer and cannot label bytes captured afterwards.
                     let (before, bytes) = match &backup.was {
                         Before::Nothing => (NOTHING, None),
-                        Before::Bytes(held) if vouched_for(&snapshot.trust, relative) => (
-                            BYTES,
-                            Some(base64::engine::general_purpose::STANDARD.encode(held)),
-                        ),
+                        Before::Bytes(held)
+                            if backup.captured_trust
+                                == bravebot_core::label::Integrity::Trusted =>
+                        {
+                            (
+                                BYTES,
+                                Some(base64::engine::general_purpose::STANDARD.encode(held)),
+                            )
+                        }
                         Before::Bytes(_) | Before::NotKept => (NOT_KEPT, None),
                     };
                     StoredBackup {
@@ -513,6 +514,7 @@ impl StoredRewind {
                         _ => Before::NotKept,
                     };
                     Backup {
+                        captured_trust: bravebot_core::label::Integrity::Trusted,
                         path: root.join(held.path),
                         was,
                     }
@@ -521,28 +523,6 @@ impl StoredRewind {
             prompt: self.prompt,
         }
     }
-}
-
-/// Whether `trust` vouched for `path`, which is what says the bytes at it were bytes the planner
-/// was allowed to see.
-///
-/// Asked twice, under both spellings a rule about this one path can have been written in: the
-/// segments joined with `/`, which is how a name the planner wrote reaches the map, and the
-/// platform's own spelling, which is how one derived from an absolute name reaches it. The two are
-/// the same string everywhere but Windows, where a rule written in one spelling is invisible to a
-/// question asked in the other, and what such a question falls back to is the rule about the
-/// directory above the file: after somebody vouches for their project, that answer is "trusted".
-///
-/// So the weaker of the two answers is the one taken. A rule marking this path untrusted keeps its
-/// bytes out of the record whichever spelling recorded it, and a path no rule covers at all is not
-/// vouched for either, since nobody has said anything about it.
-fn vouched_for(trust: &TrustStore, path: &Path) -> bool {
-    let joined = path
-        .components()
-        .map(|part| part.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/");
-    trust.is_trusted(&joined) && trust.is_trusted(&path.to_string_lossy())
 }
 
 /// A trust map as it is written down.

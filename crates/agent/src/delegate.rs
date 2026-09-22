@@ -129,6 +129,7 @@ pub struct Delegated {
 /// from the run that spawned it, which is what lets it run alongside that run rather than inside
 /// it.
 pub struct Seeded {
+    pub file_authority: bravebot_core::file_authority::FileAuthority,
     /// What the kernel built: the kind, the narrowed capabilities, the bound and the task.
     pub spec: DelegateSpec,
     /// The standing decisions it starts from, kept so what comes back can be compared against it.
@@ -198,6 +199,7 @@ pub fn seed<S: Sink>(
     remembering: Option<&str>,
 ) -> Seeded {
     Seeded {
+        file_authority: policy.file_authority(),
         spec,
         vouched: policy.vouched(),
         permissions: policy.permissions().clone(),
@@ -254,7 +256,7 @@ pub fn run(
     // own work done elsewhere, so a session that is planning must not have writes happening inside
     // one. Enforcement already comes down this way, the confirmer being the person's own; this is
     // what tells the delegate's planner why a write would be refused.
-    let task = Task::delegated(seeded.spec.clone())
+    let mut task = Task::delegated(seeded.spec.clone())
         .with_home(home.map(std::path::Path::to_path_buf))
         .with_profile(profile.map(std::path::Path::to_path_buf))
         .remembering(seeded.remembering.clone())
@@ -263,6 +265,8 @@ pub fn run(
         .with_permission_mode(permission_mode)
         .with_auto_vetting(auto_vetting)
         .with_attribution(attribution.clone());
+
+    task.file_authority = Some(seeded.file_authority.clone());
 
     // Its own, and it dies here. A reference minted inside a delegate names nothing once it has
     // gone, which is what makes "nothing but the report crosses back" a fact about the data rather

@@ -4,6 +4,7 @@ title: The trust map
 status: normative
 governs:
   - crates/core/src/trust.rs
+  - crates/core/src/file_authority.rs
   - crates/core/src/policy.rs
   - crates/tui/src/trust_prompt.rs
   - crates/session/src/sessions.rs
@@ -103,7 +104,9 @@ which name a path is asked about.
 <a id="TRUST-4"></a>
 ### TRUST-4: what a write asks, and what it records
 
-Every row is normative. A write matching a row does exactly what that row says and nothing else.
+Every row describes the effective trust after a complete write. A started write is recorded even
+when its final trust matches the rule already covering the path. A refused operation or one that
+has not entered its filesystem effect records no write.
 
 | data | destination | prompt? | effect on the map |
 |---|---|---|---|
@@ -116,6 +119,25 @@ Every row is normative. A write matching a row does exactly what that row says a
 A prompt asks one question and only this one: **may this path stop being trusted?** That is the
 only consequence a later step cannot undo, since a path recorded as untrusted can no longer be
 examined or edited.
+
+Parent and delegates use one live file authority. Before an effect may truncate or replace a
+file, its exact path becomes untrusted. It remains untrusted while the effect is in progress,
+and after any error following entry. Only a complete file replacement publishes its input's
+trust. Another writer to an active path is refused before entering its own effect; other paths
+remain available. A later complete trusted replacement can trust the path again.
+
+Byte capture and label lookup share a boundary with effect entry and successful publication.
+No reader can capture replacement bytes under an earlier grant. This covers context files,
+attachments, deferred references and searches as well as direct reads. Collection never merges
+a delegate's stale file snapshot. No coordination lock spans a prompt, model call or child join.
+
+Approvals based on a preview are checked against the path's revision before effect entry or
+vouching. A changed path cannot spend the old approval. Changes to another path do not invalidate
+that approval. A backup records the trust of its bytes at capture under the same boundary.
+
+`verified-by: bravebot_agent::turn::overlapping_delegate_writes_follow_effect_order_in_both_collection_orders`
+`verified-by: bravebot_agent::workspace::reads_before_write_publication_and_failed_replacements_remain_untrusted`
+`verified-by: bravebot_agent::workspace::shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_writes`
 
 **Why writing trusted data never asks.** Trusted data means the turn observed nothing untrusted,
 so it holds no byte an attacker influenced, and the destination only ever gains trust. There is

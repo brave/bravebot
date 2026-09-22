@@ -532,6 +532,7 @@ pub struct Attachment {
 /// What a turn is asked to do.
 #[derive(Debug, Clone)]
 pub struct Task {
+    pub(crate) file_authority: Option<bravebot_core::file_authority::FileAuthority>,
     /// The user's instruction. The only trusted input.
     pub prompt: String,
     /// Why this prompt exists, where nobody typed it.
@@ -745,6 +746,7 @@ impl PastedImage {
 impl Task {
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
+            file_authority: None,
             prompt: prompt.into(),
             // A line somebody typed until a caller says what composed it.
             composed: None,
@@ -2176,6 +2178,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         .with_asked(task.asked_about.clone())
         .with_permissions(task.permissions.clone())
         .resuming(conversation.context());
+
+    if let Some(authority) = &task.file_authority {
+        policy = policy.with_file_authority(authority.clone());
+    }
 
     // Read once. A turn nobody is looping arranges its own later look, which is what a request to
     // report a change needs; a tick of a self-paced loop sets the pace of the next one; and a tick

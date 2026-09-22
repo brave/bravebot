@@ -82,7 +82,7 @@ impl TrustStore {
     /// A name that is already absolute is one as it stands. A relative one is the working
     /// directory with the name beneath it, and the empty name is the working directory itself,
     /// which is the rule covering the whole project.
-    fn key(&self, path: &str) -> String {
+    pub(crate) fn key(&self, path: &str) -> String {
         let named = normalise(path);
         if is_absolute_key(&named) {
             return named;
@@ -285,7 +285,7 @@ pub(crate) fn normalise(path: &str) -> String {
 ///
 /// Segment-wise so `src` does not cover `srcfoo`, which a plain string prefix test would
 /// wrongly accept, and that mistake would hand trust to a path the user never named.
-fn covers(prefix: &str, path: &str) -> bool {
+pub(crate) fn covers(prefix: &str, path: &str) -> bool {
     // The filesystem root covers everything, and is the one key with no segment of its own.
     if prefix == "/" {
         return true;

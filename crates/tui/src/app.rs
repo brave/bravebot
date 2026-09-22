@@ -13547,6 +13547,7 @@ mod tests {
         let mut session = Session::new("none");
         session.open_rewind_point(a_point_before(0), "add a line to notes.md".into());
         session.keep_backups(vec![bravebot_agent::workspace::Backup {
+            captured_trust: bravebot_core::label::Integrity::Trusted,
             path: std::path::PathBuf::from("/work/notes.md"),
             was: bravebot_agent::workspace::Before::Nothing,
         }]);

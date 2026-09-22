@@ -20693,6 +20693,308 @@ mod usage {
         }
     }
 
+    /// A sibling's unchanged private map must not hide its later untrusted replacement.
+    #[test]
+    fn overlapping_delegate_writes_follow_effect_order_in_both_collection_orders() {
+        for (trusted_first, untrusted_last) in
+            [(true, true), (false, true), (true, false), (false, false)]
+        {
+            let scratch = Scratch::new(&format!(
+                "overlapping-writes-{trusted_first}-{untrusted_last}"
+            ));
+            const SENTINEL: &str = "QUARANTINED_SIBLING_SENTINEL";
+            std::fs::write(scratch.path.join("source.txt"), SENTINEL).unwrap();
+            std::fs::write(scratch.path.join("shared.txt"), "original").unwrap();
+            let workspace = Workspace::new(&scratch.path).unwrap();
+            let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+            trust.distrust("source.txt");
+            trust.distrust("shared.txt");
+            let (endpoint, pending) = controlled_server();
+            let (finished_tx, finished) = mpsc::channel();
+            let worker = thread::spawn(move || {
+                let mut conversation = bravebot_agent::Conversation::new();
+                let result = turn::resume(
+                    &config_for(&endpoint),
+                    &bravebot_net::Egress::new(),
+                    &workspace,
+                    &Task::new("PARENT-OVERLAP"),
+                    &mut conversation,
+                    &mut bravebot_agent::confirm::ApproveWrites,
+                    &mut bravebot_agent::report::IgnoreReports,
+                    &mut RecordingSink::new(),
+                    trust,
+                    bravebot_core::programs::TrustedPrograms::new(),
+                    None,
+                    &bravebot_core::cancel::Cancel::new(),
+                );
+                finished_tx.send(result).unwrap();
+            });
+            let request = || {
+                pending
+                    .recv_timeout(WAIT)
+                    .expect("expected planner request")
+            };
+            let trusted = r#"{"kind":"worker","task":"TRUSTED-WRITER"}"#;
+            let untrusted = r#"{"kind":"worker","task":"UNTRUSTED-WRITER"}"#;
+            let (first, second) = if trusted_first {
+                (trusted, untrusted)
+            } else {
+                (untrusted, trusted)
+            };
+            request().answer(&two_tool_requests(
+                ("spawn_agent", first),
+                ("spawn_agent", second),
+            ));
+            let mut parent = None;
+            let mut a = None;
+            let mut b = None;
+            for _ in 0..3 {
+                let next = request();
+                if next.body.contains("PARENT-OVERLAP") {
+                    parent = Some(next);
+                } else if next.body.contains("UNTRUSTED-WRITER") {
+                    b = Some(next);
+                } else {
+                    assert!(next.body.contains("TRUSTED-WRITER"));
+                    a = Some(next);
+                }
+            }
+            parent.unwrap().answer(&tool_request(
+                "spawn_agent",
+                r#"{"kind":"reader","task":"UNTOUCHED-SIBLING"}"#,
+            ));
+            let first = request();
+            let second = request();
+            let (parent, untouched) = if first.body.contains("PARENT-OVERLAP") {
+                (first, second)
+            } else {
+                (second, first)
+            };
+            assert!(untouched.body.contains("UNTOUCHED-SIBLING"));
+            let write_a = |a: Pending| {
+                a.answer(&tool_request(
+                    "write_file",
+                    r#"{"path":"shared.txt","contents":"trusted replacement"}"#,
+                ));
+                let done = request();
+                assert_eq!(
+                    std::fs::read_to_string(scratch.path.join("shared.txt")).unwrap(),
+                    "trusted replacement"
+                );
+                done
+            };
+            let write_b = |b: Pending| {
+                b.answer(&tool_request("read_file", r#"{"path":"source.txt"}"#));
+                let read = request();
+                assert!(!read.body.contains(SENTINEL));
+                read.answer(&tool_request(
+                    "write_file",
+                    r#"{"path":"shared.txt","contents_ref":"ref:1"}"#,
+                ));
+                let done = request();
+                assert!(!done.body.contains(SENTINEL));
+                assert_eq!(
+                    std::fs::read_to_string(scratch.path.join("shared.txt")).unwrap(),
+                    SENTINEL
+                );
+                done
+            };
+            let (a_done, b_done) = if untrusted_last {
+                let a_done = write_a(a.unwrap());
+                (a_done, write_b(b.unwrap()))
+            } else {
+                let b_done = write_b(b.unwrap());
+                (write_a(a.unwrap()), b_done)
+            };
+            // Both children remain inside their planner requests, so neither can be collected.
+            parent.answer(&tool_request("read_file", r#"{"path":"shared.txt"}"#));
+            let parent_before_collection = request();
+            let parent_leaked = parent_before_collection.body.contains(SENTINEL);
+            a_done.answer(&tool_request("read_file", r#"{"path":"shared.txt"}"#));
+            let sibling_before_collection = request();
+            let sibling_leaked = sibling_before_collection.body.contains(SENTINEL);
+            sibling_before_collection.answer(&reply_with_usage("trusted writer done", 1, 1));
+            b_done.answer(&reply_with_usage("untrusted writer done", 1, 1));
+            untouched.answer(&reply_with_usage("nothing changed", 1, 1));
+            parent_before_collection.answer(&reply_with_usage("collect workers", 1, 1));
+            let collected = request();
+            collected.answer(&tool_request("read_file", r#"{"path":"shared.txt"}"#));
+            let after_read = request();
+            let leaked = after_read.body.contains(SENTINEL);
+            after_read.answer(&reply_with_usage("done", 1, 1));
+            let outcome = finished
+                .recv_timeout(WAIT)
+                .expect("parent completed")
+                .unwrap();
+            worker.join().unwrap();
+            assert_eq!(
+                outcome.trust.is_trusted("shared.txt"),
+                !untrusted_last,
+                "trust did not follow the completed write order; trusted spawned first={trusted_first}"
+            );
+            assert!(
+                !leaked,
+                "untrusted replacement reached the parent's planner"
+            );
+            assert!(
+                !parent_leaked,
+                "parent read untrusted replacement before collection"
+            );
+            assert!(
+                !sibling_leaked,
+                "sibling read untrusted replacement before collection"
+            );
+        }
+    }
+
+    /// A foreground destination stays quarantined while its process can still write it.
+    #[cfg(unix)]
+    #[test]
+    fn foreground_redirection_quarantines_live_reads_and_all_endings() {
+        for ending in ["success", "failure", "cancelled", "parent_failure"] {
+            let scratch = Scratch::new(&format!("live-redirection-{ending}"));
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            std::fs::write(scratch.path.join("shared.txt"), "trusted original").unwrap();
+            std::fs::write(scratch.path.join("redirect.py"), format!(
+                "import os,socket\nos.write(1,b'REDIRECT_SENTINEL')\ns=socket.create_connection(('127.0.0.1',{port}))\ns.settimeout(5)\ns.sendall(b'written')\ns.recv(1)\nos._exit({})\n",
+                if ending == "failure" { 7 } else { 0 }
+            )).unwrap();
+            let workspace = Workspace::new(&scratch.path).unwrap();
+            let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+            trust.trust(".");
+            let (endpoint, pending) = controlled_server();
+            let (finished_tx, finished) = mpsc::channel();
+            let cancel = bravebot_core::Cancel::new();
+            let stop = cancel.clone();
+            let worker = thread::spawn(move || {
+                let result = turn::resume(
+                    &config_for(&endpoint),
+                    &bravebot_net::Egress::new(),
+                    &workspace,
+                    &Task::new("PARENT-REDIRECTION"),
+                    &mut bravebot_agent::Conversation::new(),
+                    &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+                    &mut bravebot_agent::report::IgnoreReports,
+                    &mut RecordingSink::new(),
+                    trust,
+                    bravebot_core::programs::TrustedPrograms::new(),
+                    None,
+                    &stop,
+                );
+                finished_tx.send(result).unwrap();
+            });
+            let request = || {
+                pending
+                    .recv_timeout(WAIT)
+                    .expect("expected planner request")
+            };
+            request().answer(&tool_request(
+                "spawn_agent",
+                r#"{"kind":"checker","task":"REDIRECT-WORKER"}"#,
+            ));
+            let first = request();
+            let second = request();
+            let (parent, child) = if first.body.contains("PARENT-REDIRECTION") {
+                (first, second)
+            } else {
+                (second, first)
+            };
+            child.answer(&tool_request(
+                "run",
+                r#"{"command":"python3 redirect.py > shared.txt"}"#,
+            ));
+            // Accept on a bounded helper so a process that never reaches the effect cannot hang this test.
+            let (ready_tx, ready) = mpsc::channel();
+            thread::spawn(move || {
+                let until = std::time::Instant::now() + WAIT;
+                while std::time::Instant::now() < until {
+                    match listener.accept() {
+                        Ok((mut socket, _)) => {
+                            socket.set_nonblocking(false).unwrap();
+                            socket.set_read_timeout(Some(WAIT)).unwrap();
+                            let mut signal = [0; 7];
+                            socket.read_exact(&mut signal).unwrap();
+                            assert_eq!(&signal, b"written");
+                            ready_tx.send(socket).unwrap();
+                            return;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::yield_now()
+                        }
+                        Err(error) => panic!("effect observer failed: {error}"),
+                    }
+                }
+            });
+            let mut process = ready
+                .recv_timeout(WAIT)
+                .expect("redirected process wrote and remains alive");
+            assert_eq!(
+                std::fs::read_to_string(scratch.path.join("shared.txt")).unwrap(),
+                "REDIRECT_SENTINEL"
+            );
+            parent.answer(&tool_request("read_file", r#"{"path":"shared.txt"}"#));
+            let after_read = request();
+            assert!(after_read.body.contains("PARENT-REDIRECTION"));
+            let leaked = after_read.body.contains("REDIRECT_SENTINEL");
+            if ending == "cancelled" {
+                cancel.cancel();
+                after_read.interrupted_stream();
+            } else if ending == "parent_failure" {
+                after_read.refuse();
+                process.write_all(b"x").unwrap();
+                let child_done = request();
+                assert!(child_done.body.contains("REDIRECT-WORKER"));
+                assert!(!child_done.body.contains("REDIRECT_SENTINEL"));
+                child_done.answer(&reply_with_usage("child done", 1, 1));
+            } else {
+                process.write_all(b"x").unwrap();
+                let child_done = request();
+                assert!(child_done.body.contains("REDIRECT-WORKER"));
+                if ending == "failure" {
+                    assert!(
+                        child_done.body.contains("exited 7"),
+                        "the command failure was not observed"
+                    );
+                }
+                child_done.answer(&reply_with_usage("child done", 1, 1));
+                after_read.answer(&reply_with_usage("collect", 1, 1));
+                request().answer(&reply_with_usage("done", 1, 1));
+            }
+            let outcome = finished
+                .recv_timeout(WAIT)
+                .expect("parent and process ended");
+            worker.join().unwrap();
+            if ending == "cancelled" {
+                assert!(matches!(
+                    outcome.unwrap_err().ending(),
+                    bravebot_agent::Ending::Stopped { .. }
+                ));
+            } else if ending == "parent_failure" {
+                assert_eq!(
+                    outcome.unwrap_err().ending().diagnosis().unwrap().category,
+                    bravebot_agent::Category::Unauthorized
+                );
+            } else {
+                assert!(!outcome.unwrap().trust.is_trusted("shared.txt"));
+            }
+            if matches!(ending, "cancelled" | "parent_failure") {
+                process.set_read_timeout(Some(WAIT)).unwrap();
+                let mut byte = [0];
+                assert_eq!(
+                    process.read(&mut byte).unwrap(),
+                    0,
+                    "child survived its parent"
+                );
+            }
+            assert!(
+                !leaked,
+                "live redirection entered the parent planner on {ending}"
+            );
+        }
+    }
+
     fn assert_usage(spent: Spent, tokens: u64, output: u64, cached: u64) {
         assert_eq!(
             (spent.tokens, spent.output_tokens, spent.cached.read_tokens),
@@ -22124,7 +22426,7 @@ fn a_credential_the_file_already_held_does_not_refuse_the_change_carrying_it() {
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut reporter,
         &mut sink,
-        bravebot_core::trust::TrustStore::new("/work"),
+        trusting_the_workspace(),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");

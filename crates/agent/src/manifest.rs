@@ -1612,7 +1612,6 @@ fn write<S: Sink, C: Confirmer>(
     workspace
         .write_endorsed(policy, &Labelled::trusted(path.clone()), &body)
         .map_err(|e| e.to_string())?;
-    policy.reconcile_after_write(&workspace.trust_key(&path), body_label);
 
     let (note, changes) =
         crate::tools::change_report(intent, existing.as_deref(), &shown, replaced_age);

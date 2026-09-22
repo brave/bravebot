@@ -153,6 +153,8 @@ enum Reach {
 /// never overlap: a relative path always means the project, whatever else is open.
 #[derive(Debug, Clone)]
 pub struct Workspace {
+    #[cfg(test)]
+    after_write: Arc<Mutex<Option<WriteInterruption>>>,
     root: PathBuf,
     /// Absolute directories the user named, each canonical.
     ///
@@ -188,6 +190,13 @@ pub struct Workspace {
     backups: Arc<Mutex<Vec<Backup>>>,
 }
 
+#[cfg(test)]
+#[derive(Debug)]
+struct WriteInterruption {
+    entered: std::sync::mpsc::Sender<()>,
+    resume: std::sync::mpsc::Receiver<bool>,
+}
+
 /// What a path held before a turn wrote to it.
 ///
 /// Carried, never read. The driver hands the bytes back to the path they came from and has no
@@ -198,6 +207,8 @@ pub struct Backup {
     pub path: PathBuf,
     /// What was there.
     pub was: Before,
+    /// Trust of these bytes when captured, never the pre-turn map.
+    pub captured_trust: bravebot_core::label::Integrity,
 }
 
 /// What a path held before a turn wrote to it.
@@ -326,6 +337,8 @@ impl Workspace {
             detail: e.to_string(),
         })?;
         Ok(Self {
+            #[cfg(test)]
+            after_write: Arc::new(Mutex::new(None)),
             root: canonical,
             added: Vec::new(),
             scratch: None,
@@ -720,6 +733,17 @@ impl Workspace {
         path: &Labelled<String>,
         reach: Reach,
     ) -> Result<Labelled<String>, WorkspaceError> {
+        let authority = policy.file_authority();
+        let _capture = authority.capture();
+        self.read_text_captured(policy, path, reach)
+    }
+
+    fn read_text_captured<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        reach: Reach,
+    ) -> Result<Labelled<String>, WorkspaceError> {
         policy.before_capability(Capability::FileRead)?;
         policy.before_action("file_read", "path", Role::Routing, path)?;
 
@@ -824,6 +848,8 @@ impl Workspace {
         media: &str,
         reach: Reach,
     ) -> Result<Labelled<String>, WorkspaceError> {
+        let authority = policy.file_authority();
+        let _capture = authority.capture();
         policy.before_capability(Capability::FileRead)?;
         policy.before_action("file_read", "path", Role::Routing, path)?;
 
@@ -876,6 +902,8 @@ impl Workspace {
         offset: usize,
         limit: usize,
     ) -> Result<Labelled<Page>, WorkspaceError> {
+        let authority = policy.file_authority();
+        let _capture = authority.capture();
         policy.before_capability(Capability::FileRead)?;
         policy.before_action("file_read", "path", Role::Routing, path)?;
 
@@ -1097,12 +1125,18 @@ impl Workspace {
         // Checked before the write gates so a stale edit is reported as staleness rather than
         // consuming the single-use endorsement. Reading the path is itself gated, below.
         let relative = self.peek_relative(policy, path)?;
-        let current = self.peek_for_review(&relative).unwrap_or_default();
-        if current != expected {
-            return Err(WorkspaceError::Stale { path: relative });
-        }
-
-        self.write_endorsed(policy, path, contents)
+        let authority = policy.file_authority();
+        let revision = {
+            let _capture = authority.capture();
+            let promoted = policy.promote_confined_read("edit_file", "path", path)?;
+            let captured = self.read_text_captured(policy, &promoted, Reach::Confined)?;
+            let current = policy.read_trusted_content("edit_file", &captured)?;
+            if current != expected {
+                return Err(WorkspaceError::Stale { path: relative });
+            }
+            authority.revision_of(&self.trust_key(&relative))
+        };
+        self.write_endorsed_at_revision(policy, path, contents, Some(revision))
     }
 
     /// The path as a plain string, for a check made on the user's behalf.
@@ -1138,6 +1172,16 @@ impl Workspace {
         path: &Labelled<String>,
         contents: &Labelled<String>,
     ) -> Result<PathBuf, WorkspaceError> {
+        self.write_endorsed_at_revision(policy, path, contents, None)
+    }
+
+    pub(crate) fn write_endorsed_at_revision<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        contents: &Labelled<String>,
+        expected_revision: Option<u64>,
+    ) -> Result<PathBuf, WorkspaceError> {
         policy.before_capability(Capability::FileWrite)?;
 
         // The path keeps the label it arrived with: the endorsement is the authority here, and
@@ -1147,7 +1191,27 @@ impl Workspace {
         policy.before_action("file_write", "contents", Role::Content, contents)?;
 
         let resolved = self.resolve(&relative)?;
-        self.record_backup(&resolved);
+        let authority = policy.file_authority();
+        let effect = {
+            let _capture = authority.capture();
+            if expected_revision.is_some_and(|revision| {
+                revision != authority.revision_of(&self.trust_key(&relative))
+            }) {
+                return Err(WorkspaceError::Stale { path: relative });
+            }
+            let captured_trust = if policy.read_is_quarantined(&self.trust_key(&relative)) {
+                bravebot_core::label::Integrity::Untrusted
+            } else {
+                bravebot_core::label::Integrity::Trusted
+            };
+            let effect = _capture.begin(&self.trust_key(&relative)).ok_or_else(|| {
+                WorkspaceError::Stale {
+                    path: relative.clone(),
+                }
+            })?;
+            self.record_backup(&resolved, captured_trust);
+            effect
+        };
 
         let proof = policy.authorise_content_release("file_write", "contents");
         let body = contents.clone().declassify(&proof);
@@ -1164,6 +1228,9 @@ impl Workspace {
             detail: e.to_string(),
         })?;
 
+        #[cfg(test)]
+        self.interrupt_after_write()?;
+        effect.complete(contents.label().integrity);
         Ok(resolved)
     }
 
@@ -1190,6 +1257,22 @@ impl Workspace {
             })?;
 
         let resolved = self.resolve(&relative)?;
+        let authority = policy.file_authority();
+        let effect = {
+            let _capture = authority.capture();
+            let captured_trust = if policy.read_is_quarantined(&self.trust_key(&relative)) {
+                bravebot_core::label::Integrity::Untrusted
+            } else {
+                bravebot_core::label::Integrity::Trusted
+            };
+            let effect = _capture.begin(&self.trust_key(&relative)).ok_or_else(|| {
+                WorkspaceError::Stale {
+                    path: relative.clone(),
+                }
+            })?;
+            self.record_backup(&resolved, captured_trust);
+            effect
+        };
 
         // Both gates have passed, so the bytes may be released to the write.
         let proof = policy.authorise_content_release("file_write", "contents");
@@ -1202,14 +1285,34 @@ impl Workspace {
             })?;
         }
 
-        self.record_backup(&resolved);
-
         std::fs::write(&resolved, body).map_err(|e| WorkspaceError::Io {
             path: relative,
             detail: e.to_string(),
         })?;
 
+        #[cfg(test)]
+        self.interrupt_after_write()?;
+        effect.complete(contents.label().integrity);
         Ok(resolved)
+    }
+
+    #[cfg(test)]
+    fn interrupt_after_write(&self) -> Result<(), WorkspaceError> {
+        let interruption = self.after_write.lock().unwrap().take();
+        if let Some(interruption) = interruption {
+            interruption.entered.send(()).unwrap();
+            if interruption
+                .resume
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+            {
+                return Err(WorkspaceError::Io {
+                    path: "fixture".into(),
+                    detail: "failure after replacement".into(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Keep what a path holds before this turn overwrites it.
@@ -1223,7 +1326,7 @@ impl Workspace {
     /// ends, so there is nothing anybody would ask to have back. Keeping it would spend
     /// [`MAX_REWIND_BYTES`] on a file nobody wants rewound, and what that budget runs out on is
     /// the next file in the project the turn writes.
-    fn record_backup(&self, resolved: &Path) {
+    fn record_backup(&self, resolved: &Path, captured_trust: bravebot_core::label::Integrity) {
         if self.reaches_scratch(resolved) {
             return;
         }
@@ -1257,6 +1360,7 @@ impl Workspace {
         };
 
         backups.push(Backup {
+            captured_trust,
             path: resolved.to_path_buf(),
             was,
         });
@@ -1718,6 +1822,8 @@ impl Workspace {
         pattern: Option<&Labelled<String>>,
         depth: Option<usize>,
     ) -> Result<Labelled<Listing>, WorkspaceError> {
+        let authority = policy.file_authority();
+        let _capture = authority.capture();
         policy.before_capability(Capability::FileRead)?;
         policy.before_action("file_list", "directory", Role::Routing, directory)?;
 
@@ -1829,6 +1935,8 @@ impl Workspace {
         case_sensitive: bool,
         offset: usize,
     ) -> Result<Labelled<Matches>, WorkspaceError> {
+        let authority = policy.file_authority();
+        let _capture = authority.capture();
         policy.before_capability(Capability::FileRead)?;
         for pattern in patterns {
             policy.before_action("file_grep", "pattern", Role::Routing, pattern)?;
@@ -2260,6 +2368,99 @@ fn written_below(named: &Path, opened: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reads during an entered effect cannot use the previous grant, and an error cannot promote it.
+    #[test]
+    fn reads_before_write_publication_and_failed_replacements_remain_untrusted() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        use std::sync::mpsc;
+        for fail in [false, true] {
+            let root = std::env::temp_dir().join(format!("bravebot-write-publication-{fail}"));
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("shared.txt"), "original trusted text").unwrap();
+            let workspace = Workspace::new(&root).unwrap();
+            let mut trust = TrustStore::new(workspace.root());
+            trust.trust(".");
+            let authority = FileAuthority::new(trust);
+            let (entered, observed) = mpsc::channel();
+            let (release, resume) = mpsc::channel();
+            *workspace.after_write.lock().unwrap() = Some(WriteInterruption { entered, resume });
+            let child_workspace = workspace.clone();
+            let child_authority = authority.clone();
+            let writer = std::thread::spawn(move || {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "write");
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                    &mut sink,
+                )
+                .unwrap()
+                .with_file_authority(child_authority);
+                child_workspace.write(
+                    &mut policy,
+                    &Labelled::trusted("shared.txt".to_string()),
+                    &Labelled::new(
+                        "PUBLICATION_SENTINEL".to_string(),
+                        if fail {
+                            Label::trusted_public()
+                        } else {
+                            Label::untrusted_public()
+                        },
+                    ),
+                )
+            });
+            observed
+                .recv_timeout(Duration::from_secs(5))
+                .expect("effect reached disk");
+            for _ in 0..2 {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "read beside writer");
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                    &mut sink,
+                )
+                .unwrap()
+                .with_file_authority(authority.clone());
+                policy.vouch_for_named_path("shared.txt");
+                let text = workspace
+                    .read(&mut policy, &Labelled::trusted("./shared.txt".to_string()))
+                    .unwrap();
+                assert!(
+                    !text.label().is_trusted(),
+                    "reader used the old grant during the effect"
+                );
+                assert!(policy.read_trusted_content("fixture", &text).is_err());
+                workspace
+                    .write(
+                        &mut policy,
+                        &Labelled::trusted("independent.txt".to_string()),
+                        &Labelled::trusted("independent".to_string()),
+                    )
+                    .unwrap();
+                assert!(policy.trust().is_trusted("independent.txt"));
+            }
+            release.send(fail).unwrap();
+            let result = writer.join().unwrap();
+            assert_eq!(
+                result.is_err(),
+                fail,
+                "the requested failure actually occurred"
+            );
+            assert!(!authority.snapshot().is_trusted("shared.txt"));
+            assert_eq!(
+                std::fs::read_to_string(root.join("shared.txt")).unwrap(),
+                "PUBLICATION_SENTINEL"
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     /// A door that opens a directory by name hands the trust map the name it resolved to, so a name
     /// the map cannot key a rule under is one no door may open: the rule would be keyed inside the
