@@ -4388,7 +4388,11 @@ fn manifest_animated(
             answer_rx,
             crate::remote_confirm::Interjections::new(),
         );
-        let mut confirmer = bravebot_agent::Confining::new(&mut asking, permission_mode);
+        // Screening off the task, which asks for none: a plan is fixed before anything is read, so
+        // nothing fills in a verdict here and a confirmer told to screen would refuse on a word
+        // nobody made.
+        let mut confirmer =
+            bravebot_agent::Confining::new(&mut asking, permission_mode, worker_task.auto_vetting);
         let egress = Egress::new();
         let outcome = bravebot_agent::manifest::run(
             &worker_config,
@@ -4983,7 +4987,13 @@ fn run_turn_animated(
         // The mode as it was when the prompt was sent. A turn keeps the one it began with: a mode
         // changed while it runs describes the next turn, and a write already being reviewed must not
         // have the question withdrawn from under the person answering it.
-        let mut confirmer = bravebot_agent::Confining::new(&mut asking, permission_mode);
+        //
+        // Screening is read off the task rather than the session for the same reason at one remove:
+        // the tools that fill in a verdict read the task's answer, and this is what decides whether a
+        // verdict that objects can refuse, so the two reading different answers would be a run that
+        // screens nothing while believing it does.
+        let mut confirmer =
+            bravebot_agent::Confining::new(&mut asking, permission_mode, task.auto_vetting);
         let egress = Egress::new();
         // Owned by the worker for the duration and handed back afterwards, whether the turn
         // succeeded or not. A failed turn is still part of the conversation, and the next one

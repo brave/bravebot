@@ -253,10 +253,14 @@ whichever way the person answers, and neither reaches a second check.
 The sentence is free text about content an attacker may own, so it is untrusted and private like
 the content, and it is drawn inside the margin a prompt puts round anything nobody vouched for.
 The audit trail records the word and never the sentence: a trail is read by people entitled to
-assume the driver is talking.
+assume the driver is talking. Where the word is `inconclusive` the driver's own account of why is
+recorded with it, that account being the driver's sentence and not the check's, so a refusal on a
+check that objected and a refusal on a check that could not be read are told apart afterwards by
+somebody who was never asked either question.
 
 `verified-by: bravebot_core::policy::what_a_check_says_is_as_untrusted_as_what_it_read`
 `verified-by: bravebot_core::policy::the_trail_records_the_verdict_and_never_the_reason`
+`verified-by: bravebot_core::policy::the_trail_tells_an_objection_apart_from_a_check_that_said_nothing`
 `verified-by: bravebot_agent::turn::content_a_person_refuses_after_a_check_stays_out_of_the_planner`
 `verified-by: bravebot_agent::turn::a_vouch_offer_carries_what_a_check_said_about_the_whole_file`
 `verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
@@ -283,15 +287,21 @@ run one. A person asked to promote content is asked on the strength of what they
 these prompts having a second opinion on them and the third not is a gap the planner chooses, and
 the trust map's rule is the largest grant of the three.
 
-The one exemption is [permission-modes.md](permission-modes.md)'s bypassing mode, which draws no
-prompt at all. There a check would be a model call whose word nobody reads. A verdict is still
-filled in and it is `inconclusive`, which claims nothing.
+The one exemption is [permission-modes.md](permission-modes.md#MODE-4)'s bypassing mode, which draws
+no prompt at all. A check is still made for the two promotion prompts where that run asked for
+auto-vetting, because there the word answers in the absent person's place and an unscreened promotion
+is what the screening was asked for to stop. It is made nowhere else in that mode: the vouch offer
+reads no word there whatever was asked for, and a promotion in a run that asked for no screening
+reads none either, so a call would produce a word nobody reads. Where none is made the verdict filled
+in is `inconclusive`, which claims nothing.
 
 `verified-by: bravebot_agent::turn::a_vouch_offer_carries_what_a_check_said_about_the_whole_file`
 `verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
 `verified-by: bravebot_agent::turn::content_a_person_reads_after_a_check_reaches_the_planner`
 `verified-by: bravebot_agent::turn::bypassing_makes_no_check_before_promoting_content`
-`verified-by: bravebot_agent::turn::bypassing_records_no_verdict_a_check_never_gave`
+`verified-by: bravebot_agent::turn::bypassing_fills_in_a_verdict_that_claims_nothing`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_content_a_check_objected_to`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_a_check_objected_to`
 `verified-by: bravebot_core::policy::a_check_before_a_vouch_carries_the_file_and_claims_no_expectation`
 
 <a id="CHECK-11"></a>
@@ -372,6 +382,12 @@ Every other verdict falls back to that prompt, carrying the banner it would have
 [CHECK-5](#CHECK-5) governs it from there. Unsafe and a check that did not complete are still told
 apart on the screen, because the reason for asking is different in the two cases.
 
+**Where there is nobody to fall back to, the fallback is a refusal.** A run bypassing permissions
+([MODE-4](permission-modes.md#MODE-4)) puts no prompt to anybody, so a verdict that is not `safe` has
+nothing to hand the question to. The bytes are kept back rather than promoted with a warning drawn on
+a screen nobody is reading, and the planner is told the slot was kept from it and nothing more. The
+same two prompts and no others: a vouch offer is not one of them here either.
+
 **It covers the promotions and not the rule.** The three prompts a check runs for divide two to one:
 
 | The prompt | What a yes does | With the mode on |
@@ -407,6 +423,13 @@ owns the content gains from this, which is the reason it is off by default.
 `verified-by: bravebot_agent::turn::with_auto_vetting_an_unsafe_verdict_still_asks_about_command_output`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_broken_check_still_asks_about_command_output`
 `verified-by: bravebot_agent::turn::auto_vetting_does_not_answer_the_vouch_offer`
+`verified-by: bravebot_agent::permission_mode::screening_under_bypass_refuses_what_a_check_would_not_pass`
+`verified-by: bravebot_agent::permission_mode::screening_under_bypass_still_promotes_what_a_check_found_nothing_in`
+`verified-by: bravebot_agent::permission_mode::screening_does_not_reach_the_vouch_offer`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_content_a_check_objected_to`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_promotes_content_a_check_found_nothing_in`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_a_check_objected_to`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_no_check_could_be_made_about`
 `verified-by: bravebot_core::policy::a_promotion_nobody_was_asked_about_is_no_wider`
 `verified-by: bravebot_core::policy::output_released_by_a_safe_verdict_is_no_wider`
 `verified-by: bravebot_core::policy::the_trail_says_which_of_the_two_released_the_output`
@@ -508,3 +531,11 @@ ask them anything: progress announces, and a listener that has gone away is not 
   on is not readable from a checkout. What bounds it is everything the verdict does not decide: one
   slot, once, `(T,priv)`, no trust rule, and no other prompt. [labels.md](labels.md) writes out what
   an attacker who owns the content gains.
+
+- **A screened run with nobody to ask stops where an attended one would have asked.** Failing closed
+  on a check that did not complete means a rate-limited or unreachable backend keeps content back, so
+  an unattended run can refuse every promotion for a reason that has nothing to do with the bytes it
+  was reading, and it costs a model call per promotion on the way. What it buys is that the same run
+  cannot be made to promote content by arranging for the check to fail, which is reachable by
+  content the check is reading. A run that would rather have the bytes than the screening leaves the
+  screening off, and gets the answers [MODE-4](permission-modes.md#MODE-4) gave before.

@@ -63,14 +63,19 @@ into a context nobody at the keyboard is watching.
 ### VET-3: the result is the bytes, or a refusal that says to work without them
 
 Where the person agrees, the content comes back as text the planner may read. Where they do not,
-the planner is told so and told to work with what it has or to say what it needed, rather than
-being left to guess or to ask again. Nothing the check wrote goes back either way.
+the planner is told the slot was kept back from it, and told to work with what it has or to say what
+it needed, rather than being left to guess or to ask again. Nothing the check wrote goes back either
+way, and neither does who decided: a refusal on a screened run with nobody to ask reads the same as a
+refusal somebody typed, which is the only wording that is true of both.
 
 Where auto-vetting is on and the check found nothing, the content comes back with no prompt drawn
-([CHECK-12](../vetting.md#CHECK-12)). The result the planner reads is the same in both cases: it is
-told the bytes, and never which of the two answered or what the check said, so nothing it writes
-can be aimed at one path rather than the other.
+([CHECK-12](../vetting.md#CHECK-12)). Where it is on and the check said anything else on a run that
+puts no prompts to anybody, that is the refusal above. The result the planner reads is the same in
+every case: it is told the bytes or told they are not coming, and never which of the three answered
+or what the check said, so nothing it writes can be aimed at one path rather than another.
 
 `verified-by: bravebot_agent::turn::content_a_person_reads_after_a_check_reaches_the_planner`
 `verified-by: bravebot_agent::turn::content_a_person_refuses_after_a_check_stays_out_of_the_planner`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_content_a_check_objected_to`
+`verified-by: bravebot_agent::turn::screening_an_unattended_run_promotes_content_a_check_found_nothing_in`

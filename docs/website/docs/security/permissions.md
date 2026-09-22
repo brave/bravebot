@@ -320,10 +320,12 @@ question](trust.md) is not put either: the session starts with the rule a yes wo
 since the tree becomes trusted a file at a time in any case. A directory your settings file asked for
 is opened and vouched for without being put to you.
 
-**No check runs for a prompt that is not drawn.** A [vetting check](vetting.md) normally sits in front
+**No check runs where nothing would read its word.** A [vetting check](vetting.md) normally sits in front
 of every prompt whose answer would promote quarantined content, and this is the one mode where those
 prompts are answered without being shown to anybody. A check there would be a model call whose word
-nobody reads, so it is not made. This is the only exemption.
+nobody reads, so it is not made. This is the only exemption, and `--vet` is what takes it back for the
+two prompts that release one slot: with that flag the check's word is what answers in your place, and a
+word that objects refuses. The vouch offer reads no word in this mode either way.
 
 What stays is the structural guarantee, that untrusted content cannot *decide* what happens. What
 goes is the narrower protection of not showing the planner bytes nobody vouched for. **This is a mode
@@ -525,3 +527,10 @@ guess; it does not lift the second, since the planner's questions are not permis
 `--vet` is the one other answer you can give in advance here, and it answers one question only: with it,
 a check that completes and finds nothing promotes the one slot the planner asked to be shown. Nothing
 else about an unattended run changes. See [vetting](vetting.md).
+
+On a run that also skips permissions, the same flag is what lets that check refuse. Bypassing releases
+both of those slots unshown on its own, so the check's word is the only thing left that can keep content
+back, and with the flag a verdict that objects or a check that did not complete does keep it back. Without
+the flag no check is made on that run at all, since nothing would read the word. The vouch offer is not
+one of the two: it writes a standing rule about a path rather than releasing one slot, and bypassing
+answers it either way.

@@ -2956,6 +2956,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 task.profile.as_deref(),
                                 task.model.as_deref(),
                                 task.permission_mode,
+                                task.auto_vetting,
                                 &task.attribution,
                                 cancel,
                                 &mut confirmer,
