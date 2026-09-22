@@ -17,6 +17,15 @@ struct State {
     versions: BTreeMap<String, u64>,
 }
 
+impl State {
+    /// Record every effect, including one that leaves the effective trust unchanged.
+    fn record_change(&mut self, key: String) -> u64 {
+        self.revision = self.revision.wrapping_add(1);
+        self.versions.insert(key, self.revision);
+        self.revision
+    }
+}
+
 #[derive(Debug)]
 struct Shared {
     access: Mutex<()>,
@@ -41,33 +50,21 @@ impl FileAuthority {
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
-        match self.0.state.lock() {
-            Ok(mut state) => {
-                if self.0.access.is_poisoned() {
-                    let paths: Vec<String> = state
-                        .trust
-                        .keyed()
-                        .map(|(path, _)| path.to_string())
-                        .collect();
-                    for path in paths {
-                        state.trust.distrust(&path);
-                    }
-                }
-                state
-            }
-            Err(error) => {
-                let mut state = error.into_inner();
-                let paths: Vec<String> = state
-                    .trust
-                    .keyed()
-                    .map(|(path, _)| path.to_string())
-                    .collect();
-                for path in paths {
-                    state.trust.distrust(&path);
-                }
-                state
+        let (mut state, poisoned) = match self.0.state.lock() {
+            Ok(state) => (state, self.0.access.is_poisoned()),
+            Err(error) => (error.into_inner(), true),
+        };
+        if poisoned {
+            let paths: Vec<String> = state
+                .trust
+                .keyed()
+                .map(|(path, _)| path.to_string())
+                .collect();
+            for path in paths {
+                state.trust.distrust(&path);
             }
         }
+        state
     }
 
     /// Order a capture or effect entry against every other participant.
@@ -119,9 +116,7 @@ impl FileAuthority {
             Integrity::Trusted => state.trust.trust(path),
             Integrity::Untrusted => state.trust.distrust(path),
         }
-        state.revision = state.revision.wrapping_add(1);
-        let revision = state.revision;
-        state.versions.insert(key, revision);
+        state.record_change(key);
         true
     }
 
@@ -134,9 +129,7 @@ impl FileAuthority {
             return None;
         }
         state.trust.distrust(&key);
-        state.revision = state.revision.wrapping_add(1);
-        let revision = state.revision;
-        state.versions.insert(key.clone(), revision);
+        let revision = state.record_change(key.clone());
         Some(FileEffect {
             authority: self.clone(),
             key,
@@ -179,9 +172,7 @@ impl FileEffect {
             Integrity::Trusted if unchanged => state.trust.trust(&self.key),
             _ => state.trust.distrust(&self.key),
         }
-        state.revision = state.revision.wrapping_add(1);
-        let revision = state.revision;
-        state.versions.insert(self.key.clone(), revision);
+        state.record_change(self.key.clone());
         self.completed = true;
     }
 }
@@ -192,9 +183,7 @@ impl Drop for FileEffect {
             let mut state = self.authority.state();
             state.active.remove(&self.key);
             state.trust.distrust(&self.key);
-            state.revision = state.revision.wrapping_add(1);
-            let revision = state.revision;
-            state.versions.insert(self.key.clone(), revision);
+            state.record_change(self.key.clone());
         }
     }
 }

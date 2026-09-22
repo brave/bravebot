@@ -3183,10 +3183,6 @@ fn write_file<S: Sink, C: Confirmer>(
 
     match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_revision)) {
         Ok(_) => {
-            // The file now holds this data, so the map must say what the path means. Under the
-            // name the map keys on, or an absolute spelling of a file in the project would record
-            // a second rule about it rather than saying what its one rule already says.
-
             let (note, changes) = change_report(intent, existing.as_deref(), &shown, replaced_age);
 
             // What the model is told, which is what its own account of the turn will repeat. It
