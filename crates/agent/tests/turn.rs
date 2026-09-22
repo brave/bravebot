@@ -14830,6 +14830,59 @@ fn a_picture_pasted_into_a_question_reaches_the_model_with_it() {
     );
 }
 
+/// A picture dropped onto the question goes with it too, in that same message. The marker reads the
+/// same on screen whichever gesture made it, so a question carrying one and not the other is a
+/// person told no image came through about a screenshot that is plainly in their line.
+///
+/// Driven through `attached::read` rather than a hand-built value, because the two halves are what
+/// the defect was: a request that carried what it was handed, and nothing handing it anything.
+#[test]
+fn a_picture_dropped_onto_a_question_reaches_the_model_with_it() {
+    let scratch = Scratch::new("dropped-question");
+    std::fs::write(scratch.path.join("shot.png"), [0x89u8, 0x50]).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("three stripes")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let carried = bravebot_agent::attached::read(
+        &workspace,
+        &[bravebot_agent::turn::Attachment {
+            path: "shot.png".to_string(),
+            media: "image/png".to_string(),
+        }],
+        bravebot_core::trust::TrustStore::new(&scratch.path),
+        &mut sink,
+    )
+    .expect("a dropped picture is read before the question is asked");
+
+    turn::aside(
+        &config,
+        &egress,
+        bravebot_agent::aside::Question::about(
+            &an_exchange_to_ask_beside(),
+            "what is in [Image #1]?",
+            Vec::new(),
+        )
+        .carrying(carried),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        |_| {},
+    )
+    .expect("asking beside the work must not be refused");
+
+    let body = received.recv().expect("the question's request");
+    assert!(body.contains("what is in [Image #1]?"), "{body}");
+    assert!(
+        body.contains("data:image/png;base64,iVA="),
+        "the picture did not go with the question: {body}"
+    );
+}
+
 /// A picture is an input, and the record says what arrived however it arrived: asked beside the work
 /// is still asked. Left out here, a session's trail would account for every picture but the ones
 /// pasted into a question.

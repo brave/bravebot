@@ -42,6 +42,7 @@ guards:
       - crates/mcp/tests/stdio.rs: 2
   - symbol: Labelled::trusted
     sites:
+      - crates/agent/src/attached.rs: 1
       - crates/agent/src/manifest.rs: 10
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
@@ -81,6 +82,7 @@ guards:
   - symbol: Policy::present
     sites:
       - crates/agent/src/aside.rs: 1
+      - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 3
       - crates/agent/src/turn.rs: 9

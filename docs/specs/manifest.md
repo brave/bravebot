@@ -36,13 +36,16 @@ what changes is the scope of the precommitment, from one turn to a whole run.
 <a id="MANIFEST-1"></a>
 ### MANIFEST-1: planning is gated, not counted
 
-A plan may be asked for only from a planner whose context holds the task string, the pictures pasted
-into it, and the driver's own words, and has been shown nothing else. A paste is a keystroke of the
-person's own and says nothing about content anybody else wrote
+A plan may be asked for only from a planner whose context holds the task string, the pictures a
+person pasted into it or dropped onto it, and the driver's own words, and has been shown nothing
+else. A paste is a keystroke of the person's own and says nothing about content anybody else wrote
 ([pasting.md](pasting.md#PASTE-5)), which is why a screenshot of the thing to be built goes in with
-the words it was pasted beside while a pipe is still refused (MANIFEST-9). Everything else is already
-excluded everywhere, since untrusted content is never shown to the planner. The gate is that
-invariant written where a change has to pass it.
+the words it was pasted beside while a pipe is still refused (MANIFEST-9). A drop is the same
+gesture reaching a file rather than a clipboard: the path is fixed before any request goes out and
+the file is read outside this planner's policy, which holds no read at all
+([dropping.md](dropping.md#DROP-4)), so the plan is still fixed before anything the plan itself
+could look at. Everything else is already excluded everywhere, since untrusted content is never
+shown to the planner. The gate is that invariant written where a change has to pass it.
 
 Two calls happen: the goal in plain words, then the same work fitted to the tool set. What is
 forbidden is a re-plan: a plan that fails validation fails the run, and nothing plans again once
@@ -53,6 +56,7 @@ a step has read something.
 `verified-by: bravebot_agent::manifest::the_audit_trail_records_each_planning_call`
 `verified-by: bravebot_agent::manifest::a_manifest_that_is_not_json_fails_without_another_call`
 `verified-by: bravebot_agent::manifest::a_picture_pasted_into_the_task_reaches_the_planner`
+`verified-by: bravebot_agent::manifest::a_picture_dropped_onto_the_task_reaches_the_planner`
 
 <a id="MANIFEST-2"></a>
 ### MANIFEST-2: a plan that is not trusted is refused

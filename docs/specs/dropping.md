@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/dropped.rs
   - crates/tui/src/app.rs
+  - crates/agent/src/attached.rs
 documented-by: docs/website/docs/using/context.md
 ---
 
@@ -48,6 +49,7 @@ rest of the session. A rule on a file is more specific than any rule on the tree
 dropped file is trusted even inside a directory marked untrusted.
 
 `verified-by: bravebot_agent::turn::attaching_a_file_vouches_for_it_the_way_naming_one_does`
+`verified-by: bravebot_agent::attached::a_dropped_picture_is_shown_even_from_a_directory_nobody_vouched_for`
 
 <a id="DROP-3"></a>
 ### DROP-3: a drop makes that file reachable, wherever on the disk it is
@@ -70,6 +72,7 @@ but that a person's gesture put its path there.
 `verified-by: bravebot_agent::workspace::a_dropped_text_file_may_come_from_outside_the_workspace`
 `verified-by: bravebot_agent::workspace::a_dropped_attachment_may_come_from_outside_the_workspace`
 `verified-by: bravebot_agent::workspace::only_a_dropped_attachment_may_come_from_outside_the_workspace`
+`verified-by: bravebot_agent::attached::a_picture_dropped_from_outside_the_workspace_is_read_all_the_same`
 `verified-by: bravebot_agent::turn::a_dropped_text_file_from_outside_the_workspace_becomes_context`
 `verified-by: bravebot_agent::turn::dropping_a_text_file_does_not_reach_anything_beside_it`
 
@@ -80,12 +83,39 @@ Images and PDFs are carried as bytes, so the model looks at them. A text file be
 contents entering the turn as trusted input. A type nothing here takes has its path written into the line instead, which is
 what dropping a file did before any of this existed. Extensions are recognised whatever their case.
 
+A slash command whose argument reaches a model carries what such a request can hold. `/btw` sends a
+question and `/manifest` plans from a task, and a picture or a PDF dropped onto either goes with the
+words in the one message. Neither planner reads it: the bytes are read before the planner's policy
+exists, under a policy holding only the read and only the paths the gesture fixed, so a planner that
+cannot reach a file is handed bytes rather than given a way to reach one. A text file on one of those
+lines becomes its name instead, because its contents would be a context message and both of those
+planners are precommitted to a context holding the task and the driver's own words. `/loop` carries
+both, since its first tick is an ordinary turn; every tick after it sends each marker as the file's
+name, because the file went with the tick that took it. A slash command the driver carries out
+itself has no request for anything to travel in, so every marker in one becomes the file's name.
+Waiting changes none of this, so a command the queue reaches when a turn ends carries what one
+dispatched at rest carries.
+
 `verified-by: bravebot_tui::drop::a_dropped_text_file_is_context_rather_than_an_attachment`
 `verified-by: bravebot_tui::drop::dropping_an_unsupported_type_writes_out_the_path`
 `verified-by: bravebot_tui::dropped::an_unsupported_type_is_a_drop_that_attaches_nothing`
 `verified-by: bravebot_tui::dropped::an_unsupported_file_beside_a_supported_one_leaves_it_attachable`
 `verified-by: bravebot_tui::dropped::an_extension_is_recognised_whatever_its_case`
 `verified-by: bravebot_tui::dropped::the_recognised_types_are_the_ones_claude_code_takes`
+`verified-by: bravebot_tui::app::a_picture_dropped_onto_a_question_goes_with_it`
+`verified-by: bravebot_tui::app::a_picture_dropped_onto_a_task_goes_with_the_plan`
+`verified-by: bravebot_tui::app::a_picture_dropped_onto_a_loop_goes_with_its_first_tick`
+`verified-by: bravebot_tui::app::a_picture_dropped_onto_a_question_that_waited_still_goes_with_it`
+`verified-by: bravebot_tui::app::a_text_file_dropped_onto_a_question_is_sent_as_its_name`
+`verified-by: bravebot_tui::app::a_file_dropped_onto_a_command_line_is_carried_out_as_its_name`
+`verified-by: bravebot_tui::state::a_later_tick_of_a_loop_names_the_file_the_first_one_carried`
+`verified-by: bravebot_tui::loops::a_dropped_file_goes_to_one_tick_and_its_name_to_every_other`
+`verified-by: bravebot_agent::attached::a_dropped_picture_comes_back_as_the_bytes_a_request_can_hold`
+`verified-by: bravebot_agent::attached::reading_a_dropped_picture_is_gated_and_named_in_the_trail`
+`verified-by: bravebot_agent::attached::a_picture_that_is_not_there_fails_rather_than_being_carried_as_nothing`
+`verified-by: bravebot_agent::attached::two_dropped_pictures_come_back_in_the_order_their_markers_number_them`
+`verified-by: bravebot_agent::turn::a_picture_dropped_onto_a_question_reaches_the_model_with_it`
+`verified-by: bravebot_agent::manifest::a_picture_dropped_onto_the_task_reaches_the_planner`
 
 <a id="DROP-5"></a>
 ### DROP-5: dropping a directory attaches nothing
@@ -99,13 +129,16 @@ A directory is somewhere to type through rather than a file to read, so naming o
 
 `[Image #1]`, numbered so a second drop is distinguishable from the first, each keeping its place in
 a mixed drop. Deleting the marker is the only way to change your mind, and sending the line clears
-what was attached to it.
+what was attached to it. Dispatching a slash command counts as sending it: the line comes off the
+box with what it named, so nothing is left staged behind a box that no longer names it.
 
 `verified-by: bravebot_tui::drop::several_files_dropped_together_each_get_a_marker`
 `verified-by: bravebot_tui::drop::a_second_drop_gets_its_own_number`
 `verified-by: bravebot_tui::drop::a_mixed_drop_keeps_each_in_its_place`
 `verified-by: bravebot_tui::drop::deleting_the_marker_takes_the_attachment_off`
 `verified-by: bravebot_tui::drop::sending_a_line_clears_what_was_attached_to_it`
+`verified-by: bravebot_tui::app::dispatching_a_command_clears_what_was_dropped_on_its_line`
+`verified-by: bravebot_tui::app::a_command_line_whose_dropped_marker_was_deleted_carries_no_file`
 `verified-by: bravebot_tui::drop::a_drop_leaves_room_after_itself`
 
 <a id="DROP-7"></a>
@@ -180,3 +213,17 @@ dropped onto a line queued mid-turn already relies on.
 - **A screenshot somebody sent you is content you have not read and are vouching for.** It goes
   into the turn as trusted input, on the strength of the gesture alone. Be as careful about a drop
   as about answering yes to a directory.
+- **A name is only as useful as the reach the request has.** A file the planner is given the name of
+  rather than the contents of is one it has to read for itself, and a request with no read in it
+  cannot, so a text file dropped onto `/btw` or `/manifest` reaches the planner as a path it can
+  only talk about. The same holds for a name that points outside the workspace, which is where a
+  drop usually comes from: a later tick of a loop, a prompt recalled in a new session and a line
+  queued mid-turn all hand over such a path, and confinement refuses the read when something acts
+  on it. What the alternative costs is the reason: admitting the contents means a context message,
+  and the requests that would need one fixed the shape of their context before the line was sent.
+- **A line that both pastes and drops sends its pictures in one order and numbers them in
+  another.** Every request puts the dropped files first and the pasted pictures after them, while
+  one counter numbers the markers in the order the gestures happened, so `[Image #1]` from a paste
+  and `[Image #2]` from a later drop arrive the other way round. A picture travels as bytes with
+  nothing beside it to say which marker it answers, so the planner has the order and nothing else.
+  Doing better means a part per marker, which is a shape the model API does not offer for a picture.
