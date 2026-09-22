@@ -45,7 +45,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [network-egress.md](network-egress.md) | `NET` | 9 | every request that leaves this process, and what comes back |
 | [backends.md](backends.md) | `BACKEND` | 42 | which service answers a request, and what a person may choose between |
 | [compaction.md](compaction.md) | `COMPACT` | 12 | shortening a long conversation into a summary of itself, in the request only |
-| [loop.md](loop.md) | `LOOP` | 14 | sending one prompt again and again until somebody stops it |
+| [loop.md](loop.md) | `LOOP` | 15 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 17 | one condition a person set, judged after every turn, until it holds |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
 | [sessions.md](sessions.md) | `SESSION` | 28 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |

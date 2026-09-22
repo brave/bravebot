@@ -292,17 +292,8 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // What is going to happen without anybody typing anything, which is the one thing about a
     // session that a person cannot read off the transcript.
     if let Some(running) = facts.looping {
-        let pace = match running.pacing() {
-            crate::loops::Pacing::Every(every) => {
-                t!(status_loop_every, every = crate::loops::spell(every))
-            }
-            crate::loops::Pacing::SelfPaced => t!(status_loop_self_paced).to_string(),
-        };
-        let when = match running.until(std::time::Instant::now()) {
-            Some(until) => t!(status_loop_next, next = crate::loops::spell(until)),
-            None if running.ticking() => t!(status_loop_running).to_string(),
-            None => t!(status_loop_unpaced).to_string(),
-        };
+        let pace = running.pace();
+        let when = running.when(std::time::Instant::now());
         // The repeated line is the value, the way the goal line below carries its condition. A
         // panel saying only how often something happens leaves the reader to remember what they
         // set going, which is the half of it they cannot get from the pacing.
@@ -777,9 +768,8 @@ mod tests {
     fn the_report_says_what_is_repeating_and_when_it_is_next_due() {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
-        let mut running = crate::loops::Running::begin(
-            crate::loops::parse("5m check the deploy").expect("a request"),
-        );
+        let mut running =
+            crate::loops::Running::begin(crate::loops::request("5m check the deploy"));
         running.dispatching();
         running.ended(None, std::time::Instant::now());
 

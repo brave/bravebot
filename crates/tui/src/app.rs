@@ -48,6 +48,21 @@ use bravebot_session::audit::{Stamped, Trail};
 /// promptly, long enough not to spin.
 const POLL: Duration = Duration::from_millis(100);
 
+/// How often a session with nothing happening in it still owes the screen a frame.
+///
+/// One second, which is the finest the countdown under the box is spelled to. Frames are drawn from
+/// what changed, and a loop waiting for its next tick changes nothing: the row would hold the
+/// moment it last drew for the whole of an interval, so a five-minute loop would say `next in 4m
+/// 58s` for five minutes and correct itself the moment somebody pressed a key for an unrelated
+/// reason. That is the one state the row exists to report, so it is the one state it cannot be
+/// stale in.
+const COUNTDOWN: Duration = Duration::from_secs(1);
+
+/// Whether a pass with no event in it owes the row under the box a frame anyway.
+fn a_countdown_is_owed_a_frame(counting_down: bool, since_drawn: Duration) -> bool {
+    counting_down && since_drawn >= COUNTDOWN
+}
+
 /// Asks for motion reported only while a button is held.
 ///
 /// Sent after [`EnableMouseCapture`], which asks for all three tracking modes at once, including
@@ -220,7 +235,7 @@ pub fn commands() -> [Command; 20] {
         },
         Command {
             name: LOOP_COMMAND,
-            argument: "[interval] <prompt>",
+            argument: "[[interval] <prompt> | stop]",
             description: t!(command_loop),
         },
         Command {
@@ -1162,14 +1177,25 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     // The command that sends a prompt rather than the line it was typed on. `/loop 5m check the
     // deploy` arms the loop and hands back "check the deploy", which is what every tick sends from
-    // here on.
+    // here on. The other two forms send nothing: they read what is repeating and end it, which are
+    // the halves of a standing loop a transcript cannot show.
     if let Some(argument) = argument_to(line, LOOP_COMMAND) {
         return match crate::loops::parse(argument) {
-            Some(request) => match session.start_loop(request, pasted) {
+            crate::loops::Asked::Report => {
+                session.report_loop();
+                Action::Redraw
+            }
+            crate::loops::Asked::Stop => {
+                if !session.stop_loop() {
+                    session.note(t!(loop_none));
+                }
+                Action::Redraw
+            }
+            crate::loops::Asked::Start(request) => match session.start_loop(request, pasted) {
                 Some(prompt) => Action::Submit(prompt),
                 None => Action::Redraw,
             },
-            None => {
+            crate::loops::Asked::Unreadable => {
                 session.note(t!(loop_needs_a_prompt));
                 Action::Redraw
             }
@@ -2491,6 +2517,12 @@ fn event_loop(
                 None => match queued_next(&mut session) {
                     Some(action) => action,
                     None => {
+                        if a_countdown_is_owed_a_frame(
+                            session.looping().is_some(),
+                            drawn_at.elapsed(),
+                        ) {
+                            needs_draw = true;
+                        }
                         if !event::poll(POLL)? {
                             continue;
                         }
@@ -9633,11 +9665,13 @@ mod tests {
         );
     }
 
-    /// With nothing to repeat there is no loop to start, and the interface says what it needs
-    /// rather than quietly doing nothing.
+    /// An interval with nothing after it is a loop somebody asked for and cannot have, so the
+    /// interface says what the command needs rather than quietly doing nothing. Not read as the
+    /// bare word either: a person halfway through typing a new interval is not asking about the
+    /// loop they are replacing.
     #[test]
-    fn the_bare_loop_command_is_still_the_command() {
-        for line in [LOOP_COMMAND, "/loop 5m"] {
+    fn an_interval_with_nothing_after_it_says_what_the_command_needs() {
+        for line in ["/loop 5m", "/loop every 5m"] {
             let mut session = Session::new("none");
             for c in line.chars() {
                 handle_key(&mut session, key(KeyCode::Char(c)));
@@ -9645,11 +9679,161 @@ mod tests {
 
             assert_eq!(
                 handle_key(&mut session, key(KeyCode::Enter)),
-                Action::Redraw
+                Action::Redraw,
+                "{line}"
             );
             assert!(session.looping().is_none(), "{line} started a loop");
             assert_eq!(session.transcript.len(), 1, "{line} said nothing");
+            assert_eq!(
+                session.transcript[0].text,
+                t!(loop_needs_a_prompt),
+                "{line}"
+            );
         }
+    }
+
+    /// The frame a countdown is owed, and the ones it is not. A session with no loop in it is left
+    /// alone, because nothing in its row goes stale on its own; a session drawn inside the last
+    /// second is left alone too, since the row is spelled no finer than a second and a frame per
+    /// pass is a spin.
+    #[test]
+    fn a_countdown_is_owed_a_frame_once_a_second_and_only_while_a_loop_runs() {
+        assert!(!a_countdown_is_owed_a_frame(false, Duration::from_secs(9)));
+        assert!(!a_countdown_is_owed_a_frame(
+            true,
+            COUNTDOWN - Duration::from_millis(1)
+        ));
+        assert!(a_countdown_is_owed_a_frame(true, COUNTDOWN));
+        assert!(a_countdown_is_owed_a_frame(true, Duration::from_secs(9)));
+    }
+
+    /// The bare word reads the loop rather than starting one, and sends nothing: between ticks the
+    /// transcript is a record of what has already happened, and a loop is the part that has not.
+    #[test]
+    fn the_bare_loop_command_says_what_is_repeating() {
+        let mut session = Session::new("none");
+        // A line no message in the catalog quotes, so the sentence that says what the command needs
+        // cannot be mistaken for the report: that sentence gives `check the deploy` as its example.
+        session.start_loop(crate::loops::request("5m tail the log"), Vec::new());
+        session.complete("done", Vec::new(), 0);
+        session.loop_turn_ended(None);
+        session.transcript.clear();
+        for c in LOOP_COMMAND.chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert_eq!(
+            session.looping().map(|running| running.prompt()),
+            Some("tail the log"),
+            "the report ended the loop"
+        );
+        assert_eq!(session.transcript.len(), 2, "the report is not two lines");
+        assert!(
+            session.transcript[0].text.contains("tail the log"),
+            "{}",
+            session.transcript[0].text
+        );
+        assert_eq!(session.transcript[1].text, t!(loop_ends_with));
+    }
+
+    /// The ending a person can reach without also stopping the turn that is in flight, which is
+    /// what Ctrl-C reaches first: a loop over a long turn is otherwise ended only by cancelling the
+    /// work it has just started. Asked for at rest it takes effect on the press.
+    #[test]
+    fn the_loop_command_ends_the_loop_when_asked_to_stop() {
+        let mut session = Session::new("none");
+        session.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        session.complete("done", Vec::new(), 0);
+        for c in "/loop stop".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert!(session.looping().is_none(), "the loop is still running");
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_stopped)),
+            "the ending was not announced"
+        );
+    }
+
+    /// The same ending asked for during a turn, which is where a loop worth ending usually is. The
+    /// line waits, the way every line typed mid-turn waits, and ends the loop when the queue is
+    /// reached rather than reaching the turn in flight. No tick goes out ahead of it either, which is
+    /// `a_tick_waits_for_the_turn_in_flight_and_for_what_is_queued`'s half of this.
+    #[test]
+    fn asking_to_stop_a_loop_during_a_turn_ends_it_when_the_queue_is_reached() {
+        let mut session = Session::new("none");
+        session.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        for c in "/loop stop".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert!(
+            session.looping().is_some(),
+            "the queued line ended the loop out from under the tick in flight"
+        );
+
+        session.complete("done", Vec::new(), 0);
+        assert_eq!(queued_next(&mut session), Some(Action::Redraw));
+        assert!(session.looping().is_none(), "the queued ending did nothing");
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_stopped)),
+            "the ending was not announced"
+        );
+    }
+
+    /// Nothing to stop is worth saying, because the person believed there was something. A command
+    /// that answered it with silence would leave them unable to tell which of the two it meant.
+    #[test]
+    fn asking_to_stop_a_loop_that_is_not_running_says_so() {
+        let mut session = Session::new("none");
+        for c in "/loop stop".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert_eq!(session.transcript.len(), 1);
+        assert_eq!(session.transcript[0].text, t!(loop_none));
+    }
+
+    /// The one place in the command where a reserved word could eat a line somebody meant to have
+    /// repeated. The word ends a loop as the whole argument, and starts one as the first word of a
+    /// sentence.
+    #[test]
+    fn a_loop_over_a_line_beginning_with_stop_is_still_a_loop() {
+        let mut session = Session::new("none");
+        for c in "/loop stop the deploy if it is still going".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("stop the deploy if it is still going".to_string())
+        );
+        assert_eq!(
+            session.looping().map(|running| running.prompt()),
+            Some("stop the deploy if it is still going")
+        );
     }
 
     /// A goal is a condition, not a prompt. Setting one that started a turn would send a line
@@ -10038,10 +10222,7 @@ mod tests {
     #[test]
     fn interrupting_stops_the_loop_before_it_leaves() {
         let mut session = Session::new("none");
-        session.start_loop(
-            crate::loops::parse("5m watch").expect("a request"),
-            Vec::new(),
-        );
+        session.start_loop(crate::loops::request("5m watch"), Vec::new());
         session.complete("done", Vec::new(), 0);
 
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
@@ -10059,10 +10240,7 @@ mod tests {
     #[test]
     fn interrupting_clears_the_line_before_it_stops_the_loop() {
         let mut session = Session::new("none");
-        session.start_loop(
-            crate::loops::parse("5m watch").expect("a request"),
-            Vec::new(),
-        );
+        session.start_loop(crate::loops::request("5m watch"), Vec::new());
         session.complete("done", Vec::new(), 0);
         for c in "half a thought".chars() {
             handle_key(&mut session, key(KeyCode::Char(c)));
@@ -10519,10 +10697,7 @@ mod tests {
 
         // A tick submits from the main loop rather than from a key, which is how the offer
         // reaches a running turn at all.
-        session.start_loop(
-            crate::loops::parse("30s check the deploy").expect("a request"),
-            Vec::new(),
-        );
+        session.start_loop(crate::loops::request("30s check the deploy"), Vec::new());
         assert_eq!(session.status, Status::Working);
         assert!(session.cleared_by_interrupt, "the tick took the offer down");
 

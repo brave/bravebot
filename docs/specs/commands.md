@@ -56,8 +56,9 @@ but that press puts anything in the queue.
 
 `/rename` is the command. `/renamed the parser` is a prompt, because the word is longer.
 `what does /add-dir do` is a prompt, because the word is not the line. The bare word with nothing
-after it is the command with an empty argument, answered by saying what it needs rather than by
-doing nothing quietly.
+after it is the command with an empty argument, answered by saying what it needs, or by doing what
+the bare word means where it means something of its own, rather than by doing nothing quietly.
+`/loop` on its own says what is repeating, which is [loop.md](loop.md)'s.
 
 **Why.** The set of words this program claims is taken out of the language a person can use to
 talk to the planner, so it is claimed as narrowly as possible: asking how a command works must
@@ -83,7 +84,7 @@ stay a question. Prefix matching would have made `/add-dirs are useful` open a d
 `verified-by: bravebot_tui::app::the_bare_rename_command_is_still_the_command`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_loop_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_loop_is_a_prompt`
-`verified-by: bravebot_tui::app::the_bare_loop_command_is_still_the_command`
+`verified-by: bravebot_tui::app::the_bare_loop_command_says_what_is_repeating`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_cd_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_cd_is_a_prompt`
 `verified-by: bravebot_tui::app::the_bare_cd_command_is_still_the_command`
