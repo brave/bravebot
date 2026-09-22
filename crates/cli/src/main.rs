@@ -681,7 +681,24 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     // command line, read back off disk, or pinned in the settings file. Without it a run compacts
     // against a default that a narrow window never reaches, so compaction never fires, while a wide
     // one reaches it with three quarters of the conversation still to spare.
-    bravebot_tui::app::adopt_budget_for_model(&mut config, &model);
+    //
+    // The same listing says whether that model reads an effort level, which is the other thing a
+    // run cannot learn anywhere else.
+    let reads_effort = bravebot_tui::app::adopt_listing_for_model(&mut config, &model);
+
+    // A level goes out only where the listing describing the model in force says it is read
+    // (BACKEND-22). What is recorded stays recorded: the choice applies again the moment a model
+    // that reads one is in force, so what a request carries does not depend on the order two
+    // commands were typed in.
+    //
+    // Said, because a level that is charged for and discarded at the far end is indistinguishable
+    // from one that was honoured, so silence here would leave somebody believing every turn of the
+    // run thought harder than it did. Said only where one was chosen: a run that asked for no level
+    // has had nothing withheld from it.
+    if !reads_effort && task.effort.is_some() {
+        eprintln!("{}", t!(cli_notice, notice = t!(session_effort_not_read)));
+        task = task.with_effort(None);
+    }
 
     // The sign-in's own lines go to stderr as they arrive, beside every other progress line, which
     // keeps stdout the reply and nothing else. A URL and a code are no use after the fact, so they
