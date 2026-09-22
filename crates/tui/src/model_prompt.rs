@@ -259,7 +259,7 @@ pub fn choose<B: Backend>(
         let Ok(event) = input::read() else {
             return None;
         };
-        let Some(key) = event.key() else {
+        let Some(key) = input::key_of(&event) else {
             continue;
         };
         // A key event arrives twice on Windows, once pressed and once released, and the release

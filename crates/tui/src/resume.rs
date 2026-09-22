@@ -189,7 +189,7 @@ pub fn choose<B: Backend>(terminal: &mut Terminal<B>, project: &Path) -> Choice 
         let Ok(event) = input::read() else {
             return Choice::Fresh;
         };
-        let Some(key) = event.key() else {
+        let Some(key) = input::key_of(&event) else {
             continue;
         };
         // A key event arrives twice on Windows, once pressed and once released, and the release

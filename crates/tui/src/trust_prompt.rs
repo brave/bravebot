@@ -167,7 +167,7 @@ fn ask_one<B: Backend>(
             Ok(taken) => {
                 // Asked of the event just handed out, so it is read before the next one replaces it.
                 let arrived_alone = input::the_last_event_arrived_alone();
-                match taken.key() {
+                match input::key_of(&taken) {
                     // Presses only: the interface asks for disambiguated keys, so a release arrives
                     // too, and answering twice grants standing permission on one keystroke.
                     Some(key) if key.kind != event::KeyEventKind::Press => continue,
@@ -425,45 +425,6 @@ mod tests {
     /// The working directory these answers are about.
     fn here() -> &'static Path {
         Path::new("/work")
-    }
-
-    /// The reported bug, at the question it reached first. An editor that activates a virtualenv
-    /// by typing `source .../.venv/bin/activate` into the terminal it opened spells an `n` on the
-    /// way past, and a reader taking those keys one at a time answers this question with it: the
-    /// directory is settled by a program, and the rest of the path becomes a prompt.
-    ///
-    /// Asserted against every event the run resolves to, rather than against the paste it should
-    /// be, so the test still rejects the fault if the classification changes shape.
-    #[test]
-    fn a_command_line_another_program_typed_in_answers_nothing() {
-        let run = crate::input::run_spelling("source /tmp/x/.venv/bin/activate\r");
-        for taken in crate::input::resolve(run, false) {
-            if let Some(key) = taken.key() {
-                assert_eq!(
-                    answer_for(key, false, true),
-                    Response::Nothing,
-                    "a key out of a burst answered the trust question"
-                );
-            }
-        }
-    }
-
-    /// What the burst test above does not cover, said out loud so nobody reads it as more than it
-    /// is. The count is of characters, so a run spelling nothing is delivered key by key, and one
-    /// write of an arrow and a return is two keystrokes here. This question is answered by a bare
-    /// letter, so a program writing one answers it; what keeps that from being the reported failure
-    /// is that the activation line is words, and words become one event that answers nothing.
-    #[test]
-    fn a_run_that_spells_nothing_still_reaches_this_question() {
-        let run = vec![
-            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-        ];
-        let reached: Vec<KeyEvent> = crate::input::resolve(run, false)
-            .iter()
-            .filter_map(|taken| taken.key())
-            .collect();
-        assert_eq!(reached.len(), 2, "a control run stopped being keys");
     }
 
     /// The characters one question puts on a terminal, in reading order.

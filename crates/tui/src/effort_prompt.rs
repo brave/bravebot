@@ -171,7 +171,7 @@ pub fn choose<B: Backend>(
         let Ok(event) = input::read() else {
             return None;
         };
-        let Some(key) = event.key() else {
+        let Some(key) = input::key_of(&event) else {
             continue;
         };
         if key.kind != event::KeyEventKind::Press {

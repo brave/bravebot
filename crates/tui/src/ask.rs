@@ -106,7 +106,7 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, asking: &Asking) -> Vec<Answe
         }
 
         let key = match input::read() {
-            Ok(taken) => match taken.key() {
+            Ok(taken) => match input::key_of(&taken) {
                 // Presses only. The interface asks the terminal for disambiguated keys, which
                 // reports releases too, and a release taken for a press answers the next question
                 // with the key that answered this one.
