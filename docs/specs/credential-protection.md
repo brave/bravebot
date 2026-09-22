@@ -458,6 +458,10 @@ a modal box, and a list long enough to push the answers off the panel is how a p
 pressing `y` at a screen they could not read. The whole report goes into the session's transcript
 as well, because the box is gone the moment it is answered.
 
+One value is one finding however many files spell it out, and the count is of distinct values: a
+fixture key repeated through a test suite is one credential to whoever is weighing the disclosure,
+and adding up its copies inflates the only number they have to weigh it against.
+
 A finding says the kind, the path, the line, a fingerprint and a masked preview, which is what
 [CRED-19](#CRED-19) allows it to hold, and the path is put through the interface's own replacement
 for control characters first: a file in the tree is named by whoever wrote the tree, and a name
@@ -473,7 +477,10 @@ turn, and the one thing a match produces is a line on a terminal.
 `verified-by: bravebot_agent::credential_scan::a_declared_key_is_reported_ahead_of_an_inferred_one`
 `verified-by: bravebot_agent::credential_scan::nothing_the_report_says_repeats_the_value_that_was_found`
 `verified-by: bravebot_agent::credential_scan::a_walk_that_runs_out_of_time_says_it_did_not_reach_the_end`
-`verified-by: bravebot_agent::credential_scan::a_dependency_directory_is_not_read_and_build_output_is`
+`verified-by: bravebot_agent::credential_scan::a_dependency_directory_is_not_read_and_shipped_build_output_is`
+`verified-by: bravebot_agent::credential_scan::one_value_in_many_files_is_counted_once`
+`verified-by: bravebot_core::credentials::a_sentence_that_mentions_a_secret_and_holds_a_separator_is_not_one`
+`verified-by: bravebot_core::credentials::a_sentence_describing_a_connection_string_holds_no_password`
 `verified-by: bravebot_agent::credential_scan::a_link_out_of_the_tree_is_not_followed`
 `verified-by: bravebot_agent::credential_scan::a_binary_file_is_not_read_as_text`
 `verified-by: bravebot_tui::trust_prompt::what_the_scan_found_is_on_the_panel_the_question_is_asked_in`

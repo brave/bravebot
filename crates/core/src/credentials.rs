@@ -378,9 +378,16 @@ fn url_password(line: &str) -> Option<String> {
         .next()
         .unwrap_or(after_scheme);
     // The last `@` divides credentials from host: a password may itself contain one.
-    let (userinfo, _) = authority.rsplit_once('@')?;
+    let (userinfo, host) = authority.rsplit_once('@')?;
     let (_, password) = userinfo.split_once(':')?;
     let password = password.trim_end_matches(['"', '\'']);
+
+    // A URL holds no whitespace, so a match spanning any is a sentence that happens to carry a
+    // scheme and an `@`. Without this, the comment above and every document describing the shape of
+    // a connection string was reported as holding the password it names.
+    if authority.contains(char::is_whitespace) || host.is_empty() {
+        return None;
+    }
 
     // A reference to a secret is not one, and an empty field is not a password.
     if password.is_empty() || password.contains("${") || password.starts_with('$') {
@@ -414,19 +421,34 @@ const NAMES: &[&str] = &[
 /// A value assigned to a name that says it is a secret, where the value is rare enough to be one.
 ///
 /// `NAME=value`, `name: value` and `"name": "value"` are one shape with different punctuation
-/// around it, so the name is taken from the left of the first separator and the value from the
-/// right of it, each stripped of the quoting the format put there.
+/// around it, so the name is the identifier the first separator follows and the value the single
+/// token after it, each stripped of the quoting the format put there.
+///
+/// Both sides are one token rather than the whole of their side, and that is what keeps this layer
+/// off prose. A sentence holds a separator too — the `:` of a URL it links to — and reading the name
+/// as everything before it made `its tokens were charged to no turn at all` the name of a secret,
+/// while reading the value as everything after it made the rest of the line its value. Every
+/// changelog entry that mentioned a token and linked to an issue was a finding.
 fn assigned(line: &str) -> Option<String> {
     let cut = line.find(['=', ':'])?;
     let (name, value) = line.split_at(cut);
     let value = trim_quoting(&value[1..]);
 
+    // The identifier the separator follows, which is the name in every format this matches and in
+    // none of the prose it must not: `export GH_TOKEN`, `  "token"` and `let secret ` all end in the
+    // name, so the quoting and the keywords in front of it need no cases of their own.
     let name = name
-        .trim()
-        .trim_start_matches("export ")
+        .rsplit(|c: char| !is_token(c))
+        .find(|run| !run.is_empty())?
         .to_ascii_uppercase();
-    let name = trim_quoting(&name);
     if !NAMES.iter().any(|keyword| name.contains(keyword)) {
+        return None;
+    }
+
+    // A credential is one token. Anything still holding a separator, a bracket or a quote is the
+    // remainder of a line rather than a value, and fingerprinting it would describe a secret that is
+    // not one and never match the same secret written anywhere else.
+    if value.is_empty() || !value.chars().all(is_token) {
         return None;
     }
 
@@ -920,6 +942,47 @@ mod tests {
     fn a_keyword_in_the_value_rather_than_the_name_is_not_a_secret() {
         let line = "description: the deploy step needs a SECRET_KEY_BASE of 64 hex digits\n";
         assert!(scan("docs.md", line, 1).is_empty());
+    }
+
+    /// A sentence holds a separator too, so taking the name as the whole of the left side and the
+    /// value as the whole of the right made prose a finding. Every line here is from this
+    /// repository, and together they were most of what a scan of it reported: a changelog entry
+    /// mentioning a token and linking to an issue, two lines of JSON in a test, a timestamp assigned
+    /// to a field whose name ends in one of [`NAMES`], and a method call on a type that does. The
+    /// name is the identifier the separator follows and the value is one token, which none of these
+    /// has on both sides.
+    #[test]
+    fn a_sentence_that_mentions_a_secret_and_holds_a_separator_is_not_one() {
+        for line in [
+            " - Fixed a record whose tokens were charged to no turn at all. ([#188](https://github.com/brave/bravebot/issues/188))\n",
+            "r#\"{\"total_tokens\":4530,\"trimmed_tokens\":0,\"object\":\"brave-chat.contentReceipt\"}\"#,\n",
+            "\"prompt_tokens_details\":{\"cached_tokens\":1100}},\n",
+            "        expired.credentials[0].valid_from = \"2020-01-01T00:00:00\".to_string();\n",
+            "            .filter_map(|s| BlindedToken::decode_base64(s).ok())\n",
+        ] {
+            let found = scan("src/lib.rs", line, 1);
+            assert!(
+                found.is_empty(),
+                "prose was reported as a secret: {line:?} gave {found:?}"
+            );
+        }
+    }
+
+    /// A URL holds no whitespace. Without asking that, this layer matched across a sentence that
+    /// merely described the shape of a connection string — including the comment in this file
+    /// documenting the rule, which reported the word `password` as the password it names.
+    #[test]
+    fn a_sentence_describing_a_connection_string_holds_no_password() {
+        for line in [
+            "/// `scheme://user:password@host` says the value is a password in its own syntax\n",
+            "see postgres://user:secret@host for the shape a connection string takes\n",
+        ] {
+            let found: Vec<_> = scan("notes.md", line, 1)
+                .into_iter()
+                .filter(|f| f.kind == Kind::UrlPassword)
+                .collect();
+            assert!(found.is_empty(), "prose reported for {line:?}: {found:?}");
+        }
     }
 
     /// A key is armoured across as many lines as it takes. Reported per line it would be a dozen

@@ -51,12 +51,17 @@ const SNIFFED: usize = 8 * 1024;
 
 /// Directories nobody in this tree wrote, which is why they are not read.
 ///
-/// Build output is deliberately absent: `dist` and `target` hold what this repository produced,
-/// and a key baked into a bundle at build time is in the tree and about to ship. So is anything
-/// vendored or submoduled, because vouching for the tree covers those too. `.git` is here because
-/// the objects under it are a scan of their own, expensive and off by default, rather than
-/// because the history does not matter.
-const NOT_READ: &[&str] = &[".git", "node_modules", "venv", ".venv"];
+/// Shipped build output is deliberately absent: `dist` holds what this repository produced, and a
+/// key baked into a bundle at build time is in the tree and about to ship. So is anything vendored
+/// or submoduled, because vouching for the tree covers those too. `.git` is here because the objects
+/// under it are a scan of their own, expensive and off by default, rather than because the history
+/// does not matter.
+///
+/// `target` is here despite being build output, because it is a compiler cache rather than a thing
+/// that ships: on this repository it held forty-five of every forty-six thousand files, so the walk
+/// spent its whole budget inside it and stopped before reaching any source at all. A scan that
+/// reports `crates` unread in order to read a cache of `crates` covers the tree in name only.
+const NOT_READ: &[&str] = &[".git", "node_modules", "venv", ".venv", "target"];
 
 /// What one pass over a tree found, and how much of the tree it got to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,7 +166,7 @@ pub fn scan_tree_within(root: &Path, budget: Duration) -> TreeScan {
     finish(scan, true)
 }
 
-/// Rank what was found and record whether the walk got to the end of the tree.
+/// Rank what was found, drop the repeats, and record whether the walk got to the end of the tree.
 ///
 /// `finished` is false only where the budget ran out. A file or a directory that could not be
 /// read has already been recorded during the walk, so it is kept rather than overwritten.
@@ -169,6 +174,13 @@ fn finish(mut scan: TreeScan, finished: bool) -> TreeScan {
     // Stable, so paths stay in the order the walk read them within each half.
     scan.findings
         .sort_by_key(|finding| !finding.kind.is_declared());
+    // One value is one credential however many files spell it out. A count that added up the copies
+    // answered "how many lines matched" while appearing to answer "how many credentials are in
+    // here": one test fixture key in this repository was thirteen of the findings reported. The
+    // first place a value appears is the one kept, which is the earliest path in the walk.
+    let mut seen = std::collections::HashSet::new();
+    scan.findings
+        .retain(|finding| seen.insert(finding.fingerprint.clone()));
     scan.everything_was_read &= finished;
     scan
 }
@@ -435,16 +447,24 @@ mod tests {
     }
 
     /// The directories nobody in the tree wrote are the bulk of a large checkout, and reading
-    /// them would spend the budget the person's own files needed. Build output is the other
+    /// them would spend the budget the person's own files needed. Shipped build output is the other
     /// half of the same rule and is read, because a key baked into a bundle is in the tree and
     /// about to ship.
+    ///
+    /// `target` is skipped despite being build output, and that is the distinction the rule turns
+    /// on: `dist` is what a project ships, while `target` is a compiler cache holding a copy of
+    /// every source file it compiled. Reading it made a scan of this repository spend its whole
+    /// budget without reaching a single file anybody wrote.
     #[test]
-    fn a_dependency_directory_is_not_read_and_build_output_is() {
+    fn a_dependency_directory_is_not_read_and_shipped_build_output_is() {
         let root = tree(
             "skipping",
             &[
                 ("node_modules/pkg/.env", &format!("KEY={A_DECLARED_KEY}\n")),
                 (".git/config", &format!("KEY={A_DECLARED_KEY}\n")),
+                // A different key from the one below, or dedup would drop this finding as a repeat
+                // and the test would pass whether `target` was skipped or read.
+                ("target/debug/out.rs", "KEY=AKIAQRSTUVWX12345678\n"),
                 (
                     "dist/bundle.js",
                     &format!("const k = \"{A_DECLARED_KEY}\";\n"),
@@ -460,6 +480,29 @@ mod tests {
             .map(|finding| finding.path.as_str())
             .collect();
         assert_eq!(paths, vec!["dist/bundle.js"], "{paths:?}");
+    }
+
+    /// One credential is one finding however many files hold it. A count that added up the copies
+    /// answered a question nobody asked: this repository's own AWS fixture key sits in thirteen
+    /// places, so a box headed "50 credentials are already in this directory" was describing
+    /// twenty-eight distinct values, and the number a person weighs a disclosure against was wrong.
+    #[test]
+    fn one_value_in_many_files_is_counted_once() {
+        let root = tree(
+            "repeated",
+            &[
+                ("a.env", &format!("KEY={A_DECLARED_KEY}\n")),
+                ("b.env", &format!("OTHER={A_DECLARED_KEY}\n")),
+                ("notes.md", &format!("the key is {A_DECLARED_KEY}\n")),
+            ],
+        );
+
+        let scan = scan_tree(&root);
+
+        assert_eq!(scan.findings().len(), 1, "got {:?}", scan.findings());
+        // The first path in the walk is the one kept, so the report is the same on the next machine.
+        assert_eq!(scan.findings()[0].path, "a.env");
+        assert_eq!(scan.read(), 3, "every copy was still read");
     }
 
     /// A link is a name in this tree for a file outside it. Following one would read a home
