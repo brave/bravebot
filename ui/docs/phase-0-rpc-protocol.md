@@ -11,9 +11,11 @@ The Electron app does not drive a terminal and does not parse one. It talks to a
 **library**, `bravebot-ui-bridge`, which lives in this repository and depends on
 `bravebot` as an ordinary Cargo dependency.
 
-**`bravebot` is not modified. Zero files, zero new crates, zero refactors.**
-That is a hard constraint on this design, not an aspiration, and §2.3 says what would
-violate it.
+**`bravebot` was not modified while it was a separate repository.** That was a hard
+constraint on the original design, and §2.3 says what would have violated it. It no longer
+holds: the two repositories are one workspace, so widening a shared function is an ordinary
+change and is the right answer whenever this side would otherwise re-decide something the
+agent already decides. What has not changed is which side decides: the agent, always.
 
 In v1 the library is reached through a thin binary, `bravebot-rpc`, that speaks
 newline-delimited JSON on stdin and stdout. The protocol in §4–§9 is the library's

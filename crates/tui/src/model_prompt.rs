@@ -571,6 +571,7 @@ mod tests {
             provider: None,
             conversation_tokens: None,
             reads_effort: true,
+            advertised: bravebot_aichat::models::Advertised::default(),
         }
     }
 

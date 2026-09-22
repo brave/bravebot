@@ -1,20 +1,16 @@
 //! Model discovery uses the agent's clients and egress policy, never renderer-supplied URLs.
 
-use bravebot_aichat::models::{self, Model};
+use bravebot_aichat::models::{self, Advertised, Model};
 use bravebot_config::Config;
-use bravebot_config::provider::{Credential, Provider};
+use bravebot_config::provider::Credential;
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
-use bravebot_core::{event::Sink, label::Label};
-use bravebot_net::{Egress, Request};
-use serde::Deserialize;
+use bravebot_net::Egress;
 use serde_json::{Value, json};
-use std::collections::HashMap;
 
 pub fn list(config: &Config) -> Value {
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
-    let mut capabilities = HashMap::new();
     if let Some(bedrock) = &config.bedrock {
         for entry in bedrock.models() {
             rows.push(Model {
@@ -24,6 +20,8 @@ pub fn list(config: &Config) -> Value {
                 reads_effort: true,
                 provider: Some("AWS Bedrock".into()),
                 conversation_tokens: Some(entry.window()),
+                // Bedrock has no listing, so nothing has described these models.
+                advertised: Advertised::default(),
             });
         }
     }
@@ -36,6 +34,8 @@ pub fn list(config: &Config) -> Value {
                 reads_effort: true,
                 provider: Some(provider.display_name().to_string()),
                 conversation_tokens: Some(model.window()),
+                // A block names models and describes none of them.
+                advertised: Advertised::default(),
             }));
             continue;
         }
@@ -51,6 +51,11 @@ pub fn list(config: &Config) -> Value {
         routing.insert_trusted("models", provider.models_url());
         routing.insert_trusted("account-models", provider.account_models_url());
         let mut sink = bravebot_session::audit::Trail::new();
+        // The agent's own roster request, not a second copy of it. It keeps the account-first
+        // fallback, the bearer header, the envelope decode, the tool filter and the key
+        // qualification in one place, and the decode stays a declassification site the agent
+        // owns rather than one this crate has to be pinned for.
+        let token = bearer(&credential);
         let result = Policy::begin(
             routing,
             ReleasePlan::new(),
@@ -58,14 +63,11 @@ pub fn list(config: &Config) -> Value {
             &mut sink,
         )
         .ok()
-        .and_then(|mut policy| gateway_models(&mut policy, provider, &credential));
+        .and_then(|mut policy| {
+            models::list_from_gateway(&mut policy, provider, token, &Egress::new()).ok()
+        });
         match result {
-            Some(listed) => {
-                for (model, badges) in listed {
-                    capabilities.insert(model.key.clone(), badges);
-                    rows.push(model);
-                }
-            }
+            Some(listed) => rows.extend(listed),
             None => warnings.push(format!(
                 "Could not load models from {}. Try again.",
                 provider.display_name()
@@ -89,121 +91,33 @@ pub fn list(config: &Config) -> Value {
             None => warnings.push("Could not load Brave models. Try again.".into()),
         }
     }
-    let mut result = catalogue(rows, &config.default_model, warnings);
-    for row in result["models"].as_array_mut().unwrap() {
-        row["capabilities"] = json!(
-            capabilities
-                .get(row["id"].as_str().unwrap())
-                .cloned()
-                .unwrap_or_default()
-        );
-    }
-    result
+    catalogue(rows, &config.default_model, warnings)
 }
 
-// The upstream picker drops modality metadata. Decode the same gateway envelope here
-// through the agent's egress policy, keeping its account-first fallback and tool filter.
-#[derive(Deserialize)]
-struct GatewayListing {
-    data: Vec<GatewayModel>,
-}
-
-#[derive(Deserialize)]
-struct GatewayModel {
-    id: String,
-    context_length: Option<u64>,
-    supported_parameters: Option<Vec<String>>,
-    architecture: Option<Architecture>,
-}
-
-#[derive(Deserialize, Default)]
-struct Architecture {
-    #[serde(default)]
-    input_modalities: Vec<String>,
-    #[serde(default)]
-    output_modalities: Vec<String>,
-}
-
-fn gateway_models<S: Sink>(
-    policy: &mut Policy<'_, S>,
-    provider: &Provider,
-    credential: &Credential,
-) -> Option<Vec<(Model, Vec<&'static str>)>> {
-    let fetch = |policy: &mut Policy<'_, S>, url: String| -> Option<GatewayListing> {
-        let response = Egress::new()
-            .fetch(
-                policy,
-                model_request(&url, credential)?,
-                Label::untrusted_public(),
-            )
-            .ok()?;
-        let label = response.body.label();
-        let (bytes, _) = policy
-            .decode_transport("gateway models", label)
-            .decode(response.body);
-        serde_json::from_slice(&bytes).ok()
-    };
-    let listed = fetch(policy, provider.account_models_url())
-        .or_else(|| fetch(policy, provider.models_url()))?;
-    Some(gateway_rows(provider, listed.data))
-}
-
-fn model_request(url: &str, credential: &Credential) -> Option<Request> {
-    let request = Request::get(url).header("accept", "application/json");
+/// The token a roster request is made with, where the block named one.
+///
+/// `None` is not an error here: a gateway configured without a credential is asked without one,
+/// which is what a local Ollama wants. The shared listing reads `None` as a reason not to ask the
+/// account-scoped route at all, since there is no account to scope an answer to. `Absent` never
+/// reaches this, being the one state that is a warning rather than a request.
+fn bearer(credential: &Credential) -> Option<&str> {
     match credential {
-        Credential::Token(token) => {
-            let token = token.expose();
-            Some(request.header("authorization", format!("Bearer {token}")))
-        }
-        Credential::NotNeeded => Some(request),
-        Credential::Absent => None,
+        Credential::Token(token) => Some(token.expose()),
+        Credential::NotNeeded | Credential::Absent => None,
     }
 }
 
-fn gateway_rows(provider: &Provider, listed: Vec<GatewayModel>) -> Vec<(Model, Vec<&'static str>)> {
-    listed
-        .into_iter()
-        .filter(|entry| !entry.id.trim().is_empty())
-        .filter(|entry| {
-            entry
-                .supported_parameters
-                .as_ref()
-                .is_none_or(|parameters| parameters.iter().any(|p| p == "tools"))
-        })
-        .map(|entry| {
-            let badges = badges(&entry);
-            let reads_effort = entry
-                .supported_parameters
-                .as_ref()
-                .is_none_or(|parameters| parameters.iter().any(|p| p == "reasoning_effort"));
-            (
-                Model {
-                    key: format!("{}/{}", provider.id, entry.id),
-                    display_name: entry.id.clone(),
-                    premium: false,
-                    reads_effort,
-                    provider: Some(provider.display_name().to_string()),
-                    conversation_tokens: Some(
-                        provider
-                            .model(&entry.id)
-                            .and_then(|m| m.context_window)
-                            .or(entry.context_length)
-                            .unwrap_or(bravebot_config::provider::CONTEXT_WINDOW),
-                    ),
-                },
-                badges,
-            )
-        })
-        .collect()
-}
-
-fn badges(entry: &GatewayModel) -> Vec<&'static str> {
-    let architecture = entry.architecture.as_ref();
-    let input = |kind| architecture.is_some_and(|a| a.input_modalities.iter().any(|m| m == kind));
-    let output = |kind| architecture.is_some_and(|a| a.output_modalities.iter().any(|m| m == kind));
-    let parameter = |kind| {
-        entry
-            .supported_parameters
+/// The badges a picker draws, from what the service said about the model.
+///
+/// Words of this window's own, composed from the service's: `image` among what a model accepts
+/// is a camera on the row, and what it produces is a different badge entirely. Nothing decides
+/// anything on them.
+fn badges(advertised: &Advertised) -> Vec<&'static str> {
+    let input = |kind: &str| advertised.input_modalities.iter().any(|m| m == kind);
+    let output = |kind: &str| advertised.output_modalities.iter().any(|m| m == kind);
+    let parameter = |kind: &str| {
+        advertised
+            .parameters
             .as_ref()
             .is_some_and(|p| p.iter().any(|p| p == kind))
     };
@@ -233,6 +147,8 @@ fn catalogue(mut rows: Vec<Model>, default: &str, warnings: Vec<String>) -> Valu
             reads_effort: true,
             provider: Some("Configured default".into()),
             conversation_tokens: None,
+            // A name out of a settings file, which nothing has described.
+            advertised: Advertised::default(),
         });
     }
     rows.sort_by(|a, b| {
@@ -252,7 +168,8 @@ fn catalogue(mut rows: Vec<Model>, default: &str, warnings: Vec<String>) -> Valu
         .map(|row| {
             json!({ "id": row.key, "name": row.display_name,
             "provider": row.provider.unwrap_or_else(|| "Brave".into()),
-            "premium": row.premium, "contextWindow": row.conversation_tokens })
+            "premium": row.premium, "contextWindow": row.conversation_tokens,
+            "capabilities": badges(&row.advertised) })
         })
         .collect();
     json!({ "models": rows, "defaultModel": default, "warnings": warnings })
@@ -279,38 +196,37 @@ pub fn selection(value: Option<&Value>) -> Result<Option<String>, crate::protoco
 mod tests {
     use super::*;
 
+    /// The one decision left here about a credential: which of the three states carries a bearer
+    /// token into the shared listing. The header itself, and the account-first fallback the
+    /// answer decides, belong to the agent.
     #[test]
     fn model_discovery_respects_all_three_credential_states() {
-        let url = "https://gateway.example/v1/models";
-        assert!(model_request(url, &Credential::Absent).is_none());
-        let public = model_request(url, &Credential::NotNeeded).unwrap();
         assert_eq!(
-            public.headers,
-            vec![("accept".into(), "application/json".into())]
+            bearer(&Credential::Token(bravebot_config::Secret::new(
+                "test-token"
+            ))),
+            Some("test-token")
         );
-        let authenticated = model_request(
-            url,
-            &Credential::Token(bravebot_config::Secret::new("test-token")),
-        )
-        .unwrap();
-        assert!(
-            authenticated
-                .headers
-                .contains(&("authorization".into(), "Bearer test-token".into()))
-        );
+        // Asked without one rather than not asked, which is what a local Ollama wants.
+        assert_eq!(bearer(&Credential::NotNeeded), None);
+        assert_eq!(bearer(&Credential::Absent), None);
     }
 
     #[test]
     fn capabilities_distinguish_input_from_output() {
-        let entry = serde_json::from_value(json!({
-            "id": "example", "architecture": {
-                "input_modalities": ["text", "image", "audio", "video", "file"],
-                "output_modalities": ["text", "audio"]
-            }, "supported_parameters": ["tools", "reasoning", "structured_outputs"]
-        }))
-        .unwrap();
+        let advertised = Advertised {
+            input_modalities: ["text", "image", "audio", "video", "file"]
+                .map(String::from)
+                .into(),
+            output_modalities: ["text", "audio"].map(String::from).into(),
+            parameters: Some(
+                ["tools", "reasoning", "structured_outputs"]
+                    .map(String::from)
+                    .into(),
+            ),
+        };
         assert_eq!(
-            badges(&entry),
+            badges(&advertised),
             vec![
                 "text",
                 "vision",
@@ -323,29 +239,29 @@ mod tests {
                 "structured-output"
             ]
         );
-        let image = serde_json::from_value(json!({"id": "image", "architecture": {
-            "input_modalities": ["text"], "output_modalities": ["image"]
-        }}))
-        .unwrap();
+        // A model that draws pictures takes none, and a badge list that confused the two would
+        // tell somebody they could hand it a screenshot.
+        let image = Advertised {
+            input_modalities: ["text"].map(String::from).into(),
+            output_modalities: ["image"].map(String::from).into(),
+            parameters: None,
+        };
         assert_eq!(badges(&image), vec!["image-output"]);
     }
 
+    /// A roster that described nothing gets no badges, which is different from a roster saying a
+    /// model can do nothing: the row is still offered, and it is offered with nothing claimed
+    /// about it either way.
     #[test]
-    fn unknown_capabilities_stay_unknown_and_tool_filter_is_preserved() {
-        let provider =
-            Provider::all(json!({"provider": {"openrouter": {}}}).as_object().unwrap()).remove(0);
-        let entries = serde_json::from_value(json!([
-            {"id": "unknown"},
-            {"id": "no-tools", "supported_parameters": []},
-            {"id": "capable", "context_length": 123456, "supported_parameters": ["tools"]}
-        ]))
-        .unwrap();
-        let rows = gateway_rows(&provider, entries);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].0.key, "openrouter/unknown");
-        assert!(rows[0].1.is_empty());
-        assert_eq!(rows[1].0.conversation_tokens, Some(123456));
-        assert_eq!(rows[1].1, vec!["tools"]);
+    fn unknown_capabilities_stay_unknown() {
+        assert!(badges(&Advertised::default()).is_empty());
+        assert!(
+            badges(&Advertised {
+                parameters: Some(Vec::new()),
+                ..Advertised::default()
+            })
+            .is_empty()
+        );
     }
 
     #[test]
