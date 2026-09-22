@@ -19057,6 +19057,153 @@ fn a_delegate_does_not_fire_the_turn_s_own_moments() {
     assert_eq!(fired, "fired\n", "a delegate fired the turn's own moment");
 }
 
+/// HOOK-7: the sentence reaches the turn's own account of itself and not only the screen, so a
+/// run with nowhere to draw says it too.
+///
+/// A call a delegate made fires `tool-finished` like any other (HOOK-2), and everything the
+/// delegate produced dies at the boundary, so the parent's notices are the only place the person
+/// can still be told their formatter has not run.
+#[cfg(unix)]
+#[test]
+fn a_hook_that_went_wrong_on_a_delegate_s_call_reaches_the_turn_s_notices() {
+    let scratch = Scratch::new("hooks-delegate-notices");
+    std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let missing = scratch.path.join("no-such-formatter");
+    // Attached to `read_file`, which the planner never calls here: the delegate makes the only
+    // call in the turn that fires this, so a sentence naming the program came from that call.
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"tool-finished\", \"tool\": \"read_file\", \"run\": [{missing:?}]}}"),
+    );
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![
+                tool_request("read_file", r#"{"path":"a.txt"}"#),
+                reply_with("read it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK").with_home(Some(home)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("a hook that would not start does not fail the turn");
+
+    assert!(
+        !reporter.delegated.is_empty(),
+        "no delegate ran, so this says nothing about one"
+    );
+    assert!(
+        reporter
+            .notices
+            .iter()
+            .any(|said| said.contains("no-such-formatter")),
+        "nobody watching was told the hook could not start: {:?}",
+        reporter.notices
+    );
+    assert!(
+        outcome
+            .notices
+            .iter()
+            .any(|said| said.contains("no-such-formatter")),
+        "a caller with nowhere to draw was not told the hook could not start: {:?}",
+        outcome.notices
+    );
+}
+
+/// HOOK-7: a hook fires when a call finishes, so a delegate whose next request failed has still
+/// had one go wrong, and the sentence has to survive a run that reported nothing.
+///
+/// The run worth telling somebody about is exactly the one that did not finish: a delegate that
+/// answered leaves a report to read, and one that did not leaves the hook sentence and the round
+/// count.
+#[cfg(unix)]
+#[test]
+fn a_delegate_that_did_not_finish_still_tells_the_turn_what_its_hooks_said() {
+    let scratch = Scratch::new("hooks-delegate-failed");
+    std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let missing = scratch.path.join("no-such-formatter");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"tool-finished\", \"tool\": \"read_file\", \"run\": [{missing:?}]}}"),
+    );
+
+    // The delegate is told to read and then told nothing: its next request finds the script out,
+    // so the read that fired the hook is behind it and the run it belonged to never answers.
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![tool_request("read_file", r#"{"path":"a.txt"}"#)],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK").with_home(Some(home)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("a delegate that did not finish does not fail the turn");
+
+    assert!(
+        reporter
+            .delegates_finished
+            .iter()
+            .any(|(_, _, failed)| *failed),
+        "the delegate answered, so this says nothing about one that did not: {:?}",
+        reporter.delegates_finished
+    );
+    assert!(
+        outcome
+            .notices
+            .iter()
+            .any(|said| said.contains("no-such-formatter")),
+        "the turn kept nothing its failed delegate's hooks said: {:?}",
+        outcome.notices
+    );
+}
+
 mod usage {
     use super::*;
     use bravebot_agent::Spent;
