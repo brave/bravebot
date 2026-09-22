@@ -50,18 +50,26 @@ impl Scratch {
     /// because a gateway is a block rather than a variable, and a `permissions` block, because a
     /// rule is one too.
     fn with_settings(self, json: &str) -> Self {
-        let directory = self.path.join(".bravebot");
-        std::fs::create_dir_all(&directory).expect("create the state directory");
-        std::fs::write(directory.join("settings.json"), json).expect("write settings");
-        self
+        self.with_state("settings.json", json)
+    }
+
+    /// Declare hooks under this home, as writing the file by hand does, and return this scratch
+    /// for chaining.
+    fn with_hooks(self, json: &str) -> Self {
+        self.with_state("hooks.json", json)
     }
 
     /// Record an effort level under this home, as choosing one in the interface does, and return
     /// this scratch for chaining.
     fn with_effort(self, level: &str) -> Self {
+        self.with_state("effort", &format!("{level}\n"))
+    }
+
+    /// Write one file of the state a home keeps, creating the directory it lives in.
+    fn with_state(self, name: &str, contents: &str) -> Self {
         let directory = self.path.join(".bravebot");
         std::fs::create_dir_all(&directory).expect("create the state directory");
-        std::fs::write(directory.join("effort"), format!("{level}\n")).expect("write the level");
+        std::fs::write(directory.join(name), contents).expect("write the state file");
         self
     }
 }
@@ -460,6 +468,60 @@ fn a_turn_that_could_not_run_exits_non_zero() {
     assert!(
         stderr.contains("127.0.0.1:1"),
         "the run failed over something other than the backend it could not reach: {stderr}"
+    );
+}
+
+/// A hook that went wrong is said even by a run whose turn then failed (HOOK-7), which is the one
+/// case where the outcome that would have carried the sentence never arrives.
+///
+/// Nothing a hook prints is read, so this report is the only way somebody learns their formatter has
+/// not run since they mistyped its path, and a turn failing is no reason for them not to hear it.
+/// A property of the process: the sentence is made by the agent, kept by the reporter the run built,
+/// and printed by the ending it reached, and only a run that has all three says whether they are
+/// joined up.
+///
+/// Unix only, for the path the declaration names: a `{:?}` of a Windows path is a JSON string of a
+/// different shape, and what the program is there is not this test's question.
+#[cfg(unix)]
+#[test]
+fn a_run_whose_turn_failed_still_says_what_its_hooks_said() {
+    let scratch = Scratch::new("cli-running-hook-notices");
+    // Attached to the end of the turn, which is the moment a failed turn reaches last and the one a
+    // caller is likeliest to leave out. The program does not exist, so firing it cannot start.
+    let missing = scratch.path.join("no-such-formatter");
+    let scratch = scratch.with_hooks(&format!(
+        r#"{{"hooks": [{{"on": "turn-finished", "run": [{missing:?}]}}]}}"#
+    ));
+
+    let output = bravebot(
+        &scratch.path,
+        // The configuration `a_turn_that_could_not_run_exits_non_zero` fails with: nothing wrong
+        // with it, naming a port nothing can be listening on, so the turn ends with no outcome at
+        // all rather than with a reply to carry the sentence.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !output.status.success(),
+        "the turn this is about did not fail, so it says nothing about a failed one: {stderr}"
+    );
+    assert!(
+        stderr.contains("127.0.0.1:1"),
+        "the run failed over something other than the backend it could not reach: {stderr}"
+    );
+    assert!(
+        stderr.contains("no-such-formatter"),
+        "the turn failed and nobody was told the hook could not start: {stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "the reply stream carried what the hook said: {stdout}"
     );
 }
 

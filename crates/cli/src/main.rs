@@ -830,6 +830,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         Err(bravebot_agent::TurnError::Manifest { attempt, cause }) => {
             let ending = exit::ending_of(&cause);
             let stopped = fail(ending, &cause);
+            say_notices(&mut std::io::stderr().lock(), reporter.notices());
             let report = attempt.describe();
             if !report.is_empty() {
                 eprintln!();
@@ -845,6 +846,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
                     &cause.to_string(),
                     reporter.calls(),
                     &refusals(&sink),
+                    reporter.notices(),
                 ));
             }
             stopped
@@ -852,12 +854,14 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         Err(err) => {
             let ending = exit::ending_of(&err);
             let stopped = fail(ending, &err);
+            say_notices(&mut std::io::stderr().lock(), reporter.notices());
             if as_json {
                 say_the_result(&what_ran(
                     ending,
                     &err.to_string(),
                     reporter.calls(),
                     &refusals(&sink),
+                    reporter.notices(),
                 ));
             }
             stopped
@@ -883,7 +887,7 @@ fn stopped_before_the_turn(
     let message = message.to_string();
     let stopped = fail(ending, &message);
     if as_json {
-        say_the_result(&what_ran(ending, &message, &[], &[]));
+        say_the_result(&what_ran(ending, &message, &[], &[], &[]));
     }
     stopped
 }
@@ -947,12 +951,14 @@ fn refusals(sink: &RecordingSink) -> Vec<json::Refusal> {
 /// Written even where nothing ran at all, because the alternative is a caller having to tell an
 /// empty stdout from a result, which is the prose surface again with an extra step. A run that
 /// failed part way through still says what it had done by then: the calls are what a caller needs
-/// to know which of them to undo.
+/// to know which of them to undo, and the notices are what it was told on the way, there being no
+/// outcome left to carry them (HOOK-7).
 fn what_ran(
     ending: Ending,
     message: &str,
     calls: &[json::Call],
     refusals: &[json::Refusal],
+    notices: &[String],
 ) -> String {
     json::render(&json::Report {
         ending,
@@ -963,7 +969,7 @@ fn what_ran(
         tokens: json::Tokens::default(),
         calls,
         refusals,
-        notices: &[],
+        notices,
     })
 }
 
@@ -1268,9 +1274,7 @@ struct Finished<'a> {
 /// back. A notice or an audit trail sharing the reply's stream would corrupt whatever the reply
 /// was piped into.
 fn report(reply: &mut impl Write, beside: &mut impl Write, run: &Finished<'_>) {
-    for notice in run.notices {
-        let _ = writeln!(beside, "{}", t!(cli_notice, notice = notice));
-    }
+    say_notices(beside, run.notices);
     if let Some(complaint) = run.not_served {
         let _ = writeln!(beside, "{complaint}");
     }
@@ -1287,6 +1291,18 @@ fn report(reply: &mut impl Write, beside: &mut impl Write, run: &Finished<'_>) {
     if !run.clean {
         let _ = writeln!(beside);
         let _ = writeln!(beside, "{}", t!(cli_something_was_refused));
+    }
+}
+
+/// Say what the turn said about itself as it ran: which standing instructions and skills loaded,
+/// and what a hook did that went wrong.
+///
+/// One function for all three surfaces that print these, so a turn that ended in a failure and one
+/// that answered cannot come to word the same sentence differently. Never on the reply's stream:
+/// these are the driver's own words and a pipe reading the reply must not pick them up.
+fn say_notices(beside: &mut impl Write, notices: &[String]) {
+    for notice in notices {
+        let _ = writeln!(beside, "{}", t!(cli_notice, notice = notice));
     }
 }
 
@@ -3106,6 +3122,26 @@ mod tests {
         assert!(beside.contains("note: a skill was loaded"), "got: {beside}");
         assert!(beside.contains("model: qwen-3-235b"), "got: {beside}");
         assert!(beside.contains("a policy gate refused"), "got: {beside}");
+    }
+
+    /// A caller reading the result object rather than stderr is a caller with nowhere to draw, and a
+    /// run that failed is the one whose sentences have no reply to arrive on (HOOK-7). Left out,
+    /// there is no surface at all on which that caller learns a hook of theirs is broken.
+    #[test]
+    fn a_result_object_for_a_failed_run_lists_what_the_turn_said() {
+        let object = what_ran(
+            Ending::Failed,
+            "BB1001: nothing answered",
+            &[],
+            &[],
+            &["hook turn-finished: /usr/bin/fmt could not be started".to_string()],
+        );
+
+        assert!(
+            object
+                .contains(r#""notices":["hook turn-finished: /usr/bin/fmt could not be started"]"#),
+            "got: {object}"
+        );
     }
 
     /// Without `--trace` the trail is not written at all, rather than written somewhere quieter.

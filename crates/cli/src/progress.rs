@@ -97,6 +97,12 @@ pub struct Progress<W: Write> {
     /// Kept here because this is the one thing told about every call, start and finish, and a
     /// second listener would be a second set of hooks to keep in step with dispatch.
     calls: Vec<Call>,
+    /// Every notice the turn said as it ran, in order, for a run that ends without an outcome.
+    ///
+    /// Kept rather than printed as it arrives, because a turn that produces an outcome carries
+    /// these on it and the ending prints them from there: written twice, a run that loaded a skill
+    /// would say so once in the middle of its progress and once at the end.
+    notices: Vec<String>,
 }
 
 impl<W: Write> Progress<W> {
@@ -104,12 +110,27 @@ impl<W: Write> Progress<W> {
         Self {
             out,
             calls: Vec::new(),
+            notices: Vec::new(),
         }
     }
 
     /// What the run called, in the order it called it.
     pub fn calls(&self) -> &[Call] {
         &self.calls
+    }
+
+    /// What the turn said as it ran, in the order it said it.
+    ///
+    /// What a turn that failed has instead of an outcome. A hook that could not be started is said
+    /// here as it happens (HOOK-7), and a turn that then fails for its own reasons produces nothing
+    /// to carry it, so this is the only copy left.
+    ///
+    /// More than an outcome carries, since a sentence said before the turn had one still reaches a
+    /// reporter: a premium endpoint that cannot be used is the case there is today. So a run that
+    /// failed says that too and a run that answered says nothing about it, the latter being a gap
+    /// of its own rather than anything this reads too widely.
+    pub fn notices(&self) -> &[String] {
+        &self.notices
     }
 
     /// A failed write is dropped. Progress announces and has nothing to refuse with, so a
@@ -132,6 +153,11 @@ impl<W: Write> Reporter for Progress<W> {
             return;
         }
         self.say(&format!("\n{text}\n"));
+    }
+
+    /// Kept for the ending to print. See [`Progress::notices`] for why it is not said here.
+    fn notice(&mut self, text: String) {
+        self.notices.push(text);
     }
 
     /// Printed as the call begins, which is the whole point: a slow call should be visible

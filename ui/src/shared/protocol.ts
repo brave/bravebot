@@ -202,6 +202,8 @@ export interface TurnError {
   contextTokens?: number
   /** A failed turn may still have saved a recoverable conversation. */
   id?: string | null
+  /** What the turn said as it ran. A turn that failed has no reply to carry them on. */
+  notices?: string[]
   turn: number
   kind: 'cancelled' | 'precommit' | 'workspace' | 'chat'
   message: string

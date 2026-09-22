@@ -181,6 +181,8 @@ decision is taken from something a person wrote rather than from something a pro
 A hook that could not be started, that ended badly, or that was still running after 30 seconds and
 was stopped, is said to the person, naming the moment and the program. It reaches a live display as
 it happens and the turn's own account of itself as well, so a run with nowhere to draw says it too.
+A turn that fails has no account, and a caller that draws nothing as the turn runs keeps what it was
+told and says it beside the failure.
 A moment inside a delegate is a moment of the turn that spawned it and reaches that turn's account,
 a delegate keeping none anybody reads, and it reaches it whether or not the delegate went on to
 answer. The turn carries on in every case. A hooks file that is missing, unparseable, larger than
@@ -198,6 +200,9 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_agent::hooks::a_hook_that_ends_badly_is_reported`
 `verified-by: bravebot_agent::hooks::a_hook_whose_program_is_not_there_is_reported`
 `verified-by: bravebot_agent::hooks::a_hook_that_outstays_the_bound_is_stopped`
+`verified-by: bravebot_agent::turn::a_turn_that_failed_still_says_what_its_hooks_said`
+`verified-by: bravebot_cli::running::a_run_whose_turn_failed_still_says_what_its_hooks_said`
+`verified-by: bravebot_ui_bridge::reporting::what_the_turn_said_is_kept_for_the_event_that_ends_it`
 `verified-by: bravebot_agent::turn::a_hook_that_went_wrong_on_a_delegate_s_call_reaches_the_turn_s_notices`
 `verified-by: bravebot_agent::turn::a_delegate_that_did_not_finish_still_tells_the_turn_what_its_hooks_said`
 `verified-by: bravebot_agent::hooks::a_file_that_declared_nothing_fires_nothing`

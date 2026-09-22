@@ -1280,6 +1280,10 @@ fn work(work: Work) {
                 &session,
                 json!({ "turn": turn, "kind": kind, "message": category.unwrap_or("cancelled"), "category": category, "attempts": attempts, "status": diagnosis.and_then(|d| d.status),
                     "contextTokens": state.conversation.last_request_tokens(),
+                    // What the turn said about itself before it failed, as `turn.done` carries for a
+                    // turn that answered. There is no outcome here to take them from, and a hook
+                    // that could not be started is the person's own to hear about (HOOK-7).
+                    "notices": reporter.notices(),
                     "id": state.handle.as_ref().map(|handle| handle.id()) }),
             ));
         }

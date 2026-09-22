@@ -98,6 +98,8 @@ pub struct BridgeReporter {
     session: String,
     /// The last token count actually sent. See [`Reporter::output_tokens`].
     last_tokens: Option<u64>,
+    /// What the turn said about itself as it ran. See [`BridgeReporter::notices`].
+    notices: Vec<String>,
 }
 
 impl BridgeReporter {
@@ -106,7 +108,17 @@ impl BridgeReporter {
             emitter,
             session: session.into(),
             last_tokens: None,
+            notices: Vec::new(),
         }
+    }
+
+    /// What the turn said as it ran, in the order it said it.
+    ///
+    /// What a turn that failed has instead of an outcome. A hook that could not be started is said
+    /// here as it happens (HOOK-7), and a turn that then fails for its own reasons produces nothing
+    /// to carry it, so the event reporting the failure carries these instead.
+    pub fn notices(&self) -> &[String] {
+        &self.notices
     }
 
     fn say(&self, name: &'static str, data: serde_json::Value) {
@@ -151,6 +163,15 @@ impl Reporter for BridgeReporter {
             return;
         }
         self.say("narration", json!({ "text": text }));
+    }
+
+    /// Kept for whichever event ends the turn to carry, rather than sent as its own.
+    ///
+    /// An event of this reporter's names the session and not the turn, and a notice belongs to the
+    /// turn it was said in: the window files these under a turn number, so one arriving loose would
+    /// have nowhere to go. `turn.done` and `turn.error` both have that number.
+    fn notice(&mut self, text: String) {
+        self.notices.push(text);
     }
 
     /// A check running, which is news here for the same reason a phase is: a whole model call
