@@ -63,7 +63,9 @@ const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 const MAX_CREDENTIALS: usize = 10_000;
 
 /// The outcome of registering: a batch of credentials this install owns.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// No equality, which the credential it carries does not have: see [`crate::Secret`].
+#[derive(Debug, Clone)]
 pub struct Registration {
     pub order_id: String,
     /// The service that signed this batch.
@@ -75,10 +77,13 @@ pub struct Registration {
 }
 
 /// One credential as the server signed it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct SignedCredential {
     /// Base64 unblinded token.
-    pub unblinded: String,
+    ///
+    /// A bearer value, so it lives in a buffer that clears itself when it goes
+    /// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
+    pub unblinded: crate::Secret,
     pub valid_from: String,
     pub valid_to: String,
     /// Which key derivation this token was blinded with.
@@ -199,7 +204,7 @@ pub fn register(
     for batch in batches {
         for token in unblind_ours(&tokens, &blinded, &batch)? {
             credentials.push(SignedCredential {
-                unblinded: token.encode_base64(),
+                unblinded: crate::Secret::new(token.encode_base64()),
                 valid_from: batch.valid_from.clone(),
                 valid_to: batch.valid_to.clone(),
                 // Every token here was blinded with blind_rfc, so the matching derivation is the
@@ -229,7 +234,7 @@ pub fn register(
 /// Base64 of the redemption document the backend expects. Spending is the caller's job: this
 /// derives the presentation and does not mark anything used.
 pub fn present(credential: &crate::store::Credential, issuer: &str) -> Result<String, DeviceError> {
-    let token = UnblindedToken::decode_base64(&credential.unblinded).map_err(|e| {
+    let token = UnblindedToken::decode_base64(credential.unblinded.expose()).map_err(|e| {
         DeviceError::Unexpected {
             detail: format!("stored credential is not a token: {e}"),
         }
@@ -280,7 +285,7 @@ pub fn present(credential: &crate::store::Credential, issuer: &str) -> Result<St
 /// what comes out is a genuinely presentable credential rather than a stub. Not `#[cfg(test)]`
 /// because a unit-test-only item is invisible to other crates.
 #[doc(hidden)]
-pub fn test_credential() -> String {
+pub fn test_credential() -> crate::Secret {
     use challenge_bypass_ristretto::voprf::SigningKey;
 
     let token = Token::random::<Sha512, _>(&mut OsRng);
@@ -294,7 +299,7 @@ pub fn test_credential() -> String {
     let proof = BatchDLEQProof::new::<Sha512, _>(&mut OsRng, &blinded, &signed, &key)
         .expect("proving a batch");
 
-    proof
+    let unblinded = proof
         .verify_and_unblind::<Sha512, _>(
             std::iter::once(&token),
             &blinded,
@@ -303,7 +308,9 @@ pub fn test_credential() -> String {
         )
         .expect("a batch this signed must verify")
         .remove(0)
-        .encode_base64()
+        .encode_base64();
+
+    crate::Secret::new(unblinded)
 }
 
 /// Read the order, and with it what credentials may be issued.
@@ -454,16 +461,17 @@ fn collect_batch(
                 // "not ready" as "nothing was signed".
                 let still_signing = response.status() == 202;
 
+                // The reply is the signed half of every credential in the batch, so the text of
+                // it is held in a buffer that clears itself rather than left for the allocator.
                 let body =
-                    response
-                        .body_mut()
-                        .read_to_string()
-                        .map_err(|e| DeviceError::Transport {
+                    crate::Secret::new(response.body_mut().read_to_string().map_err(|e| {
+                        DeviceError::Transport {
                             detail: e.to_string(),
-                        })?;
+                        }
+                    })?);
 
                 if !still_signing {
-                    return parse_batches(&body);
+                    return parse_batches(body.expose());
                 }
 
                 if attempt + 1 == MAX_POLLS {
@@ -485,15 +493,17 @@ fn collect_batch(
 
 /// Decode the signed batches from a response body.
 fn parse_batches(body: &str) -> Result<Vec<SignedBatch>, DeviceError> {
-    let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| DeviceError::Unexpected {
+    let document = crate::secret::Document::of(serde_json::from_str(body).map_err(|e| {
+        DeviceError::Unexpected {
             detail: format!("the credentials were not JSON: {e}"),
-        })?;
+        }
+    })?);
+    let value = document.read();
 
     // A single object and a list of them are both possible, since one request may cover several
     // validity windows.
-    let entries = match value {
-        serde_json::Value::Array(entries) => entries,
+    let entries: Vec<&serde_json::Value> = match value {
+        serde_json::Value::Array(entries) => entries.iter().collect(),
         object => vec![object],
     };
 
@@ -1085,7 +1095,7 @@ mod tests {
         let unblinded = issue_one_credential();
 
         let credential = crate::store::Credential {
-            unblinded: unblinded.encode_base64(),
+            unblinded: crate::Secret::new(unblinded.encode_base64()),
             valid_from: "2026-08-22T00:00:00Z".to_string(),
             valid_to: "2026-08-23T00:00:00Z".to_string(),
             spent: false,
@@ -1124,7 +1134,7 @@ mod tests {
     #[test]
     fn the_presentation_is_base64_and_not_percent_encoded() {
         let credential = crate::store::Credential {
-            unblinded: issue_one_credential().encode_base64(),
+            unblinded: crate::Secret::new(issue_one_credential().encode_base64()),
             valid_from: "2026-08-22T00:00:00".to_string(),
             valid_to: "2026-08-23T00:00:00".to_string(),
             spent: false,
@@ -1150,7 +1160,7 @@ mod tests {
         let unblinded = issue_one_credential();
 
         let mut credential = crate::store::Credential {
-            unblinded: unblinded.encode_base64(),
+            unblinded: crate::Secret::new(unblinded.encode_base64()),
             valid_from: "a".to_string(),
             valid_to: "b".to_string(),
             spent: false,

@@ -39,12 +39,14 @@
 
 pub mod device;
 pub mod profile;
+pub mod secret;
 pub mod store;
 #[cfg(test)]
 mod testutil;
 
 pub use device::{DeviceError, Registration};
 pub use profile::{Channel, LeoOrder, ProfileError, find_leo_order};
+pub use secret::Secret;
 pub use store::{StoreError, StoredCredentials};
 
 /// Where the credential endpoints live, per environment.
