@@ -13,12 +13,12 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 
 | Spec | Id | Clauses | Topic |
 |---|---|---|---|
-| [labels.md](labels.md) | `LABEL` | 9 | the lattice, taint, who may read what, and how a first label is assigned |
+| [labels.md](labels.md) | `LABEL` | 10 | the lattice, taint, who may read what, and how a first label is assigned |
 | [routing.md](routing.md) | `ROUTE` | 8 | where an effect may land and what may decide it |
-| [trust-map.md](trust-map.md) | `TRUST` | 18 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
+| [trust-map.md](trust-map.md) | `TRUST` | 19 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
 | [permissions.md](permissions.md) | `PERM` | 13 | rules written in advance about what to ask about and what to refuse |
 | [processors.md](processors.md) | `PROC` | 12 | the one component that reads untrusted content, and what it may do with it |
-| [vetting.md](vetting.md) | `CHECK` | 12 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
+| [vetting.md](vetting.md) | `CHECK` | 13 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
 | [delegation.md](delegation.md) | `DELEGATE` | 18 | a second planner, narrower than the first, and what crosses back from one |
 | [turns.md](turns.md) | `TURN` | 5 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing or checks nothing |
 | [prompting.md](prompting.md) | `PROMPT` | 10 | every moment the system stops and puts something to a human, and what an answer grants |
@@ -48,8 +48,8 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [loop.md](loop.md) | `LOOP` | 14 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 17 | one condition a person set, judged after every turn, until it holds |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
-| [sessions.md](sessions.md) | `SESSION` | 27 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
-| [state-directory.md](state-directory.md) | `STATE` | 2 | `~/.bravebot`, and who on the machine may read what is written into it |
+| [sessions.md](sessions.md) | `SESSION` | 28 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
+| [state-directory.md](state-directory.md) | `STATE` | 3 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
 | [trace.md](trace.md) | `TRACE` | 6 | what is recorded about every decision the system makes, and what that record may contain |
 | [localization.md](localization.md) | `LOCALE` | 7 | every word said to a person, and which of them change with the reader's language |
@@ -99,6 +99,15 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
   the moment an issue or a commit pointing at that clause most needs the link to survive.
 - **`governs`** lists the paths this spec decides. A diff touching one of them is reviewed against
   this file. Anything under no spec's `governs` is ordinary code and reviewed as such.
+  **Name the files, not the crate.** A pattern matching a directory wholesale puts a spec's name on
+  every file that lands in it afterwards, which reads as review-required and is not: whoever added
+  the file chose nothing, and nobody decided the spec reaches it. Enumerating costs a line when a
+  module is added that the spec does decide, and that line is the decision being made where a
+  reviewer sees it. The cost is the other way: a new module is under no spec until somebody adds it,
+  so a file can sit ungoverned without anything saying so. That is the direction to fail in, because
+  a spec claiming reach it has not been read against is worse than one that plainly has a gap.
+  Where a pattern is already a glob, as `crates/*/Cargo.toml` is, what it matches is one file per
+  crate that cannot be added without a crate being added.
 - **`guards`** lists symbols whose every use is review-required. An entry may also pin where it is
   used, as a `sites:` list of `path: count` items, and the check fails when the tree and the list
   disagree in either direction. The count is how many times the symbol occurs in that file's code:
@@ -123,6 +132,15 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
   coverage check reads them, fails when a name does not resolve to a test that exists, and drafts a
   bug for any clause whose value is `none`. `by-construction` is for a clause nothing can execute,
   such as a crate having no dependencies, and says in brackets what makes it hold.
+  **A named test is a Rust test.** The check resolves a name against the `#[test]` functions in
+  `crates/`, so a test written in anything else cannot be cited however it is spelled. A clause about
+  behaviour only another language implements therefore has two honest forms and no third: a Rust test
+  that observes the behaviour from outside, which is what a clause about a separate process gets, or
+  `verified-by: none`, which lands in [../../unverified-clauses.txt](../../unverified-clauses.txt)
+  where the gap is a line in a diff. Citing a test the check cannot resolve is neither.
+  A clause is still allowed to be about such behaviour: what the check decides is how a clause is
+  pinned, not what one may say. What it means in practice is that the clause worth writing is the one
+  stating the property this side can observe, since that is the one a test can hold to.
 
 A clause is one rule, stated so that a reader can tell whether a given diff obeys it. If a clause
 needs an "and" it is usually two clauses. A set of rules that reads best as a table is one clause with a

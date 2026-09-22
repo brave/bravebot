@@ -736,3 +736,64 @@ fn a_resumed_session_reports_what_compaction_took_out_of_it() {
 
     clean_up(&project);
 }
+
+/// One list across every project is ordered by when each session was written.
+///
+/// The ordering is why this list exists rather than a concatenation of per-project ones.
+/// Sorting inside each project and joining the results puts a month-old session above this
+/// morning's on the strength of which checkout it happened in, and that is the one thing the
+/// person opening a window cannot correct for: they are looking at the top of the list.
+///
+/// The two projects each hold two sessions, interleaved in time, because that is what makes
+/// the two orderings differ: one session per project comes out the same either way whenever
+/// the project paths happen to sort as the timestamps do.
+#[test]
+fn every_project_is_listed_in_one_order_rather_than_project_by_project() {
+    let first = scratch("order-a");
+    let second = scratch("order-b");
+    clean_up(&first);
+    clean_up(&second);
+
+    let oldest = two_prompt_session(&first, None);
+    let second_oldest = two_prompt_session(&second, None);
+    let second_newest = two_prompt_session(&first, None);
+    let newest = two_prompt_session(&second, None);
+    // Stamped rather than written a second apart: `save` records the clock, so four saves in the
+    // same second would leave the order to however the sort breaks a tie.
+    stamp(&first, &oldest, 1_000);
+    stamp(&second, &second_oldest, 2_000);
+    stamp(&first, &second_newest, 3_000);
+    stamp(&second, &newest, 4_000);
+
+    let listed = bravebot_ui_bridge::store::list_all();
+    let ours: Vec<&str> = listed
+        .iter()
+        .filter(|entry| entry.project == first || entry.project == second)
+        .map(|entry| entry.summary.id.as_str())
+        .collect();
+
+    assert_eq!(
+        ours,
+        vec![
+            newest.as_str(),
+            second_newest.as_str(),
+            second_oldest.as_str(),
+            oldest.as_str()
+        ],
+        "the list is one ordering across the projects, not each project's own"
+    );
+
+    clean_up(&first);
+    clean_up(&second);
+}
+
+/// Set when a record says it was last written, so an ordering test does not race the clock.
+fn stamp(project: &std::path::Path, id: &str, updated: u64) {
+    let path = sessions::project_directory(project)
+        .expect("a session directory")
+        .join(format!("{id}.json"));
+    let text = std::fs::read_to_string(&path).expect("the record");
+    let mut value: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+    value["updated"] = serde_json::json!(updated);
+    std::fs::write(&path, value.to_string()).expect("rewritten");
+}
