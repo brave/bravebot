@@ -772,6 +772,7 @@ a client that reloads on receipt sees the same thing on disk.
 ```json
 { "event": "turn.error", "session": "s1", "data": {
   "turn": 5, "kind": "cancelled"|"precommit"|"workspace"|"chat", "message": "…",
+  "notices": ["hook turn-finished: /usr/bin/fmt could not be started"],
   "id": "saved-session-id-or-null" } }
 ```
 
@@ -780,6 +781,11 @@ conversation is handed back either way — the next question is usually about it
 client must keep the transcript, not discard it. `id` identifies the recoverable
 record when the failed turn was saved; clients should migrate unsent draft
 preferences to this ID just as they do for `turn.done`.
+
+`notices` is what the turn said about itself as it ran, as §8.2 carries for a turn that
+answered. A failed turn produces no outcome for those sentences to arrive on, and one of
+them is a hook of the person's own that could not be started, so a client that drops this
+field is a client on which nobody learns their formatter has stopped running.
 
 ### 8.4 Failure semantics — the load-bearing part
 

@@ -54,6 +54,14 @@ test('unavailable metrics stay distinct from zero; cancellation never invents fi
   assert.equal(turns[1].tokens, undefined)
 })
 
+test('a turn that failed keeps what it was told, having no reply to carry it', () => {
+  let turns = receiveTurn({}, event('turn.started', 1))
+  turns = receiveTurn(turns, event('turn.error', 1, { kind: 'chat', notices: ['Hook turn-finished could not start /usr/bin/fmt', 7] }))
+  assert.equal(turns[1].status, 'interrupted')
+  assert.deepEqual(turns[1].notices, ['Hook turn-finished could not start /usr/bin/fmt'])
+  assert.deepEqual(receiveTurn({}, event('turn.error', 2, { kind: 'cancelled' }))[2].notices, [])
+})
+
 test('audit retention keeps whole evidence and reports both per-turn and session omissions', () => {
   let turns = {}
   for (let i = 0; i < AUDIT_EVENTS_PER_TURN + 2; i++) turns = receiveTurn(turns, event('audit', 1, { event: { kind: 'gate_passed', detail: 'ok' } }))

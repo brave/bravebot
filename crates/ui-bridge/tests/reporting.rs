@@ -90,6 +90,33 @@ fn an_empty_narration_is_not_a_message() {
     assert_eq!(said, vec!["I'll read the file to see its purpose."]);
 }
 
+/// What the turn said about itself is kept for the event that ends the turn, which is the only
+/// event with the turn number the window files a notice under (HOOK-7).
+///
+/// A turn that fails produces no outcome to carry these, so what is kept here is the whole of what
+/// `turn.error` has to report a hook that could not be started with.
+#[test]
+fn what_the_turn_said_is_kept_for_the_event_that_ends_it() {
+    let (mut reporter, events) = harness();
+
+    reporter.notice("a skill was loaded".into());
+    reporter.notice("hook turn-finished: /usr/bin/fmt could not be started".into());
+
+    assert_eq!(
+        reporter.notices(),
+        [
+            "a skill was loaded".to_string(),
+            "hook turn-finished: /usr/bin/fmt could not be started".to_string()
+        ],
+        "the turn's own words were dropped or reordered"
+    );
+    assert!(
+        names(&events).is_empty(),
+        "a notice went out as an event of its own, which names no turn: {:?}",
+        names(&events)
+    );
+}
+
 /// Everything else is passed through as it comes. Coalescing is for the two cases above
 /// and must not spread: a dropped phase or a dropped tool line is a gap in the transcript.
 #[test]

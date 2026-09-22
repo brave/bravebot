@@ -20299,6 +20299,52 @@ fn a_delegate_that_did_not_finish_still_tells_the_turn_what_its_hooks_said() {
     );
 }
 
+/// HOOK-7: a turn that fails produces no account of itself, so a sentence that reached only the
+/// account would be one nobody could ever have read.
+///
+/// The end of the turn is a moment the turn reaches whether or not it answered, and the run that
+/// most needs looking at is the one that stopped. Nothing a hook prints is read, so this sentence is
+/// the only way somebody learns their formatter has not run since they mistyped its path, and a turn
+/// failing for reasons of its own is not one of them.
+#[cfg(unix)]
+#[test]
+fn a_turn_that_failed_still_says_what_its_hooks_said() {
+    let scratch = Scratch::new("hooks-failed-turn");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let missing = scratch.path.join("no-such-formatter");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"turn-finished\", \"run\": [{missing:?}]}}"),
+    );
+
+    // Refused twice, which is the whole of what this service does: a refusal on a request's
+    // contents is asked once more without its cache breakpoints, and then the turn has no answer
+    // and no outcome to put anything on.
+    let (endpoint, _received) = serve_script(vec![Served::Status(400), Served::Status(400)]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("answer something").with_home(Some(home)),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    outcome.expect_err("the service refused every request");
+    assert!(
+        reporter
+            .notices
+            .iter()
+            .any(|said| said.contains("no-such-formatter")),
+        "the turn failed and nothing was said about the hook that could not start: {:?}",
+        reporter.notices
+    );
+}
+
 mod usage {
     use super::*;
     use bravebot_agent::Spent;

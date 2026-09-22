@@ -251,9 +251,7 @@ fn lines<R: BufRead + Send, W: Write + Send, T: Turns<Prompting<R, W>>>(
         // a moment ago is worth another prompt, and the conversation is still here.
         if let Some(failure) = &said.failure {
             let _ = writeln!(beside, "{failure}");
-            for notice in &said.notices {
-                let _ = writeln!(beside, "{}", t!(cli_notice, notice = notice));
-            }
+            crate::say_notices(beside, &said.notices);
             continue;
         }
 
@@ -430,8 +428,12 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
                     not_served: self.substituted(&outcome.model),
                 }
             }
+            // From the reporter rather than the outcome, there being no outcome: a turn that could
+            // not run still said what its hooks did, and those sentences are the person's own to
+            // hear (HOOK-7).
             Err(failure) => Said {
                 failure: Some(crate::exit::ending_of(&failure).told(&failure)),
+                notices: reporter.notices().to_vec(),
                 ..Said::default()
             },
         }
@@ -1033,6 +1035,27 @@ mod tests {
         assert!(
             beside.contains("BB1001: nothing answered"),
             "the failure was not said: {beside}"
+        );
+    }
+
+    /// A turn that could not run still says what its hooks said (HOOK-7). It produced no account of
+    /// itself for those sentences to arrive on, and a session that dropped them would leave somebody
+    /// believing a formatter that has not run since they mistyped its path is still running.
+    #[test]
+    fn a_failed_turn_still_says_what_its_hooks_said() {
+        let (reply, beside) = session_over(
+            "one\n",
+            vec![Said {
+                failure: Some("BB1001: nothing answered".to_string()),
+                notices: vec!["hook turn-finished: /usr/bin/fmt could not be started".to_string()],
+                ..Said::default()
+            }],
+        );
+
+        assert!(reply.is_empty(), "the reply stream carried it: {reply}");
+        assert!(
+            beside.contains("/usr/bin/fmt could not be started"),
+            "the turn failed and the hook sentence went with it: {beside}"
         );
     }
 
