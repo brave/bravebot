@@ -117,7 +117,10 @@ which files are wanted, and a directory is where the answer might be rather than
 
 A listing of a directory nobody vouched for is quarantined, because a filename is content. It returns
 **one reference per entry**, not one for the listing. That is what lets the planner read a file,
-process it and write it back without ever being told what it is called.
+process it and write it back without ever being told what it is called. The directories a bounded
+walk stopped at are entries too, and each reference says which of the two it stands for: there is
+nothing behind a directory to read, and the way to what is inside it is another listing with a
+greater depth.
 
 The glob is literal and the matcher does not backtrack. A truncated listing says it was truncated.
 

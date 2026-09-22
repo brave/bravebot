@@ -92,6 +92,11 @@ what comes back describes the shape of the tree and not only the part of it that
 pattern does not apply to those: it says which files are wanted, and a directory is where the
 answer might be rather than an answer.
 
+A quarantined listing names them the only way it names anything, as one of the references
+[LIST-2](#LIST-2) hands over per entry, and each of those says whether it stands for a file or for
+a directory the walk stopped at. A reference standing for a directory is refused where a path is
+expected, so the difference is enforced and not only stated.
+
 **Why.** Without a bound the only listing on offer is every path at every depth, which in a real
 repository is thousands of them. That is paid for in the planner's context, again on every round
 that resends it, and again in each delegate handed the same question. The common question is what
@@ -100,9 +105,16 @@ in the space of a screen.
 
 **Why the directories.** A bounded listing of files alone describes a tree with no branches. A
 planner reading one concludes there is no source directory and looks no further, which is worse
-than the listing it was trying to avoid.
+than the listing it was trying to avoid. Whether the names may be read decides who is told them
+and not which entries there are, so a quarantined listing of the same directory stops in the same
+places. A reference standing for a directory while reading like a file is the other half of that:
+it sends the planner to open bytes that are not there, and a write aimed at one asks a person to
+endorse a file over a directory they own.
 
 `verified-by: bravebot_agent::workspace::a_listing_given_a_depth_descends_no_further_than_that`
 `verified-by: bravebot_agent::workspace::a_depth_limited_listing_names_the_directories_it_stopped_at`
 `verified-by: bravebot_agent::workspace::a_pattern_does_not_hide_the_directories_a_bounded_walk_stopped_at`
 `verified-by: bravebot_agent::workspace::a_listing_with_no_depth_walks_the_whole_tree`
+`verified-by: bravebot_agent::turn::a_bounded_quarantined_listing_hands_over_the_directories_it_stopped_at`
+`verified-by: bravebot_core::policy::an_entry_that_is_a_directory_is_not_offered_as_a_file`
+`verified-by: bravebot_core::policy::a_directory_reference_is_refused_where_a_path_is_expected`

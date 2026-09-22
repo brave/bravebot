@@ -2947,9 +2947,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // Three shapes, and which one a result takes was decided by the tool that
                     // produced it and the kernel that labelled it, never here.
                     let body = if let Some(entries) = &output.entries {
-                        // A listing of files the planner may not see. The names never come out: it
-                        // gets one reference per entry, which it can read through and write back to
-                        // without ever being told what any of them is called.
+                        // A listing the planner may not see. The names never come out: it gets one
+                        // reference per entry, and can read through and write back to the ones
+                        // that stand for files without ever being told what any of them is called.
                         let ids: Vec<_> = (0..entries.count)
                             .map(|_| conversation.next_reference())
                             .collect();
@@ -2958,6 +2958,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 &output.tool,
                                 &entries.origin,
                                 &entries.paths,
+                                entries.directories,
                                 &ids,
                                 conversation.quarantine(),
                             )
@@ -2972,11 +2973,23 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         let named = policy.names_for_display(conversation.quarantine());
                         let preview: Vec<String> = ids
                             .iter()
-                            .filter_map(|id| {
-                                named
-                                    .iter()
-                                    .find(|(slot, _, _)| slot == id)
-                                    .map(|(slot, label, path)| format!("{slot}{label}  {path}"))
+                            .zip(&references)
+                            .filter_map(|(id, reference)| {
+                                named.iter().find(|(slot, _, _)| slot == id).map(
+                                    |(slot, label, path)| {
+                                        // A trailing slash, the way a listing the planner may read
+                                        // writes one, because the line exists for a person to tell
+                                        // where the agent is about to work: a directory called src
+                                        // and a file called src read alike without it.
+                                        let named = match reference.kind {
+                                            bravebot_core::reference::Kind::Directory => {
+                                                format!("{path}/")
+                                            }
+                                            _ => path.clone(),
+                                        };
+                                        format!("{slot}{label}  {named}")
+                                    },
+                                )
                             })
                             .collect();
                         reporter.landed(crate::report::Landing::Quarantined);

@@ -27,8 +27,9 @@ use std::fmt;
 /// context.
 /// What a reference is a reference to.
 ///
-/// The planner acts on the two differently, so it is told which it has. A file can be worked on
-/// and written back to; content can be worked on and written out. Deliberately not inferred from
+/// The planner acts on the three differently, so it is told which it has. A file can be worked on
+/// and written back to; content can be worked on and written out; a directory is neither, and is
+/// where the answer might be rather than an answer. Deliberately not inferred from
 /// whether the bytes happen to have been read: that is the driver's business and saying it aloud
 /// was what sent a planner off trying to read a reference it already held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,11 +38,14 @@ pub enum Kind {
     File,
     /// Text in a slot, which came from somewhere but is not somewhere.
     Content,
+    /// A directory a bounded listing stopped at. There are no bytes behind it, so a planner told
+    /// it held a file would spend a processor on a read that cannot work.
+    Directory,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reference {
-    /// Which of the two things this is.
+    /// Which of the three this is.
     pub kind: Kind,
     /// The slot the content lives in.
     pub slot: SlotId,
@@ -84,6 +88,12 @@ impl Reference {
     /// Say this reference is a picture of this media type.
     pub fn of_a_picture(mut self, media: impl Into<String>) -> Self {
         self.picture = Some(media.into());
+        self
+    }
+
+    /// Say this reference is a directory a listing stopped at rather than a file in it.
+    pub fn of_a_directory(mut self) -> Self {
+        self.kind = Kind::Directory;
         self
     }
 
@@ -158,6 +168,15 @@ impl Reference {
                 "Quarantined: you will not be shown it. Give {} to spawn_processor to work on, \
                  or write it into a file as contents_ref. Where you have to read it yourself, \
                  vet_content asks the user to show it to you.",
+                self.slot
+            ),
+            // The one move that works, because a directory name is quarantined like any other and
+            // no argument takes a reference to a place: the planner reaches what is inside by
+            // listing again with a deeper bound, using the directory it typed in the first place.
+            Kind::Directory => format!(
+                "Quarantined: a directory this listing stopped at rather than a file in it, so \
+                 there is nothing behind {} to read, process or write. List the directory you \
+                 named again with a greater depth to reach what is inside it.",
                 self.slot
             ),
         };

@@ -156,8 +156,9 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
              everything: depth 1 is the one directory itself, the way ls reads it, and is what \
              to use when you want to know what a project holds rather than every file it \
              contains. In a directory you may not read, the names are quarantined and you get \
-             one reference per file instead: use those as path_ref to read a file, process it, \
-             and write it back, without ever being told what it is called.",
+             one reference per entry instead, saying of each whether it is a file or a directory \
+             the walk stopped at: use a file's as path_ref to read it, process it, and write it \
+             back, without ever being told what it is called.",
             json!({
                 "type": "object",
                 "properties": {
@@ -177,9 +178,12 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
                         "type": "integer",
                         "description": "Optional number of directory levels to descend. 1 \
                                         lists this directory and no deeper, naming each \
-                                        subdirectory with a trailing / so you can see where \
-                                        the tree continues. Omit it to walk the whole tree, \
-                                        which in a large project is thousands of paths.",
+                                        subdirectory it stopped at so you can see where the \
+                                        tree continues: with a trailing / where you are shown \
+                                        the names, and as a reference that says it is a \
+                                        directory where they are quarantined. Omit it to walk \
+                                        the whole tree, which in a large project is thousands \
+                                        of paths.",
                         "minimum": 1
                     }
                 },
@@ -961,14 +965,20 @@ pub struct Deferral {
 /// A listing the planner may not read, reserved one reference per entry.
 ///
 /// The names stay wrapped: this crate carries them from the lister to the kernel and never
-/// looks. `count` is the number of them, which is released to the planner and the person alike,
-/// because how many files a directory holds is shape rather than content.
+/// looks. `count` is how many entries there are, files and the directories a bounded walk stopped
+/// at together, and it is released to the planner and the person alike, because how much a
+/// directory holds is shape rather than content.
 #[derive(Debug)]
 pub struct Entries {
     /// What to call each one to the planner, naming the directory and never the file.
     pub origin: String,
     pub paths: Labelled<Vec<String>>,
     pub count: usize,
+    /// How many of the last `paths` are directories a bounded walk stopped at rather than files
+    /// in it. Shape like `count`, and released for the same reason, though the planner reads it
+    /// one reference at a time rather than as a number: handed a listing of files alone it sees a
+    /// tree with no branches.
+    pub directories: usize,
 }
 
 /// What a dispatched call produced, ready to send back as a tool message.
@@ -2833,14 +2843,28 @@ fn list_files<S: Sink>(
             };
 
             if !listing.label().is_trusted() {
-                let count = {
-                    let shaped = policy
-                        .render_in_place("list_files", &listing, |listing| listing.files.len());
-                    let proof = policy.authorise_display_release("how many entries a listing has");
+                // Both numbers out of one release: how many entries there are, and how many of
+                // them are the directories a bounded walk stopped at. The second is what keeps
+                // the quarantined listing describing the same tree the trusted one does, where a
+                // directory is rendered with a trailing slash among the files.
+                let (count, directories) = {
+                    let shaped = policy.render_in_place("list_files", &listing, |listing| {
+                        (
+                            listing.files.len() + listing.directories.len(),
+                            listing.directories.len(),
+                        )
+                    });
+                    let proof = policy.authorise_display_release(
+                        "how many entries a listing has and how many of them it stopped at",
+                    );
                     shaped.declassify(&proof)
                 };
-                let paths =
-                    policy.render_in_place("list_files", &listing, |listing| listing.files.clone());
+                // The directories last, which is the order the kernel reads the two apart by.
+                let paths = policy.render_in_place("list_files", &listing, |listing| {
+                    let mut paths = listing.files.clone();
+                    paths.extend(listing.directories.iter().cloned());
+                    paths
+                });
                 return Produced::new(Labelled::trusted(String::new()), proposed_dir.clone(), note)
                     .of_content()
                     .capped(truncated)
@@ -2848,6 +2872,7 @@ fn list_files<S: Sink>(
                         origin: format!("an entry in \"{proposed_dir}\""),
                         paths,
                         count,
+                        directories,
                     });
             }
 

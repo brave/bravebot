@@ -1682,11 +1682,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// gain is a destination: reading through a reference is confined and changes nothing, and
     /// writing through one is refused unless a person, who is shown the resolved path, endorses
     /// it. See [`Policy::destination_from_reference`].
+    ///
+    /// `directories` is how many of the last entries are directories a bounded walk stopped at
+    /// rather than files in it. A count rather than a flag on each name, because a count is the
+    /// shape of the listing and a flag would have to be read off the names themselves.
     pub fn defer_entries(
         &mut self,
         tool: &str,
         origin: &str,
         entries: &Labelled<Vec<String>>,
+        directories: usize,
         ids: &[SlotId],
         slots: &mut crate::slot::SlotStore,
     ) -> Gated<Vec<crate::reference::Reference>> {
@@ -1718,20 +1723,42 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ));
         }
 
+        // Refused as loudly as the count above, and for the same reason: more directories than
+        // there are entries means the two numbers came from different listings, and taking this
+        // one at its word would tell the planner that every file in the directory is a place with
+        // nothing behind it.
+        if directories > paths.len() {
+            return Err(self.deny(
+                "defer",
+                Principle::Confinement,
+                format!(
+                    "{tool}: {directories} of {} entries were said to be directories",
+                    paths.len()
+                ),
+            ));
+        }
+
+        let files = paths.len() - directories;
         let mut references = Vec::with_capacity(paths.len());
-        for (slot, path) in ids.iter().cloned().zip(paths) {
+        for (at, (slot, path)) in ids.iter().cloned().zip(paths).enumerate() {
             let integrity = match self.integrity_in_force(&path) {
                 Some(Integrity::Trusted) => Integrity::Trusted,
                 _ => Integrity::Untrusted,
             };
             let label = Label::new(integrity, base.confidentiality);
 
-            slots
-                .defer(slot.clone(), &path, label)
-                .map_err(|e| Denial {
-                    principle: Principle::Confinement,
-                    message: format!("{tool}: could not reserve {slot}: {e}"),
-                })?;
+            // Which of the two this is comes from where it sits in the listing, never from the
+            // name: deciding it by reading the path would be a branch on untrusted bytes.
+            let is_a_directory = at >= files;
+            let reserved = if is_a_directory {
+                slots.defer_directory(slot.clone(), &path, label)
+            } else {
+                slots.defer(slot.clone(), &path, label)
+            };
+            reserved.map_err(|e| Denial {
+                principle: Principle::Confinement,
+                message: format!("{tool}: could not reserve {slot}: {e}"),
+            })?;
 
             // The trail names the file, because the trail is read by the person whose directory
             // it is. The planner's copy of this says only which directory it came from.
@@ -1740,9 +1767,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 label,
                 origin: path.clone(),
             });
-            references.push(crate::reference::Reference::unread(
-                slot, origin, None, label,
-            ));
+            let reference = crate::reference::Reference::unread(slot, origin, None, label);
+            references.push(if is_a_directory {
+                reference.of_a_directory()
+            } else {
+                reference
+            });
         }
 
         self.allow(
@@ -1845,6 +1875,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Refuses a slot that names no file. A processor's output is content and nothing else, and
     /// a planner that could turn it into a path would have found the way to make untrusted text
     /// choose a destination.
+    ///
+    /// Refuses a directory a listing stopped at for the same reason and one more: a write aimed at
+    /// one would take the person's single-use endorsement for a file over a directory they own,
+    /// and spend it on an effect that cannot succeed.
     fn path_of_reference(
         &mut self,
         tool: &str,
@@ -1852,6 +1886,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slot: &SlotId,
         slots: &crate::slot::SlotStore,
     ) -> Gated<String> {
+        if slots.names_a_directory(slot) {
+            return Err(self.deny(
+                "reference",
+                Principle::IntegrityGate,
+                format!(
+                    "{tool}.{field}: '{slot}' is a directory a listing stopped at rather than a \
+                     file in it, so it cannot say where to read from or write to; list that \
+                     directory with a greater depth to reach the files inside it"
+                ),
+            ));
+        }
         let Some(path) = slots.path_of(slot, &PathAuthority::mint()) else {
             return Err(self.deny(
                 "reference",
@@ -4880,6 +4925,7 @@ mod tests {
                 "list_files",
                 "an entry in \".\"",
                 &entries,
+                0,
                 &ids,
                 &mut slots,
             )
@@ -4904,6 +4950,111 @@ mod tests {
         assert_eq!(slots.path_of(&ids[1], &authority), Some("game.js"));
     }
 
+    /// A bounded listing ends in the directories it stopped at, and they are not files: a planner
+    /// told otherwise spends a processor on bytes that are not there, and never learns the one move
+    /// that reaches what is inside.
+    #[test]
+    fn an_entry_that_is_a_directory_is_not_offered_as_a_file() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+
+        let entries = Labelled::new(
+            vec![
+                "notes.md".to_string(),
+                "src".to_string(),
+                "vendor".to_string(),
+            ],
+            Label::untrusted_private(),
+        );
+        let ids = vec![
+            SlotId::new("ref:1"),
+            SlotId::new("ref:2"),
+            SlotId::new("ref:3"),
+        ];
+
+        let references = policy
+            .defer_entries(
+                "list_files",
+                "an entry in \".\"",
+                &entries,
+                2,
+                &ids,
+                &mut slots,
+            )
+            .expect("entries may be reserved");
+
+        assert_eq!(references[0].kind, crate::reference::Kind::File);
+        assert!(
+            references[0].describe().contains("spawn_processor"),
+            "the file was not offered as work: {}",
+            references[0].describe()
+        );
+        for reference in &references[1..] {
+            assert_eq!(reference.kind, crate::reference::Kind::Directory);
+            let described = reference.describe();
+            assert!(
+                !described.contains("spawn_processor") && !described.contains("path_ref"),
+                "a directory was offered as a file to work on: {described}"
+            );
+            assert!(
+                described.contains("greater depth"),
+                "the planner was not told how to reach what is inside: {described}"
+            );
+        }
+    }
+
+    /// Prose in the planner's context is not a bound. A planner that names a directory reference
+    /// where a path belongs has to be refused by the kernel, or a person is asked to endorse
+    /// writing a file over a directory they own and the endorsement is spent on an effect that
+    /// cannot work.
+    #[test]
+    fn a_directory_reference_is_refused_where_a_path_is_expected() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+
+        let entries = Labelled::new(
+            vec!["notes.md".to_string(), "src".to_string()],
+            Label::untrusted_private(),
+        );
+        let ids = vec![SlotId::new("ref:1"), SlotId::new("ref:2")];
+        policy
+            .defer_entries(
+                "list_files",
+                "an entry in \".\"",
+                &entries,
+                1,
+                &ids,
+                &mut slots,
+            )
+            .expect("entries may be reserved");
+
+        let read = policy
+            .promote_reference_for_read("read_file", "path_ref", &ids[1], &slots)
+            .expect_err("a directory is not somewhere to read from");
+        assert!(
+            read.to_string().contains("directory"),
+            "the refusal does not say what was wrong with it: {read}"
+        );
+        let destination = policy
+            .destination_from_reference("write_file", "path_ref", &ids[1], &slots)
+            .expect_err("a directory is not somewhere to write to");
+        assert!(
+            destination.to_string().contains("greater depth"),
+            "the refusal does not say what to do instead: {destination}"
+        );
+
+        // The file beside it still resolves, or the refusal has cost the planner the listing.
+        let allowed = policy
+            .promote_reference_for_read("read_file", "path_ref", &ids[0], &slots)
+            .expect("a file entry is still somewhere to read from");
+        assert_eq!(
+            allowed.clone().into_trusted().ok().as_deref(),
+            Some("notes.md")
+        );
+    }
+
     /// The count comes from outside and the list from inside, so they have to agree. Taking the
     /// shorter of the two would drop entries with nothing saying so.
     #[test]
@@ -4921,10 +5072,37 @@ mod tests {
                 "list_files",
                 "an entry",
                 &entries,
+                0,
                 &[SlotId::new("ref:1")],
                 &mut slots,
             )
             .expect_err("one name for two entries must be refused");
+        assert_eq!(err.principle, Principle::Confinement);
+    }
+
+    /// How many of the entries are directories arrives beside the list, like the count, so it can
+    /// disagree with it the same way. Believing a number bigger than the list would say every file
+    /// in the directory is a place with nothing behind it, and refuse every read of one.
+    #[test]
+    fn calling_more_entries_directories_than_there_are_is_refused() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+
+        let entries = Labelled::new(
+            vec!["a".to_string(), "b".to_string()],
+            Label::untrusted_private(),
+        );
+        let err = policy
+            .defer_entries(
+                "list_files",
+                "an entry",
+                &entries,
+                3,
+                &[SlotId::new("ref:1"), SlotId::new("ref:2")],
+                &mut slots,
+            )
+            .expect_err("three directories among two entries must be refused");
         assert_eq!(err.principle, Principle::Confinement);
     }
 
@@ -4940,7 +5118,7 @@ mod tests {
             let entries = Labelled::new(vec!["game.js".to_string()], Label::untrusted_private());
             let ids = vec![SlotId::new("ref:1")];
             policy
-                .defer_entries("list_files", "an entry", &entries, &ids, &mut slots)
+                .defer_entries("list_files", "an entry", &entries, 0, &ids, &mut slots)
                 .unwrap();
 
             let promoted = policy

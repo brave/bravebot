@@ -5082,6 +5082,96 @@ fn untrusted_listings_never_reach_the_model() {
     );
 }
 
+/// A bounded listing of files alone describes a tree with no branches, and a planner reading one
+/// concludes there is no source directory and looks no further. Quarantining the names is what the
+/// references are for; it is not a reason for the shape of the tree to go missing as well.
+#[test]
+fn a_bounded_quarantined_listing_hands_over_the_directories_it_stopped_at() {
+    let scratch = Scratch::new("list-depth-quarantined");
+    std::fs::write(scratch.path.join("file-tango.txt"), "x").unwrap();
+    for held in ["dir-uniform", "dir-victor"] {
+        std::fs::create_dir(scratch.path.join(held)).unwrap();
+        std::fs::write(scratch.path.join(held).join("deeper.txt"), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":".","depth":1}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let task = Task::new("what is at the top level");
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Unattended,
+        &mut reporter,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    for name in ["file-tango", "dir-uniform", "dir-victor"] {
+        assert!(
+            !second.contains(name),
+            "a name out of an unvouched directory reached the planner: {second}"
+        );
+    }
+    assert!(
+        second.contains("Its 3 entries are quarantined"),
+        "the two directories the walk stopped at were dropped from the count: {second}"
+    );
+    assert_eq!(
+        second
+            .matches("a directory this listing stopped at")
+            .count(),
+        2,
+        "the planner was not told which entries are places to look: {second}"
+    );
+    assert_eq!(
+        second.matches("not be shown what this file holds").count(),
+        1,
+        "a directory was handed over as a file to read: {second}"
+    );
+
+    // The person watching owns the directory and is told the real names, which is the half of this
+    // that lets them see whether the agent is about to work in the right place.
+    for name in ["dir-uniform", "dir-victor"] {
+        assert!(
+            sink.events()
+                .iter()
+                .any(|e| matches!(e, Event::SlotDeferred { origin, .. } if origin == name)),
+            "the trail does not record the directory {name} as an entry of the listing"
+        );
+    }
+    let shown = reporter
+        .shown
+        .iter()
+        .find(|shown| shown.origin.contains("an entry in"))
+        .expect("the listing was shown to the person");
+    assert!(
+        shown
+            .preview
+            .iter()
+            .any(|line| line.ends_with("dir-uniform/"))
+            && shown
+                .preview
+                .iter()
+                .any(|line| line.ends_with("dir-victor/")),
+        "a directory reads as a file of the same name on the line a person reviews: {:?}",
+        shown.preview
+    );
+}
+
 /// A turn is several requests when the model calls tools, and each re-sends the whole history.
 /// One round's count would understate what the turn cost, so they are summed.
 #[test]
