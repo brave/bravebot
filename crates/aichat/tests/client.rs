@@ -1886,7 +1886,7 @@ fn the_model_listing_is_fetched_from_the_models_path() {
     );
     assert_eq!(
         captured.header("Brave-Product"),
-        Some("brave-bot"),
+        Some("bravebot"),
         "the listing did not identify this product"
     );
 }
