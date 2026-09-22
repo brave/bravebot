@@ -31,6 +31,23 @@ export function readProjectText(root: string, path: string, limit = 128 * 1024):
   } catch { return null }
 }
 
+/**
+ * Make a bot's memory file exist, and say whether this call is what created it.
+ *
+ * The grounding walk, through the same pinned-descriptor helper the memory's editor uses. It used
+ * to be `node:fs` against a concatenated path, which follows a link at every component: a link at
+ * the memory file was read through and written through, and what came back was copied into a
+ * briefing the main process then vouched for.
+ *
+ * It returns no memory text, and there is no operation here that would hand it over. What the
+ * memory says is the model's own writing, so it reaches a turn by the model reading the file under
+ * whatever the agent's trust map says about that path, and never by this process copying it into
+ * something it vouches for.
+ */
+export function seedProjectMemory(root: string, path: string, text: string, ignore: string): boolean {
+  return request(root, path, { operation: 'memory.seed', text, ignore }).seeded === true
+}
+
 export function replaceProjectMemory(root: string, path: string, text: string, expected: string | null): string | null {
   const value = request(root, path, { operation: 'replace', text, expected })
   if (value.previous !== null && typeof value.previous !== 'string') throw new Error('Invalid memory response')

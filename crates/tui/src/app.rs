@@ -351,10 +351,16 @@ pub enum Action {
     Compact,
     /// Ask something beside the work, over a copy of the conversation. Needs the conversation and
     /// the network, which the loop owns, and gives the conversation nothing back.
-    Aside(String),
+    ///
+    /// The pictures pasted into the question travel with it, because it is a request and a paste is
+    /// the person's own input to the thing they are asking about.
+    Aside(String, Vec<crate::state::AttachedImage>),
     /// Plan this task in full and then walk it. Needs the workspace, the trust map and the
     /// network, which the loop owns, and gives the conversation nothing back.
-    Manifest(String),
+    ///
+    /// The pictures pasted into the task travel with it, for the reason a question's do: a
+    /// screenshot of the thing to be built is part of the task and nothing observed.
+    Manifest(String, Vec<crate::state::AttachedImage>),
     /// Start a new session here. Needs the conversation and the session record, which the loop owns.
     Clear,
     /// Call this session something else. Needs the session record, which the loop owns.
@@ -1015,15 +1021,14 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         //
         // The line is taken off the box before it is dispatched, the way each of these arms took it
         // before doing anything, so a command that opens a picker or ends the session does not leave
-        // its own word sitting in the box behind it.
-        //
-        // Settled as it is taken, the way a line queued behind a turn is settled as it is queued:
-        // `/btw`, `/loop` and `/manifest` hand their argument to a planner, which has no way to put
-        // a marker back.
+        // its own word sitting in the box behind it. Taken rather than cleared, so what the line
+        // named comes with it: clearing the box left a pasted picture staged behind nothing and its
+        // marker in the line being dispatched. The words a folded paste stood for are put back as
+        // the line is taken, the way a line queued behind a turn is settled as it is queued, since
+        // that marker is a handle only the session holding it can undo.
         KeyCode::Enter if command_typed(session.input()).is_some() => {
-            let line = session.unfolded(session.input());
-            session.clear_input();
-            dispatch_command(session, &line)
+            let commanded = session.take_command();
+            dispatch_command(session, commanded)
         }
         // A half-typed command, after every arm that recognises a whole one. Enter takes the
         // highlighted row rather than sending "/mod" to the planner, which is never what was meant.
@@ -1045,6 +1050,21 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     }
 }
 
+/// Whether the line is one of the commands whose argument ends up in a request.
+///
+/// `/btw` asks a question beside the work, `/manifest` plans a run from the task, and `/loop` sends
+/// the line as a prompt. Each of the three is answered by a model, so a picture pasted into one of
+/// those lines goes where the person put it. Every other command is carried out here and there is no
+/// request for one to travel in, `/goal` included: a condition is judged against a turn that has not
+/// happened yet, so a picture pasted into one has no moment to be shown at.
+///
+/// Read off the line, because both callers have a line and neither knows any more than that about it.
+fn hands_its_argument_to_a_planner(line: &str) -> bool {
+    [BTW_COMMAND, MANIFEST_COMMAND, LOOP_COMMAND]
+        .iter()
+        .any(|command| argument_to(line, command).is_some())
+}
+
 /// Carry out the command a line is, whether it was typed just now or queued while a turn ran.
 ///
 /// One place both callers reach, because the two differ only in when the line arrives. Enter at rest
@@ -1058,7 +1078,18 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
 /// Every word [`commands`] names is answered here. The last line is unreachable for any of them and
 /// is a table entry that nobody wired up: `every_command_in_the_table_dispatches` is what says so,
 /// since a word recognised and then quietly dropped would be worse than one never recognised.
-fn dispatch_command(session: &mut Session, line: &str) -> Action {
+fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -> Action {
+    // The pictures pasted into the line survive only as far as the commands that have somewhere to
+    // put them, which is the three below that hand their argument to a request. For every other word
+    // the marker becomes a sentence saying a picture was pasted, since a path or a name that came out
+    // of a paste was never going to be one.
+    let crate::state::Commanded { line, pasted } =
+        match hands_its_argument_to_a_planner(&commanded.line) {
+            true => commanded,
+            false => session.without_pictures(commanded),
+        };
+    let line = line.as_str();
+
     if line.trim() == EXIT_COMMAND {
         session.quit();
         return Action::Quit;
@@ -1095,7 +1126,7 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
     // The question is taken verbatim and never sent as a prompt: it goes out over a copy of the
     // conversation and the copy is thrown away, so nothing about it joins the exchange.
     if let Some(question) = argument_to(line, BTW_COMMAND) {
-        return Action::Aside(question.to_string());
+        return Action::Aside(question.to_string(), pasted);
     }
     if line.trim() == CLEAR_COMMAND {
         return Action::Clear;
@@ -1127,14 +1158,14 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
     // driver's own words in its context, so the conversation neither goes into the run nor hears
     // anything back from it.
     if let Some(task) = argument_to(line, MANIFEST_COMMAND) {
-        return Action::Manifest(task.to_string());
+        return Action::Manifest(task.to_string(), pasted);
     }
     // The command that sends a prompt rather than the line it was typed on. `/loop 5m check the
     // deploy` arms the loop and hands back "check the deploy", which is what every tick sends from
     // here on.
     if let Some(argument) = argument_to(line, LOOP_COMMAND) {
         return match crate::loops::parse(argument) {
-            Some(request) => match session.start_loop(request) {
+            Some(request) => match session.start_loop(request, pasted) {
                 Some(prompt) => Action::Submit(prompt),
                 None => Action::Redraw,
             },
@@ -1185,8 +1216,8 @@ fn dispatch_command(session: &mut Session, line: &str) -> Action {
 /// turn ends and stops at a command, so without this the line behind one would wait for a key press
 /// that nobody is going to make.
 fn queued_next(session: &mut Session) -> Option<Action> {
-    if let Some(line) = session.take_queued_command() {
-        return Some(dispatch_command(session, &line));
+    if let Some(commanded) = session.take_queued_command() {
+        return Some(dispatch_command(session, commanded));
     }
     // And a command line somebody queued in shell mode, which is here for the same reason and
     // becomes what Enter on it at rest becomes. Each of the three asks about the head of the queue
@@ -2693,7 +2724,7 @@ fn event_loop(
                 stored.append_audit(session.turns, &events);
                 needs_draw = true;
             }
-            Action::Aside(question) => {
+            Action::Aside(question, pasted) => {
                 if question.is_empty() {
                     session.note(t!(btw_needs_a_question));
                 } else {
@@ -2708,6 +2739,7 @@ fn event_loop(
                         &conversation,
                         &trust,
                         &question,
+                        &pasted,
                     )?;
 
                     // Written now rather than at the end of the next turn, for the reason a
@@ -2743,7 +2775,7 @@ fn event_loop(
                 }
                 needs_draw = true;
             }
-            Action::Manifest(task) => {
+            Action::Manifest(task, pasted) => {
                 if task.is_empty() {
                     session.note(t!(manifest_needs_a_task));
                 } else {
@@ -2758,6 +2790,7 @@ fn event_loop(
                         config,
                         &workspace,
                         &task,
+                        &pasted,
                         &trust,
                         &permissions,
                         settings.attribution(),
@@ -4068,6 +4101,7 @@ fn aside_animated(
     conversation: &Conversation,
     trust: &TrustStore,
     question: &str,
+    pasted: &[crate::state::AttachedImage],
 ) -> io::Result<Vec<Stamped>> {
     // For the reason a turn and a summary both do it: this is one request to the same backend,
     // and a sign-in is not something a worker thread can ask for.
@@ -4081,7 +4115,21 @@ fn aside_animated(
     // Taken here, before the worker starts, because that is what crosses to it: the request, not
     // the conversation. The conversation stays on this thread and is not touched again, so there
     // is no path by which an aside could add anything to it.
-    let asking = bravebot_agent::aside::Question::about(conversation, question);
+    //
+    // The pictures go with the question, in the order the markers in it number them, the way they go
+    // with a prompt: somebody asking about a screenshot beside the work is asking about the thing
+    // they pasted, and pasting.md PASTE-2 is the whole of why it may be looked at.
+    let asking = bravebot_agent::aside::Question::about(
+        conversation,
+        question,
+        pasted
+            .iter()
+            .map(|image| PastedImage {
+                media_type: image.media_type,
+                bytes: image.bytes.clone(),
+            })
+            .collect(),
+    );
     let asked = question.to_string();
 
     session.begin_aside();
@@ -4206,11 +4254,12 @@ fn aside_reported(session: &mut Session, message: crate::remote_confirm::ToMain)
 ///
 /// **The conversation is neither read nor written.** It is not lent here at all, which is stronger
 /// than an aside's promise to hand it back unchanged: the planner that reads the task is a fresh
-/// one whose context holds the task string and the driver's own words (MANIFEST-1), so sending the
-/// conversation would break the gate rather than merely widen it, and a step's result is
-/// quarantined (MANIFEST-8) so there is nothing it could give back. What the transcript shows is
-/// the goal as the planner understood it, the frozen plan, each step as it runs, and the reply, all
-/// of it released for a screen and none of it in the exchange a later turn resumes.
+/// one whose context holds the task string, the pictures pasted into it, and the driver's own words
+/// (MANIFEST-1), so sending the conversation would break the gate rather than merely widen it, and
+/// a step's result is quarantined (MANIFEST-8) so there is nothing it could give back. What the
+/// transcript shows is the goal as the planner understood it, the frozen plan, each step as it runs,
+/// and the reply, all of it released for a screen and none of it in the exchange a later turn
+/// resumes.
 ///
 /// **The run is written down as its own record**, by the same function the command line uses, and
 /// the session notes the id. That keeps the presence of `manifest` in a record the thing that makes
@@ -4227,6 +4276,7 @@ fn manifest_animated(
     config: &Config,
     workspace: &Workspace,
     task: &str,
+    pasted: &[crate::state::AttachedImage],
     trust: &TrustStore,
     permissions: &Permissions,
     attribution: &Attribution,
@@ -4249,10 +4299,15 @@ fn manifest_animated(
     // key pressed while it walks describes what comes after it, and a plan already on the screen
     // must not have the question withdrawn from under the person answering it.
     let permission_mode = session.permission_mode();
-    // No files, no attachments and no pasted pictures. Every one of those is context, and this mode
-    // fixes its plan before it observes anything; the task string is the whole of the input, which
-    // is the same reason a pipe is refused (MANIFEST-9).
-    let worker_task = Task::new(task)
+    // No files and no attachments: each of those is context, and this mode fixes its plan before it
+    // observes anything, which is the same reason a pipe is refused (MANIFEST-9).
+    //
+    // A pasted picture goes in, and is the one thing here that does. It is not observed context: the
+    // person pressed Ctrl-V on their own clipboard, so it arrives on the footing of the task they
+    // typed it into (PASTE-2) and says nothing about what anybody has read (PASTE-5). MANIFEST-1
+    // names it for that reason, and a plan asked for from a screenshot is still a plan fixed before
+    // anything was looked at.
+    let mut worker_task = Task::new(task)
         .with_home(bravebot_agent::home::directory())
         .with_profile(bravebot_agent::home::profile())
         .with_model(session.model().map(str::to_string))
@@ -4260,6 +4315,14 @@ fn manifest_animated(
         .with_permissions(permissions.clone())
         .with_permission_mode(permission_mode)
         .with_attribution(attribution.clone());
+    // In the order the markers in the task number them, for the reason a turn's are: a planner
+    // reading "[Image #2]" has to be able to count to the picture that answers it.
+    for image in pasted {
+        worker_task = worker_task.with_image(PastedImage {
+            media_type: image.media_type,
+            bytes: image.bytes.clone(),
+        });
+    }
     // Nothing is said about the standing form of a write answer, so nothing offers it. A plan has
     // no standing answer at all (MANIFEST-10), and a run whose steps were fixed before anything was
     // read is the worst place to record one: the key would be pressed about a step in a plan that
@@ -7203,6 +7266,207 @@ mod tests {
             assert_eq!(session.input(), "[Image #1]");
         }
 
+        /// A command the box carries out itself has nowhere to put a picture: `/goal` names a
+        /// condition that a turn which has not happened yet is judged against, so a marker in one
+        /// would send whoever judges it looking for a picture no turn ever carried. What goes in its
+        /// place says a picture was meant and cannot be shown, which is something a judge can
+        /// answer, and the picture stops being staged behind a box that no longer names it.
+        #[test]
+        fn a_picture_a_command_line_named_is_carried_out_as_words_rather_than_as_its_marker() {
+            let mut session = Session::new("kernel-enforced");
+            type_line(&mut session, "/goal the screen matches ");
+            take_from_clipboard(&mut session, picture(b"pixels".to_vec()));
+            assert_eq!(session.input(), "/goal the screen matches [Image #1]");
+
+            handle_key(&mut session, key(KeyCode::Enter));
+
+            assert_eq!(
+                session.goal().map(crate::goals::Running::condition),
+                Some(
+                    "the screen matches ([Image #1] was pasted here, but it cannot be shown to you: \
+                     a picture cannot join that command. Ask for it again if you need to see it.)"
+                )
+            );
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .any(|said| said.text.contains("does not go with that command")),
+                "nothing said the picture had stayed behind"
+            );
+            assert!(
+                session.pasted_named("[Image #1]").is_empty(),
+                "the picture is still staged behind a marker no line names"
+            );
+        }
+
+        /// Waiting changes nothing about what a command can carry, and by the time the queue reaches
+        /// one nobody is there to be asked about it. So a command the box carries out itself is
+        /// settled where it is carried out, and reads the same as one dispatched at rest.
+        #[test]
+        fn a_picture_named_on_a_command_that_waited_is_words_by_the_time_it_is_carried_out() {
+            let mut session = Session::new("none");
+            type_line(&mut session, "first");
+            handle_key(&mut session, key(KeyCode::Enter));
+            assert_eq!(session.status, Status::Working);
+
+            for c in "/goal the screen matches ".chars() {
+                handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+            }
+            take_from_clipboard(&mut session, picture(b"pixels".to_vec()));
+            assert_eq!(session.input(), "/goal the screen matches [Image #1]");
+            handle_key_while_working(&mut session, key(KeyCode::Enter));
+            assert!(session.input().is_empty(), "the command stayed in the box");
+
+            session.complete("answered", Vec::new(), 0);
+            queued_next(&mut session);
+
+            assert_eq!(
+                session.goal().map(crate::goals::Running::condition),
+                Some(
+                    "the screen matches ([Image #1] was pasted here, but it cannot be shown to you: \
+                     a picture cannot join that command. Ask for it again if you need to see it.)"
+                )
+            );
+        }
+
+        /// A question is a prompt with the conversation behind it, so the picture pasted beside the
+        /// words goes where the words go. Settling it here would answer a question about a picture
+        /// by saying the picture cannot be shown, which is the answer to nothing.
+        #[test]
+        fn a_picture_pasted_into_a_question_goes_with_it() {
+            let mut session = Session::new("kernel-enforced");
+            type_line(&mut session, "/btw what is in ");
+            take_from_clipboard(&mut session, picture(b"pixels".to_vec()));
+            assert_eq!(session.input(), "/btw what is in [Image #1]");
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Aside(
+                    "what is in [Image #1]".to_string(),
+                    vec![crate::state::AttachedImage {
+                        marker: "[Image #1]".to_string(),
+                        media_type: "image/png",
+                        bytes: b"pixels".to_vec(),
+                    }]
+                )
+            );
+            assert!(
+                !session
+                    .transcript
+                    .iter()
+                    .any(|said| said.text.contains("does not go with that command")),
+                "a picture that went with the question was spoken of as left behind"
+            );
+        }
+
+        /// A picture of the thing to be built is the task, so it reaches the planner rather than a
+        /// sentence saying a picture was meant. What stops the plan from being made of what somebody
+        /// else wrote is [`crate::state::Session::trust`], which a paste does not lower.
+        #[test]
+        fn a_picture_pasted_into_a_task_goes_with_the_plan() {
+            let mut session = Session::new("kernel-enforced");
+            type_line(&mut session, "/manifest build ");
+            take_from_clipboard(&mut session, picture(b"pixels".to_vec()));
+            assert_eq!(session.input(), "/manifest build [Image #1]");
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Manifest(
+                    "build [Image #1]".to_string(),
+                    vec![crate::state::AttachedImage {
+                        marker: "[Image #1]".to_string(),
+                        media_type: "image/png",
+                        bytes: b"pixels".to_vec(),
+                    }]
+                )
+            );
+        }
+
+        /// A tick is a prompt, so the first one is a turn the person pasted into and carries the
+        /// picture. The two halves of that are wired apart, the command handing the pictures over
+        /// and the loop handing them to one tick, so this is what says the word is on the carrying
+        /// side of the dispatch: settled there, the loop would spend its whole life asking about a
+        /// screenshot no tick was given.
+        #[test]
+        fn a_picture_pasted_into_a_loop_goes_with_its_first_tick() {
+            let mut session = Session::new("kernel-enforced");
+            type_line(&mut session, "/loop 15m look at ");
+            take_from_clipboard(&mut session, picture(b"pixels".to_vec()));
+            assert_eq!(session.input(), "/loop 15m look at [Image #1]");
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit("look at [Image #1]".to_string())
+            );
+            assert_eq!(
+                session.sent_pasted().len(),
+                1,
+                "the first tick went without the picture"
+            );
+            assert_eq!(session.sent_pasted()[0].bytes, b"pixels".to_vec());
+        }
+
+        /// Waiting is not the same as being refused, so a question that sat in the queue carries the
+        /// picture it was typed beside when the queue reaches it. The picture is held with the line
+        /// rather than in the box, which is what makes that possible: the box was cleared by the
+        /// press that queued it.
+        #[test]
+        fn a_picture_named_on_a_question_that_waited_still_goes_with_it() {
+            let mut session = Session::new("none");
+            type_line(&mut session, "first");
+            handle_key(&mut session, key(KeyCode::Enter));
+            assert_eq!(session.status, Status::Working);
+
+            for c in "/btw what is in ".chars() {
+                handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+            }
+            take_from_clipboard(&mut session, picture(b"pixels".to_vec()));
+            assert_eq!(session.input(), "/btw what is in [Image #1]");
+            handle_key_while_working(&mut session, key(KeyCode::Enter));
+            assert!(session.input().is_empty(), "the command stayed in the box");
+
+            session.complete("answered", Vec::new(), 0);
+
+            assert_eq!(
+                queued_next(&mut session),
+                Some(Action::Aside(
+                    "what is in [Image #1]".to_string(),
+                    vec![crate::state::AttachedImage {
+                        marker: "[Image #1]".to_string(),
+                        media_type: "image/png",
+                        bytes: b"pixels".to_vec(),
+                    }]
+                ))
+            );
+        }
+
+        /// Deleting the marker is how a picture is taken off a line, so what a command carries is
+        /// read out of the line rather than off what the session has staged. Read off the staging
+        /// and a paste the person rubbed out would ride along with every command they typed
+        /// afterwards.
+        #[test]
+        fn a_command_line_whose_marker_was_deleted_says_nothing_about_a_picture() {
+            let mut session = Session::new("kernel-enforced");
+            type_line(&mut session, "/btw ");
+            take_from_clipboard(&mut session, picture(b"pixels".to_vec()));
+            handle_key(&mut session, key(KeyCode::Backspace));
+            assert_eq!(session.input(), "/btw ", "the marker outlived the press");
+            type_line(&mut session, "what is this");
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Aside("what is this".to_string(), Vec::new())
+            );
+            assert!(
+                !session
+                    .transcript
+                    .iter()
+                    .any(|said| said.text.contains("does not go with that command")),
+                "a picture the person took off the line was still spoken for"
+            );
+        }
+
         /// Refused rather than truncated, and with the size, because half a picture would be sent,
         /// rejected by the endpoint, and reported as a fault of the request.
         #[test]
@@ -7387,7 +7651,10 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Aside("what is first\nsecond\nthird\nfourth".to_string())
+            Action::Aside(
+                "what is first\nsecond\nthird\nfourth".to_string(),
+                Vec::new()
+            )
         );
     }
 
@@ -7429,7 +7696,7 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Manifest("fix first\nsecond\nthird\nfourth".to_string())
+            Action::Manifest("fix first\nsecond\nthird\nfourth".to_string(), Vec::new())
         );
     }
 
@@ -8180,6 +8447,14 @@ mod tests {
     fn type_line(session: &mut Session, line: &str) {
         for c in line.chars() {
             handle_key(session, key(KeyCode::Char(c)));
+        }
+    }
+
+    /// A command line with nothing pasted into it, for a test about the word rather than the paste.
+    fn commanded(line: &str) -> crate::state::Commanded {
+        crate::state::Commanded {
+            line: line.to_string(),
+            pasted: Vec::new(),
         }
     }
 
@@ -9077,7 +9352,7 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Aside("why is the parser recursive?".to_string())
+            Action::Aside("why is the parser recursive?".to_string(), Vec::new())
         );
     }
 
@@ -9092,7 +9367,7 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Aside(String::new())
+            Action::Aside(String::new(), Vec::new())
         );
     }
 
@@ -9443,7 +9718,10 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Manifest("summarise every doc under docs/specs".to_string())
+            Action::Manifest(
+                "summarise every doc under docs/specs".to_string(),
+                Vec::new()
+            )
         );
         assert!(
             session.input().is_empty(),
@@ -9463,7 +9741,7 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Manifest(String::new()),
+            Action::Manifest(String::new(), Vec::new()),
             "the bare word has to reach the loop, which says what it needs"
         );
         assert!(
@@ -9694,7 +9972,10 @@ mod tests {
     #[test]
     fn interrupting_stops_the_loop_before_it_leaves() {
         let mut session = Session::new("none");
-        session.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        session.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         session.complete("done", Vec::new(), 0);
 
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
@@ -9712,7 +9993,10 @@ mod tests {
     #[test]
     fn interrupting_clears_the_line_before_it_stops_the_loop() {
         let mut session = Session::new("none");
-        session.start_loop(crate::loops::parse("5m watch").expect("a request"));
+        session.start_loop(
+            crate::loops::parse("5m watch").expect("a request"),
+            Vec::new(),
+        );
         session.complete("done", Vec::new(), 0);
         for c in "half a thought".chars() {
             handle_key(&mut session, key(KeyCode::Char(c)));
@@ -10169,7 +10453,10 @@ mod tests {
 
         // A tick submits from the main loop rather than from a key, which is how the offer
         // reaches a running turn at all.
-        session.start_loop(crate::loops::parse("30s check the deploy").expect("a request"));
+        session.start_loop(
+            crate::loops::parse("30s check the deploy").expect("a request"),
+            Vec::new(),
+        );
         assert_eq!(session.status, Status::Working);
         assert!(session.cleared_by_interrupt, "the tick took the offer down");
 
@@ -10659,8 +10946,8 @@ mod tests {
             );
             session.complete("answered", Vec::new(), 0);
             assert_eq!(
-                session.take_queued_command().as_deref(),
-                Some(command.name),
+                session.take_queued_command().map(|taken| taken.line),
+                Some(command.name.to_string()),
                 "{} did not wait to be carried out",
                 command.name
             );
@@ -10720,7 +11007,7 @@ mod tests {
             .take_queued_command()
             .expect("the command was not waiting to be carried out");
         assert_eq!(
-            dispatch_command(&mut session, &queued),
+            dispatch_command(&mut session, queued),
             Action::Rename("the parser work".to_string())
         );
     }
@@ -10734,7 +11021,7 @@ mod tests {
         for command in commands() {
             let mut session = Session::new("none");
             assert_ne!(
-                dispatch_command(&mut session, command.name),
+                dispatch_command(&mut session, commanded(command.name)),
                 Action::None,
                 "{} is in the table and does nothing",
                 command.name

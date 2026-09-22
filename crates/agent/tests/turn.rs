@@ -13954,7 +13954,11 @@ fn asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone() 
     let answered = turn::aside(
         &config,
         &egress,
-        bravebot_agent::aside::Question::about(&conversation, "why is the parser recursive?"),
+        bravebot_agent::aside::Question::about(
+            &conversation,
+            "why is the parser recursive?",
+            Vec::new(),
+        ),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -13985,6 +13989,83 @@ fn asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone() 
 
     // Watched as it arrived, so a person waiting on an answer sees it being written.
     assert_eq!(watched, "because the grammar nests");
+}
+
+/// A picture pasted beside the question goes with it, in the one message. A question about a
+/// screenshot is the commonest thing to ask beside the work, and answered without the screenshot it
+/// is answered about nothing: what is sent has to be what the words say it is.
+#[test]
+fn a_picture_pasted_into_a_question_reaches_the_model_with_it() {
+    let (endpoint, received) = serve_sequence(vec![reply_with("a stack trace")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::aside(
+        &config,
+        &egress,
+        bravebot_agent::aside::Question::about(
+            &an_exchange_to_ask_beside(),
+            "what is in [Image #1]?",
+            vec![PastedImage {
+                media_type: "image/png",
+                bytes: b"pixels".to_vec(),
+            }],
+        ),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        |_| {},
+    )
+    .expect("asking beside the work must not be refused");
+
+    let body = received.recv().expect("the question's request");
+    assert!(body.contains("what is in [Image #1]?"), "{body}");
+    assert!(
+        body.contains("data:image/png;base64,cGl4ZWxz"),
+        "the picture did not go with the question: {body}"
+    );
+}
+
+/// A picture is an input, and the record says what arrived however it arrived: asked beside the work
+/// is still asked. Left out here, a session's trail would account for every picture but the ones
+/// pasted into a question.
+#[test]
+fn a_picture_pasted_into_a_question_is_named_in_the_audit_trail() {
+    let (endpoint, _received) = serve_sequence(vec![reply_with("a stack trace")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::aside(
+        &config,
+        &egress,
+        bravebot_agent::aside::Question::about(
+            &an_exchange_to_ask_beside(),
+            "what is in [Image #1]?",
+            vec![PastedImage {
+                media_type: "image/png",
+                bytes: b"pixels".to_vec(),
+            }],
+        ),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        |_| {},
+    )
+    .expect("asking beside the work must not be refused");
+
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "provenance", detail }
+                if detail.contains("image/png") && detail.contains("pasted by the user")
+        )),
+        "the paste left no trace: {:?}",
+        sink.events()
+    );
 }
 
 /// The exchange in a judge's request is one nothing sends again: the check after this one carries
@@ -14025,7 +14106,11 @@ fn a_question_asked_beside_the_work_asks_for_no_cache_of_the_exchange() {
     turn::aside(
         &config,
         &egress,
-        bravebot_agent::aside::Question::about(&an_exchange_to_ask_beside(), "why recursive?"),
+        bravebot_agent::aside::Question::about(
+            &an_exchange_to_ask_beside(),
+            "why recursive?",
+            Vec::new(),
+        ),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -14050,7 +14135,11 @@ fn an_answer_over_a_trusted_exchange_may_be_written_down() {
     let answered = turn::aside(
         &config,
         &egress,
-        bravebot_agent::aside::Question::about(&an_exchange_to_ask_beside(), "why recursive?"),
+        bravebot_agent::aside::Question::about(
+            &an_exchange_to_ask_beside(),
+            "why recursive?",
+            Vec::new(),
+        ),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -14082,7 +14171,7 @@ fn an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down() {
     let answered = turn::aside(
         &config,
         &egress,
-        bravebot_agent::aside::Question::about(&conversation, "why recursive?"),
+        bravebot_agent::aside::Question::about(&conversation, "why recursive?", Vec::new()),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,

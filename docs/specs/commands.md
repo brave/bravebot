@@ -162,6 +162,12 @@ else done to it. A leading `~` is expanded only as a whole first segment, so a d
 name begins with a tilde is not a home-relative path. Nothing shortens it, splits it, or asks the
 planner what it meant.
 
+A pasted picture in it is the exception, and only on a command the driver carries out itself: the
+marker standing for the picture is put back to words before the argument is taken
+([pasting.md](pasting.md#PASTE-6)), because such a command has nowhere to carry what it stands for.
+Where the argument is sent, which is `/btw`, `/manifest` and `/loop`, the marker stays in it as it
+was typed and the picture goes with it, which is this rule rather than an exception to it.
+
 **Why.** The argument is what the command acts on: a directory that becomes trusted, a name a
 session is stored under. A person is taken to have endorsed exactly the characters they typed, so
 exactly those characters have to arrive.
@@ -172,6 +178,8 @@ exactly those characters have to arrive.
 `verified-by: bravebot_tui::app::the_btw_command_carries_its_question`
 `verified-by: bravebot_tui::app::a_session_can_ask_for_a_manifest_run`
 `verified-by: bravebot_tui::app::a_tilde_is_expanded_only_as_a_whole_first_segment`
+`verified-by: bravebot_tui::app::a_picture_pasted_into_a_question_goes_with_it`
+`verified-by: bravebot_tui::app::a_picture_a_command_line_named_is_carried_out_as_words_rather_than_as_its_marker`
 
 
 <a id="CMD-6"></a>
