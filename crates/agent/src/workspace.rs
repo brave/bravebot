@@ -733,9 +733,7 @@ impl Workspace {
         path: &Labelled<String>,
         reach: Reach,
     ) -> Result<Labelled<String>, WorkspaceError> {
-        let authority = policy.file_authority();
-        let _capture = authority.capture();
-        self.read_text_captured(policy, path, reach)
+        policy.capture_files(|policy, _capture| self.read_text_captured(policy, path, reach))
     }
 
     fn read_text_captured<S: Sink>(
@@ -848,43 +846,43 @@ impl Workspace {
         media: &str,
         reach: Reach,
     ) -> Result<Labelled<String>, WorkspaceError> {
-        let authority = policy.file_authority();
-        let _capture = authority.capture();
-        policy.before_capability(Capability::FileRead)?;
-        policy.before_action("file_read", "path", Role::Routing, path)?;
+        policy.capture_files(|policy, _capture| {
+            policy.before_capability(Capability::FileRead)?;
+            policy.before_action("file_read", "path", Role::Routing, path)?;
 
-        // Safe to read: before_action just proved this is (T,pub).
-        let relative = path
-            .clone()
-            .into_trusted()
-            .map_err(|_| WorkspaceError::Invalid {
-                path: "<untrusted>".into(),
-                reason: "the path was not trusted",
+            // Safe to read: before_action just proved this is (T,pub).
+            let relative = path
+                .clone()
+                .into_trusted()
+                .map_err(|_| WorkspaceError::Invalid {
+                    path: "<untrusted>".into(),
+                    reason: "the path was not trusted",
+                })?;
+
+            // The reach is the caller's, from the shape of the gesture that produced the path, and
+            // never from anything the file holds.
+            let resolved = self.resolve_attachment(&relative, reach)?;
+            let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
+
+            let raw = std::fs::read(&resolved).map_err(|e| WorkspaceError::Io {
+                path: relative.clone(),
+                detail: e.to_string(),
             })?;
 
-        // The reach is the caller's, from the shape of the gesture that produced the path, and
-        // never from anything the file holds.
-        let resolved = self.resolve_attachment(&relative, reach)?;
-        let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
+            if raw.len() > MAX_ATTACHMENT_BYTES {
+                return Err(WorkspaceError::TooLarge {
+                    path: relative,
+                    limit: MAX_ATTACHMENT_BYTES,
+                });
+            }
 
-        let raw = std::fs::read(&resolved).map_err(|e| WorkspaceError::Io {
-            path: relative.clone(),
-            detail: e.to_string(),
-        })?;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
 
-        if raw.len() > MAX_ATTACHMENT_BYTES {
-            return Err(WorkspaceError::TooLarge {
-                path: relative,
-                limit: MAX_ATTACHMENT_BYTES,
-            });
-        }
-
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
-
-        Ok(Labelled::new(
-            format!("data:{media};base64,{encoded}"),
-            label,
-        ))
+            Ok(Labelled::new(
+                format!("data:{media};base64,{encoded}"),
+                label,
+            ))
+        })
     }
 
     /// Read a bounded window of a file's lines, for the model.
@@ -902,21 +900,21 @@ impl Workspace {
         offset: usize,
         limit: usize,
     ) -> Result<Labelled<Page>, WorkspaceError> {
-        let authority = policy.file_authority();
-        let _capture = authority.capture();
-        policy.before_capability(Capability::FileRead)?;
-        policy.before_action("file_read", "path", Role::Routing, path)?;
+        policy.capture_files(|policy, _capture| {
+            policy.before_capability(Capability::FileRead)?;
+            policy.before_action("file_read", "path", Role::Routing, path)?;
 
-        let relative = path
-            .clone()
-            .into_trusted()
-            .map_err(|_| WorkspaceError::Invalid {
-                path: "<untrusted>".into(),
-                reason: "the path was not trusted",
-            })?;
+            let relative = path
+                .clone()
+                .into_trusted()
+                .map_err(|_| WorkspaceError::Invalid {
+                    path: "<untrusted>".into(),
+                    reason: "the path was not trusted",
+                })?;
 
-        let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
-        Ok(Labelled::new(self.page(&relative, offset, limit)?, label))
+            let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
+            Ok(Labelled::new(self.page(&relative, offset, limit)?, label))
+        })
     }
 
     /// One page of a file, with no gate of its own.
@@ -1125,17 +1123,15 @@ impl Workspace {
         // Checked before the write gates so a stale edit is reported as staleness rather than
         // consuming the single-use endorsement. Reading the path is itself gated, below.
         let relative = self.peek_relative(policy, path)?;
-        let authority = policy.file_authority();
-        let revision = {
-            let _capture = authority.capture();
+        let revision = policy.capture_files(|policy, capture| {
             let promoted = policy.promote_confined_read("edit_file", "path", path)?;
             let captured = self.read_text_captured(policy, &promoted, Reach::Confined)?;
             let current = policy.read_trusted_content("edit_file", &captured)?;
             if current != expected {
                 return Err(WorkspaceError::Stale { path: relative });
             }
-            authority.revision_of(&self.trust_key(&relative))
-        };
+            Ok(capture.revision_of(&self.trust_key(&relative)))
+        })?;
         self.write_endorsed_at_revision(policy, path, contents, Some(revision))
     }
 
@@ -1191,27 +1187,28 @@ impl Workspace {
         policy.before_action("file_write", "contents", Role::Content, contents)?;
 
         let resolved = self.resolve(&relative)?;
-        let authority = policy.file_authority();
-        let effect = {
-            let _capture = authority.capture();
-            if expected_revision.is_some_and(|revision| {
-                revision != authority.revision_of(&self.trust_key(&relative))
-            }) {
-                return Err(WorkspaceError::Stale { path: relative });
+        let effect = policy.capture_files(|policy, capture| {
+            if expected_revision
+                .is_some_and(|revision| revision != capture.revision_of(&self.trust_key(&relative)))
+            {
+                return Err(WorkspaceError::Stale {
+                    path: relative.clone(),
+                });
             }
             let captured_trust = if policy.read_is_quarantined(&self.trust_key(&relative)) {
                 bravebot_core::label::Integrity::Untrusted
             } else {
                 bravebot_core::label::Integrity::Trusted
             };
-            let effect = _capture.begin(&self.trust_key(&relative)).ok_or_else(|| {
-                WorkspaceError::Stale {
-                    path: relative.clone(),
-                }
-            })?;
+            let effect =
+                capture
+                    .begin(&self.trust_key(&relative))
+                    .ok_or_else(|| WorkspaceError::Stale {
+                        path: relative.clone(),
+                    })?;
             self.record_backup(&resolved, captured_trust);
-            effect
-        };
+            Ok::<_, WorkspaceError>(effect)
+        })?;
 
         let proof = policy.authorise_content_release("file_write", "contents");
         let body = contents.clone().declassify(&proof);
@@ -1257,22 +1254,21 @@ impl Workspace {
             })?;
 
         let resolved = self.resolve(&relative)?;
-        let authority = policy.file_authority();
-        let effect = {
-            let _capture = authority.capture();
+        let effect = policy.capture_files(|policy, capture| {
             let captured_trust = if policy.read_is_quarantined(&self.trust_key(&relative)) {
                 bravebot_core::label::Integrity::Untrusted
             } else {
                 bravebot_core::label::Integrity::Trusted
             };
-            let effect = _capture.begin(&self.trust_key(&relative)).ok_or_else(|| {
-                WorkspaceError::Stale {
-                    path: relative.clone(),
-                }
-            })?;
+            let effect =
+                capture
+                    .begin(&self.trust_key(&relative))
+                    .ok_or_else(|| WorkspaceError::Stale {
+                        path: relative.clone(),
+                    })?;
             self.record_backup(&resolved, captured_trust);
-            effect
-        };
+            Ok::<_, WorkspaceError>(effect)
+        })?;
 
         // Both gates have passed, so the bytes may be released to the write.
         let proof = policy.authorise_content_release("file_write", "contents");
@@ -1822,84 +1818,83 @@ impl Workspace {
         pattern: Option<&Labelled<String>>,
         depth: Option<usize>,
     ) -> Result<Labelled<Listing>, WorkspaceError> {
-        let authority = policy.file_authority();
-        let _capture = authority.capture();
-        policy.before_capability(Capability::FileRead)?;
-        policy.before_action("file_list", "directory", Role::Routing, directory)?;
+        policy.capture_files(|policy, _capture| {
+            policy.before_capability(Capability::FileRead)?;
+            policy.before_action("file_list", "directory", Role::Routing, directory)?;
 
-        let relative = directory
-            .clone()
-            .into_trusted()
-            .map_err(|_| WorkspaceError::Invalid {
-                path: "<untrusted>".into(),
-                reason: "the directory was not trusted",
-            })?;
+            let relative =
+                directory
+                    .clone()
+                    .into_trusted()
+                    .map_err(|_| WorkspaceError::Invalid {
+                        path: "<untrusted>".into(),
+                        reason: "the directory was not trusted",
+                    })?;
 
-        let glob = match pattern {
-            Some(pattern) => {
-                policy.before_action("file_list", "pattern", Role::Routing, pattern)?;
-                Some(
-                    pattern
-                        .clone()
-                        .into_trusted()
-                        .map_err(|_| WorkspaceError::Invalid {
-                            path: "<untrusted>".into(),
-                            reason: "the pattern was not trusted",
-                        })?,
-                )
-            }
-            None => None,
-        };
+            let glob =
+                match pattern {
+                    Some(pattern) => {
+                        policy.before_action("file_list", "pattern", Role::Routing, pattern)?;
+                        Some(pattern.clone().into_trusted().map_err(|_| {
+                            WorkspaceError::Invalid {
+                                path: "<untrusted>".into(),
+                                reason: "the pattern was not trusted",
+                            }
+                        })?)
+                    }
+                    None => None,
+                };
 
-        let root = self.resolve(&relative)?;
+            let root = self.resolve(&relative)?;
 
-        let mut found = Vec::new();
-        let mut stopped_at = Vec::new();
-        // Ignored here: what a listing left out is the entry it drops below, which the count
-        // answers exactly.
-        let patterns = glob.as_deref().map(crate::glob::expand);
-        let denied = |path: &str| policy.read_is_denied(path);
-        let _ = self.walk_filtered(
-            &root,
-            patterns.as_deref(),
-            depth,
-            MAX_ENTRIES,
-            &denied,
-            &mut Collected {
-                files: &mut found,
-                stopped_at: &mut stopped_at,
-                withheld: false,
-            },
-        )?;
-        found.sort();
-        stopped_at.sort();
+            let mut found = Vec::new();
+            let mut stopped_at = Vec::new();
+            // Ignored here: what a listing left out is the entry it drops below, which the count
+            // answers exactly.
+            let patterns = glob.as_deref().map(crate::glob::expand);
+            let denied = |path: &str| policy.read_is_denied(path);
+            let _ = self.walk_filtered(
+                &root,
+                patterns.as_deref(),
+                depth,
+                MAX_ENTRIES,
+                &denied,
+                &mut Collected {
+                    files: &mut found,
+                    stopped_at: &mut stopped_at,
+                    withheld: false,
+                },
+            )?;
+            found.sort();
+            stopped_at.sort();
 
-        // Labelled after the walk, because which paths were visited is not known before it. A
-        // listing is trusted only if every path in it is. A directory name is a name out of the
-        // same tree, so it is observed with the files rather than beside them.
-        let label = policy.observe_paths(
-            Capability::FileRead,
-            found.iter().chain(stopped_at.iter()).map(String::as_str),
-        )?;
+            // Labelled after the walk, because which paths were visited is not known before it. A
+            // listing is trusted only if every path in it is. A directory name is a name out of the
+            // same tree, so it is observed with the files rather than beside them.
+            let label = policy.observe_paths(
+                Capability::FileRead,
+                found.iter().chain(stopped_at.iter()).map(String::as_str),
+            )?;
 
-        // `walk` collects one entry past the cap so reaching it is detectable. Which entries
-        // survive is down to traversal order, so a truncated listing is a sample of the tree
-        // rather than its alphabetical head, hence saying so matters. The order is at least
-        // the same order every time, which is the walk's doing rather than this sort's: what
-        // is sorted here is what a walk kept, and sorting after a cap cannot choose what it
-        // kept.
-        let truncated = found.len() + stopped_at.len() > MAX_ENTRIES;
-        found.truncate(MAX_ENTRIES);
-        stopped_at.truncate(MAX_ENTRIES.saturating_sub(found.len()));
+            // `walk` collects one entry past the cap so reaching it is detectable. Which entries
+            // survive is down to traversal order, so a truncated listing is a sample of the tree
+            // rather than its alphabetical head, hence saying so matters. The order is at least
+            // the same order every time, which is the walk's doing rather than this sort's: what
+            // is sorted here is what a walk kept, and sorting after a cap cannot choose what it
+            // kept.
+            let truncated = found.len() + stopped_at.len() > MAX_ENTRIES;
+            found.truncate(MAX_ENTRIES);
+            stopped_at.truncate(MAX_ENTRIES.saturating_sub(found.len()));
 
-        Ok(Labelled::new(
-            Listing {
-                files: found,
-                directories: stopped_at,
-                truncated,
-            },
-            label,
-        ))
+            Ok(Labelled::new(
+                Listing {
+                    files: found,
+                    directories: stopped_at,
+                    truncated,
+                },
+                label,
+            ))
+        })
     }
 
     /// Find lines matching any of `patterns` in files beneath `directory`.
@@ -1935,175 +1930,176 @@ impl Workspace {
         case_sensitive: bool,
         offset: usize,
     ) -> Result<Labelled<Matches>, WorkspaceError> {
-        let authority = policy.file_authority();
-        let _capture = authority.capture();
-        policy.before_capability(Capability::FileRead)?;
-        for pattern in patterns {
-            policy.before_action("file_grep", "pattern", Role::Routing, pattern)?;
-        }
-        policy.before_action("file_grep", "directory", Role::Routing, directory)?;
+        policy.capture_files(|policy, _capture| {
+            policy.before_capability(Capability::FileRead)?;
+            for pattern in patterns {
+                policy.before_action("file_grep", "pattern", Role::Routing, pattern)?;
+            }
+            policy.before_action("file_grep", "directory", Role::Routing, directory)?;
 
-        let relative = directory
-            .clone()
-            .into_trusted()
-            .map_err(|_| WorkspaceError::Invalid {
-                path: "<untrusted>".into(),
-                reason: "the directory was not trusted",
-            })?;
+            let relative =
+                directory
+                    .clone()
+                    .into_trusted()
+                    .map_err(|_| WorkspaceError::Invalid {
+                        path: "<untrusted>".into(),
+                        reason: "the directory was not trusted",
+                    })?;
 
-        if patterns.is_empty() {
-            return Err(WorkspaceError::Invalid {
-                path: relative,
-                reason: "no search pattern was given",
-            });
-        }
-
-        // Compiled once for the whole walk rather than per line, and before any file is opened so
-        // that an unusable pattern is reported as itself instead of as an empty result.
-        //
-        // Case is folded by the engine rather than by lowercasing the pattern, which would turn
-        // `\D`, `\W` and `\S` into the classes they negate and invert what was asked for.
-        let mut expressions = Vec::with_capacity(patterns.len());
-        for pattern in patterns {
-            let needle = pattern
-                .clone()
-                .into_trusted()
-                .map_err(|_| WorkspaceError::Invalid {
-                    path: "<untrusted>".into(),
-                    reason: "the pattern was not trusted",
-                })?;
-            if needle.is_empty() {
+            if patterns.is_empty() {
                 return Err(WorkspaceError::Invalid {
                     path: relative,
-                    reason: "the search pattern was empty",
+                    reason: "no search pattern was given",
                 });
             }
-            let compiled = if case_sensitive {
-                crate::regex::Regex::compile(&needle)
-            } else {
-                crate::regex::Regex::compile_folded(&needle)
-            };
-            expressions.push(compiled.map_err(|e| WorkspaceError::Pattern {
-                detail: e.to_string(),
-            })?);
-        }
 
-        // Which files are searched is routing, exactly like the directory.
-        let glob = match include {
-            Some(include) => {
-                policy.before_action("file_grep", "include", Role::Routing, include)?;
-                Some(
-                    include
+            // Compiled once for the whole walk rather than per line, and before any file is opened so
+            // that an unusable pattern is reported as itself instead of as an empty result.
+            //
+            // Case is folded by the engine rather than by lowercasing the pattern, which would turn
+            // `\D`, `\W` and `\S` into the classes they negate and invert what was asked for.
+            let mut expressions = Vec::with_capacity(patterns.len());
+            for pattern in patterns {
+                let needle =
+                    pattern
                         .clone()
                         .into_trusted()
                         .map_err(|_| WorkspaceError::Invalid {
                             path: "<untrusted>".into(),
-                            reason: "the include pattern was not trusted",
-                        })?,
-                )
+                            reason: "the pattern was not trusted",
+                        })?;
+                if needle.is_empty() {
+                    return Err(WorkspaceError::Invalid {
+                        path: relative,
+                        reason: "the search pattern was empty",
+                    });
+                }
+                let compiled = if case_sensitive {
+                    crate::regex::Regex::compile(&needle)
+                } else {
+                    crate::regex::Regex::compile_folded(&needle)
+                };
+                expressions.push(compiled.map_err(|e| WorkspaceError::Pattern {
+                    detail: e.to_string(),
+                })?);
             }
-            None => None,
-        };
 
-        let root = self.resolve(&relative)?;
+            // Which files are searched is routing, exactly like the directory.
+            let glob =
+                match include {
+                    Some(include) => {
+                        policy.before_action("file_grep", "include", Role::Routing, include)?;
+                        Some(include.clone().into_trusted().map_err(|_| {
+                            WorkspaceError::Invalid {
+                                path: "<untrusted>".into(),
+                                reason: "the include pattern was not trusted",
+                            }
+                        })?)
+                    }
+                    None => None,
+                };
 
-        let mut paths = Vec::new();
-        // Whether every file was reached, which the count cannot answer: a tree of exactly the
-        // cap fills `paths` without a single file being left out.
-        let mut ignored = Vec::new();
-        // Expanded once for the whole walk, not once per path.
-        let expanded = glob.as_deref().map(crate::glob::expand);
-        let denied = |path: &str| policy.read_is_denied(path);
-        let mut collected = Collected {
-            files: &mut paths,
-            stopped_at: &mut ignored,
-            withheld: false,
-        };
-        let unvisited = self.walk_filtered(
-            &root,
-            expanded.as_deref(),
-            None,
-            self.search_files,
-            &denied,
-            &mut collected,
-        )?;
-        let withheld = collected.withheld;
-        paths.sort();
-        let considered = paths.len();
+            let root = self.resolve(&relative)?;
 
-        // Trusted only if every file the search reads is trusted.
-        let label = policy.observe_paths(Capability::FileRead, paths.iter().map(String::as_str))?;
-
-        // Collected one past the cap for the same reason as `walk`: reaching the limit has
-        // to be distinguishable from happening to have exactly that many matches.
-        let mut matches = Vec::new();
-        let mut searched = 0usize;
-        let mut timed_out = false;
-        // Counted rather than collected until the offset is reached, so asking for a later page
-        // costs the reading again but never the earlier pages' memory.
-        let skip = offset.saturating_sub(1);
-        let mut matched = 0usize;
-        let started = Instant::now();
-        for path in paths {
-            if matches.len() > MAX_MATCHES {
-                break;
-            }
-            // Checked per file rather than per line: the clock is here to bound a walk over a
-            // large tree, and a single file cannot be large enough to matter beside that.
-            if started.elapsed() >= self.search_time {
-                timed_out = true;
-                break;
-            }
-            let absolute = self.root.join(&path);
-            // Unreadable or non-UTF8 files are skipped rather than failing the search:
-            // a binary in the tree should not make grep unusable.
-            let Ok(contents) = std::fs::read_to_string(&absolute) else {
-                continue;
+            let mut paths = Vec::new();
+            // Whether every file was reached, which the count cannot answer: a tree of exactly the
+            // cap fills `paths` without a single file being left out.
+            let mut ignored = Vec::new();
+            // Expanded once for the whole walk, not once per path.
+            let expanded = glob.as_deref().map(crate::glob::expand);
+            let denied = |path: &str| policy.read_is_denied(path);
+            let mut collected = Collected {
+                files: &mut paths,
+                stopped_at: &mut ignored,
+                withheld: false,
             };
-            searched += 1;
-            for (index, line) in contents.lines().enumerate() {
+            let unvisited = self.walk_filtered(
+                &root,
+                expanded.as_deref(),
+                None,
+                self.search_files,
+                &denied,
+                &mut collected,
+            )?;
+            let withheld = collected.withheld;
+            paths.sort();
+            let considered = paths.len();
+
+            // Trusted only if every file the search reads is trusted.
+            let label =
+                policy.observe_paths(Capability::FileRead, paths.iter().map(String::as_str))?;
+
+            // Collected one past the cap for the same reason as `walk`: reaching the limit has
+            // to be distinguishable from happening to have exactly that many matches.
+            let mut matches = Vec::new();
+            let mut searched = 0usize;
+            let mut timed_out = false;
+            // Counted rather than collected until the offset is reached, so asking for a later page
+            // costs the reading again but never the earlier pages' memory.
+            let skip = offset.saturating_sub(1);
+            let mut matched = 0usize;
+            let started = Instant::now();
+            for path in paths {
                 if matches.len() > MAX_MATCHES {
                     break;
                 }
-                if expressions.iter().any(|pattern| pattern.matches(line)) {
-                    matched += 1;
-                    if matched <= skip {
-                        continue;
+                // Checked per file rather than per line: the clock is here to bound a walk over a
+                // large tree, and a single file cannot be large enough to matter beside that.
+                if started.elapsed() >= self.search_time {
+                    timed_out = true;
+                    break;
+                }
+                let absolute = self.root.join(&path);
+                // Unreadable or non-UTF8 files are skipped rather than failing the search:
+                // a binary in the tree should not make grep unusable.
+                let Ok(contents) = std::fs::read_to_string(&absolute) else {
+                    continue;
+                };
+                searched += 1;
+                for (index, line) in contents.lines().enumerate() {
+                    if matches.len() > MAX_MATCHES {
+                        break;
                     }
-                    let mut text = line.to_string();
-                    truncate_on_char_boundary(&mut text, MAX_MATCH_LINE);
-                    matches.push(Match {
-                        path: path.clone(),
-                        line: index + 1,
-                        text,
-                    });
+                    if expressions.iter().any(|pattern| pattern.matches(line)) {
+                        matched += 1;
+                        if matched <= skip {
+                            continue;
+                        }
+                        let mut text = line.to_string();
+                        truncate_on_char_boundary(&mut text, MAX_MATCH_LINE);
+                        matches.push(Match {
+                            path: path.clone(),
+                            line: index + 1,
+                            text,
+                        });
+                    }
                 }
             }
-        }
 
-        let truncated = matches.len() > MAX_MATCHES;
-        matches.truncate(MAX_MATCHES);
-        if truncated {
-            // The match collected one past the cap is what detects the cap rather than part of the
-            // answer, so it is no part of the tally either: what was counted is what was returned
-            // plus what an offset passed over.
-            matched -= 1;
-        }
+            let truncated = matches.len() > MAX_MATCHES;
+            matches.truncate(MAX_MATCHES);
+            if truncated {
+                // The match collected one past the cap is what detects the cap rather than part of the
+                // answer, so it is no part of the tally either: what was counted is what was returned
+                // plus what an offset passed over.
+                matched -= 1;
+            }
 
-        Ok(Labelled::new(
-            Matches {
-                matches,
-                truncated,
-                unvisited,
-                timed_out,
-                considered,
-                searched,
-                withheld,
-                first_match: skip + 1,
-                matched,
-            },
-            label,
-        ))
+            Ok(Labelled::new(
+                Matches {
+                    matches,
+                    truncated,
+                    unvisited,
+                    timed_out,
+                    considered,
+                    searched,
+                    withheld,
+                    first_match: skip + 1,
+                    matched,
+                },
+                label,
+            ))
+        })
     }
 
     /// Collect workspace-relative paths of regular files beneath `directory`.

@@ -14,10 +14,28 @@ struct State {
     trust: TrustStore,
     active: BTreeSet<String>,
     revision: u64,
+    // One latest revision per distinct path for outstanding preview approvals.
     versions: BTreeMap<String, u64>,
 }
 
 impl State {
+    /// Look up only whole-segment ancestors, including the special root rules.
+    fn revision_of(&self, key: &str) -> u64 {
+        let mut latest = self.versions.get("/").copied().unwrap_or(0);
+        if !crate::trust::is_absolute_key(key) {
+            latest = latest.max(self.versions.get("").copied().unwrap_or(0));
+        }
+        let mut ancestor = key;
+        while !ancestor.is_empty() {
+            latest = latest.max(self.versions.get(ancestor).copied().unwrap_or(0));
+            let Some((parent, _)) = ancestor.rsplit_once('/') else {
+                break;
+            };
+            ancestor = parent;
+        }
+        latest
+    }
+
     /// Record every effect, including one that leaves the effective trust unchanged.
     fn record_change(&mut self, key: String) -> u64 {
         self.revision = self.revision.wrapping_add(1);
@@ -97,13 +115,7 @@ impl FileAuthority {
     pub fn revision_of(&self, path: &str) -> u64 {
         let state = self.state();
         let key = state.trust.key(path);
-        state
-            .versions
-            .iter()
-            .filter(|(changed, _)| crate::trust::covers(changed, &key))
-            .map(|(_, revision)| *revision)
-            .max()
-            .unwrap_or(0)
+        state.revision_of(&key)
     }
 
     pub fn publish(&self, path: &str, integrity: Integrity) -> bool {
@@ -146,6 +158,14 @@ pub struct FileCapture<'a> {
 }
 
 impl FileCapture<'_> {
+    pub fn revision(&self) -> u64 {
+        self.authority.revision()
+    }
+
+    pub fn revision_of(&self, path: &str) -> u64 {
+        self.authority.revision_of(path)
+    }
+
     /// Reserve a path before releasing this boundary to perform a write.
     pub fn begin(&self, path: &str) -> Option<FileEffect> {
         self.authority.begin(path)
@@ -165,9 +185,7 @@ impl FileEffect {
         let _access = self.authority.capture();
         let mut state = self.authority.state();
         state.active.remove(&self.key);
-        let unchanged = state.versions.iter().all(|(path, revision)| {
-            *revision <= self.revision || !crate::trust::covers(path, &self.key)
-        });
+        let unchanged = state.revision_of(&self.key) <= self.revision;
         match integrity {
             Integrity::Trusted if unchanged => state.trust.trust(&self.key),
             _ => state.trust.distrust(&self.key),
@@ -184,6 +202,58 @@ impl Drop for FileEffect {
             state.active.remove(&self.key);
             state.trust.distrust(&self.key);
             state.record_change(self.key.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ancestor decisions invalidate previews; sibling and descendant decisions do not.
+    #[test]
+    fn path_revisions_follow_whole_segment_ancestors() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        for path in ["/", ".", "src", "src-other", "src/file", "src/child"] {
+            authority.publish(path, Integrity::Untrusted);
+        }
+        for (path, expected) in [
+            ("/elsewhere", 1),
+            ("other", 2),
+            ("src", 3),
+            ("src-other/file", 4),
+            ("./src/file", 5),
+            ("src/child/file", 6),
+            ("src/childish", 3),
+        ] {
+            assert_eq!(authority.revision_of(path), expected, "{path}");
+        }
+        // A newer, less-specific decision still invalidates the file's preview.
+        authority.publish(".", Integrity::Untrusted);
+        assert_eq!(authority.revision_of("src/file"), 7);
+
+        let relative = FileAuthority::new(TrustStore::new(""));
+        relative.publish("", Integrity::Untrusted);
+        assert_eq!(relative.revision_of("file"), 1);
+        assert_eq!(relative.revision_of("/file"), 0);
+        relative.publish("/", Integrity::Untrusted);
+        assert_eq!(relative.revision_of("file"), 2);
+        assert_eq!(relative.revision_of("/file"), 2);
+    }
+
+    /// A completed write must respect a newer ancestor decision, without distrusting siblings.
+    #[test]
+    fn completion_observes_ancestor_decisions_but_not_sibling_decisions() {
+        for (changed, trusted) in [("src", false), ("/", false), ("src-other", true)] {
+            let authority = FileAuthority::new(TrustStore::new("/work"));
+            let effect = authority.capture().begin("src/file").unwrap();
+            authority.publish(changed, Integrity::Untrusted);
+            effect.complete(Integrity::Trusted);
+            assert_eq!(
+                authority.snapshot().is_trusted("src/file"),
+                trusted,
+                "{changed}"
+            );
         }
     }
 }

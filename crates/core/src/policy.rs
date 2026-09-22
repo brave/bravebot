@@ -624,6 +624,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.trust.clone()
     }
 
+    /// Capture bytes and decide their labels within one file-authority boundary.
+    /// The closure must not prompt, call a model, or wait for a process or delegate.
+    pub fn capture_files<R>(
+        &mut self,
+        capture: impl FnOnce(&mut Self, &crate::file_authority::FileCapture<'_>) -> R,
+    ) -> R {
+        let authority = self.file_authority();
+        let guard = authority.capture();
+        capture(self, &guard)
+    }
+
     /// Say which directory this turn runs in.
     ///
     /// The workspace root, which is also the directory the map handed to [`Policy::with_trust`]

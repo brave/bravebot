@@ -138,6 +138,8 @@ that approval. A backup records the trust of its bytes at capture under the same
 `verified-by: bravebot_agent::turn::overlapping_delegate_writes_follow_effect_order_in_both_collection_orders`
 `verified-by: bravebot_agent::workspace::reads_before_write_publication_and_failed_replacements_remain_untrusted`
 `verified-by: bravebot_agent::workspace::shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_writes`
+`verified-by: bravebot_core::file_authority::path_revisions_follow_whole_segment_ancestors`
+`verified-by: bravebot_core::file_authority::completion_observes_ancestor_decisions_but_not_sibling_decisions`
 
 **Why writing trusted data never asks.** Trusted data means the turn observed nothing untrusted,
 so it holds no byte an attacker influenced, and the destination only ever gains trust. There is

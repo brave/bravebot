@@ -2365,14 +2365,12 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         // preview and decides nothing further: the head of it is cut inside the kernel, so the
         // driver never holds the text, and a file with nothing to show is asked about like any
         // other. The prompt says so in place of the preview.
-        let authority = policy.file_authority();
-        let (body, preview_revision) = {
-            let _capture = authority.capture();
+        let (body, preview_revision) = policy.capture_files(|_policy, capture| {
             (
                 workspace.peek_labelled_for_review(&proposed_path),
-                authority.revision_of(&keyed),
+                capture.revision_of(&keyed),
             )
-        };
+        });
         let shaped = policy.render_in_place("read_file", &body, |text| {
             let head: Vec<&str> = text.lines().take(VOUCH_PREVIEW).collect();
             (head.join("\n"), text.lines().nth(VOUCH_PREVIEW).is_some())
@@ -2423,10 +2421,11 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             reason,
         };
         if confirmer.confirm_vouch(&request) == Decision::Approve {
-            let _capture = authority.capture();
-            if authority.revision_of(&keyed) == preview_revision {
-                policy.vouch_for_named_path(&keyed);
-            }
+            policy.capture_files(|policy, capture| {
+                if capture.revision_of(&keyed) == preview_revision {
+                    policy.vouch_for_named_path(&keyed);
+                }
+            });
         }
     }
 
@@ -2550,33 +2549,33 @@ pub(crate) fn materialise<S: Sink>(
     // The files this actually opened, for the line the person reads. A read deferred until a
     // processor needed it is still a read of their workspace, and until it was reported the only
     // reads on the screen were the planner's, which are the ones that read nothing.
-    let authority = policy.file_authority();
-    let _capture = authority.capture();
-    let mut opened = Vec::new();
-    for slot in wanted {
-        let was_unread = slots.is_unread(slot);
-        policy
-            .materialise(tool, slot, slots, |path| read_into_slot(workspace, path))
-            .map_err(|denial| format!("refused: {denial}"))?;
-        if was_unread {
-            opened.push(slot.clone());
+    policy.capture_files(|policy, _capture| {
+        let mut opened = Vec::new();
+        for slot in wanted {
+            let was_unread = slots.is_unread(slot);
+            policy
+                .materialise(tool, slot, slots, |path| read_into_slot(workspace, path))
+                .map_err(|denial| format!("refused: {denial}"))?;
+            if was_unread {
+                opened.push(slot.clone());
+            }
         }
-    }
 
-    if opened.is_empty() {
-        return Ok(Vec::new());
-    }
-    let named = policy.names_for_display(slots);
-    Ok(opened
-        .iter()
-        .map(|slot| {
-            named
-                .iter()
-                .find(|(id, _, _)| id == slot)
-                .map(|(slot, label, path)| format!("{slot}{label}:{path}"))
-                .unwrap_or_else(|| slot.to_string())
-        })
-        .collect())
+        if opened.is_empty() {
+            return Ok(Vec::new());
+        }
+        let named = policy.names_for_display(slots);
+        Ok(opened
+            .iter()
+            .map(|slot| {
+                named
+                    .iter()
+                    .find(|(id, _, _)| id == slot)
+                    .map(|(slot, label, path)| format!("{slot}{label}:{path}"))
+                    .unwrap_or_else(|| slot.to_string())
+            })
+            .collect())
+    })
 }
 
 /// The path a call is about, from `path` or from a reference to a file.
@@ -3107,16 +3106,15 @@ fn write_file<S: Sink, C: Confirmer>(
         let proof = policy.authorise_display_release("proposed write");
         body.clone().declassify(&proof)
     };
-    let authority = policy.file_authority();
-    let (existing, existing_trusted, approved_revision) = {
-        let _capture = authority.capture();
-        let key = workspace.trust_key(&proposed_path);
-        (
-            workspace.peek_for_review(&proposed_path),
-            !policy.read_is_quarantined(&key),
-            authority.revision_of(&key),
-        )
-    };
+    let (existing, existing_trusted, approved_revision) =
+        policy.capture_files(|policy, capture| {
+            let key = workspace.trust_key(&proposed_path);
+            (
+                workspace.peek_for_review(&proposed_path),
+                !policy.read_is_quarantined(&key),
+                capture.revision_of(&key),
+            )
+        });
     // Read before the write, since afterwards the age is the age of this write.
     let replaced_age = workspace.age_of(&proposed_path);
     let intent = if existing.is_some() {
@@ -4361,14 +4359,12 @@ fn run<S: Sink, C: Confirmer>(
     policy.endorse_plan(&plan);
 
     let authority = policy.file_authority();
-    let capture = authority.capture();
-    let started_revision = authority.revision();
-    let label = match policy.before_plan(&plan) {
+    let (started_revision, checked) =
+        policy.capture_files(|policy, capture| (capture.revision(), policy.before_plan(&plan)));
+    let label = match checked {
         Ok(label) => label,
         Err(denial) => return problem(format!("refused: {denial}")),
     };
-
-    drop(capture);
 
     // The tree comes with the line wherever the line is said, and only where it is not the root.
     // The directory persists across calls, so a planner whose earlier call has been summarised away
@@ -4464,19 +4460,20 @@ fn run<S: Sink, C: Confirmer>(
             if effects.contains_key(&key) {
                 return Ok(());
             }
-            let _capture = authority.capture();
-            let prior = if !policy.read_is_quarantined(&key) {
-                bravebot_core::label::Integrity::Trusted
-            } else {
-                bravebot_core::label::Integrity::Untrusted
-            };
-            let effect = _capture.begin(&key).ok_or_else(|| {
-                crate::exec::ExecError::Io(
-                    "another file effect is still writing this destination".to_string(),
-                )
-            })?;
-            effects.insert(key, (effect, prior));
-            Ok(())
+            policy.capture_files(|policy, capture| {
+                let prior = if !policy.read_is_quarantined(&key) {
+                    bravebot_core::label::Integrity::Trusted
+                } else {
+                    bravebot_core::label::Integrity::Untrusted
+                };
+                let effect = capture.begin(&key).ok_or_else(|| {
+                    crate::exec::ExecError::Io(
+                        "another file effect is still writing this destination".to_string(),
+                    )
+                })?;
+                effects.insert(key, (effect, prior));
+                Ok(())
+            })
         },
     );
     // A proof about inputs before execution cannot label output captured beside a write.
