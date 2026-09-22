@@ -823,6 +823,13 @@ elapsed-minutes = { $minutes }m { $seconds }s
 # Beside a figure already labelled in tokens, so the unit is not repeated.
 indicator-tokens-read = ↓ { $tokens } tokens
 indicator-tokens-written = ↑ { $tokens }
+# Said while a confined check reads quarantined content, before any of it may be read. The count
+# is what the check was given, which is the one thing that predicts how long it will take. Not a
+# word about what it decided: that reaches a person on the prompt and nothing else.
+indicator-checking = { $lines ->
+    [one] Checking { $lines } line
+   *[other] Checking { $lines } lines
+    }
 # Abbreviated counts, already rounded to one place.
 tokens-thousands = { $thousands }k
 tokens-millions = { $millions }M

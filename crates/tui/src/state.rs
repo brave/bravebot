@@ -1091,6 +1091,13 @@ pub struct Session {
     /// Cleared between turns. `None` before the first request goes out, which is the only
     /// moment the generic word is all there is to say.
     pub phase: Option<Phase>,
+    /// How many lines the check in flight was given, while one is in flight.
+    ///
+    /// Separate from [`Session::phase`] because a check is not a phase of the turn: it runs inside
+    /// a tool call, the phase the round is in does not change while it runs, and it ends at a
+    /// moment of its own. A phase is replaced by the next phase, and the moment this has to stop
+    /// being drawn is the moment before a prompt is put up, which no phase is announced at.
+    checking: Option<usize>,
     /// The points this session can be put back to, oldest first.
     ///
     /// Private, because the depth and the budget hold over the whole list rather than over any
@@ -1331,6 +1338,7 @@ impl Session {
             progress: Default::default(),
             todos: Vec::new(),
             phase: None,
+            checking: None,
             running: None,
             queued: Vec::new(),
             looping: None,
@@ -1493,10 +1501,19 @@ impl Session {
 
     /// What the indicator should call what is happening, most specific first.
     ///
-    /// A call in flight is the most immediate answer, then the task the model says it is on,
+    /// A check in flight is the most immediate answer, then the task the model says it is on,
     /// then the phase it is waiting in. `None` only before the first request goes out, when
     /// there is genuinely nothing to say yet and the turn's own word is all there is.
     fn what_is_happening(&self) -> Option<String> {
+        // A check first, and ahead of every phase: it is a whole model call inside the tool call
+        // on the row above, so the round's own word is the one thing here that is not what the
+        // session is waiting on. With auto-vetting on and a safe verdict no prompt is ever drawn
+        // for it either, so without this the two words on that row are the whole of what a person
+        // sees for the whole wait.
+        if let Some(lines) = self.checking {
+            return Some(t!(indicator_checking, lines = lines).to_string());
+        }
+
         // Only the phases that say something a person cannot see elsewhere. Planning is the
         // first call, before any line has appeared, and reconnecting is a pause that looks
         // exactly like thinking and is not: nothing is being worked out and what the model had
@@ -1771,6 +1788,7 @@ impl Session {
         self.progress = Default::default();
         self.todos.clear();
         self.phase = None;
+        self.checking = None;
         self.running = None;
         self.started = None;
         self.scroll = 0;
@@ -1843,6 +1861,20 @@ impl Session {
         // sent afresh. Either way what was on the screen belongs to a reply that is over or to
         // one that has been thrown away, so the tail starts empty.
         self.streaming.clear();
+    }
+
+    /// Record that a check is running over this many lines.
+    ///
+    /// The tail is left alone, unlike [`Session::set_phase`]: a check runs in the middle of a
+    /// round, so the reply the round has written so far is still the reply, and clearing it here
+    /// would take a visible answer off the screen because a tool call went to a model.
+    pub fn checking(&mut self, lines: usize) {
+        self.checking = Some(lines);
+    }
+
+    /// Record that the check is over.
+    pub fn checked(&mut self) {
+        self.checking = None;
     }
 
     /// Add what the model has written since the last frame to the reply taking shape.
@@ -4539,6 +4571,7 @@ impl Session {
         self.status = Status::Idle;
         self.started = None;
         self.phase = None;
+        self.checking = None;
         self.running = None;
         // A prompt is English and a command line is not, so the line coming back must not land
         // behind a marker that would run it. Belt and braces with the guard in
@@ -5698,6 +5731,7 @@ impl Session {
         self.written = 0;
         self.progress = Default::default();
         self.phase = None;
+        self.checking = None;
         self.running = None;
         self.started = Some(Instant::now());
         prompt
@@ -5721,6 +5755,7 @@ impl Session {
             u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
         self.started = None;
         self.phase = None;
+        self.checking = None;
         self.running = None;
         self.streaming.clear();
     }
@@ -5954,6 +5989,7 @@ impl Session {
         self.status = Status::Working;
         self.back_to_the_tail();
         self.phase = None;
+        self.checking = None;
         self.running = None;
         self.started = Some(Instant::now());
     }
@@ -5982,6 +6018,7 @@ impl Session {
         let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.started = None;
         self.phase = None;
+        self.checking = None;
         self.running = None;
         self.tokens += tokens;
         // Zero before the first turn, which is the leading entry: whatever is spent there is spent
@@ -6011,6 +6048,7 @@ impl Session {
         let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.started = None;
         self.phase = None;
+        self.checking = None;
         self.running = None;
         self.tokens += tokens;
         // To the leading entry before the first turn, for the reason an aside is.
@@ -11460,6 +11498,53 @@ mod tests {
             assert_eq!(s.indicator().expect("working").verb, "Planning");
             s.set_phase(Phase::Reconnecting);
             assert_eq!(s.indicator().expect("working").verb, "Reconnecting");
+        }
+
+        /// A check takes it from every phase, which is the whole point of the pair. The phase the
+        /// round is in does not change while a check runs, so a session waiting on a confined
+        /// model call reads as one waiting on the round it is in the middle of.
+        #[test]
+        fn a_running_check_names_the_indicator_ahead_of_the_phase() {
+            let mut s = working();
+            s.set_phase(Phase::Planning);
+            s.checking(3);
+            assert_eq!(s.indicator().expect("working").verb, "Checking 3 lines");
+        }
+
+        /// And gives it back. The word is drawn while the status is Working, which a prompt about
+        /// the verdict does not change, so a label with no end would still be claiming a check was
+        /// running with the question about what it found already on the screen.
+        #[test]
+        fn a_check_that_is_over_gives_the_word_back_to_the_phase() {
+            let mut s = working();
+            s.set_phase(Phase::Planning);
+            s.checking(3);
+            s.checked();
+            assert_eq!(s.indicator().expect("working").verb, "Planning");
+        }
+
+        /// A check runs in the middle of a round, not at the top of one, so what the round has
+        /// written so far is still the reply. Clearing the tail here would take a visible answer
+        /// off the screen because a tool call went to a model.
+        #[test]
+        fn a_check_leaves_what_the_round_has_written() {
+            let mut s = working();
+            s.streaming("half an answer");
+            s.checking(3);
+            assert!(
+                !s.streaming.is_empty(),
+                "a check wiped the reply the round had written"
+            );
+        }
+
+        /// A check whose end was never heard must not outlive the turn: nothing after this draws
+        /// it, and the next turn would open claiming a check nobody started was running.
+        #[test]
+        fn a_finished_turn_leaves_no_check_running() {
+            let mut s = working();
+            s.checking(3);
+            s.complete("done", Vec::new(), 0);
+            assert!(s.checking.is_none(), "a check outlived the turn");
         }
 
         /// One turn's calls must not appear under the next one's prompt.

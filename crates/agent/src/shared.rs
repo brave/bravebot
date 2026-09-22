@@ -207,6 +207,8 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn landed(&mut self, landing: Landing);
         fn tool_started(&mut self, activity: Activity);
         fn tool_finished(&mut self, activity: Activity);
+        fn check_started(&mut self, lines: usize);
+        fn check_finished(&mut self);
         fn interjected(&mut self, said: String);
         fn delegate_started(&mut self, delegation: Delegation);
         fn delegate_waiting(&mut self, delegate: DelegateId);
