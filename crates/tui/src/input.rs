@@ -112,6 +112,25 @@ impl Input {
 /// and a very long burst arrives as a few pastes rather than one.
 const MOST_IN_A_RUN: usize = 8192;
 
+/// The fewest characters waiting together that are read as a program's rather than a person's.
+///
+/// Two was the first answer and it was the wrong one. The window this measures is not how fast
+/// somebody typed but how long the reader was away, which is a frame at best and a long transcript's
+/// redraw at worst, so two characters of ordinary typing land together often. The cost of being wrong
+/// that way falls on the person: their own line is read as a program's and will not send until they
+/// touch it again.
+///
+/// Eight is above what a hand produces in one of those windows. A frame is 120ms and even half a
+/// second of redraw carries five characters at a hundred and twenty words a minute, so eight asks for
+/// a rate no hand sustains. It is well below what a write carries: the line an editor sends to
+/// activate a virtualenv is fifty characters before it is split, and both halves of the split
+/// recorded in #403 are above this.
+///
+/// What raising it costs is the write that arrives in pieces smaller than this, which is bought back
+/// by [`CONTINUATION`] only once a first piece has cleared the bar. A writer that keeps every piece
+/// under eight is not caught, and that is the same limit as the writer who paces itself.
+const FEWEST_IN_A_BURST: usize = 8;
+
 /// How long after words another program typed a key still belongs to them.
 ///
 /// A write does not always arrive as one read. `terminal.sendText` in VS Code crosses the extension
@@ -271,10 +290,10 @@ fn gather() -> io::Result<()> {
 /// Separated from the reading so it can be tested without a terminal, which is the whole of the
 /// decision this module exists to make.
 ///
-/// Two or more characters waiting together is the test. One character is a keystroke, however it
-/// got there, because that is what a person pressing a key looks like and there is nothing to tell
-/// the two apart. Two is not: it asks for a keyboard held down long enough to fill the buffer
-/// between one read and the next, and a program writing a command line clears it in one write.
+/// [`FEWEST_IN_A_BURST`] characters waiting together is the test. Fewer is a person typing, because
+/// what lands in one read is decided by how long the reader was away rather than by how fast anybody
+/// typed, and a hand fills that window with a character or two. A program writing a command line
+/// fills it with the whole line.
 ///
 /// A run that carries no characters at all is not a paste whatever its length. Key autorepeat
 /// behind a slow redraw looks exactly like a burst of `Down`, and folding that into a paste of
@@ -306,7 +325,7 @@ pub(crate) fn resolve(run: Vec<KeyEvent>, continuing: bool) -> Vec<Input> {
         return vec![Input::TypedIn(carried)];
     }
 
-    if characters(&run) < 2 {
+    if characters(&run) < FEWEST_IN_A_BURST {
         return run
             .into_iter()
             .map(|key| Input::Terminal(TermEvent::Key(key)))
@@ -400,13 +419,28 @@ mod tests {
         );
     }
 
+    /// What the threshold is for. Two characters landing together is a person typing during a frame,
+    /// and reading that as a program's words cost them their line: it would not send until they
+    /// touched it again, and the interface told them another program had written it.
+    #[test]
+    fn a_hands_worth_of_characters_is_still_typing() {
+        for line in ["no", "hi", "yes", "work", "cargo t"] {
+            assert!(
+                resolve(typed(line), false)
+                    .iter()
+                    .all(|taken| matches!(taken, Input::Terminal(TermEvent::Key(_)))),
+                "{line:?} was read as words a program typed"
+            );
+        }
+    }
+
     /// The half that decides whether a question can be answered by a program. Every prompt in
     /// this crate discards an event that is not a key, so a run resolving to one paste cannot
     /// reach `answer_for` at all, and a run resolving to keys can.
     #[test]
-    fn a_run_carrying_two_characters_reaches_nothing_that_reads_keys() {
+    fn a_run_carrying_a_burst_reaches_nothing_that_reads_keys() {
         assert!(
-            resolve(typed("no"), false)
+            resolve(typed("no thanks"), false)
                 .iter()
                 .all(|taken| !matches!(taken, Input::Terminal(TermEvent::Key(_))))
         );
@@ -437,11 +471,11 @@ mod tests {
     /// of which anybody asked for.
     #[test]
     fn a_chord_inside_a_burst_is_dropped_rather_than_obeyed() {
-        let mut run = typed("de");
+        let mut run = typed("deactiv");
         run.push(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         run.push(key(KeyCode::Esc));
-        run.extend(typed("f"));
-        assert_eq!(pasted(run).as_deref(), Some("def"));
+        run.extend(typed("ate"));
+        assert_eq!(pasted(run).as_deref(), Some("deactivate"));
     }
 
     /// Asking for disambiguated keys asks for releases as well, so the events for one typed
@@ -556,10 +590,10 @@ mod tests {
     /// what lands in the box would not be what was written.
     #[test]
     fn a_burst_keeps_the_newlines_and_tabs_it_carried() {
-        let mut run = typed("a");
+        let mut run = typed("first");
         run.push(key(KeyCode::Enter));
         run.push(key(KeyCode::Tab));
-        run.extend(typed("b"));
-        assert_eq!(pasted(run).as_deref(), Some("a\n\tb"));
+        run.extend(typed("second"));
+        assert_eq!(pasted(run).as_deref(), Some("first\n\tsecond"));
     }
 }

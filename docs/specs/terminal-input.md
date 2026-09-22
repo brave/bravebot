@@ -1539,9 +1539,18 @@ person than whatever error put it there.
 
 A terminal delivers one byte stream and says nothing about who wrote it, so a person at a keyboard
 and another program holding the other end of the pty arrive identically. **A run of keys that were
-all waiting together is read as words another program typed rather than as typing.** The test is two
-or more characters available in the same read: one character is a keystroke however it got there, and
-two asks for a keyboard that filled the buffer between one read and the next.
+all waiting together is read as words another program typed rather than as typing.** The test is eight
+or more characters available in the same read. Fewer is a person typing: what lands in one read is
+decided by how long the reader was away rather than by how fast anybody typed, and a frame or a long
+transcript's redraw carries a character or two of ordinary typing. A program writing a command line
+carries the whole of it, and the line an editor sends to activate a virtualenv is fifty characters
+before it is split.
+
+**Two was the first answer here and it was wrong.** It put the bar at what a hand reaches during one
+frame, so a person's own line was read as a program's, would not send until they touched it again, and
+was announced to them as something another program had written. The cost of being wrong in that
+direction falls on the person and nothing warns them, which is worse than the cost of being wrong in
+the other, where a question stays on the screen.
 
 Such a run is not a paste and is not recorded as one. A paste came off the clipboard, which a person
 put there, and the terminal marks it: bracketed paste wraps it in markers the terminal parses before
@@ -1622,7 +1631,8 @@ the rung that ends a session asks for two presses that did not arrive together
 terminal is a person's own channel and not a route untrusted content travels.
 
 `verified-by: bravebot_tui::input::a_line_that_arrived_all_at_once_is_a_paste`
-`verified-by: bravebot_tui::input::a_run_carrying_two_characters_reaches_nothing_that_reads_keys`
+`verified-by: bravebot_tui::input::a_run_carrying_a_burst_reaches_nothing_that_reads_keys`
+`verified-by: bravebot_tui::input::a_hands_worth_of_characters_is_still_typing`
 `verified-by: bravebot_tui::input::one_character_on_its_own_stays_a_key`
 `verified-by: bravebot_tui::input::a_run_of_keys_carrying_no_text_is_still_keys`
 `verified-by: bravebot_tui::input::a_chord_inside_a_burst_is_dropped_rather_than_obeyed`
