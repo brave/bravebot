@@ -86,6 +86,29 @@ pub fn key_of(event: &TermEvent) -> Option<KeyEvent> {
     }
 }
 
+/// The character a key stands for, or `None` for a key that stands for none.
+///
+/// A mapping and nothing more: it decides nothing about who pressed the key and withholds nothing.
+/// A caller that refused to act on a key can use this to keep what the key spelled, so words another
+/// program typed can be shown to somebody rather than disappearing.
+///
+/// Enter is a newline and Tab a tab, because a command line written into a terminal carries both and
+/// dropping them would join two lines into one. Every chord stands for no text: what a program wrote
+/// is words, and a chord inside words was not typed by anybody.
+pub fn text_of(key: &KeyEvent) -> Option<char> {
+    use ratatui::crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    let bare = (key.modifiers - KeyModifiers::SHIFT).is_empty();
+    match key.code {
+        KeyCode::Char(c) if bare => Some(c),
+        KeyCode::Enter if bare => Some('\n'),
+        KeyCode::Tab if bare => Some('\t'),
+        _ => None,
+    }
+}
+
 /// Whether an event is waiting, here or at the terminal.
 ///
 /// Answers for the buffer first, because an event already taken is an event waiting: a caller

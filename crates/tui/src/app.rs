@@ -2512,10 +2512,16 @@ fn event_loop(
         Named::Opening(names) => named_to_open(&mut session, &workspace, &names),
         Named::Asking(names) => {
             let paths = named_to_open(&mut session, &workspace, &names);
-            match crate::trust_prompt::ask_named(terminal, &paths) {
+            // Carried for the reason the working directory's own question carries it.
+            let mut carried = String::new();
+            let accepted = match crate::trust_prompt::ask_named(terminal, &paths, &mut carried) {
                 Some(accepted) => accepted,
                 None => return Ok(left_behind(&stored)),
+            };
+            if !carried.is_empty() {
+                session.paste_text(&carried);
             }
+            accepted
         }
     };
     open_named(&mut session, &mut workspace, &mut trust, &opening);
@@ -3889,7 +3895,17 @@ fn opening_trust(
 ) -> Option<(TrustStore, Whence)> {
     let (trust, whence) = match opening_for(beginning, session.permission_mode(), root) {
         Opening::Settled(trust, whence) => (trust, whence),
-        Opening::Ask => (crate::trust_prompt::ask(terminal, root)?, Whence::Asked),
+        Opening::Ask => {
+            // What the question refused to answer on, which is words another program typed at the
+            // terminal while it was up. Put in the box rather than dropped, so a person who came back
+            // to a question still waiting and a virtualenv activated can see what did it (#403).
+            let mut carried = String::new();
+            let trust = crate::trust_prompt::ask(terminal, root, &mut carried)?;
+            if !carried.is_empty() {
+                session.paste_text(&carried);
+            }
+            (trust, Whence::Asked)
+        }
     };
 
     if !trust.is_trusted(".") {

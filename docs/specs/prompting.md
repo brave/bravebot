@@ -238,9 +238,17 @@ on the screen, and a person still has to press it with the bytes in front of the
 <a id="PROMPT-7"></a>
 ### PROMPT-7: declining is not cancelling
 
-Saying no to a write does not stop the turn; Ctrl-C refuses it and does. Leaving at a question a
-session opens with ends the session and opens nothing, and only Ctrl-C leaves. **It takes two presses
-there**, and neither from a key that arrived with others: leaving before a session begins is the one
+Saying no to a write does not stop the turn; Ctrl-C refuses it and does. **A question a session opens
+with is answered by a key that arrived on its own, and by no other.** A terminal cannot say who wrote a
+byte, but it can say what was waiting together ([INPUT-34](terminal-input.md#INPUT-34)), and a person
+cannot fill the buffer between one read and the next: one event waiting is a keystroke and several are
+a write. The line an editor types to activate a virtualenv spells an `n` on its way past, and the
+question used to take it. What the question refuses is not dropped: the characters are carried to the
+box, so somebody who finds a question still waiting and their virtualenv activated can read what did
+it, rather than being left to join the two up themselves.
+
+Leaving at such a question ends the session and opens nothing, and only Ctrl-C leaves. **It takes two
+presses there**, and neither from a key that arrived with others: leaving before a session begins is the one
 outcome nothing undoes, and an interrupt is a single byte another program can write into the terminal,
 which an editor activating a virtualenv does ahead of the line it types
 ([INPUT-4](terminal-input.md#INPUT-4) keeps the same rule for the same reason).
@@ -251,6 +259,9 @@ which an editor activating a virtualenv does ahead of the line it types
 `verified-by: bravebot_tui::confirm::ctrl_c_refuses_the_write_and_stops_the_turn`
 `verified-by: bravebot_tui::confirm::only_the_interrupt_stops_the_turn_at_a_run_prompt`
 `verified-by: bravebot_tui::trust_prompt::ctrl_c_leaves_on_the_second_press`
+`verified-by: bravebot_tui::trust_prompt::a_line_another_program_typed_answers_nothing`
+`verified-by: bravebot_tui::trust_prompt::a_press_of_its_own_still_answers`
+`verified-by: bravebot_tui::trust_prompt::what_the_question_refuses_is_carried_for_the_box`
 `verified-by: bravebot_tui::trust_prompt::one_interrupt_another_program_wrote_closes_nothing`
 `verified-by: bravebot_tui::trust_prompt::two_interrupts_that_arrived_together_close_nothing`
 `verified-by: bravebot_tui::trust_prompt::only_ctrl_c_leaves`

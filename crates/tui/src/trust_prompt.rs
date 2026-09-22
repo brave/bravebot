@@ -55,8 +55,14 @@ pub enum Answer {
 ///
 /// `None` is the third answer: the user pressed Ctrl-C, which is neither trusting nor declining
 /// but a request to leave, so no session begins at all.
-pub fn ask<B: Backend>(terminal: &mut Terminal<B>, directory: &Path) -> Option<TrustStore> {
-    let answer = ask_one(terminal, |frame, offered| draw(frame, directory, offered));
+pub fn ask<B: Backend>(
+    terminal: &mut Terminal<B>,
+    directory: &Path,
+    carried: &mut String,
+) -> Option<TrustStore> {
+    let answer = ask_one(terminal, carried, |frame, offered| {
+        draw(frame, directory, offered)
+    });
 
     trust_for(answer, directory)
 }
@@ -73,9 +79,10 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, directory: &Path) -> Option<T
 pub fn ask_named<B: Backend>(
     terminal: &mut Terminal<B>,
     directories: &[String],
+    carried: &mut String,
 ) -> Option<Vec<String>> {
     accepted(directories, |directory| {
-        ask_one(terminal, |frame, offered| {
+        ask_one(terminal, carried, |frame, offered| {
             draw_named(frame, directory, offered)
         })
     })
@@ -144,6 +151,7 @@ fn trusting_the_workspace(directory: &Path) -> TrustStore {
 /// Block until the user answers.
 fn ask_one<B: Backend>(
     terminal: &mut Terminal<B>,
+    carried: &mut String,
     mut draw_it: impl FnMut(&mut ratatui::Frame, bool),
 ) -> Answer {
     let mut offered_to_leave = false;
@@ -173,6 +181,15 @@ fn ask_one<B: Backend>(
                     Some(key) if key.kind != event::KeyEventKind::Press => continue,
                     Some(key) => match answer_for(key, offered_to_leave, arrived_alone) {
                         Response::Answer(answer) => return answer,
+                        // Kept rather than dropped. What this refused to answer on was a run of keys
+                        // another program wrote, and words that vanish leave a person with no account
+                        // of what just happened: the question stayed up and their virtualenv
+                        // activated, with nothing on the screen joining the two. Carried to the box,
+                        // where they can read it and decide (#403).
+                        Response::Nothing if !arrived_alone => {
+                            carried.extend(input::text_of(&key));
+                            continue;
+                        }
                         Response::Offer => {
                             offered_to_leave = true;
                             continue;
@@ -207,6 +224,19 @@ fn answer_for(key: KeyEvent, offered_to_leave: bool, arrived_alone: bool) -> Res
             KeyCode::Char('c') => Response::Offer,
             _ => Response::Nothing,
         };
+    }
+
+    // **No answer at all from a key that arrived with others**, which is the whole of what stops a
+    // program answering this question. A terminal cannot say who wrote a byte, but it can say what
+    // was waiting together, and a person cannot fill the buffer between one read and the next: one
+    // event waiting is a keystroke, and several are a write. The line an editor types to activate a
+    // virtualenv spells an `n` on its way past (#403), and the question used to take it.
+    //
+    // This is asked here rather than by the reader, so nothing is withheld from anybody: a person's
+    // own typing and a person's own paste arrive untouched and are answered by whatever reads them.
+    // What the reader supplies is the fact, and what this does is decline to grant on it.
+    if !arrived_alone {
+        return Response::Nothing;
     }
 
     match key.code {
@@ -387,6 +417,69 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
+
+    /// The reported failure, at the question it reaches first. An editor activating a virtualenv
+    /// types `source .../env/bin/activate` into the terminal it opened, and every character of it
+    /// arrives in one read: the `n` in the path used to answer this question, so the directory was
+    /// settled by a program and the rest of the path went into the box (#403).
+    #[test]
+    fn a_line_another_program_typed_answers_nothing() {
+        for c in " source /Users/me/project/env/bin/activate\r".chars() {
+            let key = match c {
+                '\r' => KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                c => KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+            };
+            // Arriving with the rest of the line, which is what one read of a write looks like.
+            assert_eq!(
+                answer_for(key, false, false),
+                Response::Nothing,
+                "{c:?} out of a written line answered the question"
+            );
+        }
+    }
+
+    /// And a person's own press still answers it, which is the half that has to keep working.
+    #[test]
+    fn a_press_of_its_own_still_answers() {
+        assert_eq!(
+            answer_for(
+                KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+                false,
+                true
+            ),
+            Response::Answer(Answer::Trust)
+        );
+        assert_eq!(
+            answer_for(
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+                false,
+                true
+            ),
+            Response::Answer(Answer::Decline)
+        );
+    }
+
+    /// What the question refuses is kept, not dropped. A line that vanished left a person with a
+    /// question still waiting and a virtualenv activated, and nothing on the screen joining the two.
+    #[test]
+    fn what_the_question_refuses_is_carried_for_the_box() {
+        let mut carried = String::new();
+        for c in " source /tmp/x/env/bin/activate".chars() {
+            let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+            // Arriving with the rest of the line, so the question answers nothing on it.
+            assert_eq!(answer_for(key, false, false), Response::Nothing);
+            carried.extend(crate::input::text_of(&key));
+        }
+        assert_eq!(carried, " source /tmp/x/env/bin/activate");
+    }
+
+    /// A chord inside those words is not carried, since what a program wrote is words and a chord in
+    /// them was pressed by nobody.
+    #[test]
+    fn a_chord_among_the_carried_words_is_left_out() {
+        let interrupt = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(crate::input::text_of(&interrupt), None);
+    }
 
     /// One key pressed at a question with nothing offered, arriving on its own.
     fn pressing(code: KeyCode) -> Response {
