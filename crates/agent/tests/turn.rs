@@ -14959,6 +14959,126 @@ fn two_delegates_work_at_the_same_time() {
     );
 }
 
+/// One credential store for the whole run, standing in for the wallet a turn opens.
+///
+/// Hands out a different value each time it is asked, so what was spent says which spend it was.
+/// A run that opened a wallet of its own would ask this one nothing; a run handed a copy of the
+/// batch would be given the first value a second time.
+#[derive(Default)]
+struct OneWallet {
+    handed: std::sync::Mutex<Vec<String>>,
+}
+
+impl bravebot_agent::shared::Spends for OneWallet {
+    fn spend_one(&self) -> Result<bravebot_aichat::SubscriptionCredential, String> {
+        let mut handed = self.handed.lock().expect("the wallet");
+        let value = format!("credential-{}", handed.len() + 1);
+        handed.push(value.clone());
+        Ok(bravebot_aichat::SubscriptionCredential {
+            cookie_name: "creds".to_string(),
+            cookie_value: value,
+        })
+    }
+}
+
+/// A build that knows a premium host, both hosts being the mock server, so a request that spends
+/// a credential is answered here rather than reaching the deployment that issued it.
+fn premium_config_for(endpoint: &str) -> Config {
+    Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.to_string()),
+        "BRAVE_AI_CHAT_PREMIUM_ENDPOINT" => Some(endpoint.to_string()),
+        _ => None,
+    })
+    .expect("config")
+}
+
+/// Everything the kernel settles about a delegate before it exists, for a reader asked one thing.
+fn seeded_reader(task: &str) -> bravebot_agent::delegate::Seeded {
+    let mut trail = RecordingSink::new();
+    let mut routing = bravebot_core::Routing::new();
+    routing.insert_trusted("task", "ask a delegate");
+    let mut policy = bravebot_core::policy::Policy::begin(
+        routing,
+        bravebot_core::policy::ReleasePlan::new(),
+        bravebot_core::capability::CapabilitySet::from_iter([
+            bravebot_core::capability::Capability::WebFetch,
+            bravebot_core::capability::Capability::FileRead,
+        ]),
+        &mut trail,
+    )
+    .expect("a policy")
+    .with_trust(trusting_the_workspace());
+
+    // Through the gate rather than assembled, so the delegate holds what a delegate holds: its
+    // kind's capabilities narrowed by the run's, and its kind's bound.
+    let spec = policy
+        .before_delegate(
+            bravebot_core::delegate::DelegateId::nth(1),
+            &bravebot_core::value::Labelled::new("reader".to_string(), Label::untrusted_public()),
+            &bravebot_core::value::Labelled::new(task.to_string(), Label::untrusted_public()),
+        )
+        .expect("a delegate the gate allows");
+    let seeded = bravebot_agent::delegate::seed(&policy, spec, None);
+    policy.finish();
+    seeded
+}
+
+/// PREM-5: the credential a delegate spends comes from the turn's wallet, and is the one after
+/// whatever the turn has already presented.
+///
+/// A spend is held in memory until the wallet is written back (PREM-6), so a delegate that opened
+/// a second wallet over the same file would read every credential the turn had spent as unspent
+/// and present the one the turn is presenting right now. The wallet here hands out a different
+/// value per call, so the two ways of getting this wrong are told apart: a delegate that opened
+/// its own asks this wallet nothing and its request goes out on the free tier, and a delegate
+/// handed a copy of the batch is given `credential-1` a second time.
+#[test]
+fn a_delegate_spends_the_wallet_the_turn_lent_it() {
+    let scratch = Scratch::new("delegate-one-wallet");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![(
+        "REPORT-BACK",
+        vec![reply_with("the delegate answered")],
+    )]);
+    let config = premium_config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    let wallet = OneWallet::default();
+    // The turn's own first round, made before it starts a delegate. What the delegate is offered
+    // afterwards is the question.
+    bravebot_agent::shared::Spends::spend_one(&wallet).expect("the turn spends first");
+
+    let mut sink = RecordingSink::new();
+    let ended = bravebot_agent::delegate::run(
+        &seeded_reader("REPORT-BACK"),
+        &config,
+        &egress,
+        &workspace,
+        None,
+        None,
+        None,
+        bravebot_agent::PermissionMode::Ask,
+        &bravebot_config::Attribution::default(),
+        &bravebot_core::cancel::Cancel::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        Some(&wallet),
+    );
+
+    assert!(
+        ended.delegated.is_ok(),
+        "the delegate never answered, so nothing it spent can be read"
+    );
+    assert_eq!(
+        *wallet.handed.lock().expect("the wallet"),
+        vec!["credential-1".to_string(), "credential-2".to_string()],
+        "the delegate's request did not spend the wallet the turn lent it"
+    );
+}
+
 /// A delegate that could not finish is reported as having failed, not as having answered. The
 /// line is the only thing telling a person their question was never answered, and one drawn the
 /// way a report is drawn says the opposite of what happened.
