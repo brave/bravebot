@@ -279,3 +279,35 @@ test('an untrusted write is marked on its container, and its remark cannot forge
   const trusted = draw(t.asked({ ...request, untrusted: false, remark: null }))
   assert.ok(!trusted.includes('untrusted'), `a vouched-for write is marked as one anyway:\n${trusted}`)
 })
+
+/**
+ * A failure is titled from the tag the agent sent, never from the words in the detail.
+ *
+ * The detail is prose: a service's own diagnostic, sometimes translated, sometimes quoting
+ * something a model wrote. The card used to match it against `/401|403|unauthoriz|credential/`
+ * and friends whenever no category arrived, which is the one thing the wire protocol forbids in
+ * as many words, and is how a message that merely mentions a refusal becomes one.
+ */
+test('a failure card reads the category and never the wording of the detail', () => {
+  const { ErrorCard } = load('src/renderer/components/ErrorCard.tsx')
+  const draw = (props) => renderToStaticMarkup(React.createElement(ErrorCard, props))
+
+  // The tag decides, and a detail whose prose points the other way does not move it.
+  assert.match(draw({ category: 'rate-limited', detail: 'unauthorized: bad credential' }), /<strong>The provider is busy<\/strong>/)
+  assert.match(draw({ category: 'cancelled', detail: 'HTTP 429 from the gateway' }), /<strong>Task stopped<\/strong>/)
+
+  // With no tag there is nothing to read, so the card says the unknown-category thing rather
+  // than guessing from the sentence. These four details are the four the sniffing matched.
+  for (const detail of [
+    'unauthorized: the credential was rejected (401)',
+    'HTTP 429: rate limit reached',
+    'the write was cancelled by the checker',
+    'payment required: 402, no credit balance',
+  ]) {
+    const drawn = draw({ detail })
+    assert.match(drawn, /<strong>The turn could not finish<\/strong>/, drawn)
+  }
+
+  // The detail is still shown, under the fold, which is where prose belongs.
+  assert.match(draw({ detail: 'unauthorized: the credential was rejected (401)' }), /unauthorized: the credential was rejected \(401\)/)
+})
