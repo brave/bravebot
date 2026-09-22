@@ -639,6 +639,9 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_aichat::models::a_row_whose_service_refused_a_level_reads_none_however_silent_the_roster`
 `verified-by: bravebot_aichat::models::a_gateway_model_that_does_not_take_the_effort_parameter_says_so`
 `verified-by: bravebot_aichat::models::a_gateway_that_states_no_parameters_is_not_taken_to_read_no_level`
+`verified-by: bravebot_cli::running::a_run_withholds_a_level_the_roster_says_the_model_does_not_read`
+`verified-by: bravebot_cli::running::a_run_sends_a_level_the_roster_says_the_model_reads`
+`verified-by: bravebot_cli::running::a_session_in_lines_withholds_a_level_the_roster_says_the_model_does_not_read`
 `verified-by: bravebot_tui::app::a_level_is_withheld_from_a_model_that_reads_none`
 `verified-by: bravebot_tui::app::a_level_a_model_cannot_use_is_kept_rather_than_forgotten`
 `verified-by: bravebot_tui::app::asking_for_a_level_a_model_cannot_use_says_so`

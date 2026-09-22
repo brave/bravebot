@@ -154,13 +154,25 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     };
 
-    // What compaction measures the conversation against. A session in lines opens no picker, so
-    // the model in force here is the stored one or the configured one, and this is the only place
-    // it can be looked up.
+    // What compaction measures the conversation against, and whether the model in force reads an
+    // effort level. A session in lines opens no picker, so the model in force here is the stored
+    // one or the configured one, and this is the only place either can be looked up.
     let named = model
         .clone()
         .unwrap_or_else(|| config.default_model.clone());
-    bravebot_tui::app::adopt_budget_for_model(&mut config, &named);
+    let reads_effort = bravebot_tui::app::adopt_listing_for_model(&mut config, &named);
+
+    // Said where a level was chosen and the model in force reads none, because a level charged for
+    // and discarded at the far end answers exactly like one that was honoured, so silence would
+    // leave somebody believing every turn of the session thought harder than it did. Said once,
+    // here, since neither the model nor the roster's answer about it can change while this runs.
+    //
+    // Nothing is said where no level was chosen: nothing was withheld from somebody who asked for
+    // none. What is recorded stays recorded either way, so the choice applies again the moment a
+    // model that reads one is in force (BACKEND-22).
+    if !reads_effort && bravebot_session::store::load_effort().is_some() {
+        asking.say(&t!(cli_notice, notice = t!(session_effort_not_read)));
+    }
 
     // Before the first prompt, so a browser opening and a code to type are not interleaved with a
     // turn. Not fatal: the turn goes ahead and fails with the backend's own account, which says
@@ -184,6 +196,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         attribution: settings.attribution().clone(),
         model,
         in_force: named,
+        reads_effort,
         complained: None,
         home,
         profile,
@@ -309,6 +322,12 @@ struct Running<'a> {
     /// The name of the model in force, whichever of the two it came from, which is what a
     /// substitution is measured against (CLI-10).
     in_force: String,
+    /// Whether the roster describing the model in force says it reads an effort level.
+    ///
+    /// Asked once, where the session is assembled, because that is where the listing is fetched
+    /// and this mode has no command that puts another model in force. A turn carries the recorded
+    /// level only where this is true (BACKEND-22).
+    reads_effort: bool,
     /// The last substitution said, so the same complaint is not repeated every turn.
     ///
     /// A session asks the same model over and over, so a substitution said once per turn is one
@@ -348,7 +367,10 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             // it, this session having taken none of the keyboard.
             .with_rounds(None)
             .with_model(self.model.clone())
-            .with_effort(bravebot_session::store::load_effort())
+            // Only where the roster describing the model in force says it is read. The choice
+            // itself is left on disk, so it applies again under a model that reads one
+            // (BACKEND-22).
+            .with_effort(bravebot_session::store::load_effort().filter(|_| self.reads_effort))
             .with_permissions(self.permissions.clone())
             .with_permission_mode(self.mode)
             .with_attribution(self.attribution.clone())

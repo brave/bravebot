@@ -10,8 +10,12 @@
 //! [CLI-6]: ../../../docs/specs/cli.md
 //! [INCOG-7]: ../../../docs/specs/incognito.md
 
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// A directory handed to a run as its own, removed when the test that made it ends.
 ///
@@ -46,6 +50,15 @@ impl Scratch {
         let directory = self.path.join(".bravebot");
         std::fs::create_dir_all(&directory).expect("create the state directory");
         std::fs::write(directory.join("settings.json"), json).expect("write settings");
+        self
+    }
+
+    /// Record an effort level under this home, as choosing one in the interface does, and return
+    /// this scratch for chaining.
+    fn with_effort(self, level: &str) -> Self {
+        let directory = self.path.join(".bravebot");
+        std::fs::create_dir_all(&directory).expect("create the state directory");
+        std::fs::write(directory.join("effort"), format!("{level}\n")).expect("write the level");
         self
     }
 }
@@ -868,5 +881,232 @@ fn forgetting_an_import_is_allowed_in_an_incognito_session() {
         !stored.exists(),
         "the credentials are still at {}",
         stored.display()
+    );
+}
+
+/// A gateway that answers one roster and keeps what was asked of it.
+///
+/// Stood up rather than mocked because the subject is what a *process* puts on the wire: the level
+/// a run sends is settled between reading the store and building the request, and nothing inside
+/// the program can be asked what a request carried.
+struct Gateway {
+    port: u16,
+    /// The body of each chat request, in the order they arrived. Rosters are not sent here: the
+    /// first thing to come out is the first request a turn made.
+    asked: mpsc::Receiver<String>,
+}
+
+/// Stand one up, offering a single model that takes `parameters` and nothing else.
+///
+/// Answers every chat request with a server error, which is the cheapest way to end the run: an
+/// invalid-request status is what a service refusing the level itself answers with, and would have
+/// the client drop the field on its own (BACKEND-22), so a test using one could not tell the two
+/// apart.
+fn a_gateway_listing(parameters: &str) -> Gateway {
+    let listing = format!(
+        r#"{{"data": [{{"id": "reasons-only", "context_length": 262144, "supported_parameters": {parameters}}}]}}"#
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, asked) = mpsc::channel();
+
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+
+            let mut content_length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            let _ = reader.read_exact(&mut body);
+
+            let answer = match request.starts_with("GET") {
+                true => http(200, &listing),
+                false => {
+                    let _ = sender.send(String::from_utf8_lossy(&body).into_owned());
+                    http(500, r#"{"error": {"message": "nothing here answers"}}"#)
+                }
+            };
+            let _ = stream.write_all(answer.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+
+    Gateway { port, asked }
+}
+
+/// One JSON response, framed.
+fn http(status: u16, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status} \r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// The settings that send a run to `gateway` and name its one model, with no `models` key, so the
+/// roster is the gateway's own answer rather than something the file stated.
+fn settings_for(gateway: &Gateway) -> String {
+    format!(
+        r#"{{
+            "provider": {{
+                "openrouter": {{
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {{"baseURL": "http://127.0.0.1:{}/api/v1"}}
+                }}
+            }},
+            "model": "openrouter/reasons-only"
+        }}"#,
+        gateway.port
+    )
+}
+
+/// The environment such a run needs: Brave's own endpoint is a port nothing listens on, so the
+/// roster under test is the gateway's and no request leaves the machine.
+const AT_A_GATEWAY: &[(&str, &str)] = &[
+    ("SERVICES_KEY_AICHAT", "a-services-key"),
+    ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+    ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+    ("OPENROUTER_API_KEY", "a-token"),
+];
+
+/// A level recorded in the store does not reach a request to a model whose listing states which
+/// parameters it takes and does not name the field (BACKEND-22).
+///
+/// A service that reads the field and one that discards it answer identically, so a level sent
+/// where the roster says it is not read is a charge somebody chose, was billed for, and did not
+/// get, with the interface reporting it as in force. The roster has already answered the question
+/// here, so there is nothing to guess.
+///
+/// A property of the process: the run reads the level off disk, fetches the listing, and builds
+/// the request, and only what went out on the wire says whether those were joined up.
+#[test]
+fn a_run_withholds_a_level_the_roster_says_the_model_does_not_read() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning"]"#);
+    let scratch = Scratch::new("cli-running-effort-withheld")
+        .with_settings(&settings_for(&gateway))
+        .with_effort("max");
+
+    let output = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "say something"]);
+
+    let (_, stderr) = said(&output);
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    assert!(
+        !asked.contains("reasoning_effort"),
+        "a level went to a model the listing says takes no such parameter: {asked}"
+    );
+    // The level is still a level somebody chose, and it applies again the moment a model that
+    // reads one is in force, so a run must not have spent it.
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".bravebot").join("effort"))
+            .expect("the recorded level")
+            .trim(),
+        "max",
+        "the run threw away the choice instead of withholding it"
+    );
+    assert!(
+        stderr.contains("reads no effort level"),
+        "the run withheld the level and said nothing about it: {stderr}"
+    );
+}
+
+/// And the same run against a listing that names the field sends it. The withholding is the roster
+/// answering the question, not a run deciding for itself: a rule that fired on every gateway would
+/// take the level away from every model that reads one, which nothing would report either.
+#[test]
+fn a_run_sends_a_level_the_roster_says_the_model_reads() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning", "reasoning_effort"]"#);
+    let scratch = Scratch::new("cli-running-effort-sent")
+        .with_settings(&settings_for(&gateway))
+        .with_effort("max");
+
+    let output = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "say something"]);
+
+    let (_, stderr) = said(&output);
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    assert!(
+        asked.contains(r#""reasoning_effort":"max""#),
+        "a level the listing names as read was withheld: {asked}"
+    );
+    assert!(
+        !stderr.contains("reads no effort level"),
+        "a model that reads a level was reported as reading none: {stderr}"
+    );
+}
+
+/// The session in lines settles the level the same way, against the listing it fetches at startup.
+///
+/// Its own test because it builds its own task, per prompt, out of its own state: the one-shot
+/// run's turn is assembled somewhere else entirely, and a fix to one says nothing about the other.
+///
+/// Linux only, because reaching this mode at all needs stdin to be a terminal (CLI-3) and
+/// `script(1)` is what supplies one. The argument form here is util-linux's; the BSD program of
+/// the same name takes another, and a run against the wrong one would fail for a reason that has
+/// nothing to do with what is under test.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_withholds_a_level_the_roster_says_the_model_does_not_read() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning"]"#);
+    let scratch = Scratch::new("cli-running-effort-withheld-in-lines")
+        .with_settings(&settings_for(&gateway))
+        .with_effort("max");
+
+    let mut session = Command::new("/usr/bin/script")
+        .env_clear()
+        .env("HOME", &scratch.path)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .envs(AT_A_GATEWAY.iter().copied())
+        // `-q` so the program's own lines are the whole of what comes back, `-e` so its status is,
+        // and `/dev/null` for the transcript nothing here reads.
+        .args([
+            "-qec",
+            &format!("{} --plain", env!("CARGO_BIN_EXE_bravebot")),
+            "/dev/null",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("a terminal for a session in lines");
+
+    // The startup trust question, then one prompt. Answered no: what is under test is what the
+    // turn sends, and a session that trusted this directory would send the same request.
+    session
+        .stdin
+        .take()
+        .expect("the session's input")
+        .write_all(b"n\nsay something\n")
+        .expect("write the script");
+    let output = session.wait_with_output().expect("the session ends");
+
+    let (said_to_the_person, _) = said(&output);
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the session reached the gateway");
+    assert!(
+        !asked.contains("reasoning_effort"),
+        "a level went to a model the listing says takes no such parameter: {asked}"
+    );
+    assert!(
+        said_to_the_person.contains("reads no effort level"),
+        "the session withheld the level and said nothing about it: {said_to_the_person}"
     );
 }

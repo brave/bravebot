@@ -3415,7 +3415,7 @@ fn adopt_budget_for_current_model(session: &mut Session, config: &mut Config) {
     session.note_model_reads_effort(reads_effort(&models, session.model()));
 }
 
-/// Take the budget for the model in force where there is no session to tell about it.
+/// Take on what the listing says about the model in force, where there is no session to hold it.
 ///
 /// A one-shot run puts a model in force without anybody picking one: the command line named it, or
 /// it was read back off disk from a session that has ended. The listing is the only place a window
@@ -3424,14 +3424,21 @@ fn adopt_budget_for_current_model(session: &mut Session, config: &mut Config) {
 /// at all, and one a wide window passes three quarters of the way through the conversation it could
 /// have held.
 ///
+/// Whether that model reads an effort level is the other thing the same listing answers, and it
+/// comes back rather than being kept, a run having nowhere to keep it. Answered here because the
+/// listing is fetched once: a caller asking separately would spend a second round trip on a
+/// question the first answer already held (BACKEND-22).
+///
 /// Silent, where [`adopt_budget_for_current_model`] notes the new budget, because a run has nobody
 /// watching and no transcript to put a line in. A listing that cannot be fetched leaves the default
-/// in place for the same reason it does in a session.
-pub fn adopt_budget_for_model(config: &mut Config, model: &str) {
+/// in place for the same reason it does in a session, and leaves the level to go out: neither is
+/// the roster saying otherwise.
+pub fn adopt_listing_for_model(config: &mut Config, model: &str) -> bool {
     let Ok(models) = list_models(config, Some(model)) else {
-        return;
+        return true;
     };
     config.adopt_window(advertised_window(&models, Some(model)));
+    reads_effort(&models, Some(model))
 }
 
 /// Whether the roster says `chosen` reads an effort level.
@@ -6089,7 +6096,7 @@ mod tests {
             bravebot_config::DEFAULT_CONTEXT_BUDGET
         );
 
-        adopt_budget_for_model(&mut config, "opus-arn");
+        adopt_listing_for_model(&mut config, "opus-arn");
 
         assert_eq!(
             config.context_budget,
@@ -6105,7 +6112,7 @@ mod tests {
     fn a_run_whose_model_no_roster_describes_keeps_the_default() {
         let mut config = a_config_with_a_named_roster();
 
-        adopt_budget_for_model(&mut config, "a-model-nothing-lists");
+        adopt_listing_for_model(&mut config, "a-model-nothing-lists");
 
         assert_eq!(
             config.context_budget,
