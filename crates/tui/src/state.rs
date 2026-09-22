@@ -4418,23 +4418,31 @@ impl Session {
     /// A marker the caret is covering goes first, before anything in front of it. The covering is
     /// visible: the whole of that marker is drawn under the caret, and a press that took the
     /// character beside it instead would take something the user could see was not selected.
+    ///
+    /// Nothing where there is nothing to delete, as [`Session::delete_word_before`] does at the
+    /// same caret: the press leaves the line, the history it is being browsed from, and any
+    /// selection standing over it exactly as they were.
     pub fn backspace(&mut self) {
+        // Read before anything is touched, because whether this press deletes at all is the
+        // question the guard below asks: a marker at the first column is under a caret there, and
+        // that press takes it.
+        let marker = self
+            .marker_at_caret()
+            .or_else(|| self.marker_before_caret());
+        // Nothing before the caret is where the marker appears to be, so this is the press that
+        // deletes it. Whatever follows stays and becomes an ordinary prompt: the mode is what was
+        // deleted, not the words. Leaving shell mode is not an edit of the line, so the offsets a
+        // selection is held as stay valid across it and the stretch stays on the screen.
+        if marker.is_none() && self.caret == 0 {
+            self.shell = false;
+            return;
+        }
         self.abandon_the_selection();
         self.history.leave();
-        if let Some((start, end)) = self
-            .marker_at_caret()
-            .or_else(|| self.marker_before_caret())
-        {
+        if let Some((start, end)) = marker {
             self.input.replace_range(start..end, "");
             self.caret = start;
             self.completion = 0;
-            return;
-        }
-        // Nothing before the caret is where the marker appears to be, so this is the press that
-        // deletes it. Whatever follows stays and becomes an ordinary prompt: the mode is what was
-        // deleted, not the words.
-        if self.caret == 0 {
-            self.shell = false;
             return;
         }
         self.move_left();
@@ -7950,6 +7958,32 @@ mod tests {
         s.backspace();
 
         assert_eq!(s.input, "abcxyz");
+        assert!(
+            s.pasted_named(&s.input).is_empty(),
+            "the picture outlived its marker"
+        );
+    }
+
+    /// A marker at the first column is covered by a caret there just as one further along the line
+    /// is, so that press takes it. Nothing ordinary is before that caret, and answering the column
+    /// alone would leave the marker standing under a press that looked like it had done nothing.
+    #[test]
+    fn backspace_on_a_marker_at_the_start_of_the_line_takes_the_marker() {
+        let mut s = session();
+        s.attach(picture(b"pixels"));
+        for c in "xyz".chars() {
+            s.type_char(c);
+        }
+        // Back over the three characters and then over the marker, which is crossed whole and
+        // leaves the caret at the first column with the marker under it.
+        for _ in 0.."xyz".len() + 1 {
+            s.move_left();
+        }
+        assert_eq!(s.caret(), 0, "the caret did not reach the first column");
+
+        s.backspace();
+
+        assert_eq!(s.input, "xyz");
         assert!(
             s.pasted_named(&s.input).is_empty(),
             "the picture outlived its marker"
@@ -12824,7 +12858,10 @@ mod tests {
     /// nothing at all to the line it was pressed over.
     #[test]
     fn a_press_that_changes_nothing_leaves_the_selection() {
-        let presses: [(&str, &str, usize, Press); 4] = [
+        let presses: [(&str, &str, usize, Press); 5] = [
+            ("Backspace at the start of the line", "hello", 0, |s| {
+                s.backspace()
+            }),
             ("Ctrl-U at the start of the line", "hello", 0, |s| {
                 s.delete_to_line_start()
             }),
