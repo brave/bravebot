@@ -112,13 +112,15 @@ pub fn ask_named<B: Backend>(
 /// began behind it is one nobody agreed to have.
 ///
 /// [PERM-14]: ../../docs/specs/permissions.md
-pub fn ask_granted<B: Backend>(terminal: &mut Terminal<B>, rules: &[Proposed]) -> Option<bool> {
+pub fn ask_granted<B: Backend>(
+    terminal: &mut Terminal<B>,
+    rules: &[Proposed],
+    carried: &mut String,
+) -> Option<bool> {
     granting(rules, || {
-        match terminal.draw(|frame| draw_granted(frame, rules)) {
-            Ok(_) => read_answer(),
-            // A terminal that cannot be drawn to cannot carry the question.
-            Err(_) => Answer::Decline,
-        }
+        ask_one(terminal, carried, |frame, offered| {
+            draw_granted(frame, rules, offered)
+        })
     })
 }
 
@@ -367,7 +369,7 @@ fn draw_named(frame: &mut ratatui::Frame, directory: &str, offered_to_leave: boo
 /// what makes this an acceptable gate at all: the answer is informed consent for specific grants
 /// rather than a general feeling about the tree, and a question that named none of them would be the
 /// defect wearing a consent story.
-fn draw_granted(frame: &mut ratatui::Frame, rules: &[Proposed]) {
+fn draw_granted(frame: &mut ratatui::Frame, rules: &[Proposed], offered_to_leave: bool) {
     let mut lines = vec![
         Line::from(Span::styled(
             t!(granted_rules_question),
@@ -398,7 +400,11 @@ fn draw_granted(frame: &mut ratatui::Frame, rules: &[Proposed]) {
             Style::default().fg(theme::muted()),
         )),
         Line::raw(""),
-        keys(t!(granted_rules_yes), t!(granted_rules_no)),
+        keys(
+            t!(granted_rules_yes),
+            t!(granted_rules_no),
+            offered_to_leave,
+        ),
     ]);
 
     panel(frame, t!(granted_rules_title), lines);
@@ -579,6 +585,11 @@ mod tests {
     /// One key pressed at a question with nothing offered, arriving on its own.
     fn pressing(code: KeyCode) -> Response {
         answer_for(KeyEvent::new(code, KeyModifiers::NONE), false, true)
+    }
+
+    /// The rules question as it is first drawn, with no interrupt pressed yet.
+    fn draw_granted_at_rest(frame: &mut ratatui::Frame, rules: &[Proposed]) {
+        draw_granted(frame, rules, false);
     }
 
     /// The question as it is first drawn, with no interrupt pressed yet.
@@ -832,7 +843,7 @@ mod tests {
             ),
             ("/work/.bravebot/settings.local.json", "Edit(src/**)"),
         ]);
-        let output = rendered(|frame| draw_granted(frame, &rules));
+        let output = rendered(|frame| draw_granted_at_rest(frame, &rules));
 
         assert!(
             output.contains("Bash(bash scripts/check.sh)"),
@@ -860,7 +871,7 @@ mod tests {
             "/work/.bravebot/settings.json",
             "Bash(bash scripts/check.sh)",
         )]);
-        let output = rendered(|frame| draw_granted(frame, &rules));
+        let output = rendered(|frame| draw_granted_at_rest(frame, &rules));
 
         // Wrapping can split a phrase across lines, so assert on short fragments.
         assert!(
@@ -881,7 +892,7 @@ mod tests {
             "/work/.bravebot/settings.json",
             "Bash(bash scripts/check.sh)",
         )]);
-        paints_the_themes_chrome(|frame| draw_granted(frame, &rules));
+        paints_the_themes_chrome(|frame| draw_granted_at_rest(frame, &rules));
     }
 
     /// The path is the whole of what the answer is about, and it is the one thing a settings file
@@ -949,7 +960,7 @@ mod tests {
             "Bash(bash scripts/check.sh)",
         )]);
         terminal
-            .draw(|frame| draw_granted(frame, &rules))
+            .draw(|frame| draw_granted_at_rest(frame, &rules))
             .expect("must not panic on a small area");
         assert!(
             drawn_on(&terminal).contains("This project"),

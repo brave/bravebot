@@ -3933,7 +3933,14 @@ fn grant_proposed_rules(
     if asking.is_empty() {
         return Some(granted);
     }
-    if !crate::trust_prompt::ask_granted(terminal, &asking)? {
+    // Carried for the reason the other two questions carry it: words another program typed while this
+    // was up are not dropped, they go to the box where somebody can read them.
+    let mut carried = String::new();
+    let granting = crate::trust_prompt::ask_granted(terminal, &asking, &mut carried);
+    if !carried.is_empty() {
+        session.paste_text(&carried);
+    }
+    if !granting? {
         return Some(granted);
     }
     if let Some(store) = grants {
