@@ -9,9 +9,14 @@ repository.workspace = true
 
 [dependencies]
 
+# The core dump limit, which is a Unix call rather than a Linux one. Already a dependency of
+# this crate on Linux, and in the lockfile as one: this widens which targets compile it and adds
+# nothing to the tree.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = { workspace = true }
-libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }

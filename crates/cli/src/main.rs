@@ -34,6 +34,14 @@ use std::process::ExitCode;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
+    // First of all, because it has to be true before the first credential is in memory and the
+    // signing key is unmasked while the command line is still being read. A crash after this
+    // writes no image of this process, which is where a key and a live session credential would
+    // otherwise be recovered from. Nothing is done about a platform that refuses: the remedy is
+    // outside the program, and quitting over it would protect the credential by making the tool
+    // unusable. See CRED-23.
+    let _ = bravebot_sandbox::crash::disable_core_dumps();
+
     // Before anything is printed, and exactly once: every later lookup reads what this settled
     // on. Nothing else in the tree consults the environment about a language.
     bravebot_i18n::init_from_environment();

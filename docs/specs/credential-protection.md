@@ -8,6 +8,7 @@ governs:
   - crates/config/src/provider.rs
   - crates/bedrock/src/credentials.rs
   - crates/core/src/credentials.rs
+  - crates/sandbox/src/crash.rs
 guards:
   - symbol: Secret::expose
 documented-by:
@@ -587,12 +588,11 @@ program does not own and cannot clear, so what is promised is the buffers it doe
 defend against a debugger attached to a live process, which is the same account and is answered by
 the authority holding the value instead.
 
-**What holds today.** The buffers a `Secret` owns. Every credential the backend configuration
-resolves is kept in one, the gateway token in a settings file included.
+**What holds today.** The core dumps, and the buffers a `Secret` owns. The process lowers its core
+dump limit to nothing before it reads the first credential, and every credential the backend
+configuration resolves is kept in a `Secret`, the gateway token in a settings file included.
 
-**What does not, and why.** Four things.
-
-The crash artifacts. Nothing turns off the core dump a crash leaves behind.
+**What does not, and why.** Three things.
 
 The pages are not kept off swap. Locking the buffers themselves needs the allocator that hands
 them out, which this program does not own, and the process-wide form, `mlockall` with
@@ -611,7 +611,10 @@ the one the parse produced on the way to it is not.
 
 `verified-by: bravebot_config::lib::scrubbing_overwrites_the_bytes_where_they_lie`
 `verified-by: bravebot_config::lib::scrubbing_counts_the_bytes_rather_than_the_characters`
+`verified-by: bravebot_sandbox::crash::disabling_core_dumps_leaves_the_kernel_unable_to_write_one`
+`verified-by: bravebot_sandbox::crash::disabling_core_dumps_does_not_lower_the_hard_limit`
 `verified-by: by-construction (the buffer a Secret owns is unreachable once the Secret is gone, so what a test can run is the scrub rather than the drop; the drop body is one call to the scrub the two tests above pin and does nothing else)`
+`verified-by: by-construction (both entry points that hold a credential, the terminal binary and the graphical front end's transport, call the core dump limit down as their first statement, before the argument vector is read and so before the signing key is unmasked)`
 
 <a id="CRED-24"></a>
 ### CRED-24: a credential never travels as a command-line argument
