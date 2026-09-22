@@ -141,15 +141,13 @@ fn worded(event: &Event) -> TrailLine {
             field,
             role,
             label,
-            allowed,
-        } => {
-            let text = format!("{tool}.{field} [{}] {label}", role_word(*role));
-            if *allowed {
-                TrailLine::passed(text)
-            } else {
-                TrailLine::blocked(text)
-            }
-        }
+            // The verdict is not read here. Whether a record is a refusal is the kernel's own
+            // answer, and this used to be one of the places that worked it out again.
+            allowed: _,
+        } => TrailLine {
+            text: format!("{tool}.{field} [{}] {label}", role_word(*role)),
+            blocked: event.is_refusal(),
+        },
     }
 }
 
@@ -165,17 +163,28 @@ pub fn recalled(event: &Value) -> Option<TrailLine> {
     })
 }
 
+/// Whether a stored record is a refusal.
+///
+/// The verdict the kernel wrote, where the file has one. A file written before the verdict was
+/// recorded carries only the shape, so that is the fallback, and it reads a `action_field` whose
+/// `allowed` cannot be read as a refusal: a check whose answer nobody can read is not one to draw
+/// as though it passed.
+fn refused(event: &Value) -> bool {
+    match event["refusal"].as_bool() {
+        Some(verdict) => verdict,
+        None => match event["kind"].as_str() {
+            Some("gate_blocked") => true,
+            Some("action_field") => event["allowed"].as_bool() != Some(true),
+            _ => false,
+        },
+    }
+}
+
 /// The words for a stored event, before the run that took it is put in front of them.
 fn read_back(event: &Value) -> Option<TrailLine> {
     let text = match event["kind"].as_str()? {
         "gate_passed" => format!("{}: {}", event["gate"].as_str()?, event["detail"].as_str()?),
-        "gate_blocked" => {
-            return Some(TrailLine::blocked(format!(
-                "{}: {}",
-                event["gate"].as_str()?,
-                event["reason"].as_str()?
-            )));
-        }
+        "gate_blocked" => format!("{}: {}", event["gate"].as_str()?, event["reason"].as_str()?),
         "observed" => format!(
             "{} produced {}",
             event["capability"].as_str()?,
@@ -198,24 +207,19 @@ fn read_back(event: &Value) -> Option<TrailLine> {
             label_text(&event["from"]),
             label_text(&event["to"])
         ),
-        "action_field" => {
-            let text = format!(
-                "{}.{} [{}] {}",
-                event["tool"].as_str()?,
-                event["field"].as_str()?,
-                event["role"].as_str()?,
-                label_text(&event["label"])
-            );
-            return Some(match event["allowed"].as_bool() {
-                Some(true) => TrailLine::passed(text),
-                // A missing or unreadable verdict is shown as a refusal, since a check whose
-                // answer nobody can read is not one to draw as though it passed.
-                _ => TrailLine::blocked(text),
-            });
-        }
+        "action_field" => format!(
+            "{}.{} [{}] {}",
+            event["tool"].as_str()?,
+            event["field"].as_str()?,
+            event["role"].as_str()?,
+            label_text(&event["label"])
+        ),
         _ => return None,
     };
-    Some(TrailLine::passed(text))
+    Some(TrailLine {
+        text,
+        blocked: refused(event),
+    })
 }
 
 impl TrailLine {
@@ -277,6 +281,11 @@ fn label_text(label: &Value) -> String {
 /// turn that spawned nothing is the file it always was.
 pub fn as_json(event: &Event, from: Option<DelegateId>) -> Value {
     let mut written = shaped(event);
+    // The kernel's verdict, beside what it decided. A refusal is two shapes rather than one, so
+    // every reader that worked the pair out for itself was a reader that could be given a third
+    // shape and go on answering for two: a screen filtering the evidence on `allowed` alone drops
+    // a `gate_blocked` as readily as it keeps a record whose verdict it cannot read.
+    written["refusal"] = Value::Bool(event.is_refusal());
     if let Some(delegate) = from {
         written["delegate"] = Value::String(delegate.to_string());
     }
@@ -637,6 +646,51 @@ mod tests {
         }))
         .expect("a field with no verdict still reads back");
         assert!(line.blocked);
+    }
+
+    /// The verdict, beside what was decided. Every reader of a record needs it, and one that
+    /// works it back out of the kind and the fields has to be taught every shape a refusal takes:
+    /// a shape it was not taught drops out of the evidence rather than into it.
+    #[test]
+    fn every_record_carries_the_kernels_own_verdict() {
+        for event in every_kind() {
+            assert_eq!(
+                as_json(&event, None)["refusal"],
+                json!(event.is_refusal()),
+                "{event:?} was not written down with the verdict the kernel took"
+            );
+        }
+        // Both answers appear, so the assertion above is not satisfied by a constant.
+        assert!(every_kind().iter().any(Event::is_refusal));
+        assert!(!every_kind().iter().all(Event::is_refusal));
+    }
+
+    /// The reader reads the verdict rather than deciding again. A record whose fields say one
+    /// thing and whose verdict says another cannot be written by this build, and it is the
+    /// fixture that fails the moment a reader goes back to re-deriving.
+    #[test]
+    fn a_recorded_verdict_is_read_rather_than_recomputed() {
+        let contradicted = json!({
+            "kind": "action_field",
+            "tool": "write_file",
+            "field": "path",
+            "role": "routing",
+            "label": {"integrity": "trusted", "confidentiality": "public"},
+            "allowed": false,
+            "refusal": false,
+        });
+        assert!(!recalled(&contradicted).expect("a field reads back").blocked);
+        let blocked_gate_that_passed = json!({
+            "kind": "gate_blocked",
+            "gate": "action",
+            "reason": "untrusted routing",
+            "refusal": false,
+        });
+        assert!(
+            !recalled(&blocked_gate_that_passed)
+                .expect("a gate reads back")
+                .blocked
+        );
     }
 
     /// One line per event, so a file can be read with ordinary tools.

@@ -115,6 +115,22 @@ pub enum Event {
     },
 }
 
+impl Event {
+    /// Whether this event is something a gate refused.
+    ///
+    /// The one answer to that question. A refusal is two shapes rather than one, a gate that
+    /// blocked and a field the gate before an effect would not pass, and every reader that
+    /// worked the pair out for itself was a place the pair could be forgotten: the aggregate
+    /// below, the words a transcript draws, the record a file keeps, the screen a reviewer
+    /// reads it on. Asked of the kernel, because the kernel is what decided it.
+    pub fn is_refusal(&self) -> bool {
+        matches!(
+            self,
+            Self::GateBlocked { .. } | Self::ActionField { allowed: false, .. }
+        )
+    }
+}
+
 /// Somewhere for events to go. Implemented outside the kernel: a terminal renderer, a
 /// JSONL file, or both.
 pub trait Sink {
@@ -182,11 +198,7 @@ impl RecordingSink {
 
     /// Whether the run completed without a single refusal.
     pub fn clean(&self) -> bool {
-        self.blocked().next().is_none()
-            && !self
-                .events
-                .iter()
-                .any(|e| matches!(e, Event::ActionField { allowed: false, .. }))
+        !self.events.iter().any(Event::is_refusal)
     }
 }
 
@@ -285,6 +297,47 @@ mod tests {
             allowed: false,
         });
         assert!(!sink.clean());
+    }
+
+    /// The one answer to "was this refused", so that a reader asking it does not have to know
+    /// that a refusal is two shapes. A record whose verdict has to be reconstructed is a record
+    /// the next shape of refusal can be added behind.
+    #[test]
+    fn a_refusal_is_either_a_blocked_gate_or_a_refused_field() {
+        let field = |allowed| Event::ActionField {
+            tool: "write_file".into(),
+            field: "path".into(),
+            role: Role::Routing,
+            label: Label::untrusted_public(),
+            allowed,
+        };
+        assert!(
+            Event::GateBlocked {
+                gate: "action",
+                detail: String::new(),
+                reason: "untrusted routing".into(),
+                principle: Principle::IntegrityGate,
+            }
+            .is_refusal()
+        );
+        assert!(field(false).is_refusal());
+        assert!(!field(true).is_refusal());
+        assert!(
+            !Event::GatePassed {
+                gate: "capability",
+                detail: String::new(),
+            }
+            .is_refusal()
+        );
+        assert!(
+            !Event::Declassified {
+                slot: SlotId::new("s"),
+                from: Label::untrusted_private(),
+                to: Label::untrusted_public(),
+                reason: "shown to the user",
+            }
+            .is_refusal()
+        );
     }
 
     #[test]

@@ -259,7 +259,7 @@ implementation should have one serialisation function per row and a round-trip t
 | `report::Landing` | `"context"` \| `"quarantined"` \| `"reserved"` | |
 | `todo::Status` | `"pending"` \| `"active"` \| `"done"` | |
 | `conversation::Said` | `{"kind":"user"\|"assistant"\|"tool","text":"…"}` with `"prompt":N` on `user` only, `{"kind":"attached","path":"…"}` or `{"kind":"watch","number":N,"path":"…"}` | from `recounted()`, §7.1 |
-| `core::event::Event` | as `audit::as_json` already produces | **reuse verbatim**, do not re-derive |
+| `core::event::Event` | as `audit::as_json` already produces, `refusal` included | **reuse verbatim**, do not re-derive |
 | `label::Label` | `{"integrity":"trusted"\|"untrusted","confidentiality":"public"\|"private"}` | as `audit::label_json` |
 | `SystemTime` seconds | JSON number, seconds since epoch | matches `Record::started`/`updated` |
 
@@ -272,11 +272,14 @@ Two rules for the enums above:
    contract.
 2. **Unknown tags degrade toward less trust.** A client reading a tag it does not
    recognise treats it as untrusted/quarantined, mirroring what `Snapshot` and
-   `Record::trust_map` already do on the Rust side. Never the other way.
-3. **A decision the agent has taken is sent, not reconstructed.** Which of the user's
-   messages a prompt is, is a fact the agent holds, so it travels beside the thing it
-   describes. A client working it back out of the other fields has to be taught every shape
-   the answer takes, and the shape it was not taught is the one that goes wrong quietly.
+   `Record::trust_map` already do on the Rust side. Never the other way. An audit record
+   whose `refusal` cannot be read is drawn as a refusal for the same reason: a check whose
+   answer nobody can read is not one to show as though it passed.
+3. **A decision the agent has taken is sent, not reconstructed.** Whether a record is a
+   refusal, and which of the user's messages a prompt is, are both facts the agent holds,
+   so both travel beside what they describe. A client working one back out of the other
+   fields has to be taught every shape the answer takes, and the shape it was not taught is
+   the one that goes wrong quietly.
 
 `report::Activity::verb` is a `&'static str` chosen by the dispatch table, never model
 output; it is safe to send as-is and safe to switch on.

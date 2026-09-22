@@ -93,8 +93,24 @@ export function receiveTurn(turns: Turns, message: BridgeEvent): Turns {
   return result
 }
 
+/**
+ * Whether a record is a refusal, as the agent decided it.
+ *
+ * Read, never re-derived. The kernel writes its own verdict beside every event, and working it
+ * back out of the kind and the fields here was a second answer to a question that has one: a
+ * record this build did not know to unpick would drop out of the refusal list rather than
+ * appearing in it, which is the wrong direction for the screen a reviewer reads to check what
+ * the agent was refused.
+ *
+ * Anything but an explicit `false` reads as a refusal, which is that direction: a verdict nobody
+ * can read is not one to draw as though the check had passed. Every record on this channel is
+ * serialised by the agent this window ships with, in the turn it is streaming, so one arriving
+ * without a readable verdict is a malformed record rather than an older one. The file the agent
+ * reads a resumed trail back out of is the other case and is not this: a trail written before the
+ * verdict was recorded has only its shape to go on, and the agent falls back to that there.
+ */
 export function isRefusal(event: Record<string, unknown>): boolean {
-  return event.kind === 'gate_blocked' || (event.kind === 'action_field' && event.allowed === false)
+  return event.refusal !== false
 }
 
 const text = (value: unknown): string => typeof value === 'string' ? value : ''

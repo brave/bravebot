@@ -77,12 +77,25 @@ test('audit retention keeps whole evidence and reports both per-turn and session
 })
 
 test('structured decisions explain refusals without interpreting arbitrary prose as authority', () => {
-  const routing = { kind: 'action_field', allowed: false, role: 'routing', label: { integrity: 'untrusted', confidentiality: 'public' }, tool: 'write_file', field: 'path' }
+  const routing = { kind: 'action_field', allowed: false, refusal: true, role: 'routing', label: { integrity: 'untrusted', confidentiality: 'public' }, tool: 'write_file', field: 'path' }
   assert.equal(isRefusal(routing), true)
   assert.match(auditDescription(routing).title, /Untrusted data/)
   assert.doesNotMatch(auditDescription({ ...routing, role: 'content' }).title, /destination/)
-  assert.equal(isRefusal({ kind: 'future_event', reason: 'blocked' }), false)
-  assert.equal(isRefusal({ kind: 'action_field', allowed: 'false' }), false)
   assert.deepEqual(auditDescription({ kind: 'future_event' }), { title: 'Audit event', detail: 'future_event' })
   for (const kind of ['gate_passed', 'gate_blocked', 'observed', 'slot_written', 'slot_deferred', 'declassified', 'action_field']) assert.notEqual(auditDescription({ kind }).title, 'Audit event')
+})
+
+test('the verdict decides a refusal, and an unreadable one is drawn as a refusal rather than dropped', () => {
+  // Read, not re-derived: a kind this build has never heard of is a refusal when the agent
+  // said so, and a shape it knows how to unpick is not one when the agent said it passed.
+  assert.equal(isRefusal({ kind: 'future_event', reason: 'blocked', refusal: true }), true)
+  assert.equal(isRefusal({ kind: 'gate_blocked', gate: 'route', refusal: false }), false)
+  assert.equal(isRefusal({ kind: 'action_field', allowed: false, refusal: false }), false)
+  // The safe direction, which the kernel and the trail reader take too. A verdict that is
+  // missing or is not a boolean is a check whose answer nobody can read, and the refusal list
+  // is the screen a reviewer reads to find out what the agent was refused: showing a record
+  // there that need not have been is recoverable, leaving one out is not.
+  assert.equal(isRefusal({ kind: 'action_field', allowed: true }), true)
+  assert.equal(isRefusal({ kind: 'action_field', allowed: false, refusal: 'false' }), true)
+  assert.equal(isRefusal({ kind: 'gate_passed', detail: 'ok', refusal: null }), true)
 })
