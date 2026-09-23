@@ -53,10 +53,24 @@ being typed. Every session opens in INSERT, whichever style is in force, and the
 beneath the box beside the mode that says how much the session asks. The ordinary box is in neither
 mode, and nothing about a mode is drawn at it.
 
-**Escape enters NORMAL mode and leaves the line exactly as it was.** Discarding a half-typed line is
-still Ctrl-C, and a turn in flight is still stopped first. Ctrl-`[` is the same request from a
-terminal that reports the modifier rather than sending the byte Escape already is. In the ordinary
-box Escape discards the line as it always has.
+An instruction still waiting for its next key is drawn after the mode, as vi's `showcmd` draws it:
+`NORMAL d` once `d` is pressed, `NORMAL di` after the `i`, and the mode alone once the instruction is
+whole.
+
+A key beginning one of vi's instructions that this box does not have does nothing, and nor does the
+key vi would give it: `"`, `q`, `@`, `m`, `'`, `` ` ``, `z`, `Z`, `[`, `]`, `r`, `R`, `g'`, `` g` ``
+and `gr` each take one more key, so `ma` sets no mark and opens no INSERT mode. `R` takes one key
+rather than replacing until Escape. `gu`, `gU`, `g~`, `g?`, `gq`, `gw` and `g@` take the stretch they
+would act on, so `guiw` changes nothing. After an operator only `'`, `` ` ``, `[`, `]` and `z` take
+their key, as in vi, so `dm` ends the `d` and the key after it is read on its own. In VISUAL mode
+the operators under `g` and `R` take no key, since the selection is the stretch.
+
+**Escape enters NORMAL mode and leaves the line exactly as it was.** It also abandons an instruction
+still waiting for a key, so `d`, Escape, `w` moves a word rather than deleting one, and so does any
+other key that is not a character, such as an arrow or Enter. Discarding a
+half-typed line is still Ctrl-C, and a turn in flight is still stopped first. Ctrl-`[` is the same
+request from a terminal that reports the modifier rather than sending the byte Escape already is. In
+the ordinary box Escape discards the line as it always has.
 
 ### Getting back into INSERT mode
 

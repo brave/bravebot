@@ -319,6 +319,8 @@ pub enum Pending {
     Find { forwards: bool, short: bool },
     /// `g`, which means nothing alone and `gg` with the second press.
     G,
+    /// `g` in VISUAL mode, where the selection is already the stretch an operator under `g` acts on.
+    VisualG,
     /// `r` in VISUAL mode, waiting for the character every selected one becomes.
     ReplaceWith,
     /// `i` or `a` in VISUAL mode, waiting for the kind of thing to select.
@@ -335,6 +337,13 @@ pub enum Pending {
     /// An operator waiting for the kind of thing in `diw` or `ca"`, having already taken the `i` or
     /// `a`.
     OperateObject { operator: Operator, around: bool },
+    /// One of vi's prefixes this box has no instruction for, waiting for the key vi would give it:
+    /// the register in `"a`, the mark in `ma`, the character in `rx`. That key is taken, and nothing
+    /// happens.
+    Unclaimed,
+    /// An operator vi spells after `g` that this box has no instruction for, waiting for the stretch
+    /// it would act on. `guiw` takes the `iw` the way `diw` does, and changes nothing.
+    UnclaimedStretch,
 }
 
 impl Pending {
@@ -352,7 +361,20 @@ impl Pending {
                 short,
             })),
             Pending::G if c == 'g' => Command::Move(Motion::InputStart),
+            // vi's operators under `g`: the case changes, rot13, formatting and the operator function.
+            // Each takes a stretch, so the keys naming one are not left to run on their own and open
+            // INSERT mode on the `i` of `guiw`.
+            Pending::G if operates_under_g(c) => Command::Wait(Pending::UnclaimedStretch),
+            // The pairs vi reads one more key after: a mark reached without the jump list, and a
+            // character replaced without moving the rest of the line.
+            Pending::G if matches!(c, '\'' | '`' | 'r') => Command::Wait(Pending::Unclaimed),
             Pending::G => Command::Nothing,
+            // With a selection on the screen there is no stretch left to name, so `vgU` is whole and
+            // the `l` after it moves the end of the selection as it would have without the `gU`.
+            Pending::VisualG if operates_under_g(c) => Command::Nothing,
+            // vi's `gr` over a selection is its `r`.
+            Pending::VisualG if c == 'r' => Command::Wait(Pending::ReplaceWith),
+            Pending::VisualG => Pending::G.then(c),
             Pending::OperateToChar {
                 operator,
                 forwards,
@@ -377,7 +399,33 @@ impl Pending {
                 Some(kind) => Command::Move(Motion::Object(Object { kind, around })),
                 None => Command::Nothing,
             },
+            Pending::Unclaimed => Command::Nothing,
+            Pending::UnclaimedStretch => match c {
+                // The stretches two keys long, which are the ones `operated` waits again for, and
+                // `gg`.
+                'i' | 'a' | 'f' | 'F' | 't' | 'T' | 'g' => Command::Wait(Pending::Unclaimed),
+                _ => unclaimed_after_an_operator(c),
+            },
         }
+    }
+}
+
+/// Whether a key after `g` is one of vi's operators there: the case changes, rot13, formatting and
+/// the operator function.
+fn operates_under_g(c: char) -> bool {
+    matches!(c, 'u' | 'U' | '~' | '?' | 'q' | 'w' | '@')
+}
+
+/// What a key that names no motion means after an operator.
+///
+/// Nothing, and the prefixes vi reads a key after even with an operator waiting take that key as
+/// well: `d'a` is a stretch to a mark, and ending the wait at the `'` would leave the `a` to open
+/// INSERT mode. The rest vi reads a key after only on their own. The `m` of `dm` ends the operator
+/// there in vi, and the key after it is read on its own, so here too.
+fn unclaimed_after_an_operator(c: char) -> Command {
+    match c {
+        '\'' | '`' | '[' | ']' | 'z' => Command::Wait(Pending::Unclaimed),
+        _ => Command::Nothing,
     }
 }
 
@@ -386,8 +434,9 @@ impl Pending {
 /// The doubled letter is the whole line, which is why `dd` and `cc` are spelled that way and why the
 /// letter has to be compared against the operator that is waiting: `dy` is not a line.
 ///
-/// The jump keys wait again rather than resolving here, since `df` still needs the character. That is
-/// the only place two keys stack up before anything happens.
+/// The jump keys wait again rather than resolving here, since `df` still needs the character, and so
+/// do the prefixes vi reads a key after even with an operator waiting, since `d'a` still has its mark
+/// to take.
 fn operated(operator: Operator, c: char) -> Command {
     let doubled = match operator {
         Operator::Delete => 'd',
@@ -435,7 +484,7 @@ fn operated(operator: Operator, c: char) -> Command {
         // means nothing.
         _ => match command(c) {
             Command::Move(motion) => Command::Change(operator, Extent::To(motion)),
-            _ => Command::Nothing,
+            _ => unclaimed_after_an_operator(c),
         },
     }
 }
@@ -525,6 +574,12 @@ pub fn command(c: char) -> Command {
         // operator and the reason to have both: the selection is on the screen while it is chosen.
         'v' => Command::Select { lines: false },
         'V' => Command::Select { lines: true },
+        // vi's prefixes with no instruction here: a register, a macro, a mark, the scrolls, the
+        // bracket jumps, and replacing. Each takes the key vi would give it, since a prefix that did
+        // nothing alone would leave the `a` of `ma` to open INSERT mode and the `x` of `rx` to delete.
+        '"' | 'q' | '@' | 'm' | '\'' | '`' | 'z' | 'Z' | '[' | ']' | 'r' | 'R' => {
+            Command::Wait(Pending::Unclaimed)
+        }
         _ => Command::Nothing,
     }
 }
@@ -566,6 +621,10 @@ pub fn visual_command(c: char) -> Command {
         // one of them.
         'v' => Command::Select { lines: false },
         'V' => Command::Select { lines: true },
+        'g' => Command::Wait(Pending::VisualG),
+        // vi's `R` over a selection changes its lines and takes no key, so the key after it is the
+        // next instruction rather than one for `R` to swallow.
+        'R' => Command::Nothing,
         // Everything else means what it means in NORMAL mode, which is nearly all of the motions. A key
         // that is not a motion there is not one here either, and the `Nothing` it returns is the answer.
         _ => match command(c) {
@@ -622,8 +681,21 @@ mod tests {
     /// would make NORMAL mode a place where half the alphabet quietly edits the prompt.
     #[test]
     fn a_letter_that_means_nothing_in_normal_mode_types_nothing() {
-        assert_eq!(command('z'), Command::Nothing);
-        assert_eq!(command('q'), Command::Nothing);
+        assert_eq!(command('K'), Command::Nothing);
+        assert_eq!(command('Q'), Command::Nothing);
+    }
+
+    /// vi's prefixes this box has no instruction for wait for the key vi would give them, and that key
+    /// does nothing. A prefix that did nothing alone would leave the key after it to run on its own,
+    /// which is the `a` of `ma` opening INSERT mode.
+    #[test]
+    fn a_prefix_this_box_has_no_instruction_for_waits_for_its_key_and_then_does_nothing() {
+        for c in ['"', 'q', '@', 'm', '\'', '`', 'z', 'Z', '[', ']', 'r', 'R'] {
+            assert_eq!(command(c), Command::Wait(Pending::Unclaimed), "{c}");
+        }
+        for c in ' '..='~' {
+            assert_eq!(Pending::Unclaimed.then(c), Command::Nothing, "{c}");
+        }
     }
 
     /// Space is a motion rather than a character, which is what vi does with it: the widest key on the
@@ -695,6 +767,62 @@ mod tests {
         assert_eq!(Pending::G.then('x'), Command::Nothing);
     }
 
+    /// The operators vi spells after `g` take a stretch the way `d` does, so the keys naming one go
+    /// with them: `guiw` takes the `iw`, and `gugg` the second `g`. `g'`, `` g` `` and `gr` take one
+    /// key more, as they do in vi. Any other pair is whole, and one that means nothing still ends the
+    /// wait.
+    #[test]
+    fn an_operator_vi_spells_after_g_waits_for_the_stretch_it_would_take() {
+        for c in ['u', 'U', '~', '?', 'q', 'w', '@'] {
+            assert_eq!(
+                Pending::G.then(c),
+                Command::Wait(Pending::UnclaimedStretch),
+                "g{c}"
+            );
+        }
+        for c in ['\'', '`', 'r'] {
+            assert_eq!(
+                Pending::G.then(c),
+                Command::Wait(Pending::Unclaimed),
+                "g{c}"
+            );
+        }
+        for c in ['i', 'a', 'f', 'F', 't', 'T', 'g', '\'', '`', '[', ']', 'z'] {
+            assert_eq!(
+                Pending::UnclaimedStretch.then(c),
+                Command::Wait(Pending::Unclaimed),
+                "gu{c}"
+            );
+        }
+        for c in ['w', '$', 'u', 'x', 'd', 'm', '"', 'r'] {
+            assert_eq!(Pending::UnclaimedStretch.then(c), Command::Nothing, "gu{c}");
+        }
+        assert_eq!(Pending::G.then('J'), Command::Nothing);
+    }
+
+    /// A selection is already the stretch, so in VISUAL mode an operator under `g` is whole and `R`
+    /// takes no key: the key after either is the next instruction, as it is in vi.
+    #[test]
+    fn visual_mode_gives_an_operator_under_g_no_stretch_and_capital_r_no_key() {
+        assert_eq!(visual_command('g'), Command::Wait(Pending::VisualG));
+        for c in ['u', 'U', '~', '?', 'q', 'w', '@'] {
+            assert_eq!(Pending::VisualG.then(c), Command::Nothing, "vg{c}");
+        }
+        assert_eq!(
+            Pending::VisualG.then('g'),
+            Command::Move(Motion::InputStart)
+        );
+        assert_eq!(
+            Pending::VisualG.then('r'),
+            Command::Wait(Pending::ReplaceWith)
+        );
+        assert_eq!(
+            Pending::VisualG.then('\''),
+            Command::Wait(Pending::Unclaimed)
+        );
+        assert_eq!(visual_command('R'), Command::Nothing);
+    }
+
     /// Any motion at all names a stretch, which is what makes `dw`, `d$` and `dG` one idea rather than
     /// three bindings. A key that is not a motion names no stretch, and the pair means nothing.
     #[test]
@@ -708,7 +836,30 @@ mod tests {
             after('$'),
             Command::Change(Operator::Delete, Extent::To(Motion::LineEnd))
         );
-        assert_eq!(after('z'), Command::Nothing);
+        assert_eq!(after('K'), Command::Nothing);
+    }
+
+    /// After an operator, the prefixes vi still reads a key after take it: `d'a` must not leave the
+    /// `a` to open INSERT mode. The rest end the operator there, as they do in vi, so the key after
+    /// `dm` is read on its own.
+    #[test]
+    fn an_operator_waits_for_the_key_after_a_prefix_only_where_vi_reads_one() {
+        for operator in [Operator::Delete, Operator::Change, Operator::Yank] {
+            for c in ['\'', '`', '[', ']', 'z'] {
+                assert_eq!(
+                    Pending::Operate(operator).then(c),
+                    Command::Wait(Pending::Unclaimed),
+                    "{operator:?} {c}"
+                );
+            }
+            for c in ['"', 'q', '@', 'm', 'r', 'Z', 'R'] {
+                assert_eq!(
+                    Pending::Operate(operator).then(c),
+                    Command::Nothing,
+                    "{operator:?} {c}"
+                );
+            }
+        }
     }
 
     /// The doubled letter is the whole line, and it is compared against the operator that is waiting:
@@ -864,7 +1015,7 @@ mod tests {
                 "{c} differed between the modes"
             );
         }
-        assert_eq!(visual_command('z'), Command::Nothing);
+        assert_eq!(visual_command('K'), Command::Nothing);
     }
 
     /// A text object selects rather than being acted on, so `vi(` shows the stretch `ci(` would take.
