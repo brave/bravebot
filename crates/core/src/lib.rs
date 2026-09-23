@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ambient;
 pub mod ask;
 pub mod cancel;
 pub mod capability;

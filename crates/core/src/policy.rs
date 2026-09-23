@@ -4370,6 +4370,30 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.issue_grant("run", "plan", plan.canonical());
     }
 
+    /// Record that an authority nothing here holds has been spent.
+    ///
+    /// A container daemon, a tool that is already logged in, the ssh agent and a machine's
+    /// metadata service are reached rather than held, so there is no custody to record and
+    /// nothing to take back afterwards. What there is is that it happened, and the trail is the
+    /// one record of a session that outlives the process: a person accounting for what an agent
+    /// did with their account has nothing else to read.
+    ///
+    /// Said where the authority is spent rather than where it was granted. A grant is a sentence
+    /// on a prompt somebody may answer and never act on, and the two are different facts.
+    ///
+    /// Nothing is recorded for a plan that reaches none, which is nearly all of them: an entry
+    /// saying so on every line would bury the ones that say something.
+    pub fn record_ambient(&mut self, spent: &[crate::ambient::Spent]) {
+        if spent.is_empty() {
+            return;
+        }
+        let named: Vec<String> = spent
+            .iter()
+            .map(|spent| format!("{} ({})", spent.authority.name(), spent.named))
+            .collect();
+        self.allow("ambient", named.join(", "));
+    }
+
     /// The gate a command line passes immediately before anything executes. Returns the label its
     /// output will carry.
     ///

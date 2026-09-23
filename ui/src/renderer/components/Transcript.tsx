@@ -1114,6 +1114,19 @@ export function Row({
 
           <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
           {decision === null && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
+          {!!request.ambient?.length && (
+            <div className="warn">
+              This spends access that is yours elsewhere. Nobody is asked for it at the moment it
+              is used, and nothing here takes it back afterwards.
+              <ul>
+                {request.ambient.map((spent) => (
+                  <li key={`${spent.authority}:${spent.named}`}>
+                    <code>{spent.named}</code>: {t.ambientSentence(spent.authority)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {request.releasesPrivate && (
             <p className="warn">
               This hands your own data to the program. Whatever it does with those bytes

@@ -560,6 +560,30 @@ pub fn ask_run<B: Backend>(terminal: &mut Terminal<B>, request: &RunRequest) -> 
     }
 }
 
+/// What one ambient authority is, in the words a person reads.
+///
+/// The sentence is per authority rather than one sentence with a name substituted into it,
+/// because what each of them costs is different: a container daemon is root on this machine, a
+/// logged-in tool is an account elsewhere, the agent is a signature, the metadata service is a
+/// role. The word that named it is the driver's own, from the table that recognised it, so
+/// nothing of the command line is put into this sentence.
+fn authority(spent: &bravebot_core::ambient::Spent) -> String {
+    let named = spent.named;
+    match spent.authority {
+        bravebot_core::ambient::Authority::ContainerDaemon => {
+            t!(run_authority_container, named = named)
+        }
+        bravebot_core::ambient::Authority::LoggedInTool => {
+            t!(run_authority_logged_in, named = named)
+        }
+        bravebot_core::ambient::Authority::AgentSocket => t!(run_authority_agent, named = named),
+        bravebot_core::ambient::Authority::MetadataService => {
+            t!(run_authority_metadata, named = named)
+        }
+    }
+    .to_string()
+}
+
 /// Draw the run confirmation, returning how far its body can be scrolled.
 ///
 /// One line per stage, rendered by [`bravebot_core::Stage::display`], which quotes unambiguously: two
@@ -680,6 +704,30 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         format!("  {}", t!(run_not_sandboxed)),
         Style::default().fg(theme::running()),
     )));
+
+    // Which access in particular a yes hands over, where the line reaches one nothing here holds:
+    // a container daemon, a tool already logged in, the ssh agent, the metadata service. The line
+    // above says what confinement there is and is said every time; this says what is being
+    // granted, which is the half a person cannot read off an argument list. Said only where there
+    // is something to say, so it never becomes a row that is always there.
+    let spends = request.ambient_authority();
+    if !spends.is_empty() {
+        // Wrapped with the indent carried down, like every other sentence in this panel that runs
+        // past the border: a second row starting at the border reads as a line of its own.
+        lines.extend(indented(
+            t!(run_spends_authority),
+            Style::default().fg(theme::fail()),
+            inside.width as usize,
+        ));
+        for spent in &spends {
+            lines.push(Line::from(Span::styled(
+                format!("       {}", authority(spent)),
+                Style::default()
+                    .fg(theme::text())
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+    }
 
     // The second and independent reason to be careful, on confidentiality rather than integrity.
     // Only said when it applies, so it does not become noise that hides the case it is for.
@@ -1630,6 +1678,18 @@ fn draw_fetch(frame: &mut ratatui::Frame, request: &FetchRequest) {
         ),
         Line::raw(""),
     ];
+    // What the host is, where it is the metadata service of the machine this runs on. The
+    // address above is what the request reaches and is not what it means: that service asks
+    // nothing of whoever opens the socket and answers with the credentials of the role, so a
+    // person shown the number alone is being asked about an address.
+    if request.ambient_authority().is_some() {
+        lines.extend(indented(
+            t!(fetch_authority_metadata),
+            Style::default().fg(theme::fail()),
+            inside.width as usize,
+        ));
+        lines.push(Line::raw(""));
+    }
     lines.extend(indented(
         t!(fetch_explained),
         Style::default().fg(theme::muted()),
@@ -2194,6 +2254,22 @@ mod tests {
             .collect()
     }
 
+    fn rendered_fetch(request: &FetchRequest) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(160, 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw_fetch(frame, request);
+            })
+            .expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
     /// A reviewer has to see the argv, the binary behind each name, and where it will run. All
     /// three change what the run means, and none of them can be inferred from the others.
     #[test]
@@ -2210,6 +2286,58 @@ mod tests {
     #[test]
     fn a_run_prompt_says_it_is_not_sandboxed() {
         assert!(rendered_run(&a_run(false)).contains("not sandboxed"));
+    }
+
+    /// A line that reaches an authority nothing here holds says which one, beside the line about
+    /// not being sandboxed rather than instead of it. Both are drawn: one says what confinement
+    /// there is and the other says what a yes hands over, and a person told only the first has
+    /// been told that a `docker` line is unsandboxed and not that it is root on their machine.
+    #[test]
+    fn a_run_prompt_names_the_ambient_authority_a_line_reaches() {
+        let pipeline = bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new(
+            "docker",
+            vec!["ps".into(), "-a".into()],
+        )]);
+        let request =
+            RunRequest::from_pipeline(&pipeline, &["/usr/bin/docker".into()], "/home/someone");
+
+        let drawn = rendered_run(&request);
+        assert!(drawn.contains("not sandboxed"), "{drawn}");
+        assert!(drawn.contains("container daemon"), "{drawn}");
+        assert!(drawn.contains("as root on this machine"), "{drawn}");
+    }
+
+    /// Most lines reach nothing of the sort, and the row is not drawn for them. A sentence that
+    /// appeared on every prompt would be one a reader learns to skip, which is what the line
+    /// above it already costs and the reason this one is not spent the same way.
+    #[test]
+    fn a_run_prompt_names_no_authority_where_the_line_reaches_none() {
+        let drawn = rendered_run(&a_compiled_run());
+        assert!(drawn.contains("not sandboxed"), "{drawn}");
+        assert!(!drawn.contains("spends access"), "{drawn}");
+    }
+
+    /// The metadata service asks nothing of whoever reaches it and answers with the credentials
+    /// of the role the machine runs as, so approving a request to it is granting those. A prompt
+    /// showing the address alone is asking a person about a link-local number.
+    #[test]
+    fn a_fetch_prompt_says_what_the_metadata_service_is() {
+        let drawn = rendered_fetch(&FetchRequest {
+            url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/".to_string(),
+            host: "169.254.169.254".to_string(),
+        });
+        assert!(drawn.contains("metadata service"), "{drawn}");
+        assert!(drawn.contains("credentials of the role"), "{drawn}");
+    }
+
+    /// An ordinary host is an ordinary question, and nothing of the kind is said about it.
+    #[test]
+    fn a_fetch_prompt_says_nothing_of_the_sort_about_an_ordinary_host() {
+        let drawn = rendered_fetch(&FetchRequest {
+            url: "https://example.test/page".to_string(),
+            host: "example.test".to_string(),
+        });
+        assert!(!drawn.contains("metadata service"), "{drawn}");
     }
 
     /// Vouching grants two things, and the prompt has to ask for both in as many words. The

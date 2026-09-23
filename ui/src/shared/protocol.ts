@@ -298,6 +298,19 @@ export interface RunRequest {
    * governing.
    */
   releasesPrivate: boolean
+  /**
+   * Access the command reaches that nothing in the agent holds.
+   *
+   * A container daemon, a tool that is already logged in, the ssh agent, the metadata service
+   * of this machine: nothing is handed over when one is used, nobody is asked at that moment,
+   * and the agent cannot take the access back afterwards. So the one thing available is that
+   * whoever approves the command is told what they are approving.
+   *
+   * `authority` is the kind, which is what to match on, and `named` is the word that named it:
+   * a program, an address, a socket or a variable. The sentence is the front end's, because the
+   * words a person reads belong to the surface drawing them. Empty for nearly every command.
+   */
+  ambient?: { authority: string; named: string }[]
   /** What approving *and remembering* would cover — the thing the second answer is about. */
   vouches: { program: string; args: string[]; display: string }[]
   summary: string

@@ -585,6 +585,16 @@ run-line-sent = the model wrote:
 run-writes = it writes these files:
 run-is-fed = it is fed the contents of:
 run-not-sandboxed = this is not sandboxed: it runs with the access your own shell has
+# Said above the list of what a line reaches that nothing here holds: no credential is handed
+# over, nobody is asked at the moment it is used, and nothing here can take the access back. Said
+# only where a line reaches one, so the list is never empty and never noise. The line above is
+# said either way: this names what is being granted, rather than replacing what confinement there
+# is with a list.
+run-spends-authority = it also spends access that is yours elsewhere, which nobody is asked for and nothing here takes back:
+run-authority-container = { $named }: the container daemon, which runs anything as root on this machine
+run-authority-logged-in = { $named }: already logged in, so it acts as you without asking you
+run-authority-agent = { $named }: your ssh agent, which signs with keys it never hands over
+run-authority-metadata = { $named }: this machine's metadata service, which hands out the credentials of the role it runs as
 run-releases-private = it is also being fed your own data, which leaves here with it
 run-always-explained = a: trust this exact command for the rest of this session
 run-always-means-both = which means both:
@@ -676,6 +686,12 @@ vet-always-covers =
 fetch-title = fetch this?
 fetch-verb = Fetch
 fetch-host = talking to { $host }
+# Said where the host is the metadata service of the machine this is running on, which is a host
+# like any other to everything in between: it asks for no credential and hands out the ones of
+# the role this machine runs as. A person shown the address alone has been shown a number.
+fetch-authority-metadata =
+    this is this machine's own metadata service: it asks nothing of whoever reaches it and
+    answers with the credentials of the role this machine runs as.
 fetch-explained =
     what comes back stays quarantined however you answer: the model can pass it to a
     processor or write it to a file, and cannot read it or be told what it says.

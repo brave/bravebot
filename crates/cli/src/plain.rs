@@ -703,6 +703,29 @@ fn change(request: &WriteRequest) -> Vec<String> {
     lines
 }
 
+/// What one ambient authority is, in the words a person reads.
+///
+/// A sentence per authority rather than one with a name substituted in, because what each of them
+/// costs is different: a container daemon is root on this machine, a logged-in tool is an account
+/// elsewhere, the agent is a signature, the metadata service is a role. The word that named it
+/// comes from the table that recognised it, so no part of the command line reaches this sentence.
+fn authority(spent: &bravebot_core::ambient::Spent) -> String {
+    let named = spent.named;
+    match spent.authority {
+        bravebot_core::ambient::Authority::ContainerDaemon => {
+            t!(run_authority_container, named = named)
+        }
+        bravebot_core::ambient::Authority::LoggedInTool => {
+            t!(run_authority_logged_in, named = named)
+        }
+        bravebot_core::ambient::Authority::AgentSocket => t!(run_authority_agent, named = named),
+        bravebot_core::ambient::Authority::MetadataService => {
+            t!(run_authority_metadata, named = named)
+        }
+    }
+    .to_string()
+}
+
 /// The lines a run is read before approving: every step as the line wrote it, the binary each name
 /// resolved to, what it would write, and what it is not.
 ///
@@ -726,6 +749,16 @@ fn program(request: &RunRequest) -> Vec<String> {
     // Said every time, because it is true every time and is the thing a person is likeliest to
     // assume otherwise.
     lines.push(t!(run_not_sandboxed).to_string());
+    // Which access in particular a yes hands over, where the line reaches one nothing here holds.
+    // The line above says what confinement there is and is said every time; this says what is
+    // being granted, and is said only where there is something to name.
+    let spends = request.ambient_authority();
+    if !spends.is_empty() {
+        lines.push(t!(run_spends_authority).to_string());
+        for spent in &spends {
+            lines.push(format!("  {}", authority(spent)));
+        }
+    }
     if request.releases_private() {
         lines.push(t!(run_releases_private).to_string());
     }
@@ -778,13 +811,19 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
     }
 
     fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
-        let lines = vec![
+        let mut lines = vec![
             // The host on its own row, because that is what the answer is about: a URL is easy to
             // misread, and `https://example.com@evil.test/` names one site and reaches another.
             t!(fetch_host, host = shown(&request.host)),
             shown(&request.url),
-            t!(fetch_explained).to_string(),
         ];
+        // What the host is, where it is this machine's own metadata service. That service asks
+        // nothing of whoever opens the socket and answers with the credentials of the role, so
+        // the address alone does not say what the request reaches.
+        if request.ambient_authority().is_some() {
+            lines.push(t!(fetch_authority_metadata).to_string());
+        }
+        lines.push(t!(fetch_explained).to_string());
         self.ask(&lines, t!(fetch_title))
     }
 
@@ -1250,6 +1289,36 @@ mod tests {
         assert!(
             lines.contains(t!(run_not_sandboxed)),
             "the question does not say the program is not sandboxed: {lines}"
+        );
+        // The line above says what confinement there is, which is none. This line reaches nothing
+        // that is on no tier at all, so nothing further is claimed about it.
+        assert!(
+            !lines.contains(t!(run_spends_authority)),
+            "a line reaching no ambient authority was said to spend one: {lines}"
+        );
+    }
+
+    /// Both front ends ask the same question, so both have to say what a yes hands over. The
+    /// blanket line is about confinement and is said every time; this names the particular access
+    /// a person cannot read off the argument list, and a `gh` line is an account elsewhere rather
+    /// than a program in this tree.
+    #[test]
+    fn a_run_that_reaches_an_ambient_authority_says_which_one() {
+        let pipeline =
+            bravebot_core::command::Pipeline::new(vec![bravebot_core::command::Stage::new(
+                "gh",
+                vec!["pr".to_string(), "list".to_string()],
+            )]);
+        let request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/gh".to_string()], "/work");
+
+        let lines = program(&request).join("\n");
+        assert!(
+            lines.contains(t!(run_not_sandboxed)),
+            "the blanket line was dropped in favour of the list: {lines}"
+        );
+        assert!(
+            lines.contains("already logged in"),
+            "the question does not say what the line spends: {lines}"
         );
     }
 }

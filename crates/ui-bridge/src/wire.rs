@@ -336,6 +336,17 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         "writes": request.plan.writes,
         "stdin": request.stdin,
         "releasesPrivate": request.releases_private(),
+        // What the line reaches that nothing here holds: a container daemon, a tool already
+        // logged in, the ssh agent, a machine's metadata service. Nothing is handed over when one
+        // is used and nobody can refuse it, so the only thing available is that whoever grants it
+        // is told what they are granting. Sent as the kind and the word that named it rather than
+        // as a sentence, for the reason a vetting verdict is: the words belong to whichever front
+        // end draws them. Empty for nearly every line, and a front end draws nothing for those.
+        "ambient": request
+            .ambient_authority()
+            .iter()
+            .map(|spent| json!({ "authority": spent.authority.name(), "named": spent.named }))
+            .collect::<Vec<_>>(),
         // What approving-and-remembering would cover, which is the thing the second
         // answer needs to be about. A pipeline vouches for all of its stages: one that
         // still had to ask about a stage would not have stopped asking.

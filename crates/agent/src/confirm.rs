@@ -240,6 +240,18 @@ impl RunRequest {
         self.plan.releases_private()
     }
 
+    /// The authorities this line reaches that nothing here holds, in the order it names them.
+    ///
+    /// Drawn beside the line saying the command is not sandboxed rather than instead of it. That
+    /// line is true of every command and says what confinement there is; this says which
+    /// particular access a yes hands over, which is the thing a person cannot work out from the
+    /// argument list in front of them. Nothing is refused on it and nothing depends on the list
+    /// being complete: a container daemon nobody recognised is still unsandboxed and still said
+    /// to be.
+    pub fn ambient_authority(&self) -> Vec<bravebot_core::ambient::Spent> {
+        bravebot_core::ambient::spent_by(&self.plan)
+    }
+
     /// Whether the line writes an environment assignment in front of one of its programs.
     ///
     /// The second reason the prompt cannot offer to stop asking: an entry records a program, its
@@ -421,6 +433,16 @@ impl FetchRequest {
     /// A short description for a prompt line.
     pub fn summary(&self) -> String {
         format!("fetch from {}", self.host)
+    }
+
+    /// The authority this host is, where reaching it is reaching one.
+    ///
+    /// A metadata service is an ordinary host to everything between here and it: it needs no
+    /// credential, is on no tier, and hands out the credentials of the role this machine runs as
+    /// to whatever can open the socket. So a request to one is a grant of that, and a prompt that
+    /// showed only the address would be asking about a link-local number.
+    pub fn ambient_authority(&self) -> Option<bravebot_core::ambient::Spent> {
+        bravebot_core::ambient::at_host(&self.host)
     }
 }
 
