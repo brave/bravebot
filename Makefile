@@ -44,6 +44,7 @@ help:
 	@echo "  make build                 Debug build"
 	@echo "  make test                  Run all tests"
 	@echo "  make check                 Format check, clippy, tests, and toolchain age"
+	@echo "  make check-all-local       All checks except Docker platform checks"
 	@echo "  make check-spec            Check docs/specs against the implementation"
 	@echo "  make check-security        The security audit's deterministic half"
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
@@ -56,11 +57,11 @@ help:
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
 	@echo "  make check-npm             Install from the lockfile and lint it, as CI does"
-	@echo "  make check-ui              The front end's Node tests, which pin what its renderer marks"
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
-	@echo "  make check-all             Every check any CI enforces, including the security scan"
+	@echo "  make check-ui              Build the desktop UI, run the tests pinning what it marks, drive it"
+	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
 	@echo "  make fmt                   Apply formatting"
@@ -119,16 +120,14 @@ aws-logout:
 	@echo "ending every cached AWS SSO session; sign in again with: aws sso login --profile <name>"
 	aws sso logout
 
-# Everything CI enforces, runnable locally before pushing.
-#
-# The toolchain check is last so a run that has something to say says it after the results
-# rather than in front of them, and it fails rather than warns: this target's whole claim is
-# that passing it means CI passes, and on a toolchain several releases behind that is not true.
+# Host formatting, Clippy, tests and toolchain age. Platform and UI checks are separate.
+# Report an old toolchain after the test results, since CI may use newer lints.
 .PHONY: check
+RUST_TEST_THREADS ?= 4
 check:
 	cargo fmt --all -- --check
 	cargo clippy --all-targets --all-features -- -D warnings
-	cargo test --all --locked
+	RUST_TEST_THREADS="$(RUST_TEST_THREADS)" cargo test --all --locked
 	@python3 contrib/check-versions.py
 	@python3 contrib/check-toolchain.py
 
@@ -218,10 +217,6 @@ check-reviewdog: check-reviewdog-selftest
 check-reviewdog-full: check-reviewdog-selftest
 	@contrib/check-reviewdog.sh --full
 
-.PHONY: check-reviewdog-selftest
-check-reviewdog-selftest:
-	python3 contrib/check-reviewdog-selftest.py
-
 # The npm-lockfile job. The published package is a thin wrapper that downloads the
 # release binary, so the lockfile is the whole supply chain surface it has. The front end
 # under ui/ has a lockfile of its own, holding Electron's tree, and it gets the same lint:
@@ -230,34 +225,8 @@ check-reviewdog-selftest:
 check-npm:
 	npm ci --ignore-scripts
 	npm run lint:lockfile
+	npm run lint:lockfile:website
 	npm run lint:lockfile:ui
-
-# The node half of the Front end job. Two of these files are the only thing pinning what the
-# desktop renderer owes the layering spec: that released content is marked by a container it
-# cannot forge, reaches no raw markup and makes the app fetch nothing, and that a replayed
-# message is drawn from the record rather than from its own words. Both are properties of a
-# surface this workspace does not compile, so no Rust test can cite them and nothing here ran
-# them: a renderer change that dropped the marking passed every target this repository has.
-#
-# --ignore-scripts, so no Electron runtime is fetched. None of these tests opens a window: they
-# render through react-dom and load the main-process modules directly. What it costs is that this
-# install also removes a runtime already there, since npm ci empties node_modules and the setup
-# step that puts it back is one of the scripts being skipped: run `npm run setup:electron` in ui/
-# before the next `npm run dev`. The one thing these tests need built is the secure-file helper,
-# which six of them spawn for real rather than stub, so the cargo build is part of the target
-# rather than a prerequisite left to whoever reads a failure.
-#
-# `ls` ahead of the tests because `node --test` given a pattern matching nothing exits 0 having
-# run nothing, so the renamed-away case would pass rather than fail. Two of these files are named
-# in the layering spec's `governs` list and check-spec fails when one goes, which leaves the other
-# eight; this covers all ten without a list here to keep in step.
-#
-# Not part of `check`, which needs no Node and no registry, and not the whole of that CI job
-# either: the Electron build and the walkthrough do fetch the runtime and do open a window.
-.PHONY: check-ui
-check-ui:
-	cargo build -p bravebot-ui-files
-	cd ui && npm ci --ignore-scripts && ls scripts/*.test.mjs >/dev/null && node --test scripts/*.test.mjs
 
 # The dependency policy in deny.toml. CI runs this target rather than cargo-deny's action,
 # so the version below is the only one anywhere and a pass here means what it means there.
@@ -283,12 +252,15 @@ check-deps:
 # rustup is not a given here and a Homebrew or distro Rust cannot switch toolchains.
 # Catches a feature that only compiles on a newer toolchain than the release build has.
 .PHONY: check-msrv
+# The source archive contains working-tree edits but excludes ignored local state.
+# pipefail keeps a failed archive from becoming a successful container check.
+check-msrv check-windows check-linux: SHELL := /bin/bash -o pipefail
 check-msrv:
 	@case "$(MSRV_IMAGE)" in rust:$(MSRV)-slim@sha256:*) ;; \
 		*) echo "MSRV is $(MSRV) and MSRV_IMAGE is $(MSRV_IMAGE): bump both"; exit 1;; esac
-	docker run --rm --platform linux/amd64 -e BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 \
-		-v "$(PWD):/src:ro" -w /work $(MSRV_IMAGE) sh -c '\
-		cp -r /src/. /work && \
+	python3 contrib/check-source.py | docker run --rm -i -e BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 \
+		-w /work $(MSRV_IMAGE) sh -c '\
+		tar -xf - && \
 		cargo build --all --locked'
 
 # The windows job. Nothing else compiles the `#[cfg(windows)]` arms of this tree for a check:
@@ -299,9 +271,9 @@ check-msrv:
 # component.
 .PHONY: check-windows
 check-windows:
-	docker run --rm --platform linux/amd64 -e BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 \
-		-v "$(PWD):/src:ro" -w /work $(STABLE_IMAGE) sh -c '\
-		cp -r /src/. /work && \
+	python3 contrib/check-source.py | docker run --rm -i -e BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 \
+		-w /work $(STABLE_IMAGE) sh -c '\
+		tar -xf - && \
 		apt-get update >/dev/null && \
 		apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 >/dev/null && \
 		rustup component add clippy >/dev/null && \
@@ -330,12 +302,48 @@ docs-changes:
 docs-updated-to-sha:
 	@python3 agents/skills/update-docs/docs-ref.py show
 
-# Everything any CI enforces, in one target: the jobs in ci.yml plus the security
-# scan the organization-level workflow runs. Slower than `check` by a lot -- two
-# container builds and a scan -- so `check` stays the inner loop and this is the
-# before-you-push pass.
-.PHONY: check-all
-check-all: check check-spec check-security check-locales check-versions check-docs check-npm check-ui check-deps check-msrv check-windows check-reviewdog
+# All local checks before pushing, including the UI and Linux code paths.
+# Requires Docker and the desktop runtime dependencies described in checks.md.
+.PHONY: check-all-local check-all
+check-all-local: check-scripts check check-spec check-security check-locales check-versions check-docs check-npm check-deps check-ui check-reviewdog
+check-all: check-all-local check-msrv check-windows check-linux
+
+.PHONY: check-scripts check-all-selftest check-reviewdog-selftest
+check-scripts: check-all-selftest check-reviewdog-selftest
+
+check-all-selftest:
+	python3 contrib/check-all-selftest.py
+
+check-reviewdog-selftest:
+	python3 contrib/check-reviewdog-selftest.py
+
+# CI and local runs share the same desktop checks. Linux uses a virtual display;
+# macOS uses the logged-in desktop session.
+#
+# The Node tests this runs are the only thing pinning what the desktop renderer owes the layering
+# spec: that released content is marked by a container it cannot forge, reaches no raw markup and
+# makes the app fetch nothing, and that a replayed message is drawn from the record rather than
+# from its own words. Both are properties of a surface this workspace does not compile, so no Rust
+# test can cite them and `make check` never ran them. `ls` precedes the run because `node --test`
+# given a pattern matching nothing exits 0 having run nothing, which would make a renamed-away pin
+# a passing gate. The helper six of them spawn for real is built by the bridge script that
+# `npm run build` calls, so it needs no step of its own here.
+.PHONY: check-ui check-ui-build check-ui-walkthrough
+check-ui: check-ui-build
+	$(MAKE) check-ui-walkthrough
+
+check-ui-build:
+	npm --prefix ui ci
+	npm --prefix ui run typecheck
+	BRAVEBOT_BUILD_UNCONFIGURED=1 npm --prefix ui run build
+	cd ui && ls scripts/*.test.mjs >/dev/null && node --test scripts/*.test.mjs
+
+check-ui-walkthrough:
+	cd ui && if [ "$$(uname -s)" = Linux ]; then \
+		xvfb-run -a node scripts/drive-manual-walkthrough.mjs; \
+	else \
+		node scripts/drive-manual-walkthrough.mjs; \
+	fi
 
 # What each catalog has of the reference, and what it is missing. The build says so too, in a
 # warning, but a warning is only printed when the build script actually runs, so a translator
@@ -366,15 +374,16 @@ check-locales:
 # all, so the sandbox tests would fail rather than skip, while on a CI runner that same
 # failure is the report that the Linux half of confinement went unexercised.
 #
-# Threads are capped because several turn tests stand up a mock HTTP server on an ephemeral
-# port, and at the container's default parallelism enough of them race that a different one
-# fails each run. A native runner has the headroom; Docker here does not.
+# Keep test parallelism bounded in Docker, as it is for the host checks.
+# Python runs the redirected-process fixture in the turn tests.
 .PHONY: check-linux
 check-linux:
-	docker run --rm --platform linux/amd64 -e BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 -e USER=root \
+	python3 contrib/check-source.py | docker run --rm -i -e BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 -e USER=root \
 		-e BRAVEBOT_ALLOW_MISSING_LANDLOCK=1 \
-		-v "$(PWD):/src:ro" -w /work $(STABLE_IMAGE) sh -c '\
-		cp -r /src/. /work && \
+		-w /work $(STABLE_IMAGE) sh -c '\
+		tar -xf - && \
+		apt-get update >/dev/null && \
+		apt-get install -y --no-install-recommends python3 >/dev/null && \
 		rustup component add clippy rustfmt >/dev/null 2>&1 && \
 		cargo fmt --all -- --check && \
 		cargo clippy --all-targets --all-features -- -D warnings && \

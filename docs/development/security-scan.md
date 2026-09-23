@@ -29,7 +29,7 @@ A runner failure makes the check fail, including a scanner failure hidden by a l
 formatter in its pipeline or by reviewdog filtering out all of its findings. Runner stderr
 also fails the check so a partial scan cannot report a clean result. Both scan targets first
 run `make check-reviewdog-selftest` to test empty scans, findings, and scanner failures.
-A full scan clears any inherited branch baseline.
+`make check-scripts` also tests check orchestration. A full scan clears any inherited branch baseline.
 Failure to list the files or set the baseline also fails the scan.
 
 Opengrep's baseline mode considers committed changes only. When tracked files have

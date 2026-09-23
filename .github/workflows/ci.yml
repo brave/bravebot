@@ -134,11 +134,7 @@ jobs:
           package-manager-cache: false
 
       - name: Install from the lockfile and lint it
-        run: |
-          npm ci --ignore-scripts
-          npm run lint:lockfile
-          npm run lint:lockfile:website
-          npm run lint:lockfile:ui
+        run: make check-npm
 
   # The documentation website under docs/website. Docusaurus throws on broken links or
   # broken anchors, so this job validates documentation correctness across the tree.
@@ -189,6 +185,9 @@ jobs:
 
       - name: Audit the label rule mechanically
         run: make check-security
+
+      - name: Test local check orchestration and scanner failures
+        run: make check-scripts
 
   # Whether every message catalog matches contrib/untranslated-messages.txt. A translation may lag the
   # reference, since what it lacks is shown in English and a catalog nobody could use unfinished
@@ -343,24 +342,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64
 
-      # The Electron package is needed to typecheck src/main and src/preload against it. The
-      # runtime binary is needed as well, for the walkthrough below, so this install does not
-      # set ELECTRON_SKIP_BINARY_DOWNLOAD.
-      - name: Install
-        working-directory: ui
-        run: npm ci
-
-      - name: Typecheck
-        working-directory: ui
-        run: npm run typecheck
-
-      - name: Build and run the Node tests
-        working-directory: ui
-        run: |
-          npm run build
-          node --test scripts/*.test.mjs
+      - name: Build and test the desktop UI
+        run: make check-ui-build
 
       - name: Walkthrough regression
-        working-directory: ui
         timeout-minutes: 5
-        run: xvfb-run -a node scripts/drive-manual-walkthrough.mjs
+        run: make check-ui-walkthrough

@@ -24,6 +24,58 @@ suspicious of.
 
 ## Before pushing
 
+Choose how much to run:
+
+| Command | Coverage |
+|---|---|
+| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, toolchain age, docs, npm lockfiles, dependency policy, desktop UI and reviewdog. No Docker. |
+| `make check-all` | Everything in `check-all-local`, plus Docker checks for minimum Rust, Windows Clippy and Linux. |
+
+Before a PR, run the checks relevant to your change and state which command passed.
+If you use `check-all-local`, leave the platform checks to CI and say they were not run
+locally. You can also run an individual target, such as `make check-reviewdog`, or check
+formatting with `cargo fmt --all -- --check`.
+
+If the checkout has no backend credentials, use
+`BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make check-all-local` (or `check-all`) to allow
+the Rust build.
+
+`make check-all` requires Docker for the platform checks. A missing prerequisite fails
+the target; it does not count as a pass. Add `-k`, for example `make -k check-all-local`,
+to continue independent checks when one fails.
+
+For the full run on macOS, start Docker Desktop and run `make check-all` from the checkout
+you plan to submit. The Linux checks run inside Docker, and Windows Clippy cross-compiles there;
+neither needs a separate Linux or Windows machine. Host Rust tests use four threads by
+default; override this with `RUST_TEST_THREADS=8 make check-all` if needed.
+The containers receive current source, including local edits and untracked files,
+but exclude ignored files, build output and nested checkouts. They use Docker's native
+architecture so Apple Silicon does not need to emulate an x86 Linux CPU.
+
+`make check-ui` installs the desktop dependencies, typechecks and builds the app,
+runs its Node tests, and drives the Electron walkthrough. Those Node tests are the only thing
+pinning what the desktop renderer owes the layering spec: that released content is marked by a
+container it cannot forge, reaches no raw markup and makes the app fetch nothing, and that a
+replayed message is drawn from the record rather than from its own words. Both are properties of a
+surface this workspace does not compile, so no Rust test can observe them and `make check` never
+did. Run this for a change under `ui/`. On macOS it needs a logged-in
+desktop session. On Linux it needs `xvfb-run` and Electron's runtime libraries; CI
+installs `xvfb`, `libgtk-3-0`, `libnss3` and `libasound2t64`. CI uses the same build
+and walkthrough targets, with a separate timeout for the walkthrough.
+The check build leaves out backend credentials, even when your development build has
+them, so the walkthrough can test the unconfigured app without using your account.
+Run `npm --prefix ui run build` afterwards to restore a configured development build.
+
+`make check-scripts` checks that every required gate runs, that UI and lockfile failures
+reach the caller, and that scanner failures cannot pass as empty scans. It runs
+`check-all-selftest` and `check-reviewdog-selftest`, which can also run separately.
+To also exercise the installed reviewdog binary, set `REVIEWDOG_TEST_BINARY` to its
+absolute path when running the target. Without it, that integration test is reported as skipped.
+
+These are local checks, not a promise that every CI environment passes. Windows Clippy
+cross-compiles without running Windows tests. Docker Desktop cannot exercise Landlock;
+CI's native Linux tests cover that gap. Release cross-builds remain separate.
+
 `make check` runs the whole suite and takes minutes. It is what to run before pushing a branch and
 what CI runs, not what to run between two edits to the same file, and never twice to confirm the
 same thing. Reaching for it out of caution is not free: it is the difference between a review that
@@ -72,19 +124,6 @@ states it in its own header and, for a lockfile, in the entry for the package it
 check` runs it and so does CI, because the tagging path's own refusal fires on release day, which
 is long after the pull request that moved one file and not the others. It carries a `--selftest`,
 which `make check-versions` runs first.
-
-`make check-ui` runs the front end's own Node tests, which are the only thing pinning what the
-desktop renderer owes the layering spec: that released content is marked by a container it cannot
-forge, reaches no raw markup and makes the app fetch nothing, and that a replayed message is drawn
-from the record rather than from its own words. Those are properties of a surface this workspace does
-not compile, so no Rust test can observe them and `make check` never did. It builds
-`bravebot-ui-files` first, because six of these tests spawn that helper for real, and installs with
-`--ignore-scripts`, because none of them opens a window and the Electron runtime is a hundred
-megabytes. That install also removes a runtime already installed, so run `npm run setup:electron` in
-`ui/` before the next `npm run dev`. Run this for a change under `ui/`. It is not part of `make
-check`, which needs no Node and no registry, and it is not the whole of the Front end CI job either:
-the Electron build and the walkthrough do fetch the runtime and do open a window, so CI is still
-where those are decided.
 
 `make check-npm` installs from the lockfile and lints it, as CI does. `make check-deps` decides
 `deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
