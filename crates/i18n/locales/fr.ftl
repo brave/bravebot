@@ -174,6 +174,9 @@ doctor-ends-aws-session =
     une identification de session : émise par AWS STS pour le profil et prend fin à sa propre expiration ; on ne peut y mettre fin plus tôt qu'auprès de son émetteur, car `aws sso logout` efface la copie de cette machine et non la session elle-même
 doctor-ends-gateway-token =
     un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages ou effacer la variable met fin à la garde de cette machine et laisse le jeton actif là-bas
+doctor-noticed = détection
+doctor-noticed-aws-session =
+    en { $minutes } minutes environ, et seulement si quelqu'un lit le journal du compte : un appel fait avec cette session y apparaît et non ici, rien sur cette machine ne guette un tel appel, et y mettre fin avant son expiration demande une requête auprès de son émetteur
 doctor-outlives = survit
 doctor-outlives-aws-access-key =
     une identification de session déjà émise par STS sous cette clé d'accès, qui court jusqu'à sa propre expiration : la suppression de la clé ne l'atteint pas

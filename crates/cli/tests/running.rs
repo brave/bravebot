@@ -650,6 +650,67 @@ fn a_run_asked_for_a_result_object_puts_one_on_stdout() {
     );
 }
 
+/// CRED-10: the figure sizing the one brief window reaches the person, under the account of what
+/// would end the credential it sizes. The record holding a figure nothing prints is the same
+/// position as the record holding no figure: somebody reading this after a session credential
+/// appears somewhere public still has nothing to weigh the window against.
+///
+/// Under that line rather than anywhere in the report, and once rather than three times: the
+/// figure belongs to the session credential, and a report that offered it for the signing key
+/// would claim a window bounds a credential that has none.
+///
+/// Both AWS arrangements are held wherever an account is configured, so an account is all the
+/// fixture needs; the AWS CLI is never run, since this is what the configuration holds rather
+/// than what a profile resolves to.
+#[test]
+fn doctor_sizes_the_window_on_a_session_credential_and_on_nothing_else() {
+    let scratch = Scratch::new("cli-running-brief-window");
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+            ("BRAVEBOT_USE_BEDROCK", "1"),
+            ("AWS_REGION", "us-west-2"),
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    let sized: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("noticed "))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(
+        sized.len(),
+        1,
+        "one credential is at Held briefly, and this report sized {}: {stdout}",
+        sized.len()
+    );
+
+    let at = sized[0];
+    assert!(
+        lines[at].contains("15 minutes"),
+        "the window was reported without the figure the record holds: {}",
+        lines[at]
+    );
+    // The session credential is the one above it: `aws sso logout` is in that account and in no
+    // other, so this says which credential the figure was printed under.
+    assert!(
+        lines[at - 1].starts_with("ends ") && lines[at - 1].contains("aws sso logout"),
+        "the figure was not reported under the credential it sizes: {}",
+        lines[at - 1]
+    );
+}
+
 /// The flag reaches the layer a process reads, which is the half of it no in-process test can
 /// answer: `Settings::load` is called from the interface, from a one-shot run and from the list a
 /// subprocess is built with, and what carries the named file to all three is process-wide state the

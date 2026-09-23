@@ -10,6 +10,7 @@
 
 use std::env;
 use std::fmt;
+use std::time::Duration;
 
 /// Environment variable names, kept together so the set is auditable at a glance.
 pub mod env_var {
@@ -310,6 +311,12 @@ impl fmt::Display for Secret {
 /// is recorded beside the value is which arrangement it is, and the three answers follow from that.
 /// The words a person reads are in the message catalog, since this crate holds none of its own.
 ///
+/// CRED-10 asks a fourth thing, of the credentials at Held briefly alone: how quickly a leak of one
+/// would be noticed and acted on. That figure is a judgement about the deployment rather than a
+/// fact about the arrangement, and it establishes no tier and moves none, so it is recorded here
+/// beside the tier rather than derived from it: [`Held::held_briefly`] and
+/// [`Held::noticed_within`].
+///
 /// The obligation is detection followed by something a person can act on. An expiry, which is all
 /// that was kept before, says when a credential stops working and nothing about how to stop it
 /// working sooner; removing the file it came from ends this run's custody and leaves it live at its
@@ -367,6 +374,46 @@ impl<'a> Held<'a> {
             Self::AwsSession,
             Self::GatewayToken { host: gateway_host },
         ]
+    }
+
+    /// Whether this credential stands at Held briefly rather than at Held.
+    ///
+    /// The tier decides which obligations a credential carries, and CRED-10 asks a figure of the
+    /// credentials at Held briefly and of no others, so which tier a credential stands at has to
+    /// be a question the record answers rather than one a reader answers from the prose above
+    /// each variant.
+    ///
+    /// A claim about the arrangement, so it moves only when the arrangement does: CRED-4. A
+    /// session credential is minted for an occasion by an issuer that ends it, and none of the
+    /// others has an issuer that ends anything on its own.
+    pub fn held_briefly(self) -> bool {
+        matches!(self, Self::AwsSession)
+    }
+
+    /// How quickly a leak of this credential would be noticed and acted on, which CRED-10 asks the
+    /// record to say for every credential at Held briefly.
+    ///
+    /// `None` for a credential at Held, where the figure would mean nothing: a permanent
+    /// credential is bounded by the surface that revokes it rather than by a window, and that
+    /// surface is what [`Held`] already records. The figure is owed exactly where the window is
+    /// the bound, so it is `Some` for exactly the credentials [`Held::held_briefly`] names, and
+    /// the two are pinned together rather than derived from one another.
+    ///
+    /// It does not establish the tier and cannot move it. A rota that stopped watching would make
+    /// this number larger and leave the session credential exactly where the gate walk left it.
+    ///
+    /// **Where the fifteen minutes comes from.** It is a judgement about this deployment, which is
+    /// one person's machine, and not a property of the arrangement. Nothing here watches for a use
+    /// of a credential this program holds: the notice comes from the AWS account's own trail,
+    /// where a call made with the session appears rather than here, and ending the session before
+    /// its expiry is then one request at its issuer. Fifteen minutes is how long that takes
+    /// somebody who is reading the trail. Where nobody reads it, nothing notices at all and the
+    /// expiry is the only bound, which is the judgement this figure exists to let a person make.
+    pub fn noticed_within(self) -> Option<Duration> {
+        match self {
+            Self::AwsSession => Some(Duration::from_secs(15 * 60)),
+            Self::SigningKey | Self::AwsAccessKey | Self::GatewayToken { .. } => None,
+        }
     }
 
     /// Whether revoking this credential at its issuer leaves something minted from it working.
@@ -1161,6 +1208,48 @@ mod tests {
                 host: "in-the-file.invalid"
             }
             .outlives_revocation()
+        );
+    }
+
+    /// CRED-10: a credential the record stands at Held briefly is owed a figure for how quickly a
+    /// leak of it would be noticed and acted on, and one at Held is not. The window is the whole
+    /// of what bounds the first, so a window nobody sized is a number somebody liked; the second
+    /// is bounded by the surface that revokes it, which the record already names, and giving it a
+    /// figure too would say a window bounds a credential that has none.
+    ///
+    /// The two are kept apart and pinned together here so that a credential standing at Held
+    /// briefly and left unsized fails rather than passing quietly.
+    #[test]
+    fn a_credential_at_held_briefly_is_sized_against_detection_and_one_at_held_is_not() {
+        let gateway = Held::GatewayToken {
+            host: "gateway.invalid",
+        };
+        for held in Held::all("gateway.invalid") {
+            assert_eq!(
+                held.noticed_within().is_some(),
+                held.held_briefly(),
+                "{held:?} stands at one tier and is sized for the other"
+            );
+        }
+
+        assert!(Held::AwsSession.held_briefly());
+        assert!(!Held::SigningKey.held_briefly());
+        assert!(!Held::AwsAccessKey.held_briefly());
+        assert!(!gateway.held_briefly());
+
+        let window = Held::AwsSession
+            .noticed_within()
+            .expect("a session credential stands at Held briefly");
+        assert!(
+            window >= Duration::from_secs(60),
+            "a figure under a minute is the unsized case wearing a number: {window:?}"
+        );
+        // Whole minutes, because minutes are what the report states: a figure of ninety seconds
+        // would reach a person as one minute, which is a smaller window than anybody recorded.
+        assert_eq!(
+            window.as_secs() % 60,
+            0,
+            "a figure that is not whole minutes is reported as a shorter one: {window:?}"
         );
     }
 
