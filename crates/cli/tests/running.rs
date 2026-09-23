@@ -711,6 +711,82 @@ fn doctor_sizes_the_window_on_a_session_credential_and_on_nothing_else() {
     );
 }
 
+/// CRED-3: the walk a credential took reaches the person, one line per drop, under the account of
+/// what would end that credential. A record nothing prints is the position the clause describes:
+/// somebody reading the report is told where each credential stands and nothing about which gate
+/// put it there, so a tier is an assertion again.
+///
+/// Counted per credential rather than over the report, because the session credential is the one
+/// thing here that passes a gate: two drops where the other two have three, and a report that
+/// printed three for it would say AWS enforces nothing it does enforce.
+///
+/// Both AWS arrangements are held wherever an account is configured, so an account is all the
+/// fixture needs; the AWS CLI is never run, since this is what the configuration holds rather
+/// than what a profile resolves to.
+#[test]
+fn doctor_accounts_for_every_drop_of_each_credentials_walk() {
+    let scratch = Scratch::new("cli-running-gate-walk");
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+            ("BRAVEBOT_USE_BEDROCK", "1"),
+            ("AWS_REGION", "us-west-2"),
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+
+    // One block per credential: the account of what would end it, and everything printed under it
+    // until the next one.
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    let starts: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("ends "))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(
+        starts.len(),
+        3,
+        "this configuration holds the signing key and both AWS arrangements: {stdout}"
+    );
+
+    for (position, at) in starts.iter().enumerate() {
+        let until = starts.get(position + 1).copied().unwrap_or(lines.len());
+        let dropped: Vec<&str> = lines[*at..until]
+            .iter()
+            .filter(|line| line.starts_with("dropped "))
+            .copied()
+            .collect();
+
+        // The session credential is the one whose account names `aws sso logout`, and the one
+        // gate anything here passes is its third.
+        let expected = match lines[*at].contains("aws sso logout") {
+            true => 2,
+            false => 3,
+        };
+        assert_eq!(
+            dropped.len(),
+            expected,
+            "the walk reported under {} is not the walk the record holds: {dropped:?}",
+            lines[*at]
+        );
+        for (gate, line) in dropped.iter().enumerate() {
+            assert!(
+                line.contains(&format!("gate {}", gate + 1)),
+                "the drops are reported out of the order the gates are asked: {dropped:?}"
+            );
+        }
+    }
+}
+
 /// The flag reaches the layer a process reads, which is the half of it no in-process test can
 /// answer: `Settings::load` is called from the interface, from a one-shot run and from the list a
 /// subprocess is built with, and what carries the named file to all three is process-wide state the

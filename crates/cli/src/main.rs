@@ -1878,6 +1878,14 @@ fn doctor() -> ExitCode {
                 if let Some(survives) = what_outlives_revoking(held) {
                     fact(t!(doctor_outlives), survives);
                 }
+                // How it got here, after what would end it: the lines above name the credential
+                // and the address somebody acts on, and these say which gate each drop failed and
+                // whether anybody could have done otherwise.
+                for drop in held.walk() {
+                    if let Some(dropped) = why_it_dropped(held, *drop) {
+                        fact(t!(doctor_dropped), dropped);
+                    }
+                }
             }
 
             // What a run would actually request, since a choice made with `/model` overrides the
@@ -2200,6 +2208,128 @@ fn how_soon_a_leak_is_noticed(held: bravebot_config::Held<'_>) -> Option<String>
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsAccessKey
         | bravebot_config::Held::GatewayToken { .. } => None,
+    }
+}
+
+/// What `doctor` says about one drop of a credential's gate walk: the gate, whether the
+/// counterparty refused or nobody attempted it, and the condition that was not met, which is what
+/// CRED-3 asks be recorded.
+///
+/// `None` where the credential's walk holds no such drop, so a report cannot state a reason the
+/// record does not: a gate it passed, or a condition of a gate it failed on something else. Which
+/// those are is the record's answer, and the two can disagree here where a test can see it.
+///
+/// Keyed on the condition rather than on the gate, because the condition is what the sentence
+/// says. Keyed on the gate, a walk revised to fail gate 2 on the bound having no end would still
+/// print the account of a bound nobody fixed, which is a stated reason that is not the one the
+/// record holds.
+///
+/// A `match` over the record rather than a field on it, for the reason [`what_would_end`] is one:
+/// `bravebot-config` holds no words a person reads, so a credential or a condition added there
+/// does not compile until every credential has said whether it drops on it.
+///
+/// The gate number and the answer come from the drop rather than from the sentence, so a line
+/// cannot state a gate the walk did not fail or an answer the record does not hold. No sentence
+/// names the gateway host: a walk accounts for an arrangement, and the address somebody acts on is
+/// on the line above it.
+fn why_it_dropped(
+    held: bravebot_config::Held<'_>,
+    drop: bravebot_config::GateDrop,
+) -> Option<String> {
+    use bravebot_config::{Condition, Held};
+
+    let gate = drop.condition.gate().number();
+    let answer = whether_anybody_asked(drop.attempt);
+    Some(match (held, drop.condition) {
+        (Held::SigningKey, Condition::NothingDecidesEachUse) => t!(
+            doctor_dropped_signing_key_nothing_decides_each_use,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::SigningKey, Condition::NoBoundFixedBeforeIssue) => t!(
+            doctor_dropped_signing_key_no_bound_fixed_before_issue,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::SigningKey, Condition::NotMintedForOneStep) => t!(
+            doctor_dropped_signing_key_not_minted_for_one_step,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::AwsAccessKey, Condition::NothingDecidesEachUse) => t!(
+            doctor_dropped_aws_access_key_nothing_decides_each_use,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::AwsAccessKey, Condition::NoBoundFixedBeforeIssue) => t!(
+            doctor_dropped_aws_access_key_no_bound_fixed_before_issue,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::AwsAccessKey, Condition::NotMintedForOneStep) => t!(
+            doctor_dropped_aws_access_key_not_minted_for_one_step,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::AwsSession, Condition::NothingDecidesEachUse) => t!(
+            doctor_dropped_aws_session_nothing_decides_each_use,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::AwsSession, Condition::NoBoundFixedBeforeIssue) => t!(
+            doctor_dropped_aws_session_no_bound_fixed_before_issue,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::GatewayToken { .. }, Condition::NothingDecidesEachUse) => t!(
+            doctor_dropped_gateway_token_nothing_decides_each_use,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::GatewayToken { .. }, Condition::NoBoundFixedBeforeIssue) => t!(
+            doctor_dropped_gateway_token_no_bound_fixed_before_issue,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::GatewayToken { .. }, Condition::NotMintedForOneStep) => t!(
+            doctor_dropped_gateway_token_not_minted_for_one_step,
+            gate = gate,
+            answer = answer
+        ),
+        // The conditions each credential's walk does not hold. Gate 3 is passed by the session
+        // credential and by nothing else, since STS mints it for the profile and ends it at an
+        // expiry AWS enforces; the rest are the other conditions of the gates each credential
+        // does drop at, and a drop recorded on one of them is an account nobody has written.
+        (
+            Held::SigningKey | Held::AwsAccessKey | Held::GatewayToken { .. },
+            Condition::NothingCanRefuseAUse
+            | Condition::BoundEnforcedWithinReach
+            | Condition::BoundWithNoEnd
+            | Condition::IssuerEndsNothing
+            | Condition::RenewableWithoutAuthority,
+        )
+        | (
+            Held::AwsSession,
+            Condition::NothingCanRefuseAUse
+            | Condition::BoundEnforcedWithinReach
+            | Condition::BoundWithNoEnd
+            | Condition::NotMintedForOneStep
+            | Condition::IssuerEndsNothing
+            | Condition::RenewableWithoutAuthority,
+        ) => return None,
+    })
+}
+
+/// Whether the counterparty refused or nobody attempted it, in the words a person reads.
+///
+/// The two answers end at the same tier and mean opposite things, so the sentence carries the
+/// record's answer rather than one written into each account: only the second is a decision
+/// anybody here can revisit, and a line that says the wrong one sends somebody to argue with AWS
+/// about a request nobody made.
+fn whether_anybody_asked(attempt: bravebot_config::Attempt) -> &'static str {
+    match attempt {
+        bravebot_config::Attempt::Refused => t!(doctor_dropped_refused),
+        bravebot_config::Attempt::NotAttempted => t!(doctor_dropped_not_attempted),
     }
 }
 
@@ -3094,6 +3224,102 @@ mod tests {
             assert!(
                 sentence.contains(&minutes),
                 "{held:?} is reported with a figure the record does not hold: {sentence}"
+            );
+        }
+    }
+
+    /// CRED-3: a reason is reported for exactly the drops the record holds. A credential whose
+    /// drops go unreported leaves the tier an assertion, which is the state the clause exists to
+    /// end. A reason reported for a drop the record does not hold is the other half and the worse
+    /// one: the session credential's expiry is enforced by AWS, and a line saying it failed gate 3
+    /// sends somebody looking for a bound nothing is missing, while a gate 2 line naming a
+    /// condition the walk did not fail is a stated reason that is not the reason.
+    ///
+    /// Asked of every condition of every gate rather than of the walk alone, since the walk is
+    /// what both sides read and a report keyed on something coarser agrees with it by accident.
+    #[test]
+    fn a_reason_is_reported_for_exactly_the_drops_the_record_holds() {
+        for held in bravebot_config::Held::all(GATEWAY_HOST) {
+            for condition in bravebot_config::Condition::all() {
+                let recorded = held.walk().iter().any(|drop| drop.condition == condition);
+                let reported = why_it_dropped(
+                    held,
+                    bravebot_config::GateDrop {
+                        condition,
+                        attempt: bravebot_config::Attempt::NotAttempted,
+                    },
+                );
+
+                assert_eq!(
+                    reported.is_some_and(|line| !line.is_empty()),
+                    recorded,
+                    "{held:?} is reported and recorded differently at gate {}, on {condition:?}",
+                    condition.gate().number()
+                );
+            }
+        }
+    }
+
+    /// CRED-3: a reported drop states the gate and the answer the record holds. A sentence
+    /// carrying its own gate number drifts from the walk the first time either is revised, and one
+    /// carrying its own answer is the failure that matters: the counterparty refusing and nobody
+    /// attempting end at the same tier, and only the second is anybody's here to revisit, so a
+    /// report that always says one of them tells a reader nothing they can act on.
+    #[test]
+    fn a_drop_is_reported_with_the_gate_and_the_answer_the_record_holds() {
+        for held in bravebot_config::Held::all(GATEWAY_HOST) {
+            for drop in held.walk() {
+                let line = why_it_dropped(held, *drop).expect("a drop the record holds");
+                let gate = drop.condition.gate().number().to_string();
+                assert!(
+                    line.contains(&gate),
+                    "{held:?} is reported at a gate the record does not name: {line}"
+                );
+
+                // The same condition with the other answer, which is the only difference between
+                // a fact about the world and a decision made here.
+                let other = bravebot_config::GateDrop {
+                    attempt: match drop.attempt {
+                        bravebot_config::Attempt::Refused => bravebot_config::Attempt::NotAttempted,
+                        bravebot_config::Attempt::NotAttempted => bravebot_config::Attempt::Refused,
+                    },
+                    ..*drop
+                };
+                assert_ne!(
+                    Some(line),
+                    why_it_dropped(held, other),
+                    "{held:?} reads the same at gate {gate} whether the counterparty refused or \
+                     nobody attempted it"
+                );
+            }
+        }
+    }
+
+    /// CRED-3: each drop has its own account of the condition that failed. One arm copied to the
+    /// next is what this catches, and a walk reported as three identical sentences says which gates
+    /// failed without saying what about them failed, which is the half of the clause that is not
+    /// the tier.
+    ///
+    /// Compared with the gate numbers taken out, because the number is passed in from the record:
+    /// an account copied from another gate is told apart by the digit the caller supplied rather
+    /// than by anything it says, and the sentence a person reads is then about the wrong
+    /// condition.
+    #[test]
+    fn every_drop_has_its_own_account_of_the_condition_it_failed() {
+        let reported: Vec<String> = bravebot_config::Held::all(GATEWAY_HOST)
+            .iter()
+            .flat_map(|held| {
+                held.walk()
+                    .iter()
+                    .filter_map(|drop| why_it_dropped(*held, *drop))
+            })
+            .map(|line| line.replace(|c: char| c.is_ascii_digit(), ""))
+            .collect();
+
+        for (at, line) in reported.iter().enumerate() {
+            assert!(
+                !reported[at + 1..].contains(line),
+                "two drops share one account of the condition that failed: {line}"
             );
         }
     }

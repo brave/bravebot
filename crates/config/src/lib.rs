@@ -303,6 +303,137 @@ impl fmt::Display for Secret {
     }
 }
 
+/// Which of the three gates between the tiers a credential's walk failed at.
+///
+/// Numbered top down from Delegated, as the walk asks them: gate 1 separates Delegated from
+/// Granted, gate 2 Granted from Held briefly, gate 3 Held briefly from Held. A drop names the
+/// gate rather than the tier it landed on because the gate is the question that was answered,
+/// and the tier is only where answering it left the credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gate {
+    /// Can something the agent cannot impersonate decide each use, and refuse?
+    One,
+    /// Can the issuer mint a bounded derivative, enforced beyond the agent's reach?
+    Two,
+    /// Can the issuer mint on demand and enforce death, unrefreshable without authority?
+    Three,
+}
+
+impl Gate {
+    /// The number the walk asks this gate at, which is what a report states.
+    ///
+    /// Taken from the record rather than written into each sentence a person reads, so a report
+    /// cannot name a gate the record did not fail.
+    pub const fn number(self) -> u8 {
+        match self {
+            Self::One => 1,
+            Self::Two => 2,
+            Self::Three => 3,
+        }
+    }
+}
+
+/// One condition of one gate, which is what CRED-3 asks a drop to name.
+///
+/// The set is the questions the gates ask rather than the answers this configuration happens to
+/// record: a gate fails on a condition, and a record holding only the conditions something fails
+/// on today could not say that a second one had started failing too.
+///
+/// Which gate a condition belongs to is [`Condition::gate`] and not a field beside it, since a
+/// condition is a condition of exactly one gate and a pair of fields can be set to disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Condition {
+    /// Gate 1: nothing the agent cannot impersonate decides each use.
+    ///
+    /// CRED-6 is what this asks: where the agent can redeem what it holds unaided, the thing it
+    /// holds is the credential under another name.
+    NothingDecidesEachUse,
+    /// Gate 1: what decides each use cannot refuse one.
+    ///
+    /// Separate from the condition above because a performer that cannot say no is an
+    /// authorisation step that always authorises.
+    NothingCanRefuseAUse,
+    /// Gate 2: no bound on what the value may do is fixed before it is issued.
+    ///
+    /// CRED-7's first half. A value that arrives carrying whatever its holder already had is
+    /// unbounded whoever minted it.
+    NoBoundFixedBeforeIssue,
+    /// Gate 2: the bound is checked within the agent's reach.
+    ///
+    /// CRED-7's second half: a program running as the person presents itself as any other, so a
+    /// bound the agent's own code enforces answers to whoever is asking.
+    BoundEnforcedWithinReach,
+    /// Gate 2: the bound has no end.
+    ///
+    /// CRED-8. Narrow and permanent is a static secret with a small reach.
+    BoundWithNoEnd,
+    /// Gate 3: the value is not minted for one named step.
+    NotMintedForOneStep,
+    /// Gate 3: the issuer puts no end on it.
+    IssuerEndsNothing,
+    /// Gate 3: the agent can renew it without further authority.
+    ///
+    /// CRED-9's false pass: a fifteen-minute token the agent refreshes by itself is a permanent
+    /// credential with extra steps.
+    RenewableWithoutAuthority,
+}
+
+impl Condition {
+    /// Every condition a gate asks about, so something reporting a walk can be held to all of
+    /// them rather than to the ones a credential happens to fail on today.
+    pub const fn all() -> [Self; 8] {
+        [
+            Self::NothingDecidesEachUse,
+            Self::NothingCanRefuseAUse,
+            Self::NoBoundFixedBeforeIssue,
+            Self::BoundEnforcedWithinReach,
+            Self::BoundWithNoEnd,
+            Self::NotMintedForOneStep,
+            Self::IssuerEndsNothing,
+            Self::RenewableWithoutAuthority,
+        ]
+    }
+
+    /// The gate this condition is a condition of.
+    pub const fn gate(self) -> Gate {
+        match self {
+            Self::NothingDecidesEachUse | Self::NothingCanRefuseAUse => Gate::One,
+            Self::NoBoundFixedBeforeIssue
+            | Self::BoundEnforcedWithinReach
+            | Self::BoundWithNoEnd => Gate::Two,
+            Self::NotMintedForOneStep
+            | Self::IssuerEndsNothing
+            | Self::RenewableWithoutAuthority => Gate::Three,
+        }
+    }
+}
+
+/// Whether a condition went unmet because the counterparty refused or because nobody attempted it.
+///
+/// CRED-3 keeps these apart because they end at the same tier and mean opposite things. A refusal
+/// is a fact about the world, and nothing on this side changes it by trying harder. An unattempted
+/// gate is a decision somebody made here, and it is the one that is ours to revisit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Attempt {
+    /// The counterparty offers the arrangement to nobody, so asking for it changes nothing.
+    Refused,
+    /// The counterparty offers the arrangement, or could, and nothing here asks for it.
+    NotAttempted,
+}
+
+/// One drop of a credential's gate walk: the condition of the gate that failed, and whether the
+/// counterparty refused or nobody attempted it.
+///
+/// Both halves, because CRED-3 asks for both and a tier without them is an assertion: Held says
+/// where a credential stands and says nothing about whether it could have stood anywhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GateDrop {
+    /// Which of the gate's conditions was not met. The gate is [`Condition::gate`].
+    pub condition: Condition,
+    /// Which of the two answers the condition has.
+    pub attempt: Attempt,
+}
+
 /// A credential this program holds itself, and so owes an account of what would end it.
 ///
 /// CRED-25 asks three things about every credential at Held or Held briefly: who issued it, the
@@ -316,6 +447,12 @@ impl fmt::Display for Secret {
 /// fact about the arrangement, and it establishes no tier and moves none, so it is recorded here
 /// beside the tier rather than derived from it: [`Held::held_briefly`] and
 /// [`Held::noticed_within`].
+///
+/// CRED-3 asks a fifth thing, of every credential here: how it reached the tier it stands at. Each
+/// drop of the walk down from Delegated records which of the gate's conditions failed and whether
+/// the counterparty refused or nobody attempted it, which is [`Held::walk`]. A tier without that
+/// is an assertion, and the two answers matter separately: a gate the counterparty refused is a
+/// fact about the world, and a gate nobody attempted is a decision made here.
 ///
 /// The obligation is detection followed by something a person can act on. An expiry, which is all
 /// that was kept before, says when a credential stops working and nothing about how to stop it
@@ -374,6 +511,95 @@ impl<'a> Held<'a> {
             Self::AwsSession,
             Self::GatewayToken { host: gateway_host },
         ]
+    }
+
+    /// Every drop of this credential's walk down from Delegated, in the order the gates are asked.
+    ///
+    /// CRED-2 puts a credential's tier at where its walk stopped, and CRED-3 asks each drop to say
+    /// which of that gate's conditions failed and whether the counterparty refused or nobody
+    /// attempted it. Recorded per credential rather than per tier, because two credentials at Held
+    /// can have got there for opposite reasons and only one of them is worth revisiting.
+    ///
+    /// The length is the tier: failing a gate drops exactly one tier and nothing skips one, so two
+    /// drops is Held briefly and three is Held. That is the same claim [`Held::held_briefly`]
+    /// makes, and the two are pinned against each other rather than derived from one another, so a
+    /// walk revised without the tier fails rather than quietly restating it.
+    ///
+    /// Every drop here is one nobody attempted. Each of these credentials is handed over whole and
+    /// used directly, and at each gate the counterparty either offers the stronger arrangement
+    /// already, as AWS does in minting a bounded session, or has never been asked for it. None of
+    /// them is a refusal, so none of them is excused by the world being as it is.
+    pub fn walk(self) -> &'static [GateDrop] {
+        match self {
+            // The key signs the request digest in this process, so nothing decides a use. The
+            // backend derives its copy from a master seed and the key id and offers nothing
+            // narrower and nothing shorter, and it is this project's own backend: what stops each
+            // of these gates is that nobody has built the other side of it.
+            Self::SigningKey => &[
+                GateDrop {
+                    condition: Condition::NothingDecidesEachUse,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NoBoundFixedBeforeIssue,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NotMintedForOneStep,
+                    attempt: Attempt::NotAttempted,
+                },
+            ],
+            // AWS mints a session bounded by a policy it enforces and the agent cannot widen, and
+            // ends it, which is gates 2 and 3 both answered on the counterparty's side. What this
+            // program does with a long-lived key is sign with it, so all three drops are ours.
+            Self::AwsAccessKey => &[
+                GateDrop {
+                    condition: Condition::NothingDecidesEachUse,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NoBoundFixedBeforeIssue,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NotMintedForOneStep,
+                    attempt: Attempt::NotAttempted,
+                },
+            ],
+            // Two drops, because gate 3 passes: STS mints the session for the profile and ends it
+            // at an expiry AWS enforces. Gate 2 fails on the bound rather than on the lifetime,
+            // which is the whole of the difference between Granted and Held briefly: the session
+            // carries whatever the profile's role or SSO grant allows, and nothing here asks STS
+            // to narrow it to this run.
+            Self::AwsSession => &[
+                GateDrop {
+                    condition: Condition::NothingDecidesEachUse,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NoBoundFixedBeforeIssue,
+                    attempt: Attempt::NotAttempted,
+                },
+            ],
+            // A block names a host and a variable and never an issuer, so there is nothing here
+            // to ask for a performer, a narrower token or a shorter one. Not attempted rather
+            // than refused: what the gateway at the other end offers is not something this
+            // program has been told.
+            Self::GatewayToken { .. } => &[
+                GateDrop {
+                    condition: Condition::NothingDecidesEachUse,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NoBoundFixedBeforeIssue,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NotMintedForOneStep,
+                    attempt: Attempt::NotAttempted,
+                },
+            ],
+        }
     }
 
     /// Whether this credential stands at Held briefly rather than at Held.
@@ -1209,6 +1435,61 @@ mod tests {
             }
             .outlives_revocation()
         );
+    }
+
+    /// CRED-3: a credential's walk holds one drop per gate it failed, asked in order from the top,
+    /// and stops where its tier says it stopped. A walk that skipped a gate, repeated one or ran
+    /// past the tier would be a record of a different credential than the one standing there, and
+    /// the tier is the one thing about the walk anything else already reads.
+    ///
+    /// Each drop's gate comes from the condition it names, so a condition filed under the wrong
+    /// gate arrives here as a walk whose gates are out of order.
+    #[test]
+    fn a_credentials_walk_holds_one_drop_per_gate_it_failed_and_stops_at_its_tier() {
+        for held in Held::all("gateway.invalid") {
+            let gates: Vec<Gate> = held
+                .walk()
+                .iter()
+                .map(|drop| drop.condition.gate())
+                .collect();
+
+            assert_eq!(
+                gates,
+                [Gate::One, Gate::Two, Gate::Three][..gates.len()],
+                "{held:?} records a walk that skips a gate or asks them out of order"
+            );
+            assert_eq!(
+                held.walk().len(),
+                match held.held_briefly() {
+                    true => 2,
+                    false => 3,
+                },
+                "{held:?} stands at one tier and records the walk of another"
+            );
+        }
+    }
+
+    /// CRED-3: a drop says whether the counterparty refused or nobody attempted it, and every drop
+    /// this configuration records is one nobody attempted. The two answers end at the same tier
+    /// and only the second is ours to revisit, so recording a refusal where the arrangement is
+    /// available files a decision made here as a fact about the world, and the credential stops
+    /// being worth looking at again.
+    ///
+    /// True of all four: AWS mints a bounded session and ends it, this project's own backend
+    /// issues the signing key, and a gateway block names no issuer for anything to have asked.
+    /// None of those is a counterparty saying no.
+    #[test]
+    fn every_drop_this_configuration_records_is_one_nobody_attempted() {
+        for held in Held::all("gateway.invalid") {
+            for drop in held.walk() {
+                assert_eq!(
+                    drop.attempt,
+                    Attempt::NotAttempted,
+                    "{held:?} excuses gate {} as refused",
+                    drop.condition.gate().number()
+                );
+            }
+        }
     }
 
     /// CRED-10: a credential the record stands at Held briefly is owed a figure for how quickly a
