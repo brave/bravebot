@@ -69,21 +69,54 @@ Darwin binaries are codesigned and notarised, Windows binaries are Authenticode-
 ## The desktop application
 
 ```sh
-make app-bundle
+make darwin-arm64 darwin-amd64 strip
+make app-release
 ```
 
-The third family of artifact, and the one the tag does not produce. It builds the agent and the
-secure file helper in release mode, bundles the front end, and writes
-`ui/dist/Brave Bot-darwin-<arch>/Brave Bot.app` on macOS or `ui/dist/Brave Bot-linux-<arch>/` on
-Linux, carrying those two release executables as resources. `ui/package.json` states its version,
-which is the version above, so the app names the release it ships an agent build of.
+The third family of artifact, and the one the tag does not produce. It is released for macOS
+only. A Linux desktop release needs a package format and a machine to test it on, and has neither.
 
-It refuses a build with no backend credentials in it, which the front end's own
-`npm run bridge` allows on purpose: a bundle built from an unconfigured shell starts, lists
-sessions, opens them, and fails at the first inference request, and Finder loads no shell
-configuration for the person who would then report that. So the credentials have to be in the
-environment `make` runs in, as they are for the cross-builds above.
+`app-release` runs on a Mac of either architecture and needs no Rust toolchain. It packages the
+app once per architecture from what the cross-build left in `dist/`, and writes a disk image for
+each:
 
-The bundle is not signed, not notarised, and not built by anything in this repository: no CI job
-packages it and the tag does not either. Until it goes through the same job that signs the
-binaries, a release that includes the app is this command run by hand on a configured macOS host.
+| Reads | Writes |
+| --- | --- |
+| `dist/bravebot-rpc-darwin-arm64`, `dist/bravebot-ui-files-darwin-arm64` | `dist/bravebot-app-darwin-arm64.dmg` |
+| `dist/bravebot-rpc-darwin-amd64`, `dist/bravebot-ui-files-darwin-amd64` | `dist/bravebot-app-darwin-amd64.dmg` |
+
+Those two executables are the agent the app talks to and its secure file helper. A Mac
+cross-build writes them beside the CLI and `make strip` strips them with it, so the agent inside
+the app is the build the CLI asset on the same release page is. They go into the images and are not
+assets of their own, so `make checksums` leaves them out. Each image holds
+`Brave Bot.app`, a link to `/Applications`, and the Electron and Chromium licence files.
+`ui/package.json` states the app's version, which is the version above, so the app names the
+release it ships an agent build of. Its bundle id is `com.brave.bravebot`: macOS keys privacy
+grants and keychain items on it, so it stays the same across releases.
+
+The app is fused and not signed. The fuses turn off `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` and
+`--inspect`, each a way to make the signed binary run code that is not the app's, and turn on
+asar integrity validation and loading only from the asar. Fusing rewrites the Electron binary,
+which a signature covers, so it comes first, and `app-release` is two steps with the signing
+between them:
+
+```sh
+make app-bundles   # ui/dist/Brave Bot-darwin-arm64/ and ui/dist/Brave Bot-darwin-x64/
+# sign and notarise each Brave Bot.app where it lies
+make app-dmg       # dist/bravebot-app-darwin-<arch>.dmg, then sign and notarise those
+```
+
+The two executables in `Contents/Resources/` have to be signed on their own before the app is:
+`codesign --deep` does not look there, and notarisation rejects an unsigned one.
+
+Nothing in this repository runs any of it: no CI job packages the app and the tag does not
+either. Like `make strip` and `make checksums`, the targets state the format and the release job
+consumes it.
+
+`make app-bundle` is the same app for the machine it runs on, from this checkout's own release
+build rather than from `dist/`, left in `ui/dist/` with no image. It refuses a build with no
+backend credentials in it, which the front end's own `npm run bridge` allows on purpose: a bundle
+built from an unconfigured shell starts, lists sessions, opens them, and fails at the first
+inference request, and Finder loads no shell configuration for the person who would then report
+that. So the credentials have to be in the environment `make` runs in, as they are for the
+cross-builds above.
