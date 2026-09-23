@@ -1605,7 +1605,7 @@ question**, and nothing here should be read as claiming it does: a question answ
 is answered by a bare letter whoever wrote it. What it buys is the one distinction a terminal leaves
 available, spent in the one place where a second press is the whole of what is being asked for.
 
-`verified-by: bravebot_tui::input::the_flag_starts_out_saying_a_key_arrived_alone`
+`verified-by: bravebot_tui::input::the_queue_is_answered_before_the_terminal_and_in_arrival_order`
 `verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`

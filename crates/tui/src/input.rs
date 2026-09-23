@@ -237,13 +237,49 @@ mod tests {
         }
     }
 
-    /// The reader adds a fact and takes nothing away, so there is nothing here that decides what an
-    /// event is. What the fact is used for is tested where it is used, at the rung that leaves.
+    /// The seam between the queue and the terminal: [`poll`] answers for what is buffered before
+    /// asking the terminal, and [`read`] hands that out before touching it. This is what lets a
+    /// caller poll and then read and be sure of getting something, and a reader that swallowed an
+    /// event would send `read` back to block in the terminal, stalling every loop shaped
+    /// `while poll(ZERO) { read() }` until the next key arrived.
+    ///
+    /// One test rather than several, and it opens with what the flag says before anything is read,
+    /// because the queue and the flag are process globals: split up, these assertions would race
+    /// each other under parallel execution rather than testing anything. Nothing else in this crate
+    /// touches either, and `read` is called exactly as many times as there are events queued, so a
+    /// fault fails here instead of reaching the terminal a test does not have.
     #[test]
-    fn the_flag_starts_out_saying_a_key_arrived_alone() {
+    fn the_queue_is_answered_before_the_terminal_and_in_arrival_order() {
         assert!(
             the_last_event_arrived_alone(),
             "a session that has read nothing yet must not treat a first press as crowded"
         );
+
+        let arrived = vec![key(KeyCode::Char('s')), key(KeyCode::Enter)];
+        {
+            let mut queue = pending();
+            for pair in tagged(arrived.clone()) {
+                queue.push_back(pair);
+            }
+        }
+
+        assert!(
+            poll(Duration::ZERO).expect("a queue with events in it cannot reach the terminal"),
+            "an event already taken was reported as nothing waiting"
+        );
+
+        for expected in arrived {
+            let taken = read().expect("an event was queued, so reading cannot reach the terminal");
+            assert_eq!(
+                taken, expected,
+                "the queue handed its events out in another order"
+            );
+            assert!(
+                !the_last_event_arrived_alone(),
+                "one of two events that arrived together was reported as having arrived alone"
+            );
+        }
+
+        assert!(pending().is_empty(), "the queue held something back");
     }
 }
