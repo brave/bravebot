@@ -16,6 +16,7 @@ members of lives.
 | `npm run build` | Build both Rust executables, typecheck, bundle into `out/` |
 | `npm start` | Set up Electron and preview the existing bundle; does not rebuild it |
 | `npm run package` | Build both Rust executables, bundle, package for macOS or Linux; does not typecheck |
+| `make check-ui` (from the root) | Install, build the file helper, and run every `scripts/*.test.mjs` |
 | `cargo test -p bravebot-ui-bridge -p bravebot-ui-files` | Test the two front-end crates |
 | `cargo test --all` | Test the whole workspace, agent crates included |
 | `cargo clippy --all-targets --all-features -- -D warnings` | Lint the whole workspace |
