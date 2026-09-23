@@ -7,6 +7,7 @@ governs:
 documented-by:
   - docs/website/docs/troubleshooting.md
   - docs/website/docs/reference/cli.md
+  - docs/website/docs/using/transcript.md
 ---
 
 ## Scope
@@ -97,6 +98,10 @@ turns have nothing to build, and both lines say what happened rather than what s
 **Counted from the write.** Before a file changes there is nothing to run, so a turn that spends
 twenty rounds reading is not asked about a build it has no reason to have done.
 
+**However the turn ended.** A stop and a failed request leave the same changed files on disk as an
+answer does, so the person is told on all three endings. Being stopped with nothing compiled is the
+ending a person is least able to spot for themselves: no outcome is drawn to read it out of.
+
 **What happened, not what was asked for.** Both lines are about the workspace, so both count a
 write that landed and a program that started, never the call the planner made. A write the person
 declined and a write plan mode refused leave nothing to build, and a run the person declined
@@ -109,6 +114,9 @@ about to act on.
 `verified-by: bravebot_agent::turn::a_write_the_person_refused_is_not_reported_as_a_change_that_was_never_built`
 `verified-by: bravebot_agent::turn::a_write_plan_mode_refused_is_not_reported_as_a_change_that_was_never_built`
 `verified-by: bravebot_agent::turn::a_run_the_person_refused_leaves_the_change_reported_as_never_built`
+`verified-by: bravebot_agent::turn::a_turn_stopped_before_any_write_is_not_told_a_change_was_never_built`
+`verified-by: bravebot_agent::turn::a_turn_stopped_after_a_write_is_told_the_change_was_never_built`
+`verified-by: bravebot_agent::turn::a_turn_that_failed_after_a_write_is_told_the_change_was_never_built`
 
 <a id="TURN-5"></a>
 ### TURN-5: completed work remains charged when a turn fails or stops

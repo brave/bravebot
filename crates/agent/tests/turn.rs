@@ -7961,6 +7961,217 @@ fn a_run_the_person_refused_leaves_the_change_reported_as_never_built() {
     );
 }
 
+/// A turn stopped after a write still tells the person that nothing was built.
+///
+/// This is the incident the clause was written for: eighteen files edited, no command run, and the
+/// person watching pressed Escape. A diff is on disk either way, and it is the same diff they are
+/// about to act on, so a stop is when they most need telling that nothing has compiled it.
+#[test]
+fn a_turn_stopped_after_a_write_is_told_the_change_was_never_built() {
+    /// Records what the person was told, and stops the turn once the write has finished.
+    ///
+    /// Standing in for Escape pressed after the write landed, at a point the test can pin down
+    /// exactly. Keyed on the write itself rather than on whatever call finishes first, so a turn
+    /// that grew a call before the write would still be stopped in the state under test: a file
+    /// changed and nothing run.
+    struct StopAfterTheWrite {
+        cancel: bravebot_core::cancel::Cancel,
+        narration: Vec<String>,
+    }
+
+    impl bravebot_agent::report::Reporter for StopAfterTheWrite {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn narration(&mut self, text: String) {
+            self.narration.push(text);
+        }
+
+        fn tool_finished(&mut self, activity: bravebot_agent::report::Activity) {
+            if activity.tool == "write_file" {
+                self.cancel.cancel();
+            }
+        }
+    }
+
+    let scratch = Scratch::new("write-then-stopped");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // A reply after the write, so the turn would carry on if the stop were not honoured.
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "write_file",
+            r#"{"path":"notes.txt","contents":"first slice"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let mut reporter = StopAfterTheWrite {
+        cancel: cancel.clone(),
+        narration: Vec::new(),
+    };
+
+    let error = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut RecordingConfirmer::approving(),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &cancel,
+    )
+    .expect_err("a stopped turn must not succeed");
+
+    assert!(
+        matches!(error, turn::TurnError::Cancelled { .. }),
+        "the turn ended some other way, so this says nothing about a stop: {error:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.txt")).unwrap(),
+        "first slice",
+        "the write did not land, so this test says nothing about a turn that changed a file"
+    );
+    assert!(
+        reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was not told the change was never built: {:?}",
+        reporter.narration
+    );
+}
+
+/// A turn whose request failed after a write still tells the person that nothing was built.
+///
+/// The other half of the same state, and the one a person cannot see coming: a backend that
+/// refuses mid-turn leaves the same unbuilt diff behind as a stop, and the summary they read
+/// afterwards is all they have to tell a compiled change from one that was never tried.
+#[test]
+fn a_turn_that_failed_after_a_write_is_told_the_change_was_never_built() {
+    let scratch = Scratch::new("write-then-failed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_script(vec![
+        Served::Reply(tool_request(
+            "write_file",
+            r#"{"path":"notes.txt","contents":"first slice"}"#,
+        )),
+        Served::Status(401),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let error = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut RecordingConfirmer::approving(),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("a turn whose request was refused must not succeed");
+
+    assert_eq!(
+        why_it_failed(&error).category,
+        bravebot_agent::Category::Unauthorized,
+        "the turn ended some other way, so this says nothing about a failure"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.txt")).unwrap(),
+        "first slice",
+        "the write did not land, so this test says nothing about a turn that changed a file"
+    );
+    assert!(
+        reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was not told the change was never built: {:?}",
+        reporter.narration
+    );
+}
+
+/// A turn stopped with nothing written is told nothing about a change.
+///
+/// The condition an ending does not replace, and the common case: somebody stops a turn part way
+/// through reading. There is no diff to warn them about, and being told nothing was built sends
+/// them looking for one.
+#[test]
+fn a_turn_stopped_before_any_write_is_not_told_a_change_was_never_built() {
+    /// Records what the person was told, and stops the turn once the read has finished.
+    struct StopAfterTheRead {
+        cancel: bravebot_core::cancel::Cancel,
+        narration: Vec<String>,
+    }
+
+    impl bravebot_agent::report::Reporter for StopAfterTheRead {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn narration(&mut self, text: String) {
+            self.narration.push(text);
+        }
+
+        fn tool_finished(&mut self, activity: bravebot_agent::report::Activity) {
+            if activity.tool == "read_file" {
+                self.cancel.cancel();
+            }
+        }
+    }
+
+    let scratch = Scratch::new("read-then-stopped");
+    std::fs::write(scratch.path.join("notes.txt"), "first slice").expect("write something to read");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"notes.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let mut reporter = StopAfterTheRead {
+        cancel: cancel.clone(),
+        narration: Vec::new(),
+    };
+
+    let error = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("what does this do"),
+        &mut RecordingConfirmer::approving(),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &cancel,
+    )
+    .expect_err("a stopped turn must not succeed");
+
+    // Cancelled is also what says the read finished: nothing else stops this turn.
+    assert!(
+        matches!(error, turn::TurnError::Cancelled { .. }),
+        "the turn ended some other way, so this says nothing about a stop: {error:?}"
+    );
+    assert!(
+        !reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "a turn that changed nothing was told its change was never built: {:?}",
+        reporter.narration
+    );
+}
+
 /// A turn that has read for a long time and written nothing is told so, once.
 ///
 /// The failure this is for produced nothing at all: fourteen minutes of reading, a plan the
