@@ -666,6 +666,21 @@ pub struct Task {
     /// says how many slots are free, because the bound is the session's and only the session can
     /// count it.
     pub arming: crate::watch::Arming,
+    /// Whether this caller will send this turn's line again after a wait the turn asks for.
+    ///
+    /// `false` by default, which is every caller that runs a turn and stops: a one-shot run, the
+    /// desktop bridge, anything with nothing holding the line afterwards. Such a turn is offered
+    /// no way to arrange a later look and a call to that tool is answered as an unknown name,
+    /// because the wait would be discarded and the confirmation would be telling somebody a
+    /// watch exists that does not (SCHED-6).
+    ///
+    /// Supplied per turn rather than per session, because the answer differs turn by turn on a
+    /// caller that keeps a line at all: a loop repeats a line somebody endorsed, so a turn
+    /// running a sentence this program wrote has nothing a later look could repeat.
+    ///
+    /// Read only where `tick` is `None`. A tick is already the thing being asked again, and what
+    /// it may say about the next one is the loop's own question.
+    pub looking_again: bool,
     /// The condition this session is working towards, where a person set one.
     ///
     /// `None` for a turn with no goal. It changes one thing: the planner is told what the session
@@ -769,6 +784,9 @@ impl Task {
             // No watches unless a caller says it keeps some, for the reason `rounds` is bounded
             // by default: a default cannot know whether anybody is there to read a fire.
             arming: crate::watch::Arming::Unavailable,
+            // And nothing will ask again unless a caller says it will, for the same reason: a
+            // default cannot know whether anything is still holding the line once this returns.
+            looking_again: false,
             working_towards: None,
             // Bounded unless a caller says otherwise. The unbounded case needs somebody watching,
             // and a default cannot know whether anybody is, so the default is the one that is
@@ -919,6 +937,12 @@ impl Task {
     /// Say whether this turn may arm a standing watch, and why not where it may not.
     pub fn arming(mut self, arming: crate::watch::Arming) -> Self {
         self.arming = arming;
+        self
+    }
+
+    /// Say whether this caller will send this turn's line again after a wait the turn asks for.
+    pub fn looking_again(mut self, looking_again: bool) -> Self {
+        self.looking_again = looking_again;
         self
     }
 
@@ -2186,10 +2210,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // Read once. A turn nobody is looping arranges its own later look, which is what a request to
     // report a change needs; a tick of a self-paced loop sets the pace of the next one; and a tick
     // the person gave an interval for decides nothing, because their interval already did.
+    //
+    // The caller says whether there is anything to arrange at all, because only it knows: a
+    // one-shot run and the desktop bridge each take one turn and exit, and a session running a
+    // line this program wrote keeps no loop over it. A wait asked for there is discarded, so the
+    // turn is offered no way to ask for one rather than told a watch it cannot have now exists.
     let scheduling = match task.tick {
-        None => tools::Scheduling::ArrangingALook,
         Some(tick) if tick.self_paced => tools::Scheduling::PacingALoop,
         Some(_) => tools::Scheduling::TheirInterval,
+        None if task.looking_again => tools::Scheduling::ArrangingALook,
+        None => tools::Scheduling::NoLaterLook,
     };
 
     // Found once per turn and reused for every round. Per turn rather than per session so a

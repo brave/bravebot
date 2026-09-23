@@ -30,8 +30,10 @@ that is merely carried.
 | [`todo_write`](#todo_write) | none | `todos` | no |
 
 Two more are offered only where they mean something.
-[`schedule_next`](#schedule_next) goes to a turn inside a self-paced
-[`/loop`](commands.md#loop-interval-prompt) and to no other turn.
+[`schedule_next`](#schedule_next) goes to a turn that will be asked again: one inside a self-paced
+[`/loop`](commands.md#loop-interval-prompt), and one on a line you typed in a session that can send
+it again. Not to a tick of a loop you gave an interval for, not to a delegate, and not where nothing
+will ask again, which is a one-shot run, the desktop application, or a line the agent wrote itself.
 [`watch_file`](#watch_file) goes to a session that keeps watches, so not to a delegate, a one-shot
 run or a planned run.
 
@@ -984,9 +986,10 @@ touched. An unrecognised status reads as outstanding work.
 
 ## `schedule_next`
 
-Says when a self-paced [`/loop`](commands.md#loop-interval-prompt) should run again. It is offered to
-a tick of a self-paced loop and to nothing else; a call from any other turn is answered the way any
-unoffered name is.
+Says when this turn should be asked again: the pace of the next tick of a self-paced
+[`/loop`](commands.md#loop-interval-prompt), or, outside a loop, the first later look at something,
+which starts a loop over the line you typed. It is offered only where that later look can actually
+happen; a call from any other turn is answered the way any unoffered name is.
 
 | Parameter | |
 |---|---|
@@ -994,8 +997,8 @@ unoffered name is.
 | `noop` | whether this tick found anything; routing, and required |
 | `reason` | what the turn is waiting on, in its own words; content |
 
-**There is no argument for what the next run asks.** The prompt is the line you typed when you started
-the loop, and it is sent again unchanged.
+**There is no argument for what the next run asks.** The prompt is the line you typed, and it is sent
+again unchanged.
 
 The wait is held between a minute and an hour **before** it is reported back, so the number the
 planner is told is the number it is getting. A call missing the delay or the verdict is refused rather

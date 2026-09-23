@@ -5176,6 +5176,11 @@ fn run_turn_animated(
     // here: only the session can count what is live, and a tool answering out of a stale count
     // would tell the planner about a watch the session then refused.
     let arming = session.arming();
+    // And whether a wait this turn asks for would become a later look at this line, which decides
+    // whether it is offered a way to ask for one. Read here for the reason `arming` is: only the
+    // session knows what it is already doing, and a tool answering out of a stale reading would
+    // tell the planner a watch exists that the session then declines to keep.
+    let looking_again = will_look_again(session, wrote);
     // Read once, here, so the mode the planner is told about and the mode the confirmer enforces are
     // the same one: the person may press the key while this turn runs, and the two halves reading it
     // at different moments is how they would come to disagree.
@@ -5198,6 +5203,7 @@ fn run_turn_animated(
         .with_auto_vetting(session.auto_vetting())
         .ticking(tick)
         .arming(arming)
+        .looking_again(looking_again)
         .working_towards(working_towards);
     // Every file named with `@` becomes context, which a turn treats as trusted: the user typed the
     // path and their keystroke is what vouches for it, exactly as `--file` does on the command
@@ -5678,6 +5684,25 @@ enum Wrote {
 /// needs a whole [`turn::Outcome`], and the field holding the released reply is its own crate's.
 fn watch_to_start(wakeup: Option<turn::Wakeup>, wrote: Wrote) -> Option<turn::Wakeup> {
     wakeup.filter(|_| wrote == Wrote::ThePerson)
+}
+
+/// Whether a wait this turn asks for would become a later look at its own line.
+///
+/// Asked before the turn rather than after it, because it decides whether the turn is offered a
+/// way to ask for one at all (SCHED-6). Where the answer is no the wait is discarded, and a tool
+/// whose confirmation says a later look is arranged and needs nothing from the person would be
+/// describing a watch nothing is keeping.
+///
+/// The same refusals [`watch_to_start`] and [`crate::state::Session::watch_again`] make once the
+/// turn has ended, in one place ahead of it: the line has to be the person's, and the session has
+/// to have nothing else of its own already running, since it does one of a watch, a loop and a
+/// goal at a time. A turn that is a tick of a loop is not this question at all, the loop being
+/// already the thing that asks again, and the agent reads this only where there is no tick.
+fn will_look_again(session: &Session, wrote: Wrote) -> bool {
+    wrote == Wrote::ThePerson
+        && session.looping().is_none()
+        && session.goal().is_none()
+        && session.watches().is_empty()
 }
 
 /// The files a prompt vouches for by naming them with `@`.
@@ -14348,6 +14373,57 @@ mod tests {
         );
         assert_eq!(watch_to_start(Some(wakeup), Wrote::TheDriver), None);
         assert_eq!(watch_to_start(None, Wrote::ThePerson), None);
+    }
+
+    /// And the turn is asked before it runs, not only answered afterwards. A turn whose wait is
+    /// going to be discarded and which is offered a way to ask for one is told back that a later
+    /// look is arranged and needs nothing from the person, and that sentence is what it writes
+    /// into the answer: the person reads that a watch exists, and nothing is watching.
+    ///
+    /// The four refusals are the four the session makes once the turn has ended. The line has to
+    /// be the person's, since a loop repeats a line somebody endorsed; and the session has to
+    /// have nothing of its own already running, since it does one of a watch, a loop and a goal
+    /// at a time, and a wait arriving under any of the three is dropped.
+    #[test]
+    fn only_a_turn_whose_wait_would_be_kept_is_offered_a_later_look() {
+        let idle = Session::new("none");
+        assert!(
+            will_look_again(&idle, Wrote::ThePerson),
+            "a turn on the person's own line, with the session idle, was offered nothing"
+        );
+        assert!(
+            !will_look_again(&idle, Wrote::TheDriver),
+            "a sentence this program wrote was offered a loop over itself"
+        );
+
+        let mut looping = Session::new("none");
+        looping.start_loop(
+            crate::loops::request("5m watch the build"),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(
+            !will_look_again(&looping, Wrote::ThePerson),
+            "a line typed during a loop was offered a second one"
+        );
+
+        let mut goal = Session::new("none");
+        goal.start_goal("cargo test exits 0".to_string());
+        assert!(
+            !will_look_again(&goal, Wrote::ThePerson),
+            "a turn under a goal was offered a loop the goal will refuse"
+        );
+
+        let mut watching = Session::new("none");
+        watching.arm_watch(
+            "a.txt",
+            ".",
+            bravebot_agent::watch::Looked::Saw("a token".to_string()),
+        );
+        assert!(
+            !will_look_again(&watching, Wrote::ThePerson),
+            "a turn under a standing watch was offered a loop the watch will refuse"
+        );
     }
 
     /// A goal is a condition for a session and not for one turn, so stopping a turn going the

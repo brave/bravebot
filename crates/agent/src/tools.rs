@@ -47,20 +47,41 @@ const TODO_STATUSES: [&str; 3] = Status::NAMES;
 
 /// What a turn may say about when it runs again.
 ///
-/// Three states rather than a flag, because "nobody is pacing this turn" and "somebody else is"
-/// want opposite answers. A turn nobody is looping has to arrange its own later look or answer a
-/// request to report a change from one read and stop. A tick of a loop the person timed has that
+/// Four states rather than a flag, because "nobody is pacing this turn", "somebody else is" and
+/// "nothing will ask this turn anything again" want three different answers. A turn nobody is
+/// looping, on a caller that will put its line again, has to arrange its own later look or answer
+/// a request to report a change from one read and stop. A tick of a loop the person timed has that
 /// look coming already, so a tool for asking for one would have it schedule a second, and the
-/// wait would be dropped: the interval decides when that loop runs, not the turn.
+/// wait would be dropped: the interval decides when that loop runs, not the turn. A turn nothing
+/// will ask again has the same wait dropped for the opposite reason, and the same answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scheduling {
-    /// Not a tick of anything. It may arrange the one later look a watch needs, which starts a
-    /// loop repeating the line the person typed.
+    /// Not a tick of anything, on a caller that will ask again. It may arrange the one later look
+    /// a watch needs, which starts a loop repeating the line the person typed.
     ArrangingALook,
     /// A tick of a loop nobody gave an interval for, setting the pace of the next tick.
     PacingALoop,
     /// A tick of a loop the person gave an interval for. There is nothing here to decide.
     TheirInterval,
+    /// Nothing will ask this turn's line again, whatever wait it names: a surface that runs one
+    /// turn and exits, or a line this program wrote rather than the person.
+    ///
+    /// There is no later look to arrange, so the wait is discarded wherever one is asked for. A
+    /// confirmation saying a later look is arranged and needs nothing from the person would be
+    /// describing a watch that does not exist, which is why the tool is withheld here rather than
+    /// answered.
+    NoLaterLook,
+}
+
+impl Scheduling {
+    /// Whether the tool is offered to the planner, and dispatched where it is called anyway.
+    ///
+    /// Withheld from a tick the person timed, which has nothing to decide, and from a turn
+    /// nothing will ask again, which has nothing a wait could become. A call from either is
+    /// answered the way any other name nobody offered is.
+    pub fn offered(self) -> bool {
+        matches!(self, Scheduling::ArrangingALook | Scheduling::PacingALoop)
+    }
 }
 
 /// The tools the model may call.
@@ -74,12 +95,42 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
     // a description that named neither as the better one would leave the planner picking the one
     // it read first, which is the read's own paragraph and therefore always the loop.
     let watching = if arming.offered() {
-        " Where what is being waited on is this one file, watch_file is the better answer: it \
-         arms a standing watch that outlives this turn and reports the change with no turn of \
-         yours running at all. Keep schedule_next for a wait that is not about one file, or where \
-         the user asked for their own line to be run again."
+        let mut said = " Where what is being waited on is this one file, watch_file is the better \
+                         answer: it arms a standing watch that outlives this turn and reports the \
+                         change with no turn of yours running at all."
+            .to_string();
+        // The second half only where there is a schedule_next to keep for something. A turn
+        // offered no way to arrange a later look has nothing to save one for, and saying
+        // otherwise sends it to a name that is not on its list.
+        if scheduling.offered() {
+            said.push_str(
+                " Keep schedule_next for a wait that is not about one file, or where the user \
+                 asked for their own line to be run again.",
+            );
+        }
+        said
     } else {
-        ""
+        String::new()
+    };
+    // What a turn asked to report a change does about the next look, in the two descriptions that
+    // route such a request: the read's change token for a file, the run's own output for a
+    // program. Neither technique reaches past this turn by itself, so both have to say where the
+    // later look comes from, and that differs by turn. A planner told to arrange one on a surface
+    // offering no way to arrange it spends a round on a name that is not there, and then has a
+    // refusal to explain to somebody who asked to be told when something changes.
+    let (look_again_after_a_read, look_again_after_a_run) = match scheduling {
+        Scheduling::ArrangingALook => (
+            "The next look is yours to arrange: call schedule_next at the end of this turn and you are asked again after the wait, with the user's line sent unchanged, so a request to be told when a file changes is answered by reading it now and scheduling the look that would catch a change. Do that rather than telling somebody to arrange it themselves.",
+            "So take the first look now and call schedule_next at the end of the turn, which has you asked again after the wait with the user's line unchanged.",
+        ),
+        Scheduling::PacingALoop | Scheduling::TheirInterval => (
+            "Inside a loop the next tick is the next look, so there is nothing to arrange: report what this tick saw and leave the rest to the next one.",
+            "Inside a loop that is already what happens, so take this tick's look, report what it saw and leave the rest to the next one.",
+        ),
+        Scheduling::NoLaterLook => (
+            "Comparing a second token needs a later turn, and nothing will ask you again: this turn is the last one asked about the user's line. Report what this look found and say so plainly, rather than promising a later report or telling the user to arrange one.",
+            "Nothing will ask you again, though: this turn is the last one asked about the user's line, so take the look you can take inside it and say plainly that no later one is coming.",
+        ),
     };
     let mut tools = vec![
         Tool::function(
@@ -101,11 +152,7 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
              compared and never a time of day, which you have no clock for. And a token that moved \
              says the file was written, not what changed: a rewrite of the same bytes moves it \
              too, and a change that leaves the file's modification time alone moves nothing. \
-             The next look is yours to arrange: call schedule_next at the end of this turn and you \
-             are asked again after the wait, with the user's line sent unchanged, so a request to \
-             be told when a file changes is answered by reading it now and scheduling the look that \
-             would catch a change. Do that rather than telling somebody to arrange it themselves. \
-             Inside a loop the next tick is the next look, so there is nothing to arrange there. \
+             {look_again_after_a_read} \
              Where you have taken a look and not scheduled another, say so, because no change with \
              nothing watching reads as a promise to report the next one.{watching} \
              \
@@ -555,6 +602,9 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
         ),
         Tool::function(
             "run",
+            // Joined rather than formatted: this description states shell syntax the planner may
+            // not use, `${...}` and `{a,b}` among it, and a format string would have to escape
+            // every brace in it to say so.
             "Run a command line. Write it the way you would type it: `grep -rn thing src/ | \
              head -30`. Pipes, &&, ||, ;, ( ), quoting, redirection (>, >>, <, 2>, 2>&1, &>), \
              globs and {a,b} all work in the operands. There is no shell: the line is compiled \
@@ -591,12 +641,12 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
              output is watched here: start it with background: true and call job_output with \
              wait_seconds, which is one call covering a window rather than a look per turn. \
              Neither reaches past this turn by itself: a background job is killed when the turn \
-             ends, and comparing a token needs a later look. So take the first look now and call \
-             schedule_next at the end of the turn, which has you asked again after the wait with \
-             the user's line unchanged. Inside a loop that is already what happens, so report what \
-             this tick saw and leave the rest to the next one. And say which window you watched, \
-             or which looks you compared, rather than a time of day, which you have no clock for; \
-             where you have scheduled no further look, say that too.",
+             ends, and comparing a token needs a later look. "
+                .to_string()
+                + look_again_after_a_run
+                + " And say which window you watched, or which looks you compared, rather than \
+                   a time of day, which you have no clock for; where you have scheduled no \
+                   further look, say that too.",
             json!({
                 "type": "object",
                 "properties": {
@@ -835,11 +885,10 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
         ));
     }
 
-    let arranging = match scheduling {
-        Scheduling::TheirInterval => return tools,
-        Scheduling::PacingALoop => false,
-        Scheduling::ArrangingALook => true,
-    };
+    if !scheduling.offered() {
+        return tools;
+    }
+    let arranging = scheduling == Scheduling::ArrangingALook;
     tools.push(Tool::function(
         "schedule_next",
         if !arranging {
@@ -2051,10 +2100,11 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         // capability really is held.
         "fetch_url" if !tools.delegated => fetch_url(policy, tools, confirmer, &arguments),
         "job_output" => job_output(policy, tools, &arguments),
-        // A delegate ends when it answers, and a tick the person timed has its next look coming
-        // already, so neither is offered this and a call from either is answered as an unknown
-        // name. Refused here as well as absent from the list.
-        "schedule_next" if !tools.delegated && tools.scheduling != Scheduling::TheirInterval => {
+        // A delegate ends when it answers, a tick the person timed has its next look coming
+        // already, and a turn nothing will ask again has nowhere for a wait to go, so none of the
+        // three is offered this and a call from any of them is answered as an unknown name.
+        // Refused here as well as absent from the list.
+        "schedule_next" if !tools.delegated && tools.scheduling.offered() => {
             schedule_next(policy, tools.scheduling, &arguments)
         }
         // A surface that keeps no watches is offered no way to arm one, and a call from a turn on
@@ -3621,8 +3671,10 @@ fn schedule_next<S: Sink>(
     // Which of the two happened is worth telling the planner apart, because the answer it is
     // writing differs: a tick reports what this look found and leaves the rest to the next one,
     // while a turn that has just started a watch is telling somebody a watch now exists.
+    // The two withheld cases do not reach here: dispatch answers a call from either as an unknown
+    // name, for want of anything a confirmation could truthfully say about a wait nothing keeps.
     let confirmation = match scheduling {
-        Scheduling::PacingALoop | Scheduling::TheirInterval => format!(
+        Scheduling::PacingALoop | Scheduling::TheirInterval | Scheduling::NoLaterLook => format!(
             "scheduled: this loop runs again in {held} seconds, sending the user's own prompt \
              unchanged"
         ),
@@ -6695,11 +6747,11 @@ mod tests {
             described.contains("scheduled no further look, say that too"),
             "the description does not say to report that nothing is watching: {described}"
         );
-        // A tick of a loop already has its next look coming, so a tick told to schedule one would
-        // be arranging a second look nobody asked for.
+        // The same sentence spanning the join, so a formatting pass that swallows the line break
+        // is caught here rather than reaching a planner as a run of spaces mid-sentence.
         assert!(
-            described.contains("Inside a loop that is already what happens"),
-            "the description has a tick arrange a look the loop is already taking: {described}"
+            described.contains("rather than a time of day"),
+            "the description came out with its continuation baked in: {described}"
         );
         // Said, because the planner has no clock: the preamble gives it today's date and tells it
         // not to run `date`, so an instruction to date a sample invites it to invent a time.
@@ -6707,6 +6759,58 @@ mod tests {
             described.contains("no clock for"),
             "the description asks the planner for a time of day it cannot know: {described}"
         );
+    }
+
+    /// The two descriptions that route a request to be told when something changes have to point
+    /// at a later look that exists. Where a wait would be discarded there is none, and a planner
+    /// told to arrange one spends a round on a name that is not there and then has a refusal to
+    /// explain to somebody who asked to be told about a change.
+    ///
+    /// Each turn is checked for the wrong sentence as well as the right one: a description that
+    /// carried all three answers at once would satisfy any test that only looked for the one it
+    /// wanted, and would leave the planner picking whichever it read first.
+    #[test]
+    fn what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_arrange() {
+        let described = |scheduling, name: &str| {
+            available(scheduling, Arming::Allowed { free: 1 })
+                .into_iter()
+                .find(|t| t.function.name == name)
+                .unwrap_or_else(|| panic!("{name} is offered"))
+                .function
+                .description
+        };
+
+        for name in ["read_file", "run"] {
+            let arranging = described(Scheduling::ArrangingALook, name);
+            assert!(
+                arranging.contains("call schedule_next at the end of th"),
+                "{name} did not tell a turn that can arrange a look to arrange one: {arranging}"
+            );
+
+            // A tick's next look is the next tick, so a tick told to schedule one would be
+            // arranging a second look nobody asked for.
+            let pacing = described(Scheduling::PacingALoop, name);
+            assert!(
+                pacing.contains("Inside a loop"),
+                "{name} did not tell a tick its next look is the next tick: {pacing}"
+            );
+            assert!(
+                !pacing.contains("call schedule_next at the end of th"),
+                "{name} had a tick arrange a look the loop is already taking: {pacing}"
+            );
+
+            // And a turn nothing will ask again has no later look at all, so the honest answer is
+            // to say that nothing is watching rather than to promise a report.
+            let last = described(Scheduling::NoLaterLook, name);
+            assert!(
+                last.to_lowercase().contains("nothing will ask you again"),
+                "{name} did not tell a turn nothing will ask again to say so: {last}"
+            );
+            assert!(
+                !last.contains("schedule_next"),
+                "{name} sent a turn nothing will ask again to a tool it was not offered: {last}"
+            );
+        }
     }
 
     /// The instruction that measurably steered a session into the expensive path. A capped
@@ -7783,6 +7887,26 @@ mod tests {
             );
         }
 
+        /// A surface that runs one turn and exits, and a line this program wrote rather than the
+        /// person, both discard whatever wait a turn asks for: there is nothing left holding the
+        /// line to send it again. A tool offered there invites a call whose confirmation tells
+        /// somebody a watch now exists and needs nothing from them, which is a sentence the
+        /// planner then writes into the answer of a run that is about to exit.
+        #[test]
+        fn a_turn_nothing_will_ask_again_is_offered_no_way_to_schedule_one() {
+            let offered = available(Scheduling::NoLaterLook, Arming::Allowed { free: 1 });
+            assert!(
+                !offered.iter().any(|t| t.function.name == "schedule_next"),
+                "a turn nothing will ask again was offered a way to arrange a later look"
+            );
+            // And the rest of the table is still there, so the absence above is this tool being
+            // withheld rather than a turn offered nothing at all.
+            assert!(
+                offered.iter().any(|t| t.function.name == "read_file"),
+                "the table itself went missing"
+            );
+        }
+
         /// The one turn with nothing to decide. Its loop is already running on an interval a
         /// person gave, so the next look is coming whatever this turn says, and a tool for asking
         /// for one would have it arrange a second look nobody wants and then find the wait
@@ -7818,6 +7942,74 @@ mod tests {
             let pacing = call(json!({"delay_seconds": 300, "noop": false}));
             let told = released(&pacing.text);
             assert!(told.contains("this loop runs again"), "{told}");
+        }
+
+        /// A list is not the whole rule. The three turns this tool is withheld from are refused
+        /// at dispatch as well, because a planner can name a tool it was never offered and one
+        /// that quietly worked would take a wait nothing keeps and report it as arranged: a
+        /// delegate ends when it answers, a tick the person timed has its next look coming
+        /// already, and a turn nothing will ask again has nowhere for a wait to go.
+        ///
+        /// The first case is the control. Without it an implementation that refused every call
+        /// would pass the other three, which says nothing about what is being refused.
+        #[test]
+        fn a_call_from_a_turn_this_was_withheld_from_is_answered_as_an_unknown_name() {
+            let scratch = super::arguments::Scratch::new("schedule-next-dispatch");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            for (scheduling, delegated, refused) in [
+                (Scheduling::ArrangingALook, false, false),
+                (Scheduling::ArrangingALook, true, true),
+                (Scheduling::TheirInterval, false, true),
+                (Scheduling::NoLaterLook, false, true),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "watch the build");
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy");
+
+                let call: ToolCall = serde_json::from_value(json!({
+                    "id": "1",
+                    "function": {
+                        "name": "schedule_next",
+                        "arguments": r#"{"delay_seconds": 300, "noop": false}"#,
+                    }
+                }))
+                .expect("a call");
+
+                let output = super::arguments::with_tools(&workspace, |tools| {
+                    tools.scheduling = scheduling;
+                    tools.delegated = delegated;
+                    dispatch(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::Unattended,
+                        &mut crate::report::IgnoreReports,
+                        &call,
+                    )
+                });
+                let told = {
+                    let proof = policy.authorise_display_release("test inspects the tool result");
+                    output.text.clone().declassify(&proof)
+                };
+
+                assert_eq!(
+                    told == "error: no such tool 'schedule_next'",
+                    refused,
+                    "{scheduling:?}, delegated {delegated}: {told}"
+                );
+                assert_eq!(
+                    output.wakeup.is_none(),
+                    refused,
+                    "{scheduling:?}, delegated {delegated}: the wait travelled back anyway"
+                );
+            }
         }
 
         /// The planner has to be told the wait it is getting, not the wait it asked for, or its
@@ -8659,12 +8851,14 @@ mod tests {
         use bravebot_core::policy::{ReleasePlan, Routing};
 
         /// A directory that removes itself, so a test leaves nothing behind.
-        struct Scratch {
-            path: std::path::PathBuf,
+        ///
+        /// Reachable from the sibling modules for the reason [`with_tools`] is.
+        pub(super) struct Scratch {
+            pub(super) path: std::path::PathBuf,
         }
 
         impl Scratch {
-            fn new(name: &str) -> Self {
+            pub(super) fn new(name: &str) -> Self {
                 let path = crate::testutil::scratch_dir(&format!(
                     "bravebot-arguments-{name}-{}",
                     std::process::id()
@@ -8716,7 +8910,13 @@ mod tests {
 
         /// The turn's tool state, assembled for one call. A closure rather than a value because
         /// `Tools` borrows every piece of it.
-        fn with_tools<R>(workspace: &Workspace, body: impl FnOnce(&mut Tools<'_>) -> R) -> R {
+        ///
+        /// Reachable from the sibling modules because dispatch is where a tool nobody was offered
+        /// is refused, and that refusal belongs beside the clause it comes from rather than here.
+        pub(super) fn with_tools<R>(
+            workspace: &Workspace,
+            body: impl FnOnce(&mut Tools<'_>) -> R,
+        ) -> R {
             let config = config();
             let egress = bravebot_net::Egress::new();
             let skills = crate::skills::Catalogue::default();

@@ -31,7 +31,7 @@ would make the same call unreadable, and would let a turn write its own next ins
 <a id="SCHED-2"></a>
 ### SCHED-2: withdrawn, it is offered to a tick of a self-paced loop and to nothing else
 
-Replaced by [SCHED-6](#SCHED-6), which offers it to every turn except a tick the person timed. The
+Replaced by [SCHED-6](#SCHED-6), which offers it to every turn that will be asked again. The
 rule it stated left a session asked to report a change with nothing to report it from: one turn
 cannot both read a file now and see it change later, so a turn that could not arrange the later
 look answered from a single read and left nothing watching. SCHED-1 is what the rule was protecting
@@ -69,28 +69,49 @@ turn reads it back, and it is not sent anywhere.
 `verified-by: bravebot_agent::tools::what_the_turn_is_waiting_on_reaches_the_person_watching`
 
 <a id="SCHED-6"></a>
-### SCHED-6: every turn may arrange the next look except a tick the person timed
+### SCHED-6: a turn that will be asked again may arrange the next look
 
-A turn nobody is looping is offered this, and the wait it gives starts a loop over the line the
-person typed ([LOOP-14](../loop.md#LOOP-14)). A tick of a self-paced loop is offered it and sets the
-pace of the next tick. A tick of a loop the person gave an interval for is offered nothing, and a
-call from one is answered the way any other name nobody offered is: no such tool. So is a call from
-a delegate.
+A turn nobody is looping, on a caller that will send its line again after a wait, is offered this,
+and the wait it gives starts a loop over the line the person typed
+([LOOP-14](../loop.md#LOOP-14)). A tick of a self-paced loop is offered it and sets the pace of the
+next tick.
 
-The confirmation says which of the two happened, because the answer the turn is writing differs: a
-tick reports what this look found and leaves the rest to the next one, while a turn that has just
-arranged the first later look is telling somebody a watch now exists and needs nothing from them.
+Three turns are offered nothing, and a call from any of them is answered the way any other name
+nobody offered is: no such tool. A tick of a loop the person gave an interval for. A delegate. And
+a turn nothing will ask again, which is a surface that runs one turn and exits, or a line the
+driver wrote rather than the person: the wait it names is discarded when the turn ends.
 
-**Why.** A request to be told when something changes cannot be answered inside one turn, and the
-rule that withheld the tool from every turn but a tick meant the only honest answer was a single
-read and a suggestion that the person arrange the rest themselves. A tick the person timed is the
-one turn with nothing to decide: the interval already says when it runs, so a wait asked for there
-would be dropped, and a tool present but inert is one the planner has to be told to ignore.
+Which caller that is, the caller says: a turn carries whether its line will be sent again, and a
+caller that says nothing is one that will not.
+
+The confirmation says which of the two offered cases happened, because the answer the turn is
+writing differs: a tick reports what this look found and leaves the rest to the next one, while a
+turn that has just arranged the first later look is telling somebody a watch now exists and needs
+nothing from them.
+
+The two descriptions that route a request to be told when something changes, the read whose change
+token is compared and the run whose output is watched, say where the next look comes from, and say
+the same thing this clause does about the turn they are offered to.
+
+**Why.** A request to be told when something changes cannot be answered inside one turn, and a rule
+withholding the tool from every turn but a tick leaves the only honest answer a single read and a
+suggestion that the person arrange the rest themselves. A tick the person timed is the one turn
+with nothing to decide: the interval already says when it runs, so a wait asked for there would be
+dropped, and a tool present but inert is one the planner has to be told to ignore. A turn nothing
+will ask again has the same wait dropped for the opposite reason, and the confirmation is why it
+matters more: the planner is told a later look is arranged and needs nothing from the person, and
+it writes that to somebody who then believes a watch exists that nothing is keeping.
 
 `verified-by: bravebot_agent::tools::any_turn_may_arrange_the_next_look_and_is_told_which_case_it_is`
 `verified-by: bravebot_agent::tools::a_tick_the_person_timed_is_offered_no_way_to_schedule_one`
+`verified-by: bravebot_agent::tools::a_turn_nothing_will_ask_again_is_offered_no_way_to_schedule_one`
 `verified-by: bravebot_agent::tools::a_turn_outside_a_loop_is_told_the_next_look_is_already_arranged`
+`verified-by: bravebot_agent::tools::a_call_from_a_turn_this_was_withheld_from_is_answered_as_an_unknown_name`
+`verified-by: bravebot_agent::tools::what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_arrange`
 `verified-by: bravebot_agent::turn::a_turn_that_is_not_a_tick_can_arrange_the_next_look`
+`verified-by: bravebot_agent::turn::a_turn_nothing_will_ask_again_cannot_arrange_a_later_look`
 `verified-by: bravebot_agent::turn::a_tick_the_person_timed_cannot_reschedule_itself`
 `verified-by: bravebot_agent::turn::a_tick_of_a_self_paced_loop_says_when_to_run_again`
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
+`verified-by: bravebot_cli::running::a_one_shot_run_offers_no_way_to_arrange_a_later_look`
+`verified-by: bravebot_tui::app::only_a_turn_whose_wait_would_be_kept_is_offered_a_later_look`
