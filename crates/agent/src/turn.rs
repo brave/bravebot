@@ -3608,6 +3608,25 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     if let Some(vouched) = vouched {
         *vouched = policy.vouched();
     }
+
+    // Said to the person, not to the planner, which gets its own question while the turn is still
+    // going and can still act on it. They are the one about to act on a diff, and nothing the turn
+    // leaves behind distinguishes a change that was compiled from one that was never tried. Not a
+    // reproach: plenty of turns have nothing to build, and this says what happened rather than
+    // what should have.
+    //
+    // Above the unwrap, so a stop and a failed request say it too: either leaves the same changed
+    // files on disk as an answer does, and being stopped with none of it compiled is the state a
+    // person is least able to spot for themselves. Both flags are the round loop's own locals,
+    // settled by whatever it did before it ended.
+    if changed_at.is_some() && !ran_a_program {
+        reporter.narration(
+            "files changed this turn and no command was run, so none of it has been \
+             built or tested"
+                .to_string(),
+        );
+    }
+
     let completion = completion?;
 
     // Released while the policy is open, so the audit trail records that the reply was
@@ -3645,18 +3664,6 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     let trust = policy.trust();
     let programs = policy.programs().clone();
     let asked_about = policy.asked().clone();
-
-    // Said to the person, not to the planner, which has answered and gone. They are the one about
-    // to act on a diff, and nothing else in the summary distinguishes a change that was compiled
-    // from one that was never tried. Not a reproach: plenty of turns have nothing to build, and
-    // this says what happened rather than what should have.
-    if changed_at.is_some() && !ran_a_program {
-        reporter.narration(
-            "files changed this turn and no command was run, so none of it has been \
-             built or tested"
-                .to_string(),
-        );
-    }
 
     // Read last, so everything the turn did is inside it, including the presentation just above.
     spent.wall = began.elapsed();

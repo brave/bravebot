@@ -54,7 +54,8 @@ characters in it cannot paint anything. A turn that succeeds after a failure rep
 and takes none of the colour of the one before it.
 
 **A turn that changed files and ran nothing says so.** Where a run was possible, files changed and no
-program was run, the end of the turn tells you plainly that nothing was built or tested. Nothing else
+program was run, the end of the turn tells you plainly that nothing was built or tested, whether it
+answered, failed, or you stopped it: the files are changed either way. Nothing else
 on your screen distinguishes that diff from a checked one. It is not a reproach: plenty of turns have
 nothing to build, and one of those says nothing.
 
