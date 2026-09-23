@@ -496,6 +496,7 @@ src/shared/                 types both sides agree on
   export.ts                 the formats, and what each one leaves out
   theme.ts                  the palette format, ported from the agent's own theme.rs
 scripts/                    the bridge build, the packager, the drivers and the demo
+build/                      the app icon, and the drawing it is made from
 docs/                       the protocol design, this document, testing and the demo
 ```
 

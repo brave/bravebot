@@ -16,7 +16,8 @@ members of lives.
 | `npm run build` | Build both Rust executables, typecheck, bundle into `out/` |
 | `npm start` | Set up Electron and preview the existing bundle; does not rebuild it |
 | `npm run package` | Build both Rust executables, bundle, package for macOS or Linux; does not typecheck |
-| `make app-bundle` (from the root) | The same bundle, carrying release executables built with credentials required |
+| `make app-bundle` (from the root) | The same bundle, carrying release executables built with credentials required, fused |
+| `make app-release` (from the root) | A disk image per Mac architecture, from the cross-built executables in `dist/`; see [releasing](../../docs/development/releasing.md#the-desktop-application) |
 | `make check-ui` (from the root) | Install, build the file helper, and run every `scripts/*.test.mjs` |
 | `cargo test -p bravebot-ui-bridge -p bravebot-ui-files` | Test the two front-end crates |
 | `cargo test --all` | Test the whole workspace, agent crates included |
@@ -60,8 +61,10 @@ bundles, then `scripts/package.mjs` uses `@electron/packager` to create
 `dist/Brave Bot-darwin-<arch>/Brave Bot.app` on macOS or
 `dist/Brave Bot-linux-<arch>/` on Linux. Launch the Linux package with
 `"./dist/Brave Bot-linux-x64/Brave Bot"` (replace `x64` for other architectures).
-The platform and architecture follow the Node process. Rust uses its configured toolchain target; for a native
-bundle, use matching Node and Rust architectures.
+The platform follows the Node process, and so does the architecture unless
+`node scripts/package.mjs --arch=arm64` or `--arch=x64` names one, in Electron's names rather than
+the cross-build's `amd64`. Rust uses its configured toolchain target; for a native bundle, use
+matching Node and Rust architectures.
 
 Which Rust build the bundle carries is the one thing the finished bundle does not record: it is
 named, versioned and laid out identically either way, and the two overwrite each other in
@@ -70,7 +73,7 @@ built and what makes it the right command for testing the bundle itself. The las
 says which it took:
 
 ```
-packaged: dist/Brave Bot-linux-x64 (debug executables)
+packaged: dist/Brave Bot-linux-x64 (debug executables, not fused)
 ```
 
 The bundle's version is `package.json`'s, and that is the repository's version rather than one
@@ -83,10 +86,36 @@ Packaged builds use those copies; development builds use the workspace `../targe
 
 A bundle for anybody else is `make app-bundle`, from the repository root: it builds both
 executables in release mode with the backend credentials required rather than optional, and
-packages those instead. Neither command signs or notarises the result, so what comes out is
-installable and not distributable, and how a release would get the rest is
-[releasing](../../docs/development/releasing.md#the-desktop-application). Git commit signatures
-are separate from macOS app signing.
+packages those instead. `make app-release` packages the release's own cross-built pair for each
+Mac architecture instead, through `--executables=<dir>`, and packaging reads the header of each
+executable in that pair and refuses one built for another platform or architecture than the
+bundle's. Neither command signs or notarises the
+result, so what comes out is installable and not distributable, and how a release gets the rest
+is [releasing](../../docs/development/releasing.md#the-desktop-application). Git commit
+signatures are separate from macOS app signing.
+
+Those two are fused and `npm run package` is not. `scripts/fuses.mjs` turns off the Electron
+fuses that let the binary run code that is not the app's: `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`
+and the `--inspect` arguments. It turns on asar integrity validation and loading only from the
+asar. A fused app cannot be driven, because Playwright attaches through `--inspect`, so
+`npm run drive:packaged` and `SECURE_FILES_APP` take the unfused bundle `npm run package` writes.
+All three write to the same `dist/` path, and `drive:packaged` refuses a fused bundle there rather
+than wait out its launch timeout.
+
+Every macOS bundle carries the bundle id `com.brave.bravebot` and the icon `build/icon.icns`. macOS
+keys privacy grants and keychain items on the bundle id, so it does not change between releases.
+The icon is the About mascot in Brave orange on a macOS tile, drawn in `build/icon.svg`; after
+changing the drawing, remake the icon from it:
+
+```bash
+inkscape build/icon.svg -w 1024 -h 1024 -o /tmp/icon-1024.png
+mkdir /tmp/icon.iconset
+for s in 16 32 128 256 512; do
+  sips -z $s $s /tmp/icon-1024.png --out /tmp/icon.iconset/icon_${s}x${s}.png
+  sips -z $((s*2)) $((s*2)) /tmp/icon-1024.png --out /tmp/icon.iconset/icon_${s}x${s}@2x.png
+done
+iconutil -c icns /tmp/icon.iconset -o build/icon.icns
+```
 
 A development checkout can produce a configured or unconfigured binary depending
 on the build environment. Follow [credentials](setup.md#credentials) before packaging

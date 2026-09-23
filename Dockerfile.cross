@@ -29,12 +29,21 @@ RUN --mount=type=secret,id=bravebot_env,target=/run/secrets/bravebot_env \
        --config profile.release.strip=false
 
 # Normalise the artifact name so extraction does not need to know about .exe.
+#
+# A Mac target also keeps the desktop application's two executables, which the build above
+# has already compiled with the rest of the workspace: `make app-release` packages them, and
+# the desktop application is released for macOS only.
 RUN mkdir -p /out \
     && if [ -f "/src/target/${TARGET}/release/bravebot.exe" ]; then \
          cp "/src/target/${TARGET}/release/bravebot.exe" /out/bravebot; \
        else \
          cp "/src/target/${TARGET}/release/bravebot" /out/bravebot; \
-       fi
+       fi \
+    && case "$TARGET" in \
+         *-apple-darwin) \
+           cp "/src/target/${TARGET}/release/bravebot-rpc" \
+              "/src/target/${TARGET}/release/bravebot-ui-files" /out/ ;; \
+       esac
 
 FROM scratch
-COPY --from=builder /out/bravebot /bravebot
+COPY --from=builder /out/ /

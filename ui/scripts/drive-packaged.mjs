@@ -11,6 +11,7 @@
 import { _electron as electron } from 'playwright-core'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdirSync } from 'node:fs'
+import { acceptsInspect } from './fuses.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -24,6 +25,14 @@ const BUNDLE = `dist/Brave Bot-darwin-${process.arch === 'arm64' ? 'arm64' : 'x6
 if (!existsSync(BUNDLE)) {
   console.log(`RESULT: skipped — no bundle at ${BUNDLE}; run \`npm run package\``)
   process.exit(0)
+}
+
+// `make app-bundle` and `make app-release` write a fused bundle to this same path, and Playwright
+// attaches through `--inspect`, so launching one waits out the timeout below and says only that
+// the launch failed.
+if (!acceptsInspect(readFileSync(`${BUNDLE}/Contents/Frameworks/Electron Framework.framework/Electron Framework`))) {
+  console.log(`RESULT: failed, because ${BUNDLE} is fused and Playwright cannot attach to it; run \`npm run package\``)
+  process.exit(1)
 }
 
 // The menu bar's title is the one thing no template can set, so it is checked where AppKit

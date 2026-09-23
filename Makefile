@@ -81,6 +81,7 @@ help:
 	@echo "  make github-release                         Tag it; Jenkins and npm publish are later"
 	@echo "  make publish-npm [TAG=v<version>]           Publish npm for TAG, or the latest GitHub release"
 	@echo "  make app-bundle                             Package the desktop application, release build"
+	@echo "  make app-release                            Its disk images for both Mac architectures, unsigned"
 	@echo
 	@echo "  make clean          Remove build output"
 
@@ -443,12 +444,76 @@ all-platforms: darwin-arm64 darwin-amd64 linux-amd64 linux-arm64 windows-amd64 w
 #
 # Nothing here signs or notarises the result, so the bundle is installable and not distributable;
 # the job that signs the binaries is where that belongs, and issue #394 is where it is decided.
+# It is fused, as a release is, so it runs no Node program it is handed and Playwright cannot
+# drive it: `npm run package` in ui/ is the bundle the drivers attach to.
 .PHONY: app-bundle
 app-bundle:
 	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=0 cargo build --release --locked \
 		-p bravebot-ui-bridge -p bravebot-ui-files
 	cd ui && npm ci && npm run typecheck && npm exec -- electron-vite build && \
 		node scripts/package.mjs --release
+
+# The desktop application's release assets, built on a Mac from what the cross-build left in
+# dist/, for both architectures whichever one this Mac is:
+#
+#   reads   dist/bravebot-rpc-darwin-<arch>, dist/bravebot-ui-files-darwin-<arch>
+#   writes  dist/bravebot-app-darwin-<arch>.dmg
+#
+# for <arch> arm64 and amd64, the names the CLI assets use. The executables are the ones
+# `make darwin-arm64 darwin-amd64 strip` produces, so the agent inside the app is the same build as
+# the one beside it on the releases page, and nothing here needs a Rust toolchain.
+#
+# Two steps, because signing goes between them. `app-bundles` writes a fused, unsigned bundle per
+# architecture to ui/dist/Brave Bot-darwin-<arm64|x64>/, which a signing job signs where it lies;
+# `app-dmg` then puts each one in its disk image, beside the two licence files the packager writes
+# next to the bundle rather than into it. `app-release` is both with nothing in between. Fusing
+# has to come first because it rewrites the Electron binary, which a signature covers.
+#
+# Each pair is the architecture's name in an asset and Electron's name for it, which differ for
+# Intel, and this list is the one place that says so.
+APP_ARCHES = arm64:arm64 amd64:x64
+
+.PHONY: app-release
+app-release: app-bundles
+	$(MAKE) app-dmg
+
+.PHONY: app-bundles
+app-bundles:
+	@missing=; builds=; for pair in $(APP_ARCHES); do \
+		arch=$${pair%%:*}; lacks=; \
+		for name in bravebot-rpc bravebot-ui-files; do \
+			test -f dist/$$name-darwin-$$arch || lacks="$$lacks $$name-darwin-$$arch"; \
+		done; \
+		if [ -n "$$lacks" ]; then missing="$$missing$$lacks"; builds="$$builds darwin-$$arch"; fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "missing from dist/:$$missing" >&2; \
+		echo "run \`make$$builds strip\` first" >&2; exit 1; \
+	fi
+	cd ui && npm ci && npm run typecheck && npm exec -- electron-vite build
+	@set -e; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
+	for pair in $(APP_ARCHES); do \
+		arch=$${pair%%:*}; electron=$${pair#*:}; \
+		mkdir "$$stage/$$arch"; \
+		install -m 0755 dist/bravebot-rpc-darwin-$$arch "$$stage/$$arch/bravebot-rpc"; \
+		install -m 0755 dist/bravebot-ui-files-darwin-$$arch "$$stage/$$arch/bravebot-ui-files"; \
+		(cd ui && node scripts/package.mjs --executables="$$stage/$$arch" --arch=$$electron); \
+	done
+
+.PHONY: app-dmg
+app-dmg:
+	@set -e; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
+	for pair in $(APP_ARCHES); do \
+		arch=$${pair%%:*}; electron=$${pair#*:}; \
+		bundle="ui/dist/Brave Bot-darwin-$$electron"; \
+		mkdir "$$stage/$$arch"; \
+		ditto "$$bundle/Brave Bot.app" "$$stage/$$arch/Brave Bot.app"; \
+		cp "$$bundle/LICENSE" "$$bundle/LICENSES.chromium.html" "$$stage/$$arch/"; \
+		ln -s /Applications "$$stage/$$arch/Applications"; \
+		hdiutil create -quiet -volname "Brave Bot" -srcfolder "$$stage/$$arch" -ov -format UDZO \
+			dist/bravebot-app-darwin-$$arch.dmg; \
+		echo "wrote dist/bravebot-app-darwin-$$arch.dmg"; \
+	done
 
 # Symbols are kept during the build because Rust's own strip can corrupt some targets
 # under zigbuild, so they are removed here instead.
@@ -467,7 +532,7 @@ app-bundle:
 .PHONY: strip
 strip:
 	@for f in dist/$(BINARY)-*; do \
-		case "$$f" in *.sha256|*SHA256SUMS) continue;; esac; \
+		case "$$f" in *.sha256|*SHA256SUMS|*.dmg) continue;; esac; \
 		docker run --rm -v "$(PWD)/dist:/dist" -e ASSET="/dist/$$(basename $$f)" \
 			$(ZIGBUILD_IMAGE) sh -c '\
 			lib=$$(rustc --print sysroot)/lib && \
@@ -481,11 +546,13 @@ strip:
 # Nothing in this repository runs this, and the publish job hashes the signed binaries itself.
 # It is the statement of the format those files have to be in: the digest alone, with no filename
 # beside it, which is the only thing the npm postinstall accepts. SHA256SUMS is the conventional
-# form of the same hashes, for verifying a download by hand.
+# form of the same hashes, for verifying a download by hand. The desktop application's two
+# executables are left out: they go into its disk images and are not assets of their own.
 .PHONY: checksums
 checksums:
 	@cd dist && rm -f ./*.sha256 SHA256SUMS && \
 	for f in $(BINARY)-*; do \
+		case "$$f" in bravebot-rpc-*|bravebot-ui-files-*) continue;; esac; \
 		shasum -a 256 "$$f" | awk '{print $$1}' > "$$f.sha256"; \
 		shasum -a 256 "$$f" >> SHA256SUMS; \
 	done
@@ -636,12 +703,16 @@ define cross-build
 endef
 
 # `docker create` on a scratch image needs a command argument even though it never
-# runs; the container exists only so the binary can be copied out.
+# runs; the container exists only so the binary can be copied out. A Mac target's image
+# also holds the desktop application's two executables, which land beside the CLI under
+# the names `app-bundles` reads, and are stripped with it.
 define extract
 	mkdir -p dist
 	docker rm -f tmp-$(BINARY)-$(2) 2>/dev/null || true
 	docker create --name tmp-$(BINARY)-$(2) $(1) /dev/null
 	docker cp tmp-$(BINARY)-$(2):/$(BINARY) dist/$(call artifact,$(2))
+	$(if $(findstring darwin,$(2)),for helper in bravebot-rpc bravebot-ui-files; do \
+		docker cp tmp-$(BINARY)-$(2):/$$helper dist/$$helper-$(2) || exit 1; done)
 	docker rm tmp-$(BINARY)-$(2)
 endef
 
