@@ -441,6 +441,76 @@ fn a_refused_argument_exits_non_zero() {
     }
 }
 
+/// A command line refused before it named a command is a failure before the turn, so CLI-12 owes
+/// it a result object, and stdout is where the object goes. The usage table is written there too,
+/// so a run that asked for an object used to get prose in its place and nothing to parse: the
+/// caller had to tell a usage table from a result, which is the surface the flag exists to remove.
+///
+/// Both dispatch refusals a command line can carry the flag into are here, since routing one of
+/// them and not the other leaves a caller that has to know which mistake it made. The same
+/// invocations without the flag are here for the other direction: the table is what a person
+/// mistyping a flag needs, and suppressing it for everybody would answer this clause by breaking
+/// CLI-5.
+#[test]
+fn a_refused_command_line_asking_for_a_result_object_gets_one_instead_of_the_usage() {
+    let scratch = Scratch::new("cli-running-refused-json");
+
+    for (arguments, refused) in [
+        (
+            &["--nonsense", "--json", "-p", "say something"][..],
+            "--nonsense",
+        ),
+        (&["--plain", "--json"][..], "--plain"),
+    ] {
+        let output = bravebot(&scratch.path, &[], arguments);
+        let (stdout, stderr) = said(&output);
+
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{arguments:?} did not exit as a refused argument: {stderr}"
+        );
+        assert_eq!(
+            stdout.lines().count(),
+            1,
+            "{arguments:?} did not answer with one object on one line: {stdout}"
+        );
+        for field in [
+            r#""schema":1"#,
+            r#""ok":false"#,
+            r#""status":2"#,
+            r#""reason":"argument""#,
+            r#""identifier":"BB1002""#,
+        ] {
+            assert!(
+                stdout.contains(field),
+                "{field} is missing from what {arguments:?} answered with: {stdout}"
+            );
+        }
+        // The other half of the clause: the object took the reply's place, and the prose that used
+        // to be there went nowhere rather than sharing the stream with it.
+        assert!(
+            !stdout.contains("Usage:"),
+            "{arguments:?} put the usage table on stdout beside the object: {stdout}"
+        );
+        // Unchanged by the flag: the person still reads why it was refused, on stderr.
+        assert!(
+            stderr.contains("BB1002") && stderr.contains(refused),
+            "{arguments:?} stopped saying what it refused: {stderr}"
+        );
+    }
+
+    for arguments in [&["--nonsense"][..], &["--plain", "--also-nonsense"][..]] {
+        let output = bravebot(&scratch.path, &[], arguments);
+        let (stdout, stderr) = said(&output);
+
+        assert!(
+            stdout.contains("Usage:"),
+            "{arguments:?} asked for no object and lost the usage table too: {stdout} / {stderr}"
+        );
+    }
+}
+
 /// The third failure the clause names, and the one the status matters most for: a turn that could
 /// not run produces no reply, so a script reading stdout sees an empty answer rather than an
 /// error.
