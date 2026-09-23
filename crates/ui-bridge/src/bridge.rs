@@ -48,6 +48,9 @@ struct Open {
     running: Option<Running>,
     model: Option<String>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
+    /// Settled once, when the session opened, as the terminal does: a session that opened with
+    /// the mode on said so at the top, and a later change to the file would make that untrue.
+    auto_vetting: bool,
 }
 
 /// Drives the agent for a front-end.
@@ -219,6 +222,7 @@ impl Bridge {
             inherited.unwrap_or_else(|| TrustStore::new(&directory)),
         );
 
+        let auto_vetting = self.auto_vetting(&directory);
         let handle = self.mint(Open {
             project: directory.clone(),
             state: Arc::new(Mutex::new(state)),
@@ -226,6 +230,7 @@ impl Bridge {
             running: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
+            auto_vetting,
         });
 
         if !answered_trust {
@@ -236,11 +241,24 @@ impl Bridge {
             ));
         }
 
-        Ok(self.recount(&handle, &directory, &record))
+        Ok(self.recount(&handle, &directory, &record, auto_vetting))
+    }
+
+    fn auto_vetting(&self, project: &std::path::Path) -> bool {
+        crate::settings::auto_vetting(&crate::settings::layers(
+            Some(project),
+            self.settings.as_deref(),
+        ))
     }
 
     /// Everything a front-end needs to draw a session it did not watch happen.
-    fn recount(&self, handle: &str, directory: &std::path::Path, record: &Record) -> Value {
+    fn recount(
+        &self,
+        handle: &str,
+        directory: &std::path::Path,
+        record: &Record,
+        auto_vetting: bool,
+    ) -> Value {
         // Restored rather than read straight off the record, because restoring is what
         // adds the note saying the quarantine's references no longer name anything — and
         // `recounted` filters that note back out. Going around it would show a transcript
@@ -294,6 +312,7 @@ impl Bridge {
                 record.front.as_deref(),
                 crate::FRONT,
             ),
+            "autoVetting": auto_vetting,
         })
     }
 
@@ -314,6 +333,7 @@ impl Bridge {
         }
 
         let branch = bravebot_session::sessions::branch_of(&directory);
+        let auto_vetting = self.auto_vetting(&directory);
         let handle = self.mint(Open {
             project: directory.clone(),
             // An empty map until the user answers. Nothing runs before then, so this is
@@ -323,6 +343,7 @@ impl Bridge {
             running: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
+            auto_vetting,
         });
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
@@ -338,6 +359,7 @@ impl Bridge {
             "model": crate::settings::config(Some(&directory), self.settings.as_deref()).ok().map(|config| config.default_model),
             "directory": directory.display().to_string(),
             "branch": branch,
+            "autoVetting": auto_vetting,
         }))
     }
 
@@ -377,6 +399,7 @@ impl Bridge {
 
         let project = open.project.clone();
         let answered_trust = open.answered_trust;
+        let auto_vetting = open.auto_vetting;
 
         // Everything needed is copied out under the lock and the lock is dropped before any of
         // it is used. A fork does no I/O and no thinking, but holding a session's state across
@@ -457,6 +480,9 @@ impl Bridge {
             running: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
+            // The parent's, not read again: the child's transcript is the parent's up to the cut,
+            // and the notice at its top says what the parent opened under.
+            auto_vetting,
         });
 
         if !answered_trust {
@@ -485,6 +511,7 @@ impl Bridge {
             "turns": ordinal,
             "todos": todos_json(&todos),
             "trust": { "known": known, "rules": if known { Value::from(rules) } else { Value::Null } },
+            "autoVetting": auto_vetting,
             "parent": {
                 "id": parent_id,
                 "directory": project.display().to_string(),
@@ -597,7 +624,7 @@ impl Bridge {
         // the caps a search this turn makes runs under (SEARCH-9).
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
         let attribution = settings.attribution().clone();
-        let auto_vetting = crate::settings::auto_vetting(&settings);
+        let auto_vetting = open.auto_vetting;
         let mut workspace = turn_workspace(open.project.clone(), &settings)
             .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
 
@@ -1141,7 +1168,7 @@ struct Work {
     config: Config,
     /// What the settings say a commit message and a pull request this turn writes may carry.
     attribution: bravebot_config::Attribution,
-    /// Settled when the turn was asked for, so a prompt already on screen is not answered under a different rule.
+    /// The session's, settled when it opened.
     auto_vetting: bool,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
     model: Option<String>,
@@ -1531,6 +1558,7 @@ mod watch_tests {
             running: None,
             model: None,
             watches: Arc::clone(&watches),
+            auto_vetting: false,
         });
         std::fs::write(
             root.join("watched"),
@@ -1600,6 +1628,7 @@ mod watch_tests {
             running: Some(running),
             model: None,
             watches: Arc::clone(&watches),
+            auto_vetting: false,
         });
         let request = Request::parse(
             &json!({"id": 1, "method": "turn.cancel", "params": {"session": handle}}).to_string(),
@@ -1647,6 +1676,7 @@ mod watch_tests {
             running: None,
             model: None,
             watches: Arc::clone(&watches),
+            auto_vetting: false,
         });
         bridge.poll_watches_at(now + Duration::from_secs(7 * 24 * 60 * 60));
         assert!(watches.lock().unwrap().is_empty());

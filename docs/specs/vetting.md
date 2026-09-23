@@ -9,6 +9,8 @@ governs:
   - crates/agent/src/report.rs
   - crates/session/src/store.rs
   - crates/tui/src/status.rs
+  - crates/ui-bridge/src/bridge.rs
+  - crates/ui-bridge/src/settings.rs
   - crates/ui-bridge/src/wire.rs
   - crates/ui-bridge/src/turn.rs
 guards:

@@ -134,6 +134,13 @@ export interface OpenedSession {
    * said again when this has gone up since it last looked.
    */
   archived: number
+  /**
+   * Whether a check that finds nothing reads quarantined content to the model with nobody asked.
+   *
+   * Settled by the agent when the session opened and not changed while it is open, so a window
+   * says it once at the top of the transcript and goes on showing it (CHECK-11).
+   */
+  autoVetting: boolean
 }
 
 export interface ModelOption {
@@ -173,6 +180,8 @@ export interface ForkedSession {
   turns: number
   todos: Record<string, TodoRow[]>
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
+  /** The parent's, as it opened: the child carries on its conversation. */
+  autoVetting: boolean
   parent: {
     id: string
     directory: string
