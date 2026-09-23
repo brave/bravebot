@@ -23460,6 +23460,356 @@ fn a_credential_pasted_by_an_edit_leaves_the_file_as_it_was() {
     );
 }
 
+/// One turn of the `run` tool, with the map naming the tree and every run approved.
+///
+/// Reads the reporter back, since a finding is the person's half of the answer and never the
+/// planner's, so a test of what was said has to be able to read both.
+///
+/// The state directory comes back first, and is somewhere else entirely: a record of where the
+/// credentials are is the one thing that must not be written beside them. It is returned rather
+/// than kept here because it is what a caller reads the record out of, and because dropping it
+/// would take the record with it.
+fn a_run_turn_scanning(
+    scratch: &Scratch,
+    command: &str,
+    programs: bravebot_core::programs::TrustedPrograms,
+) -> (Scratch, bravebot_agent::report::RecordingReporter, String) {
+    // Named after the tree it holds the record for, so two tests running at once do not write
+    // into one file and read each other's findings back.
+    let home = Scratch::new(&format!(
+        "{}-home",
+        scratch
+            .path
+            .file_name()
+            .expect("the scratch tree is a named directory")
+            .to_string_lossy()
+    ));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("run", &format!(r#"{{"command":"{command}"}}"#)),
+        reply_with("done"),
+    ]);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("back the file up before changing it").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveRuns,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        programs,
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    (home, reporter, tool_results(&second))
+}
+
+/// A vouched entry for the one program a line runs, so what the line prints is content the
+/// person asserted something about rather than content nobody vouched for.
+///
+/// The scan of what a line left reads the destination at the label the driver already fixed for
+/// that line's output, and the driver fixes `(U,priv)` for a line whose steps nobody vouched
+/// for: examining bytes nobody vouched for in order to decide whether to refuse is the one thing
+/// this repository does not do. So the fixture has to establish the case the check can reach,
+/// and a fixture that did not would pass against a check wired to nothing.
+fn vouching_for(
+    program: &str,
+    args: &[&str],
+    tree: &std::path::Path,
+) -> bravebot_core::programs::TrustedPrograms {
+    let resolved = bravebot_agent::programs::resolve(program, tree).expect("the program exists");
+    bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(&resolved, args, tree)])
+}
+
+/// The clause's own reproduction. A turn asked to change `.env` backs it up with a `run` line
+/// first, and the credential is then in a second file in the tree: the pre-edit backup CRED-11
+/// names, with nothing refused and nothing said.
+///
+/// The value is nowhere in the line, so nothing that reads the planner's own words can catch
+/// this. What has to be read is what the line left at the destination it opened, which is the
+/// one thing the three write-tool paths never saw.
+///
+/// The destination did not exist before the line ran, so putting it back is removing it, and
+/// that is what the assertion is: a backup left in place holding the key would satisfy any check
+/// that only asked whether the turn had been refused.
+#[test]
+fn a_credential_a_run_line_redirects_into_the_tree_does_not_stay_there() {
+    let scratch = Scratch::new("credential-run-redirect");
+    let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+    std::fs::write(scratch.path.join(".env"), &env).unwrap();
+    let programs = vouching_for("cat", &[".env"], &scratch.path);
+
+    let (_home, reporter, answered) =
+        a_run_turn_scanning(&scratch, "cat .env > .env.bak", programs);
+
+    assert!(
+        !scratch.path.join(".env.bak").exists(),
+        "a credential a run line copied is still in the tree: {:?}",
+        std::fs::read_to_string(scratch.path.join(".env.bak")).ok()
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        env,
+        "the file the line read was changed by the refusal"
+    );
+
+    // The planner is told the line did not stand, and told nothing about what was found: a
+    // finding is a record of where a secret is, and a model's context is the one place it would
+    // be read by something that could be talked into using it.
+    assert!(
+        answered.contains("refused") && answered.contains(".env.bak"),
+        "the planner was not told the line did not stand: {answered}"
+    );
+    assert!(
+        !answered.contains(DECLARED_KEY) && !answered.contains("an AWS access key id"),
+        "a finding or a value reached the planner's context: {answered}"
+    );
+
+    let told = reporter
+        .finished
+        .iter()
+        .filter_map(|activity| activity.note.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        told.contains("an AWS access key id") && told.contains(".env.bak:1"),
+        "the person was not told what was found or where: {told}"
+    );
+    assert!(
+        !told.contains(DECLARED_KEY),
+        "the value itself was put on the screen: {told}"
+    );
+}
+
+/// The other half of the same question, and the one a scan with no pre-image gets wrong. A line
+/// appending to a file that already holds a secret carries that secret into the destination
+/// without having written it, exactly as a write tool's whole-file body does.
+///
+/// Attributing the destination to the line whole would refuse this and put the file back, which
+/// is a turn that cannot append a line to its own `.env` and a rewind of work nobody asked to
+/// have undone. So the assertion is that the append stands, and that the person is still told.
+#[test]
+fn a_credential_the_destination_already_held_does_not_refuse_the_line_carrying_it() {
+    let scratch = Scratch::new("credential-run-carried");
+    let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+    std::fs::write(scratch.path.join(".env"), &env).unwrap();
+    let programs = vouching_for("echo", &["PORT=8080"], &scratch.path);
+
+    let (_home, reporter, answered) =
+        a_run_turn_scanning(&scratch, "echo PORT=8080 >> .env", programs);
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        format!("{env}PORT=8080\n"),
+        "a line carrying a credential the destination already held was refused and put back"
+    );
+    assert!(
+        !answered.contains("refused"),
+        "the line was refused for a value it did not write: {answered}"
+    );
+
+    let told = reporter
+        .finished
+        .iter()
+        .filter_map(|activity| activity.note.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        told.contains("already there") && told.contains("an AWS access key id"),
+        "the person was not told the destination carries a credential: {told}"
+    );
+}
+
+/// The inferred layer has no prompt to go to at this tool, and its answer is a notice rather
+/// than silence. A write tool raises a guess on the approval it is already asking for, and a
+/// line is approved before it runs and before anything can be read back, so the person hears
+/// about it once or not at all.
+///
+/// Not refused: the rule that catches a generated framework key also catches a development
+/// password and a test fixture, and there is nobody to say which this is. So the assertion is
+/// both halves, that the file stands and that the person was told, since dropping the finding
+/// passes any test that only checked the file.
+#[test]
+fn a_value_a_line_wrote_that_only_looks_like_a_secret_is_told_to_the_person() {
+    let scratch = Scratch::new("credential-run-inferred");
+    std::fs::write(
+        scratch.path.join("secret.txt"),
+        format!("SECRET_KEY_BASE={GENERATED_SECRET}\n"),
+    )
+    .unwrap();
+    let programs = vouching_for("cat", &["secret.txt"], &scratch.path);
+
+    let (_home, reporter, answered) =
+        a_run_turn_scanning(&scratch, "cat secret.txt > .env", programs);
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        format!("SECRET_KEY_BASE={GENERATED_SECRET}\n"),
+        "a guess refused a line nobody was asked about"
+    );
+    assert!(
+        !answered.contains("refused"),
+        "a guess refused the line: {answered}"
+    );
+
+    let told = reporter
+        .finished
+        .iter()
+        .filter_map(|activity| activity.note.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        told.contains("looks like a credential")
+            && told.contains("a secret assigned by name")
+            && told.contains(".env:1"),
+        "the person was not told what the line wrote: {told}"
+    );
+    assert!(
+        !told.contains(GENERATED_SECRET),
+        "the value itself was put on the screen: {told}"
+    );
+}
+
+/// The route that needs no file to already hold anything: the turn composes the value itself and
+/// writes it with a line. A command line is the planner's own words, so this is the same
+/// question a write tool's body is asked, and it is asked before the line is compiled.
+///
+/// Refused whatever the line would have done with the value, because a line carrying one has
+/// already put it in every place a refusal can still reach: the file it would open, the prompt
+/// the person reads, and `/proc/<pid>/cmdline` for every account on the machine.
+#[test]
+fn a_credential_the_line_itself_carries_stops_the_line() {
+    let scratch = Scratch::new("credential-run-in-the-line");
+
+    let (_home, reporter, answered) = a_run_turn_scanning(
+        &scratch,
+        &format!("printf AWS_ACCESS_KEY_ID={DECLARED_KEY} > .env"),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    assert!(
+        !scratch.path.join(".env").exists(),
+        "a credential the line itself carried was written to the tree: {:?}",
+        std::fs::read_to_string(scratch.path.join(".env")).ok()
+    );
+    assert!(
+        answered.contains("refused"),
+        "the planner was not told the line did not run: {answered}"
+    );
+    assert!(
+        !answered.contains("an AWS access key id"),
+        "a finding reached the planner's context: {answered}"
+    );
+
+    let told = reporter
+        .finished
+        .iter()
+        .filter_map(|activity| activity.note.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        told.contains("an AWS access key id"),
+        "the person was not told what was found: {told}"
+    );
+    assert!(
+        !told.contains(DECLARED_KEY),
+        "the value itself was put on the screen: {told}"
+    );
+}
+
+/// A finding at a destination a line opened outlives the turn, exactly as one a write tool
+/// caught does.
+///
+/// The value was in the person's tree while the line ran, and putting it back afterwards does
+/// not make that untrue: what CRED-19 records is what the machine has had in it, and the screen
+/// alone is gone when the session ends. A scan wired to the three write tools alone writes the
+/// record for a `write_file` that never landed and nothing at all for a `run` line that did.
+///
+/// The entry names the destination rather than the file the line read, because the destination
+/// is where the value went.
+#[test]
+fn a_credential_a_line_left_at_a_destination_is_written_to_the_record() {
+    let scratch = Scratch::new("credential-run-redirect-recorded");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+    )
+    .unwrap();
+    let programs = vouching_for("cat", &[".env"], &scratch.path);
+
+    let (home, _reporter, _answered) =
+        a_run_turn_scanning(&scratch, "cat .env > .env.bak", programs);
+
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let store = bravebot_agent::findings::Store::new(&home.path, workspace.root());
+    let recorded = store.recorded();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "a line left a credential in the tree and nothing was written down: {recorded:?}"
+    );
+    let finding = &recorded[0];
+    assert_eq!(finding.kind, bravebot_core::credentials::Kind::AwsAccessKey);
+    assert_eq!(finding.path, ".env.bak");
+    assert_eq!(finding.line, 1);
+    assert!(
+        !store.path().starts_with(&scratch.path),
+        "the record of what is in the tree was written into the tree: {}",
+        store.path().display()
+    );
+    let written = std::fs::read_to_string(store.path()).expect("the record");
+    assert!(
+        !written.contains(DECLARED_KEY),
+        "the record repeats the value it is about: {written}"
+    );
+}
+
+/// A finding in the line itself is written down too, and the refusal is not what decides it.
+///
+/// The line is refused before anything runs, so nothing of it reached a file — but the planner
+/// composed the value and this machine held it, which is the thing the person is owed a record
+/// of. CRED-19 says a finding is written whatever was done about it, and a `return` taken before
+/// the record is the one way this site can look right and keep nothing.
+///
+/// The entry names the line as the place, since there is no path: a value in a line is not in a
+/// file, and an entry claiming one would say the person's tree holds something it does not.
+#[test]
+fn a_credential_in_the_line_itself_is_written_to_the_record() {
+    let scratch = Scratch::new("credential-run-in-the-line-recorded");
+
+    let (home, _reporter, _answered) = a_run_turn_scanning(
+        &scratch,
+        &format!("printf AWS_ACCESS_KEY_ID={DECLARED_KEY} > .env"),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let store = bravebot_agent::findings::Store::new(&home.path, workspace.root());
+    let recorded = store.recorded();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "a credential in a refused line was not written down: {recorded:?}"
+    );
+    assert_eq!(
+        recorded[0].kind,
+        bravebot_core::credentials::Kind::AwsAccessKey
+    );
+    assert_eq!(recorded[0].path, "the command line");
+    let written = std::fs::read_to_string(store.path()).expect("the record");
+    assert!(
+        !written.contains(DECLARED_KEY),
+        "the record repeats the value it is about: {written}"
+    );
+}
+
 // ------------------------------------------------- reshaping a write for the screen
 
 /// Where the trail says a gate ran, by index, so two of them can be put in order.
