@@ -317,11 +317,16 @@ fi
 
 # A runner that cannot start reports zero findings, which reads exactly like a
 # clean run. Say so rather than let it pass silently.
+# Outside CI, security-action's sandbox wrapper runs the scanner unsandboxed
+# and says so on stderr; that line alone is a completed scan, not a failure.
+SANDBOX_NOTICE='^with-sandbox: .*; running unsandboxed \(local mode\)\.$'
 for runner in $RUNNERS; do
     log="$REPO_ROOT/reviewdog.$runner.stderr.log"
     [ -s "$log" ] || continue
+    rest="$(grep -Ev "$SANDBOX_NOTICE" "$log")"
+    [ -n "$rest" ] || continue
     printf '\033[0;31m%s could not run cleanly:\033[0m\n' "$runner" >&2
-    sed 's/^/  /' "$log" >&2
+    printf '%s\n' "$rest" | sed 's/^/  /' >&2
     scan_failed=1
 done
 if [ -s "$FAILURES" ]; then
