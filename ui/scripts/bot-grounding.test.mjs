@@ -14,7 +14,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildSync } from 'esbuild'
 import { createRequire } from 'node:module'
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -106,5 +106,17 @@ test('a link where the briefing belongs is displaced, not written through', () =
     assert.equal(readFileSync(outside, 'utf8'), 'outside sentinel', 'the file the link aimed at keeps its bytes')
     assert.equal(lstatSync(paths.ground).isSymbolicLink(), false, 'the briefing is a regular file this process wrote')
     assert.ok(readFileSync(paths.ground, 'utf8').includes('Keep the harbour lights lit'))
+  } finally { f.clean() }
+})
+
+// Rejects a briefing handed over as a name composed for a file the write left behind, such as the
+// temporary one the rename displaces. DROP-10 has the bridge refuse a path naming nothing, so a
+// turn prepared that way is a turn the app cannot send at all.
+test('the briefing is handed over as a file that is there', () => {
+  const f = fixture('ground-present')
+  try {
+    const paths = f.bots.ground(f.bot)
+    assert.ok(paths, 'the briefing was prepared')
+    assert.equal(statSync(paths.ground).isFile(), true, 'the file the turn will name is on the disk when it is named')
   } finally { f.clean() }
 })
