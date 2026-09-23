@@ -11074,6 +11074,13 @@ mod tests {
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert!(session.watches().is_empty());
         assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(watches_stopped, count = 2)),
+            "the watches ended in silence"
+        );
+        assert!(
             !session.is_quitting(),
             "the press that stopped them also left"
         );

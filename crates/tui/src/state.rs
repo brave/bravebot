@@ -1876,7 +1876,17 @@ impl Session {
         // And the watches, for the sharper version of the same reason again: a fire is a sentence
         // this program writes about a file, and one arriving in a conversation that never asked
         // for it has nothing above it to explain itself by.
-        self.watches.stop_all();
+        //
+        // Said rather than done in silence, because a watch that ended in silence is
+        // indistinguishable from one that is live and has seen nothing, and telling those two
+        // apart is the whole of what a person armed it to learn. The transcript was emptied at
+        // the top of this, so the line lands as the new conversation's first. Silent where there
+        // were none, so a person who never armed one is not told about a feature every time they
+        // type /clear.
+        let ended = self.watches.stop_all();
+        if ended > 0 {
+            self.note(t!(watches_cleared, count = ended));
+        }
         // The delegates went with the transcript that held them, so the mode standing over one
         // is standing over nothing. What the commands printed is kept beside the transcript rather
         // than in it, so it is dropped here by name: a conversation nobody remembers leaving its
@@ -9776,12 +9786,35 @@ mod tests {
 
     /// A watch that outlived its session would start sending prompts at somebody who opened a
     /// conversation to read it, about a file that moved while nobody was here.
+    ///
+    /// It ends saying so, for the reason every other ending does: a watch that ended in silence
+    /// is indistinguishable from one that is live and has seen nothing. The line is looked for in
+    /// the transcript the clear left behind, since that is where a person reads it: one added
+    /// before the transcript was emptied would be gone by the time anybody could see it.
     #[test]
     fn clearing_a_session_ends_every_watch() {
         let mut s = session();
         s.arm_watch("notes.md", ARMED_IN, saw("first"));
+        s.arm_watch("plan.md", ARMED_IN, saw("first"));
         s.clear();
         assert!(s.watches().is_empty());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watches_cleared, count = 2)),
+            "the watches ended in silence"
+        );
+    }
+
+    /// A person who never armed one is not told about a feature every time they type /clear.
+    #[test]
+    fn clearing_a_session_watching_nothing_says_nothing_about_watches() {
+        let mut s = session();
+        s.clear();
+        assert!(
+            s.transcript.is_empty(),
+            "a session watching nothing said something about watches"
+        );
     }
 
     /// A number a person read off the screen ends the watch it named and leaves the others.
@@ -9795,6 +9828,12 @@ mod tests {
         assert_eq!(
             s.watches().iter().map(|w| w.path()).collect::<Vec<_>>(),
             vec!["b.md"]
+        );
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_stopped, number = 1)),
+            "the watch ended in silence"
         );
         assert!(!s.stop_watch(1), "a watch that had ended was ended again");
         assert!(
@@ -9819,6 +9858,12 @@ mod tests {
         assert!(s.watch_is_firing());
         assert!(s.stop_firing_watch());
         assert!(s.watches().is_empty());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_stopped_with_its_turn, number = 1)),
+            "the watch ended in silence"
+        );
     }
 
     /// A turn that was not a fire ends no watch: that press is a person steering their own work.
