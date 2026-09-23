@@ -953,7 +953,8 @@ export function Row({
       // The same line register as the attachment above, and deliberately not a bubble. This is
       // something that happened on the way to a reply rather than something anybody said, and the
       // whole reason it has an entry of its own is that drawing it as a prompt would claim
-      // otherwise. See `CONSOLIDATION_MARK`.
+      // otherwise. Reached only from the record's own tag, never from a message's wording, so
+      // nothing anybody types earns this row.
       return <div className="attached consolidation">Asked to bring its memory up to date</div>
 
     case 'watch':

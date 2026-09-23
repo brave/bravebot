@@ -136,21 +136,6 @@ export interface StoredBots {
  */
 export const BOTS_MAX = 100
 
-/**
- * The first line of a prompt this app sent on a bot's behalf rather than a person typing it.
- *
- * Lives here rather than beside the text it prefixes because two sides need it: the main process
- * writes it, and the transcript reads it back off a *reopened* session to tell a turn nobody asked
- * for from one somebody did. `transcript.ts` already refuses to draw an attachment as a prompt on
- * the grounds that saying a person said something they did not is the lie that matters here, and a
- * consolidation drawn as a user bubble is exactly that lie.
- *
- * Matching on wording is otherwise the thing that file is careful never to do — but this is a
- * string this app composes, not one it guesses at from upstream, so the match is exact by
- * construction rather than by hope.
- */
-export const CONSOLIDATION_MARK = '[bravebot-ui] Keeping your memory current.'
-
 /** The characters a slug may be made of, which is the whole of why it is safe as a path segment. */
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 

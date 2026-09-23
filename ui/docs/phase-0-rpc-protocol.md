@@ -260,7 +260,7 @@ implementation should have one serialisation function per row and a round-trip t
 | `report::Reach` | `"not_the_planner"` \| `"no_model"` | |
 | `report::Landing` | `"context"` \| `"quarantined"` \| `"reserved"` | |
 | `todo::Status` | `"pending"` \| `"active"` \| `"done"` | |
-| `conversation::Said` | `{"kind":"user"\|"assistant"\|"tool","text":"…"}` with `"prompt":N` on `user` only, `{"kind":"attached","path":"…"}` or `{"kind":"watch","number":N,"path":"…"}` | from `recounted()`, §7.1 |
+| `conversation::Said` | `{"kind":"user"\|"assistant"\|"tool","text":"…"}` with `"prompt":N` on `user` only, `{"kind":"attached","path":"…"}`, `{"kind":"watch","number":N,"path":"…"}` or `{"kind":"consolidation"}` | from `recounted()`, §7.1 |
 | `core::event::Event` | as `audit::as_json` already produces, `refusal` included | **reuse verbatim**, do not re-derive |
 | `label::Label` | `{"integrity":"trusted"\|"untrusted","confidentiality":"public"\|"private"}` | as `audit::label_json` |
 | `SystemTime` seconds | JSON number, seconds since epoch | matches `Record::started`/`updated` |
@@ -352,14 +352,17 @@ Loads the `Record` via `sessions::load` and the trail and todos via `sessions::r
   does not store what came of it**, so the client must not render a result or a status
   beside a replayed tool line. Live turns get `tool.started`/`tool.finished` with a
   `note`; replayed ones do not, and inventing an outcome would be worse than the gap.
-- **A message the agent composed carries a tag and no text.** A file somebody named arrives as
-  `{"kind":"attached","path":"…"}` and a watch that fired as
-  `{"kind":"watch","number":N,"path":"…"}`. Both are user-role messages in the request, because
-  that is how a file reaches a planner, and neither is a prompt: the client writes its own row
-  from the fields. The text is withheld rather than merely unused. The words of an attached
-  message are a line the agent wrote followed by **the file's own bytes**, so a client that read
-  them back to decide what to draw would let whoever wrote that file choose which row it appears
-  as, the interface's own rows included. Rule 1 of §6, applied where it matters most.
+- **A message composed rather than typed carries a tag and no text.** A file somebody named
+  arrives as `{"kind":"attached","path":"…"}`, a watch that fired as
+  `{"kind":"watch","number":N,"path":"…"}`, and a prompt a front end composed on its own account
+  as `{"kind":"consolidation"}`. All three are user-role messages in the request, because that is
+  how a file reaches a planner, and none is a prompt: the client writes its own row from the tag
+  and whatever fields come with it. The text is withheld rather than merely unused. The words of
+  an attached message are a line the agent wrote followed by **the file's own bytes**, so a client
+  that read them back to decide what to draw would let whoever wrote that file choose which row it
+  appears as, the interface's own rows included; and the words of a composed prompt are wording a
+  front end chose, so a client matching on them would draw that row over any prompt anybody typed
+  the same sentence into. Rule 1 of §6, applied where it matters most.
 - `prompt` appears on a `user` entry and no other, and is which of the user's messages it is:
   the coordinate `session.fork` cuts on. **A client must not count this for itself.** A count
   over the rows a transcript calls prompts is a second copy of a rule this side already applies,
@@ -424,11 +427,12 @@ differently: the front-end puts it in the composer and the person edits it.
   disagree: a client working from a transcript the conversation has moved on from is the case.
   A mismatch is `bad_request`; a fork taken one prompt away from where somebody pointed is worse
   than one that did not happen.
-- **A message the agent composed is not a prompt on either side.** It is tagged in the record and
-  reported as `attached` or `watch`, so neither the window nor the cut has to recognise one by its
-  wording. That is what keeps the two counts aligned rather than approximately aligned: while an
-  attachment was recognised by its first line, a file whose own first line read `Contents of x:`
-  moved every later ordinal in the session, and one that did not read that way moved none.
+- **A message composed rather than typed is not a prompt on either side.** It is tagged in the
+  record and reported as `attached`, `watch` or `consolidation`, so neither the window nor the cut
+  has to recognise one by its wording. That is what keeps the two counts aligned rather than
+  approximately aligned: while an attachment was recognised by its first line, a file whose own
+  first line read `Contents of x:` moved every later ordinal in the session, and one that did not
+  read that way moved none.
 - The ordinal is turned back into a message index by walking `archive ++ messages`, skipping
   anything tagged, and consuming the drawn prompts in order, matching on text. That is an
   **alignment, not a second copy of `recounted`'s rules**: those rules drop an untagged user
@@ -532,6 +536,15 @@ outside a turn.
 
 Builds a `Task::new(prompt)`, applies `with_file` per entry of `files`,
 `with_dropped_text` per entry of `dropped`, and `with_home(home::directory())`.
+
+The optional `composed` parameter says the client composed this prompt itself rather than
+a person typing it, and takes exactly one word: `"consolidation"`, a turn sent to ask a bot
+to bring its memory up to date. Omitting it or passing `null` says a person typed it, which is
+the ordinary case. It records the tag §7.1 reports, so a transcript drawn from the record can
+tell such a turn from a prompt without reading either one's words, and such a prompt is not one
+of the places `session.fork` may cut. Any other value, `"attached"` and `"watch"` included, is
+`bad_request`: those are the agent's own account of what a turn did, and a client able to claim
+one could have a transcript draw a file's row around a line a person typed.
 
 Both lists are optional and both default to empty. They differ in where a path may point
 and in nothing else: `files` is workspace-relative and read inside the project, while

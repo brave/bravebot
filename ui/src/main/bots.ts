@@ -109,7 +109,7 @@ import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Bot, botOf, CONSOLIDATION_MARK, isSlug, withBot } from '../shared/bots'
+import { type Bot, botOf, isSlug, withBot } from '../shared/bots'
 import { putBots, readState } from './state'
 
 /** Where a bot's files live inside the checkout it works in, relative to that checkout. */
@@ -293,17 +293,18 @@ export function noteBotNudged(slug: string): void {
  * What this app says to a bot when it sends a turn nobody typed.
  *
  * Written as one short instruction rather than as a briefing, because the briefing is attached
- * alongside it and saying the same thing twice in one turn is how a model learns to skim both. It
- * opens with `CONSOLIDATION_MARK` so that a transcript — this run's, or one reopened next year —
- * can tell it from something a person asked for.
+ * alongside it and saying the same thing twice in one turn is how a model learns to skim both.
+ *
+ * Nothing in it says what it is. What tells it apart, in this run's transcript or in one reopened
+ * next year, is the `composed` tag the send carries, which rides beside the message rather than
+ * inside it: a sentence written here to be recognised later would be a sentence the backend was
+ * sent, and one anybody could type into the composer to be drawn as this app's own row.
  *
  * `why` is the sentence that differs between the occasions this is sent, and is the only part a
  * caller supplies. Nothing here interpolates anything a model said.
  */
 export function consolidationPrompt(bot: Bot, why: string): string {
   return [
-    CONSOLIDATION_MARK,
-    '',
     why,
     '',
     `Look back over this conversation and bring \`${memoryPath(bot.slug)}\` up to date: add what`,

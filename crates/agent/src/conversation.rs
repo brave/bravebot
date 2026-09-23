@@ -27,12 +27,14 @@ use bravebot_core::label::Integrity;
 use bravebot_core::slot::{SlotId, SlotStore};
 use serde::{Deserialize, Serialize};
 
-/// Why the agent composed a user message, for the surfaces that draw one.
+/// Why a user message was composed rather than typed, for the surfaces that draw one.
 ///
-/// A prompt is what a person typed. These are not: the agent writes them into the conversation
-/// itself, to put a file somebody named in front of the planner, or to say that a watch fired
-/// while no turn was running. A transcript draws each of them as something other than a prompt,
-/// and the only thing that can say which one it is is the agent that composed it.
+/// A prompt is what a person typed. These are not. Two of them the agent writes into the
+/// conversation itself, to put a file somebody named in front of the planner, or to say that a
+/// watch fired while no turn was running. The third a front end sends on its own account, to ask
+/// a bot to bring its memory up to date after a compaction has taken the detail behind it. A
+/// transcript draws each of them as something other than a prompt, and the only thing that can
+/// say which one it is is whatever composed it.
 ///
 /// The alternative is reading the prose back, which asks the words inside a message what the
 /// message is. The words inside a context file are the file's, so that hands whoever wrote the
@@ -56,6 +58,15 @@ pub enum Composed {
         /// The path it was armed on.
         path: String,
     },
+    /// A turn a front end sent to bring a bot's memory up to date, rather than a person typing it.
+    ///
+    /// The one tag a front end may write, and it names what the turn is for rather than merely
+    /// saying somebody other than a person composed it. A surface drawing a row of its own for
+    /// this is asserting that the conversation was asked to consolidate, and a tag that said only
+    /// "not typed" would leave that row standing over any prompt any client composed for any
+    /// reason. The agent's own two tags stay the agent's: see `wire::composed` in
+    /// `bravebot-ui-bridge` for the word a request may carry and the ones it may not.
+    Consolidation,
 }
 
 /// One message as the record holds it: what was sent, and why the agent wrote it.

@@ -16,7 +16,11 @@
 //! the more restrictive variant, never the more permissive one, mirroring what
 //! `Snapshot` and `Record::trust_map` already do upstream. There is no error case for a
 //! decision, because refusing to parse an answer and refusing the write it answers are
-//! the same outcome and only one of them is honest about it.
+//! the same outcome and only one of them is honest about it. [`composed`] is the one
+//! function here that refuses, and it reads a claim a request makes rather than an answer
+//! to a question: there is no quieter reading of a client asking for a tag it may not
+//! have, and a turn that went out untagged instead would be drawn as a prompt nobody
+//! typed.
 
 use bravebot_agent::confirm::{
     Decision, Intent, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
@@ -28,6 +32,8 @@ use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::todo::{Row, Status};
 use serde_json::{Value, json};
+
+use crate::protocol::Failure;
 
 /// Unchanged lines shown either side of a change, for orientation.
 ///
@@ -203,11 +209,11 @@ pub fn recounted(said: &[Said]) -> Vec<Value> {
 /// live turns get `tool.finished` with an outcome, replayed ones do not, and inventing
 /// one would be worse than the gap.
 ///
-/// A line the agent composed crosses as a tag of its own and the fields the client needs to write
-/// its own row, and its text is dropped here rather than sent. The projection carries it for a
-/// transcript that draws the message plainly, and this client does not draw one: sending both would
-/// offer a choice between a tag and a sentence, and the sentence is the one whose words came out of
-/// a file.
+/// A line somebody composed rather than typed crosses as a tag of its own and the fields the
+/// client needs to write its own row, and its text is dropped here rather than sent. The
+/// projection carries it for a transcript that draws the message plainly, and this client does not
+/// draw one: sending both would offer a choice between a tag and a sentence, and the sentence is
+/// the one whose words came out of a file.
 fn said(said: &Said) -> Value {
     match said {
         Said::User(text) => json!({ "kind": "user", "text": text }),
@@ -221,6 +227,34 @@ fn said(said: &Said) -> Value {
             why: Composed::Watch { number, path },
             ..
         } => json!({ "kind": "watch", "number": number, "path": path }),
+        // No field of its own, because the row a transcript draws for this is about the turn
+        // rather than about anything in it, and no prose either: the words are a prompt the front
+        // end composed, and a client offered both would be offered the choice the tag removes.
+        Said::Composed {
+            why: Composed::Consolidation,
+            ..
+        } => json!({ "kind": "consolidation" }),
+    }
+}
+
+/// The word a `turn.send` may carry to say the front end composed its prompt, if it carries one.
+///
+/// The one tag a request may claim, and the reason this is a closed match rather than a parse of
+/// whatever the field holds. [`Composed::Attached`] and [`Composed::Watch`] are the agent's own
+/// account of what a turn did, so a front end able to name either would be a front end able to
+/// have a transcript draw a file's row, or a watch's, around a line a person typed, which is the
+/// escape the tags exist to close. Naming one of those is refused rather than ignored: a client
+/// asking for a tag it may not have has misunderstood the protocol, and a turn that quietly went
+/// out untagged would be drawn as a prompt nobody typed.
+///
+/// Absent is the ordinary case and means a person typed it.
+pub fn composed(value: Option<&Value>) -> Result<Option<Composed>, Failure> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(word)) if word == "consolidation" => Ok(Some(Composed::Consolidation)),
+        Some(other) => Err(Failure::bad_request(format!(
+            "`composed` may only say `consolidation`, not {other}"
+        ))),
     }
 }
 

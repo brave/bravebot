@@ -133,6 +133,10 @@ let stopWatchingThemes: (() => void) | null = null
  *
  * `grounded` decides how much is attached. `nudge` decides only what the briefing says once it has
  * been decided to attach it, and is meaningless without it.
+ *
+ * `composed` says this process wrote the prompt rather than a person typing it, and is the whole
+ * of what makes a reopened transcript draw it as house-keeping. It is a tag on the record and not
+ * a word in the prompt, so nothing a person can type into the composer can earn that row.
  */
 async function sendBotTurn(
   session: string,
@@ -143,6 +147,7 @@ async function sendBotTurn(
   recall = true,
   model?: string | null,
   attachments?: unknown,
+  composed?: 'consolidation',
 ): Promise<{ ok?: unknown; error?: BotFailure }> {
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
@@ -152,6 +157,9 @@ async function sendBotTurn(
   // defaults it that way, and a parameter that only ever appears when it is doing something is a
   // parameter somebody reading the wire can see the point of.
   const params: Record<string, unknown> = recall ? { session, prompt } : { session, prompt, recall }
+  // Left off entirely for the ordinary case, for the same reason `recall` is: a person typed it,
+  // and the agent's default for an absent tag says exactly that.
+  if (composed) params.composed = composed
   const selectedModel = held.model ?? model
   if (selectedModel !== undefined) params.model = selectedModel
   if (grounded) {
@@ -225,6 +233,11 @@ async function consolidate(session: string, slug: string): Promise<void> {
     // window or in the terminal front-end, which shares the same history file. It does not name
     // the session either. See `recall` in `bridge.rs`.
     false,
+    undefined,
+    undefined,
+    // And the record says so, which is what a transcript reopened later reads. The two are
+    // separate answers: `recall` is about the history file, this is about what the message is.
+    'consolidation',
   ).catch(() => ({ error: { code: 'internal', message: 'consolidation failed' } }))
   if (answer.error) {
     consolidating.delete(session)

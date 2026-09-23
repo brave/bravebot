@@ -49,10 +49,11 @@ export interface Shown {
 /**
  * One thing said, from a conversation nobody watched happen.
  *
- * The last two are messages the *agent* composed, and they carry no text on purpose. A window
- * writes its own sentence from the fields, because the text of one of them is a file's own bytes
- * and drawing that as anything but a plain message would let whoever wrote the file pick which row
- * it appears as. Rule 1 above, applied to the one message whose prose is not the agent's.
+ * The last three were composed rather than typed, two by the agent and one by this app, and they
+ * carry no text on purpose. A window writes its own sentence from the fields, because the text of
+ * one of them is a file's own bytes and drawing that as anything but a plain message would let
+ * whoever wrote the file pick which row it appears as. Rule 1 above, applied to the messages whose
+ * prose is nobody's to read back. A `user` is therefore what somebody typed, whatever it says.
  */
 export type Said =
   | {
@@ -73,6 +74,15 @@ export type Said =
   | { kind: 'tool'; text: string }
   | { kind: 'attached'; path: string }
   | { kind: 'watch'; number: number; path: string }
+  /**
+   * A turn this app sent to bring a bot's memory up to date, rather than a person typing it.
+   *
+   * No text and no ordinal, for the same reason the two above carry neither: what a transcript
+   * draws for this is a row about the turn, and the words are a prompt the main process composed.
+   * The tag is written by the `composed` field of the `turn.send` that sent it, which is the only
+   * tag a request may claim.
+   */
+  | { kind: 'consolidation' }
 
 export interface TodoRow {
   content: string
