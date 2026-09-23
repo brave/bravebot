@@ -867,7 +867,7 @@ fn draw_delegate_head(frame: &mut Frame, area: Rect, session: &Session) {
                 Span::styled(
                     t!(
                         watching_footer,
-                        kind = delegate.kind,
+                        kind = delegate.kind.clone(),
                         number = delegate.id.to_string()
                     ),
                     Style::default().add_modifier(Modifier::BOLD),
@@ -907,7 +907,7 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
             (
                 t!(
                     watching_footer,
-                    kind = delegate.kind,
+                    kind = delegate.kind.clone(),
                     number = delegate.id.to_string()
                 )
                 .to_string(),
@@ -3290,7 +3290,7 @@ mod tests {
             let id = DelegateId::nth(session.delegates().len() as u32 + 1);
             session.delegate_started(Delegation {
                 id,
-                kind,
+                kind: kind.to_string(),
                 task: task.to_string(),
             });
             session.reporting_for(Some(id));
@@ -5837,7 +5837,7 @@ mod tests {
         let id = bravebot_agent::report::DelegateId::nth(1);
         session.delegate_started(bravebot_agent::report::Delegation {
             id,
-            kind: "reader",
+            kind: "reader".to_string(),
             task: "find the parser".to_string(),
         });
         session.delegate_finished(id, "answered".to_string(), false, None);
@@ -5872,7 +5872,7 @@ mod tests {
         let id = bravebot_agent::report::DelegateId::nth(1);
         session.delegate_started(bravebot_agent::report::Delegation {
             id,
-            kind: "reader",
+            kind: "reader".to_string(),
             task: "find the parser".to_string(),
         });
 

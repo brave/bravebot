@@ -925,26 +925,77 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
 ///   request at a host of its own would be egress nobody approved for this sub-task, and the
 ///   person shown the host would be answering for a task they never set. The capability being
 ///   held is what makes this one a name and not a capability check: no gate would refuse it.
-pub fn for_delegate(capabilities: &bravebot_core::capability::CapabilitySet) -> Vec<Tool> {
-    use bravebot_core::capability::Capability;
+///
+/// Two terms rather than one, and they are visible as two: the capability is the gate, and the
+/// definition's list is a confinement inside it that can only ever remove a name. `None` is a
+/// definition that named no tools, which is the kind's own set and is what every delegate had
+/// before definitions existed.
+pub fn for_delegate(
+    capabilities: &bravebot_core::capability::CapabilitySet,
+    confined_to: Option<&[String]>,
+) -> Vec<Tool> {
+    use bravebot_core::delegate::{NEVER_DELEGATED, gating_capability};
 
     available(
         Scheduling::ArrangingALook,
         crate::watch::Arming::Unavailable,
     )
     .into_iter()
-    .filter(|tool| match tool.function.name.as_str() {
-        "spawn_agent" | "ask_user" | "todo_write" | "schedule_next" | "fetch_url"
-        | "vet_content" => false,
-        "write_file" | "edit_file" => capabilities.contains(Capability::FileWrite),
-        "run" | "read_output" | "job_output" => capabilities.contains(Capability::ShellExec),
-        // LSP-9: asking a server is its own grant, so a delegate holding file reads has not
-        // thereby been given one. Named rather than left to the catch-all below, which would
-        // hand it over with `FileRead`.
-        "lsp" => capabilities.contains(Capability::LanguageServer),
-        _ => capabilities.contains(Capability::FileRead),
+    .filter(|tool| {
+        let name = tool.function.name.as_str();
+        if NEVER_DELEGATED.contains(&name) {
+            return false;
+        }
+        if !gating_capability(name).is_some_and(|needs| capabilities.contains(needs)) {
+            return false;
+        }
+        // Applied after the capability rather than instead of it. A definition subtracts from
+        // what its kind reaches and never adds, so a name here that the gate above dropped is a
+        // name this delegate loaded without.
+        confined_to.is_none_or(|named| named.iter().any(|tool| tool == name))
     })
     .collect()
+}
+
+/// The tools a turn offers its planner, with the kinds of delegate this turn resolved.
+///
+/// The schema is otherwise the table's own, and this replaces one field of one tool: which names
+/// `spawn_agent` accepts, and what each of them is for. Built here rather than threaded through
+/// [`available`] because every other tool is the same whatever a person has written down.
+pub fn for_planner(
+    scheduling: Scheduling,
+    arming: crate::watch::Arming,
+    delegates: &bravebot_core::delegate::Definitions,
+) -> Vec<Tool> {
+    let mut tools = available(scheduling, arming);
+    let Some(spawn) = tools
+        .iter_mut()
+        .find(|tool| tool.function.name == "spawn_agent")
+    else {
+        return tools;
+    };
+    let Some(kind) = spawn
+        .function
+        .parameters
+        .get_mut("properties")
+        .and_then(|properties| properties.get_mut("kind"))
+    else {
+        return tools;
+    };
+
+    // Name and description together, because a name on its own says nothing about when to pick
+    // it. Both are the definition's own words, from a file that passed the trusted-content gate
+    // or from this program: a name nobody vouched for never entered the set.
+    let described = delegates
+        .iter()
+        .map(|definition| format!("\n- {}: {}", definition.name(), definition.description()))
+        .collect::<String>();
+    kind["description"] = json!(format!(
+        "Which kind of agent. Pick the narrowest one that can do the job; they are listed \
+         narrowest first.{described}"
+    ));
+    kind["enum"] = json!(delegates.names());
+    tools
 }
 
 /// A read a tool decided not to perform yet.
@@ -5063,7 +5114,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
     let Some(kind) = argument(arguments, "kind") else {
         return problem(format!(
             "error: 'kind' is required and must be one of {}",
-            bravebot_core::delegate::Kind::NAMES.join(", ")
+            policy.delegates().names().join(", ")
         ));
     };
     let tasks = match tasks_in(arguments) {
@@ -5077,7 +5128,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
         String::new(),
     );
     let mut started = Vec::new();
-    let mut kind_name = "";
+    let mut kind_name = String::new();
 
     for task in &tasks {
         // Numbered by the driver, in the order this turn spawned them, and numbered before the
@@ -5107,11 +5158,15 @@ fn spawn_agent<S: Sink, R: Reporter>(
         };
         reporter.delegate_started(crate::report::Delegation {
             id,
-            kind: spec.kind().as_str(),
+            // The definition's name rather than its kind's, because "a reader" stops telling the
+            // person watching anything the moment two definitions are readers. Printable for the
+            // one reason a skill's name is: a name from a source nobody vouched for never
+            // reached the set this was selected out of.
+            kind: spec.definition().to_string(),
             task: asked,
         });
 
-        kind_name = spec.kind().as_str();
+        kind_name = spec.definition().to_string();
         started.push(id.to_string());
 
         // Everything the kernel settled, taken off the policy here on the turn's own thread. From
@@ -6079,7 +6134,7 @@ mod tests {
     fn a_delegate_is_never_offered_a_way_to_delegate() {
         for name in bravebot_core::delegate::Kind::NAMES {
             let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
-            let offered: Vec<String> = for_delegate(&kind.capabilities())
+            let offered: Vec<String> = for_delegate(&kind.capabilities(), None)
                 .iter()
                 .map(|t| t.function.name.clone())
                 .collect();
@@ -6098,7 +6153,7 @@ mod tests {
     fn a_delegate_is_never_offered_a_way_to_promote_a_slot() {
         for name in bravebot_core::delegate::Kind::NAMES {
             let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
-            let offered: Vec<String> = for_delegate(&kind.capabilities())
+            let offered: Vec<String> = for_delegate(&kind.capabilities(), None)
                 .iter()
                 .map(|t| t.function.name.clone())
                 .collect();
@@ -6116,7 +6171,7 @@ mod tests {
         use bravebot_core::delegate::Kind;
 
         let names = |kind: Kind| -> Vec<String> {
-            for_delegate(&kind.capabilities())
+            for_delegate(&kind.capabilities(), None)
                 .iter()
                 .map(|t| t.function.name.clone())
                 .collect()
@@ -6149,7 +6204,7 @@ mod tests {
     fn a_delegate_is_offered_no_task_list_and_no_way_to_ask() {
         for name in bravebot_core::delegate::Kind::NAMES {
             let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
-            let offered: Vec<String> = for_delegate(&kind.capabilities())
+            let offered: Vec<String> = for_delegate(&kind.capabilities(), None)
                 .iter()
                 .map(|t| t.function.name.clone())
                 .collect();
@@ -6182,7 +6237,7 @@ mod tests {
                 capabilities.contains(bravebot_core::capability::Capability::WebFetch),
                 "a {name} could not have made its own requests"
             );
-            let offered: Vec<String> = for_delegate(&capabilities)
+            let offered: Vec<String> = for_delegate(&capabilities, None)
                 .iter()
                 .map(|t| t.function.name.clone())
                 .collect();
@@ -6191,6 +6246,150 @@ mod tests {
                 "a {name} was offered a way to reach a host of its own"
             );
         }
+    }
+
+    /// A definition confines a delegate to the tools it named, and only ever downwards: a name
+    /// it did not write is a tool the delegate does not get, and a name its kind does not reach
+    /// was dropped before this ever saw it.
+    #[test]
+    fn a_definition_confines_a_delegate_to_the_tools_it_named() {
+        use bravebot_core::delegate::Kind;
+
+        let named = ["read_file".to_string()];
+        let offered: Vec<String> = for_delegate(&Kind::Worker.capabilities(), Some(&named))
+            .iter()
+            .map(|t| t.function.name.clone())
+            .collect();
+
+        assert_eq!(offered, ["read_file"]);
+
+        let all: Vec<String> = for_delegate(&Kind::Worker.capabilities(), None)
+            .iter()
+            .map(|t| t.function.name.clone())
+            .collect();
+        assert!(
+            all.len() > offered.len(),
+            "confining a worker to one tool offered it no fewer than naming none did"
+        );
+    }
+
+    /// The kernel narrows a definition's capabilities by asking
+    /// [`bravebot_core::delegate::gating_capability`] what each named tool needs, and this list
+    /// is built by asking the same question. Two answers to it would be a delegate holding a
+    /// capability for a tool it is not offered, or offered a tool no gate would let it use.
+    #[test]
+    fn the_capability_that_gates_a_tool_here_is_the_one_the_kernel_reads() {
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::delegate::{Kind, NEVER_DELEGATED, gating_capability};
+
+        let everything = Kind::Worker
+            .capabilities()
+            .iter()
+            .chain([bravebot_core::capability::Capability::LanguageServer])
+            .collect::<CapabilitySet>();
+
+        for tool in available(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+        ) {
+            let name = tool.function.name.as_str();
+            if NEVER_DELEGATED.contains(&name) {
+                continue;
+            }
+            let needs = gating_capability(name).unwrap_or_else(|| {
+                panic!("{name} is offered to a delegate and names no capability")
+            });
+            let without: CapabilitySet = everything.iter().filter(|held| *held != needs).collect();
+
+            let offered = |set: &CapabilitySet| {
+                for_delegate(set, None)
+                    .iter()
+                    .any(|t| t.function.name == name)
+            };
+            assert!(
+                offered(&everything),
+                "{name} is offered to nothing that holds every capability"
+            );
+            assert!(
+                !offered(&without),
+                "{name} is offered without {needs}, which the kernel reads as what it needs"
+            );
+        }
+
+        // And the other way, so the kernel cannot go on recognising a name that stopped being a
+        // tool: a definition naming one would be told it had been given something, and the
+        // notice saying what a delegate did not get would be missing a line.
+        let names: Vec<String> = available(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+        )
+        .iter()
+        .map(|tool| tool.function.name.clone())
+        .collect();
+        for name in [
+            "read_file",
+            "list_files",
+            "search",
+            "spawn_processor",
+            "load_skill",
+            "write_file",
+            "edit_file",
+            "run",
+            "read_output",
+            "job_output",
+            "lsp",
+        ] {
+            assert!(
+                gating_capability(name).is_some(),
+                "{name} stopped being a name the kernel recognises"
+            );
+            assert!(
+                names.iter().any(|offered| offered == name),
+                "the kernel recognises {name}, which is no longer a tool"
+            );
+        }
+    }
+
+    /// The names a planner may write are the names the kernel will accept, and the reason to pick
+    /// one is the definition's own sentence. A schema listing the three compiled-in kinds in a
+    /// session that resolved a fourth would leave the only name worth writing unwritable.
+    #[test]
+    fn the_kinds_the_planner_is_offered_are_the_ones_this_session_resolved() {
+        use bravebot_core::delegate::{Definition, Definitions, Kind};
+
+        let mut delegates = Definitions::default();
+        delegates.insert(Definition::from_file(
+            "rule-reviewer",
+            "Checks a diff against the rule. Use before asking for a review.",
+            Kind::Reader,
+            None,
+            "",
+            ".bravebot/agents/rule-reviewer.md",
+        ));
+
+        let tools = for_planner(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+            &delegates,
+        );
+        let spawn = tools
+            .iter()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .expect("a planner is offered a way to delegate");
+        let kind = &spawn.function.parameters["properties"]["kind"];
+
+        assert_eq!(
+            kind["enum"],
+            json!(["reader", "checker", "worker", "rule-reviewer"])
+        );
+        let described = kind["description"].as_str().expect("a description");
+        assert!(
+            described.contains(
+                "\n- rule-reviewer: Checks a diff against the rule. Use before asking for a \
+                 review."
+            ),
+            "the planner was given no reason to pick the definition: {described}"
+        );
     }
 
     /// A **shell** stays absent, and this is the distinction the whole tool turns on. A shell
@@ -6239,7 +6438,7 @@ mod tests {
         let held: Vec<&str> = turn.iter().map(|t| t.function.name.as_str()).collect();
         for name in bravebot_core::delegate::Kind::NAMES {
             let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
-            let offered = for_delegate(&kind.capabilities());
+            let offered = for_delegate(&kind.capabilities(), None);
             shell_free(name, &offered);
             for tool in &offered {
                 assert!(
@@ -8249,7 +8448,7 @@ mod tests {
                 "the tool was offered to a caller that keeps no watches"
             );
             assert!(
-                !for_delegate(&CapabilitySet::from_iter([Capability::FileRead]))
+                !for_delegate(&CapabilitySet::from_iter([Capability::FileRead]), None)
                     .iter()
                     .any(|t| t.function.name == "watch_file"),
                 "a delegate was offered a way to arm a watch"

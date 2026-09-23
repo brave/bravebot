@@ -6589,7 +6589,7 @@ mod tests {
             let id = DelegateId::nth(session.delegates().len() as u32 + 1);
             session.delegate_started(Delegation {
                 id,
-                kind,
+                kind: kind.to_string(),
                 task: task.to_string(),
             });
             session.reporting_for(Some(id));
@@ -6943,13 +6943,17 @@ mod tests {
 
             handle_key(&mut session, key(KeyCode::Char('p')));
             assert_eq!(
-                session.watched_delegate().map(|delegate| delegate.kind),
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
                 Some("reader")
             );
 
             handle_key(&mut session, key(KeyCode::Char('n')));
             assert_eq!(
-                session.watched_delegate().map(|delegate| delegate.kind),
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
                 Some("checker")
             );
         }
@@ -6970,7 +6974,9 @@ mod tests {
                 "enter did not open a delegate"
             );
             assert_eq!(
-                session.watched_delegate().map(|delegate| delegate.kind),
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
                 Some("reader"),
                 "enter opened a delegate other than the one the list was on"
             );
