@@ -79,6 +79,7 @@ help:
 	@echo "Releasing:"
 	@echo "  make bump-version BUMP=bugfix|minor|major   Set the next version"
 	@echo "  make github-release                         Tag it; Jenkins and npm publish are later"
+	@echo "  make app-bundle                             Package the desktop application, release build"
 	@echo
 	@echo "  make clean          Remove build output"
 
@@ -418,6 +419,35 @@ all-platforms: darwin-arm64 darwin-amd64 linux-amd64 linux-arm64 windows-amd64 w
 	@echo
 	@echo "built:"
 	@ls -1 dist/
+
+# The desktop application as something somebody else can run: the third family of artifact a
+# release produces, beside the signed binaries above and the npm package.
+#
+# The Rust half is built here rather than through ui/scripts/build-bridge.sh, for the two things
+# that script does which a release must not. It builds the debug profile, so a bundle packaged
+# after it carries an unoptimised agent; and it defaults BRAVEBOT_ALLOW_UNCONFIGURED_BUILD to 1,
+# so a shell with no credentials in it yields a bundle that starts, lists sessions and then fails
+# at the first inference request, which is the binary crates/config/build.rs exists to refuse.
+# Setting it to 0 fails that build here instead, while whoever is packaging is still watching. It
+# is set to 0 rather than left unset because the permission is granted by that exact value: a
+# recipe that only declined to set it would still grant it in a shell that exports it, which the
+# front-end script and every CI job here do.
+# Credentials come from the environment, as they do for every other release build: direnv at the
+# root of this repository, or a release job's own secrets.
+#
+# `npm ci`, never `install`: the lockfile is what CI lints and a resolve on the spot is a
+# dependency change. Its install hooks run, and have to: the packager copies the Electron runtime
+# into the bundle, and that runtime is what the hook fetches. electron-vite is then run directly
+# rather than through `npm run build`, which would build the debug pair again on the way past.
+#
+# Nothing here signs or notarises the result, so the bundle is installable and not distributable;
+# the job that signs the binaries is where that belongs, and issue #394 is where it is decided.
+.PHONY: app-bundle
+app-bundle:
+	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=0 cargo build --release --locked \
+		-p bravebot-ui-bridge -p bravebot-ui-files
+	cd ui && npm ci && npm run typecheck && npm exec -- electron-vite build && \
+		node scripts/package.mjs --release
 
 # Symbols are kept during the build because Rust's own strip can corrupt some targets
 # under zigbuild, so they are removed here instead.
