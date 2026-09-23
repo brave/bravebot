@@ -216,7 +216,7 @@ draft that got one shows it and a draft that did not is unchanged.
 ### Step 9: file them
 
 ```bash
-python3 agents/skills/security-audit/post-issues.py --work-dir "$WORK_DIR" [--dry-run]
+python3 agents/skills/security-audit/post-issues.py --work-dir "$WORK_DIR" [--dry-run] [--assignee LOGIN]
 ```
 
 Print its output. One line per draft saying `filed` with the URL, or `skip` with the number of
@@ -237,7 +237,10 @@ guessing at one here would put a finding nobody has read into somebody's queue.
 
 A label the repository does not have stops the whole step before anything is posted, and the
 output names the `gh label create` for each one. Creating a label changes what everybody sees,
-so it is the user's to run, not this skill's.
+so it is the user's to run, not this skill's. `--assignee` is checked the same way and for the
+same reason: a login the repository would refuse fails the create it is passed to, and finding
+that out partway through leaves half a report filed. Pass it only where the user named somebody,
+since an issue assigned to a person nobody asked for is in their queue either way.
 
 ### Step 10: say what happened
 
