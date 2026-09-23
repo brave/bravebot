@@ -130,6 +130,9 @@ pub fn name_a_settings_file(path: PathBuf) {
 ///
 /// Not comparable, because a gateway block it read may carry a token and [`crate::Secret`]
 /// refuses equality. What a test wants of one of these is a field of it rather than the whole.
+///
+/// Clears its `env` block when it goes, that block being a buffer this program owns a credential in
+/// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
 #[derive(Debug, Clone, Default)]
 pub struct Settings {
     env: BTreeMap<String, String>,
@@ -598,6 +601,36 @@ impl Settings {
             .chain(self.search.files.is_some().then_some("search.maxFiles"))
             .chain(self.search.time.is_some().then_some("search.maxSeconds"))
             .chain(self.env.keys().map(String::as_str))
+    }
+}
+
+/// Clear the `env` block rather than return a credential in it to the allocator.
+///
+/// The block is variables, and one of the names a person may write there is the signing key: what
+/// [`crate::Config`] builds out of that name is a [`crate::Secret`] that clears itself, and the map
+/// it was read out of is a second buffer holding the same bytes for as long as the settings live
+/// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
+///
+/// Every value rather than the names a credential is known to arrive under, which is the reading
+/// [`crate::scrub_document`] gives a parsed file and is here for the same reason: the same block
+/// carries a region and a model name, and what a person may put in it is anything. The names are
+/// left alone, a name being what a value was called rather than the value.
+///
+/// The other fields are not credentials. A gateway token among them is already in a `Secret`, which
+/// clears itself as this goes.
+impl Drop for Settings {
+    fn drop(&mut self) {
+        self.scrub_env();
+    }
+}
+
+impl Settings {
+    /// Overwrite what the `env` block was set to, which is what [`Drop`] above is.
+    ///
+    /// A method rather than the body of that drop, because a buffer this owns is unreachable once
+    /// this is gone: what a test can run is the overwriting, and the drop calling it is one line.
+    fn scrub_env(&mut self) {
+        self.env.values_mut().for_each(crate::scrub);
     }
 }
 
@@ -1325,6 +1358,50 @@ mod tests {
         );
         assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
         assert_eq!(settings.get("AWS_PROFILE"), Some("some-profile"));
+    }
+
+    /// CRED-23: a signing key is one of the names a person may write into the `env` block, so that
+    /// block is a buffer this program owns a credential in.
+    ///
+    /// The `Secret` the configuration builds out of the name clears itself, and this map is a second
+    /// buffer holding the same bytes for as long as the settings live. Both halves of the assertion
+    /// are needed and neither says it alone: a buffer of zeros at a fresh address leaves the value
+    /// where the allocator can hand it on, and a buffer that has not moved and still reads as the
+    /// value is what dropping the string produces.
+    ///
+    /// Every value rather than the credential name alone, because the same block carries a region
+    /// and a model name and what a person may put there is anything.
+    #[test]
+    fn what_the_env_block_was_set_to_is_overwritten_where_it_lies() {
+        let key = "sk-live-0123456789abcdef";
+        let mut settings = Settings::parse(
+            &serde_json::json!({
+                "env": {crate::env_var::SIGNING_KEY: key, "AWS_REGION": "us-west-2"}
+            })
+            .to_string(),
+        );
+        let addresses: Vec<(String, *const u8, usize)> = settings
+            .env
+            .iter()
+            .map(|(name, value)| (name.clone(), value.as_ptr(), value.len()))
+            .collect();
+        assert_eq!(addresses.len(), 2, "the fixture set two names");
+
+        settings.scrub_env();
+
+        for (name, address, length) in addresses {
+            let value = settings.get(&name).expect("the name is still in the block");
+            assert_eq!(
+                value.as_ptr(),
+                address,
+                "{name}'s buffer moved, so its value is still in the one left behind"
+            );
+            assert_eq!(
+                value.as_bytes(),
+                vec![0u8; length],
+                "the buffer {name} was in still holds bytes of its value"
+            );
+        }
     }
 
     /// Every name is read rather than a chosen subset. The file is the user's own configuration
