@@ -78,12 +78,19 @@ impl Carried {
 /// `dropped` is what the markers in the line stood for, in the order they number them, so a planner
 /// reading `[Image #2]` can count to the picture that answers it.
 ///
+/// `trust` is the caller's own map, and it is written back to as each drop is read rather than
+/// copied and left behind. Dropping a file records a rule for that file, and the rule is the
+/// person's rather than this request's: `dropping.md` DROP-2 has it hold for the rest of the
+/// session, so the same picture is shown again without being dragged again. Written back on the way
+/// out too, since the gesture is what granted the rule and a sibling file that could not be read
+/// says nothing about it.
+///
 /// Nothing at all for a line that dropped nothing, which is the ordinary case: a policy needs
 /// routing to precommit and there is nothing here to put in it.
 pub fn read<S: Sink>(
     workspace: &Workspace,
     dropped: &[Attachment],
-    trust: TrustStore,
+    trust: &mut TrustStore,
     sink: &mut S,
 ) -> Result<Vec<Carried>, TurnError> {
     if dropped.is_empty() {
@@ -106,7 +113,7 @@ pub fn read<S: Sink>(
         sink,
     )
     .map_err(|d| TurnError::Precommit(d.to_string()))?
-    .with_trust(trust)
+    .with_trust(trust.clone())
     .with_root(workspace.root())
     .with_scratch(workspace.scratch());
 
@@ -130,23 +137,38 @@ pub fn read<S: Sink>(
         // read so the read sees it, and under the name the read will ask about.
         policy.vouch_for_named_path(&workspace.trust_key(&path));
 
-        let contents = workspace.read_dropped_attachment(
+        let contents = match workspace.read_dropped_attachment(
             &mut policy,
             &Labelled::trusted(path.clone()),
             &file.media,
-        )?;
+        ) {
+            Ok(contents) => contents,
+            // Taken on the way out as well as at the end, because the rules already recorded are
+            // for files this person dropped and a file that would not open is not a reason to take
+            // them back.
+            Err(error) => {
+                *trust = policy.trust();
+                policy.finish();
+                return Err(error.into());
+            }
+        };
 
         // The kernel decides, from the label alone, whether the planner may see the bytes. Nothing
         // here can ask for them, which is the point.
-        let presented = policy
-            .present(
-                "chat",
-                SlotId::new(format!("ref:{index}")),
-                &path,
-                &contents,
-                &mut slots,
-            )
-            .map_err(|d| TurnError::Precommit(d.to_string()))?;
+        let presented = match policy.present(
+            "chat",
+            SlotId::new(format!("ref:{index}")),
+            &path,
+            &contents,
+            &mut slots,
+        ) {
+            Ok(presented) => presented,
+            Err(denial) => {
+                *trust = policy.trust();
+                policy.finish();
+                return Err(TurnError::Precommit(denial.to_string()));
+            }
+        };
 
         carried.push(match presented {
             Presentation::Visible(uri) => Carried::Shown { path, uri },
@@ -157,6 +179,9 @@ pub fn read<S: Sink>(
         });
     }
 
+    // Taken before `finish` consumes the policy, the way a turn takes its own, because the rules
+    // each drop recorded are in here and nowhere else.
+    *trust = policy.trust();
     policy.finish();
     Ok(carried)
 }

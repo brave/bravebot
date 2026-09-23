@@ -516,7 +516,7 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
     confirmer: &mut C,
     reporter: &mut R,
     sink: &mut S,
-    trust: TrustStore,
+    mut trust: TrustStore,
     cancel: &Cancel,
 ) -> Result<Outcome, TurnError> {
     // A pipe is quarantined context in a turn. Here it would be dropped: the plan is frozen
@@ -546,7 +546,12 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
     // planner cannot read. What a person dropped onto the line is read here instead, under a policy
     // of its own, and the plan is still fixed before anything the plan itself could look at. See
     // [`crate::attached`].
-    let dropped = match crate::attached::read(workspace, &task.attachments, trust.clone(), sink) {
+    //
+    // The run's own map, lent rather than copied, because dropping a file records a rule for it
+    // (`dropping.md` DROP-2) and that rule is the person's rather than this read's: a copy left
+    // behind here would make the file trusted for the length of the read and untrusted for every
+    // step of the plan that touches it afterwards.
+    let dropped = match crate::attached::read(workspace, &task.attachments, &mut trust, sink) {
         Ok(dropped) => dropped,
         Err(error) => return Err(stopped(attempt, error)),
     };
