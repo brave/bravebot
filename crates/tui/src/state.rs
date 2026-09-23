@@ -1942,6 +1942,14 @@ impl Session {
     ///
     /// Empty text is dropped here rather than by the turn, for the same reason narration is:
     /// this side may look at released text, and the turn may not.
+    ///
+    /// Nothing about the view moves for it, and not through [`Session::back_to_the_tail`] either.
+    /// A chunk lands several times a second for as long as the model writes, so putting the view
+    /// back for one does not cost a reader their place once: it costs it again before they have
+    /// read a line, and scrolling back becomes something they cannot do while a reply arrives. A
+    /// view already at the tail needs nothing done to it to follow what arrives, since `scroll` is
+    /// 0 there and, with nothing open over it, that is the arm of `draw_transcript` which draws the
+    /// end of the transcript.
     pub fn streaming(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -1953,7 +1961,6 @@ impl Session {
             return;
         }
         self.streaming.push_str(text);
-        self.back_to_the_tail();
     }
 
     /// Put the turn's own view back at its tail for something the turn has just done.
@@ -1962,6 +1969,11 @@ impl Session {
     /// the turn's own is held aside until it closes. A person who went to read a delegate or what
     /// a command printed asked for that screen, and a row arriving under the turn is not them
     /// asking for another.
+    ///
+    /// For a one-off event only: a delegate starting, a preview released, a queued prompt taken, an
+    /// aside going out. Each happens once and changes what the session is doing, so the tail is
+    /// where its own view belongs afterwards. The reply arriving is not one of them, and
+    /// [`Session::streaming`] says why.
     fn back_to_the_tail(&mut self) {
         if self.watching.is_none() {
             self.scroll = 0;
@@ -6469,8 +6481,11 @@ impl Session {
     /// whole of what the scroller is for, so the offset is worked out afresh from the row that was
     /// at the top, rather than carried across a layout it was measured against.
     ///
-    /// A view sitting at the tail stays at the tail, since somebody watching a reply arrive is
-    /// watching the end of it, and only an open scroller holds a view against that.
+    /// A view sitting at the tail with nothing open stays at the tail, since somebody watching a
+    /// reply arrive is watching the end of it. An open scroller holds even that, because opening it
+    /// is somebody saying they have stopped watching. A view scrolled away from the tail is held
+    /// wherever it was left, the wheel at rest as much as the scroller, so the lines a reply adds
+    /// under it do not drag it back down.
     pub fn note_layout(&mut self, laid: Laid) {
         if self.scrolling() || self.scroll > 0 {
             let top = self.top_row();
@@ -8213,8 +8228,41 @@ mod tests {
         );
     }
 
-    /// At rest the transcript follows what is being written, which is what somebody watching a
-    /// reply arrive is watching it for. Only the scroller holds a view against the tail.
+    /// The wheel moves the view without opening anything, so a view scrolled back at rest is held
+    /// by the offset alone. What the reply adds goes below it: the offset is counted from an end
+    /// that every chunk moves, so a chunk that leaves the offset alone still has to leave the row
+    /// at the top of the view alone.
+    #[test]
+    fn a_chunk_of_the_reply_leaves_a_view_scrolled_back_at_rest_where_it_was() {
+        let mut session = Session::new("kernel-enforced");
+        session.note_layout(Laid {
+            width: 80,
+            height: 10,
+            rows: 100,
+            ..Laid::default()
+        });
+        session.scroll_up(40);
+        let looking_at = session.top_row();
+        assert_eq!(looking_at, 50, "the view is not scrolled back off the tail");
+
+        session.streaming("a line of the reply\n");
+        session.note_layout(Laid {
+            width: 80,
+            height: 10,
+            rows: 130,
+            ..Laid::default()
+        });
+
+        assert_eq!(
+            session.top_row(),
+            looking_at,
+            "a chunk of the reply took the view back to the tail"
+        );
+    }
+
+    /// At rest and at the tail the transcript follows what is being written, which is what
+    /// somebody watching a reply arrive is watching it for. Holding a view is for one that was
+    /// scrolled back, and there is nothing to hold here.
     #[test]
     fn what_arrives_at_rest_still_reaches_the_bottom_of_the_screen() {
         let mut session = Session::new("kernel-enforced");

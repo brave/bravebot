@@ -4662,21 +4662,12 @@ mod tests {
             );
         }
 
-        /// Draw one frame the way the loop draws it, and give back the top row of the screen and
-        /// what the frame laid the transcript out to.
+        /// The top row of one frame drawn the way the loop draws it.
         fn a_frame(session: &mut Session) -> String {
-            let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
-            let mut laid = Laid::default();
-            terminal
-                .draw(|frame| laid = draw(frame, session))
-                .expect("draw succeeds");
-            session.note_layout(laid);
-
-            let buffer = terminal.backend().buffer();
-            let top: String = (0..buffer.area.width)
-                .map(|column| buffer[(column, 0)].symbol())
-                .collect();
-            top.trim_end().to_string()
+            rows_of_a_frame(session)
+                .into_iter()
+                .next()
+                .expect("a screen has a row")
         }
 
         /// Holding the view has to hold it in the frame that draws it, not in the one after. The
@@ -7319,6 +7310,70 @@ mod tests {
             "scrolling back down did not return to the latest reply"
         );
     }
+
+    /// A view scrolled back has to survive the reply being written under it, which is the only
+    /// time holding it is hard. A chunk lands several times a second for as long as the model
+    /// writes, so a view taken back to the tail for one is taken again before its reader has
+    /// finished the line they scrolled to, and scrolling back stops being something they can do.
+    #[test]
+    fn a_reply_arriving_does_not_drag_a_scrolled_back_view_to_the_tail() {
+        let mut session = Session::new("none");
+        for turn in 0..40 {
+            session.type_char('q');
+            session.submit();
+            session.complete(format!("reply number {turn}"), Vec::new(), 0);
+        }
+
+        // Laid out once first: the offset is measured against the screen of the previous frame,
+        // and a session that has never been told one counts back from nothing. This frame is at
+        // the tail, so it also fixes what being dragged back there looks like.
+        let tail = rows_of_a_frame(&mut session).join("\n");
+        assert!(
+            tail.contains("reply number 39"),
+            "the tail does not show the last reply, so its absence proves nothing: {tail}"
+        );
+
+        session.scroll_up(60);
+        let reading = rows_of_a_frame(&mut session).join("\n");
+        assert!(
+            !reading.contains("reply number 39"),
+            "the view never left the tail, so there is nothing here to hold: {reading}"
+        );
+
+        session.streaming("a chunk of the next reply");
+
+        let arriving = rows_of_a_frame(&mut session).join("\n");
+        assert!(
+            !arriving.contains("reply number 39"),
+            "a chunk of the reply dragged the view back to the tail: {arriving}"
+        );
+    }
+
+    /// Draw one frame the way the loop draws it, tell the session what the frame laid out, and give
+    /// back the rows of the screen.
+    ///
+    /// [`rendered`] cannot answer a question about a held view: it never reports the layout, so the
+    /// offset stays measured against a screen the session has not seen.
+    fn rows_of_a_frame(session: &mut Session) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = draw(frame, session))
+            .expect("draw succeeds");
+        session.note_layout(laid);
+
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
     /// Render at a chosen size, since wrapping depends on width.
     fn rendered_at(session: &Session, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
