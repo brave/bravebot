@@ -13,8 +13,8 @@ guards:
       - crates/agent/src/lsp.rs: 4
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/tools.rs: 20
-      - crates/agent/src/workspace.rs: 6
-      - crates/agent/tests/workspace.rs: 27
+      - crates/agent/src/workspace.rs: 7
+      - crates/agent/tests/workspace.rs: 28
       - crates/aichat/src/lib.rs: 4
       - crates/bedrock/src/lib.rs: 5
       - crates/core/src/policy.rs: 85
@@ -32,7 +32,7 @@ guards:
       - crates/agent/src/tools.rs: 26
       - crates/agent/src/turn.rs: 4
       - crates/agent/src/vet.rs: 1
-      - crates/agent/src/workspace.rs: 2
+      - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 41
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 1
@@ -48,7 +48,9 @@ guards:
       - crates/agent/src/skills.rs: 3
       - crates/agent/src/tools.rs: 13
       - crates/agent/src/turn.rs: 3
-      - crates/agent/tests/workspace.rs: 149
+      - crates/agent/src/workspace.rs: 8
+      - crates/tui/tests/sessions.rs: 2
+      - crates/agent/tests/workspace.rs: 158
       - crates/core/src/policy.rs: 23
       - crates/core/src/value.rs: 3
   - symbol: Labelled::relabel

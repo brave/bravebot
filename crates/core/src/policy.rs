@@ -251,7 +251,7 @@ pub struct Policy<'sink, S: Sink> {
     sink: &'sink mut S,
     denials: usize,
     /// Which paths the user vouched for.
-    trust: TrustStore,
+    trust: crate::file_authority::FileAuthority,
     /// The working directory this turn runs in.
     ///
     /// The same directory [`Policy::trust`] was made against: the map reads its own relative names
@@ -382,7 +382,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // `with_trust`. The filesystem root is the working directory a map with no project
             // behind it has to read a relative name under, and an empty map answers `None` about
             // every path whatever it is read under.
-            trust: TrustStore::new("/"),
+            trust: crate::file_authority::FileAuthority::new(TrustStore::new("/")),
             root: None,
             scratch: None,
             programs: crate::programs::TrustedPrograms::new(),
@@ -605,13 +605,43 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Install the user's trust decisions, before the turn runs.
     pub fn with_trust(mut self, trust: TrustStore) -> Self {
-        self.trust = trust;
+        self.trust = crate::file_authority::FileAuthority::new(trust);
         self
     }
 
     /// The trust decisions in force, including any this turn recorded.
-    pub fn trust(&self) -> &TrustStore {
-        &self.trust
+    pub fn trust(&self) -> TrustStore {
+        self.trust.snapshot()
+    }
+
+    /// Whether the map trusts `path`, for a caller that wants the answer and not the map.
+    ///
+    /// Unlike [`Policy::read_is_quarantined`] this is the map's own answer, with nothing lent to
+    /// the session's own directory, which is what a question about a directory in the project
+    /// wants.
+    pub fn trusts_path(&self, path: &str) -> bool {
+        self.trust.is_trusted(path)
+    }
+
+    /// Share file authority without sharing capabilities, routing or context.
+    pub fn with_file_authority(mut self, authority: crate::file_authority::FileAuthority) -> Self {
+        self.trust = authority;
+        self
+    }
+
+    pub fn file_authority(&self) -> crate::file_authority::FileAuthority {
+        self.trust.clone()
+    }
+
+    /// Capture bytes and decide their labels within one file-authority boundary.
+    /// The closure must not prompt, call a model, or wait for a process or delegate.
+    pub fn capture_files<R>(
+        &mut self,
+        capture: impl FnOnce(&mut Self, &crate::file_authority::FileCapture<'_>) -> R,
+    ) -> R {
+        let authority = self.file_authority();
+        let guard = authority.capture();
+        capture(self, &guard)
     }
 
     /// Say which directory this turn runs in.
@@ -2391,43 +2421,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// a command they approved, so both were `(T,pub)` before any run existed.
     pub fn vouched(&self) -> Vouched {
         Vouched {
-            trust: self.trust.clone(),
+            trust: self.trust(),
             programs: self.programs.clone(),
         }
     }
 
-    /// Take back what a person decided inside a nested run.
+    /// Adopt exact command approvals added inside a delegate.
     ///
-    /// The trust map and the vouched programs, and nothing the delegate itself produced. Both are
-    /// standing decisions a person made about their own machine, and the record of them belongs
-    /// to the session rather than to whichever run happened to be going when they made it: a
-    /// delegate told once that the build may run must not leave the next one asking again.
-    ///
-    /// What moved inside the delegate is what comes back, which is what `since` is for. A
-    /// delegate hands back the whole record it was seeded with, and the entries differing from
-    /// that copy are the ones a person answered inside it. The rest are written back unchanged
-    /// and settle nothing, because a copy taken at one moment says what was true then: it can be
-    /// behind what the session has since decided, and something behind must not be able to erase.
-    ///
-    /// **No label crosses here and none could.** A trust rule is a path a person answered about
-    /// and a vouched program is a command they approved, so both were `(T,pub)` before either run
-    /// existed. Nothing a delegate read, produced or was told is in either record.
+    /// File decisions are already shared and must never be merged from snapshots. Capabilities,
+    /// routing grants, quarantines and prompt history remain local to each policy.
     pub fn adopt_from_delegate(&mut self, since: &Vouched, ended: &Vouched) {
-        // Under the keys rather than the names: a name is relative to whichever working
-        // directory the map holding it was made with, and the two maps here need not have been.
-        let before: BTreeMap<&str, Integrity> = since.trust.keyed().collect();
-        let mut paths = 0;
-        for (path, integrity) in ended.trust.keyed() {
-            if before.get(path) == Some(&integrity) {
-                continue;
-            }
-            match integrity {
-                Integrity::Trusted => self.trust.trust(path),
-                Integrity::Untrusted => self.trust.distrust(path),
-            }
-            paths += 1;
-        }
-
         let mut vouched = 0;
         for command in ended.programs.iter() {
             if since
@@ -2442,10 +2445,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         self.allow(
             "delegate",
-            format!(
-                "what a person vouched for inside a delegate is kept: {paths} trust rules, \
-                 {vouched} commands"
-            ),
+            format!("what a person vouched for inside a delegate is kept: {vouched} commands"),
         );
     }
 
@@ -3535,7 +3535,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         scanned
     }
 
-    /// Update the trust map to match what was just written to `path`.
+    /// Reconcile a completed write in a non-overlapping snapshot.
+    ///
+    /// Live filesystem callers must use `FileAuthority::capture` and its effect reservation
+    /// before writing. Calling this after I/O cannot order reads against that write.
     ///
     /// The invariant: a path's effective trust equals the integrity of the data in it. A rule
     /// is recorded only when the write disagrees with the rule already covering the path, so a
@@ -3554,54 +3557,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return;
         }
 
-        match actual {
-            Integrity::Untrusted => self.trust.distrust(path),
-            Integrity::Trusted => self.trust.trust(path),
-        }
-
-        self.allow(
-            "trust",
-            format!(
-                "{path} recorded as {} to match what was written",
-                match actual {
-                    Integrity::Trusted => "trusted",
-                    Integrity::Untrusted => "untrusted",
-                }
-            ),
-        );
-    }
-
-    /// Update the trust map for the destinations a command line opened for writing.
-    ///
-    /// `written` is the label the run gate fixed for the line's output, and `paths` are the files
-    /// it opened, spelled the way a read of them is spelled. A redirection is a write this system
-    /// performs, so untrusted output landing in a vouched-for tree marks those paths untrusted,
-    /// which is what stops the bytes being read back as trusted.
-    ///
-    /// One direction. A trusted line is no evidence that its destination holds only trusted
-    /// bytes: `>>` keeps whatever was already in the file, and the label is a statement about
-    /// who answered for the programs rather than about what any one file now holds. So a line
-    /// never raises a path's trust, and raising it stays something a person does.
-    pub fn reconcile_after_run(&mut self, paths: &[String], written: Label) {
-        if paths.is_empty() {
-            return;
-        }
-
-        if written.is_trusted() {
+        let recorded = match actual {
+            Integrity::Trusted => "trusted",
+            Integrity::Untrusted => "untrusted",
+        };
+        if !self.trust.publish(path, actual) {
             self.allow(
                 "trust",
-                format!(
-                    "{} left as the map had them: a line's output says nothing about what was \
-                     already in a file it added to",
-                    paths.join(", ")
-                ),
+                format!("{path} left as it was: a file effect on it is still active"),
             );
             return;
         }
 
-        for path in paths {
-            self.reconcile_after_write(path, written);
-        }
+        self.allow(
+            "trust",
+            format!("{path} recorded as {recorded} to match what was written"),
+        );
     }
 
     /// Record that the user named `path` themselves, which is what vouches for it.
@@ -3615,11 +3586,43 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// and a rule on the file is more specific than any rule on the tree around it, so a
     /// referenced file is trusted inside a directory nobody vouched for.
     pub fn vouch_for_named_path(&mut self, path: &str) {
-        self.trust.trust(path);
+        if !self.trust.publish(path, Integrity::Trusted) {
+            self.allow(
+                "trust",
+                format!("{path} remains untrusted while a file effect is active"),
+            );
+            return;
+        }
         self.allow(
             "trust",
             format!("{path} trusted: the user named it in their own line"),
         );
+    }
+
+    /// Vouch for `path` only if nothing has decided about it since `shown_at`.
+    ///
+    /// A preview is what the answer was about. If that path, or a tree above it, was decided about
+    /// while the question was on the screen, the text the person read is not what a rule minted now
+    /// would cover, so the answer is thrown away rather than spent on bytes nobody saw.
+    ///
+    /// Refusing is recorded and reported. A yes that quietly does nothing leaves a person watching
+    /// a file they just trusted come back quarantined with nothing saying why, and the caller needs
+    /// the answer to say so.
+    pub fn vouch_if_unchanged(&mut self, path: &str, shown_at: u64) -> bool {
+        let vouched = self.capture_files(|policy, capture| {
+            if capture.revision_of(path) != shown_at {
+                return false;
+            }
+            policy.vouch_for_named_path(path);
+            true
+        });
+        if !vouched {
+            self.allow(
+                "trust",
+                format!("{path} not trusted: it changed while the question was being answered"),
+            );
+        }
+        vouched
     }
 
     /// Each step of a plan as one line, for a rule to match against.
@@ -11028,8 +11031,11 @@ five
             let seeded = policy.vouched();
             // What the delegate's own run came back with: the same map, plus the answer a person
             // gave inside it.
-            let mut ended = seeded.clone();
-            ended.trust.trust("vendor/lib.js");
+            let mut child_sink = RecordingSink::new();
+            let mut child =
+                open_policy(&mut child_sink).with_file_authority(policy.file_authority());
+            child.vouch_for_named_path("vendor/lib.js");
+            let ended = child.vouched();
             policy.adopt_from_delegate(&seeded, &ended);
 
             assert!(
@@ -11080,10 +11086,16 @@ five
 
             // Both copies taken from the same run, before either delegate had asked anything.
             let seeded = policy.vouched();
-            let mut reader = seeded.clone();
-            reader.trust.trust("vendor/reader.js");
-            let mut checker = seeded.clone();
-            checker.trust.trust("vendor/checker.js");
+            let mut reader_sink = RecordingSink::new();
+            let mut checker_sink = RecordingSink::new();
+            let mut reader =
+                open_policy(&mut reader_sink).with_file_authority(policy.file_authority());
+            let mut checker =
+                open_policy(&mut checker_sink).with_file_authority(policy.file_authority());
+            reader.vouch_for_named_path("vendor/reader.js");
+            checker.vouch_for_named_path("vendor/checker.js");
+            let reader = reader.vouched();
+            let checker = checker.vouched();
 
             policy.adopt_from_delegate(&seeded, &reader);
             policy.adopt_from_delegate(&seeded, &checker);
@@ -11109,8 +11121,11 @@ five
             // Seeded first, so this copy predates the answer below and cannot know about it.
             let seeded = policy.vouched();
 
-            let mut answered = seeded.clone();
-            answered.trust.distrust("vendor/generated");
+            let mut child_sink = RecordingSink::new();
+            let mut child =
+                open_policy(&mut child_sink).with_file_authority(policy.file_authority());
+            child.reconcile_after_write("vendor/generated", Label::untrusted_public());
+            let answered = child.vouched();
             policy.adopt_from_delegate(&seeded, &answered);
             assert_eq!(
                 policy.trust().integrity_of("vendor/generated"),
@@ -11125,6 +11140,69 @@ five
                 Some(Integrity::Untrusted),
                 "a delegate that answered nothing erased what another one had settled"
             );
+        }
+
+        /// An approval is spent on the version the person was shown, and a version they never saw
+        /// is not one they answered about.
+        ///
+        /// The preview is what the question was: somebody reading a file and saying it is theirs
+        /// has said so about the text in front of them. A sibling effect replaces the bytes while
+        /// they are answering, and vouching anyway would put their grant on a file nobody read.
+        #[test]
+        fn a_vouch_is_not_spent_on_a_version_nobody_was_shown() {
+            let mut sink = RecordingSink::new();
+            let mut writer_sink = RecordingSink::new();
+            let (spent, trusted) = {
+                let mut policy = open_policy(&mut sink);
+                let shown_at =
+                    policy.capture_files(|_, capture| capture.revision_of("vendor/lib.js"));
+
+                // A sibling's write, entered and published the way the workspace enters one: the
+                // path is reserved under one boundary and what it holds is published under another,
+                // with the bytes released in between.
+                let mut writer =
+                    open_policy(&mut writer_sink).with_file_authority(policy.file_authority());
+                let effect = writer
+                    .capture_files(|_, capture| capture.begin("vendor/lib.js"))
+                    .expect("the path is free");
+                effect.complete(Integrity::Untrusted);
+
+                (
+                    policy.vouch_if_unchanged("vendor/lib.js", shown_at),
+                    policy.trust().is_trusted("vendor/lib.js"),
+                )
+            };
+
+            assert!(
+                !spent,
+                "an approval was spent on a version it was not given for"
+            );
+            assert!(
+                !trusted,
+                "a file replaced while the question was open came back trusted"
+            );
+            let trail = format!("{:?}", sink.events());
+            assert!(
+                trail.contains("changed while the question was being answered"),
+                "nothing says why a file the person trusted came back quarantined: {trail}"
+            );
+        }
+
+        /// The same call with nothing intervening, so the answer is spent.
+        ///
+        /// Without this the check above would be satisfied by a method that never vouches, which
+        /// would leave every prompt a person answers costing them the answer and nothing else.
+        #[test]
+        fn a_vouch_for_the_version_shown_is_spent_on_it() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let shown_at = policy.capture_files(|_, capture| capture.revision_of("vendor/lib.js"));
+
+            assert!(
+                policy.vouch_if_unchanged("vendor/lib.js", shown_at),
+                "an answer about the version in front of the person was not spent on it"
+            );
+            assert!(policy.trust().is_trusted("vendor/lib.js"));
         }
     }
 

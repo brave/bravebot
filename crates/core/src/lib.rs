@@ -22,6 +22,7 @@ pub mod credentials;
 pub mod delegate;
 pub mod event;
 pub mod fence;
+pub mod file_authority;
 pub mod incognito;
 pub mod label;
 pub mod manifest;

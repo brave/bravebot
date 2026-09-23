@@ -1218,15 +1218,12 @@ pub struct Jobs {
 /// One background pipeline, and what it was started as.
 #[derive(Debug)]
 struct Job {
+    file_authority: bravebot_core::file_authority::FileAuthority,
+    file_revision: u64,
     running: crate::exec::Background,
     /// The line as the person approved it, for the account given afterwards.
     line: String,
-    /// The label its output carries, as the kernel fixed it before anything started.
-    ///
-    /// Kept rather than worked out again when the output is read. The label belongs to the plan a
-    /// person answered for, and deriving it a second time later would be a second answer waiting
-    /// to disagree: what a person vouched for can change during a turn, and a pipeline started
-    /// before that must not have its output relabelled because of it.
+    /// The initial output label. A later file revision can lower its integrity, never raise it.
     label: bravebot_core::label::Label,
     /// How much of each pipe has already been handed over, so a later look reports what is new.
     ///
@@ -1241,6 +1238,24 @@ struct Job {
     /// it a planner that waited for a build would be told a second time, with the output gone,
     /// since the bytes go to whoever was handed them.
     reported: bool,
+}
+
+impl Job {
+    /// The label this job's output may carry now, rather than the one fixed before it started.
+    ///
+    /// A proof about the files a line was endorsed against says nothing about a tree something has
+    /// decided about since, and the delivery is where that shows. Both routes out of here ask this,
+    /// so they ask it in one place: a second copy of the question is a second chance for one of them
+    /// to stop asking it.
+    fn label_now(&self) -> Label {
+        if self.file_authority.is_current(self.file_revision) {
+            return self.label;
+        }
+        Label::new(
+            bravebot_core::label::Integrity::Untrusted,
+            self.label.confidentiality,
+        )
+    }
 }
 
 /// A background job's finish, as the turn is told about it (CMDLINE-14).
@@ -1288,12 +1303,16 @@ impl Jobs {
         running: crate::exec::Background,
         line: String,
         label: bravebot_core::label::Label,
+        file_authority: bravebot_core::file_authority::FileAuthority,
+        file_revision: u64,
     ) -> String {
         self.started += 1;
         let name = format!("job:{}", self.started);
         self.running.insert(
             name.clone(),
             Job {
+                file_authority,
+                file_revision,
                 running,
                 line,
                 label,
@@ -1322,6 +1341,7 @@ impl Jobs {
             }
             job.reported = true;
             let printed = job.running.since(&mut job.seen);
+            job.label = job.label_now();
             // Capped only where the planner may read it, exactly as a run's output is: what it may
             // not read is quarantined whole, and there is nothing of it in the conversation to
             // bound.
@@ -2349,6 +2369,11 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     let mut spent = Usage::default();
     let mut waited = None;
 
+    // Whether a yes was given and could not be spent, carried out of the block for the same
+    // reason: the person answered, and what they are told back has to say that their answer did
+    // not land rather than reading as the file simply being quarantined.
+    let mut approval_outlived = false;
+
     if policy.read_is_quarantined(&keyed)
         && media.is_none()
         && workspace.names_a_file(&proposed_path)
@@ -2358,7 +2383,12 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         // preview and decides nothing further: the head of it is cut inside the kernel, so the
         // driver never holds the text, and a file with nothing to show is asked about like any
         // other. The prompt says so in place of the preview.
-        let body = workspace.peek_labelled_for_review(&proposed_path);
+        let (body, preview_revision) = policy.capture_files(|_policy, capture| {
+            (
+                workspace.peek_labelled_for_review(&proposed_path),
+                capture.revision_of(&keyed),
+            )
+        });
         let shaped = policy.render_in_place("read_file", &body, |text| {
             let head: Vec<&str> = text.lines().take(VOUCH_PREVIEW).collect();
             (head.join("\n"), text.lines().nth(VOUCH_PREVIEW).is_some())
@@ -2409,7 +2439,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             reason,
         };
         if confirmer.confirm_vouch(&request) == Decision::Approve {
-            policy.vouch_for_named_path(&keyed);
+            approval_outlived = !policy.vouch_if_unchanged(&keyed, preview_revision);
         }
     }
 
@@ -2417,6 +2447,21 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // the ones that report a refusal: the request was made and somebody is paying for it whether or
     // not the read that followed handed anything over.
     let priced = |produced: Produced| produced.costing(spent).waiting(waited);
+
+    // A yes that arrived too late is said so, rather than left to read as a file nobody was asked
+    // about. The bytes the answer was about are gone, so the only thing to do with the answer is
+    // throw it away, and the person who gave it is owed the reason: reading again puts the question
+    // again, about what the file holds now.
+    if approval_outlived {
+        return priced(confirmed(
+            format!(
+                "{shown_path} changed while the user was being asked about it, so the answer they \
+                 gave was about text that is no longer there and nothing was trusted. Read it \
+                 again if you still need it, and they will be asked about what is in it now."
+            ),
+            format!("{shown_path} changed while it was being asked about"),
+        ));
+    }
 
     // A reference to a file the planner may not read already is that file, so reading it has
     // nothing to hand back but another name for the same thing, which reads as the read having
@@ -2533,31 +2578,33 @@ pub(crate) fn materialise<S: Sink>(
     // The files this actually opened, for the line the person reads. A read deferred until a
     // processor needed it is still a read of their workspace, and until it was reported the only
     // reads on the screen were the planner's, which are the ones that read nothing.
-    let mut opened = Vec::new();
-    for slot in wanted {
-        let was_unread = slots.is_unread(slot);
-        policy
-            .materialise(tool, slot, slots, |path| read_into_slot(workspace, path))
-            .map_err(|denial| format!("refused: {denial}"))?;
-        if was_unread {
-            opened.push(slot.clone());
+    policy.capture_files(|policy, _capture| {
+        let mut opened = Vec::new();
+        for slot in wanted {
+            let was_unread = slots.is_unread(slot);
+            policy
+                .materialise(tool, slot, slots, |path| read_into_slot(workspace, path))
+                .map_err(|denial| format!("refused: {denial}"))?;
+            if was_unread {
+                opened.push(slot.clone());
+            }
         }
-    }
 
-    if opened.is_empty() {
-        return Ok(Vec::new());
-    }
-    let named = policy.names_for_display(slots);
-    Ok(opened
-        .iter()
-        .map(|slot| {
-            named
-                .iter()
-                .find(|(id, _, _)| id == slot)
-                .map(|(slot, label, path)| format!("{slot}{label}:{path}"))
-                .unwrap_or_else(|| slot.to_string())
-        })
-        .collect())
+        if opened.is_empty() {
+            return Ok(Vec::new());
+        }
+        let named = policy.names_for_display(slots);
+        Ok(opened
+            .iter()
+            .map(|slot| {
+                named
+                    .iter()
+                    .find(|(id, _, _)| id == slot)
+                    .map(|(slot, label, path)| format!("{slot}{label}:{path}"))
+                    .unwrap_or_else(|| slot.to_string())
+            })
+            .collect())
+    })
 }
 
 /// The path a call is about, from `path` or from a reference to a file.
@@ -3088,7 +3135,15 @@ fn write_file<S: Sink, C: Confirmer>(
         let proof = policy.authorise_display_release("proposed write");
         body.clone().declassify(&proof)
     };
-    let existing = workspace.peek_for_review(&proposed_path);
+    let (existing, existing_trusted, approved_revision) =
+        policy.capture_files(|policy, capture| {
+            let key = workspace.trust_key(&proposed_path);
+            (
+                workspace.peek_for_review(&proposed_path),
+                !policy.read_is_quarantined(&key),
+                capture.revision_of(&key),
+            )
+        });
     // Read before the write, since afterwards the age is the age of this write.
     let replaced_age = workspace.age_of(&proposed_path);
     let intent = if existing.is_some() {
@@ -3116,7 +3171,12 @@ fn write_file<S: Sink, C: Confirmer>(
     // deleted afterwards has still held the secret, and whatever was watching the directory has
     // still seen it. Asked before the approval prompt for a smaller reason: a person should not be
     // shown a diff to approve that is going to be refused whatever they answer.
-    let scanned = policy.scan_a_write("write_file", &shown_path, existing.as_deref(), &body);
+    let scanned = policy.scan_a_write(
+        "write_file",
+        &shown_path,
+        existing.as_deref().filter(|_| existing_trusted),
+        &body,
+    );
     if !scanned.refused().is_empty() {
         return credential_refusal(&shown_path, &scanned);
     }
@@ -3148,12 +3208,8 @@ fn write_file<S: Sink, C: Confirmer>(
     // this exact value.
     policy.issue_grant("file_write", "path", proposed_path.clone());
 
-    match workspace.write_endorsed(policy, &path, &body) {
+    match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_revision)) {
         Ok(_) => {
-            // The file now holds this data, so the map must say what the path means. Under the
-            // name the map keys on, or an absolute spelling of a file in the project would record
-            // a second rule about it rather than saying what its one rule already says.
-            policy.reconcile_after_write(&workspace.trust_key(&proposed_path), body_label);
             let (note, changes) = change_report(intent, existing.as_deref(), &shown, replaced_age);
 
             // What the model is told, which is what its own account of the turn will repeat. It
@@ -3327,7 +3383,6 @@ fn edit_file<S: Sink, C: Confirmer>(
     // on a promoted value would be routed by the model's own proposal.
     match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current) {
         Ok(_) => {
-            policy.reconcile_after_write(&workspace.trust_key(&proposed_path), body_label);
             let (note, changes) = change_report(Intent::Edit, Some(&current), &shown, None);
             let note = carried_note(note, &scanned);
             let headline = format!("edited {shown_path}: {occurrences} replacement(s)");
@@ -4332,7 +4387,10 @@ fn run<S: Sink, C: Confirmer>(
     // The approval is what makes this plan trustworthy, and it is bound to this exact plan.
     policy.endorse_plan(&plan);
 
-    let label = match policy.before_plan(&plan) {
+    let authority = policy.file_authority();
+    let (started_revision, checked) =
+        policy.capture_files(|policy, capture| (capture.revision(), policy.before_plan(&plan)));
+    let label = match checked {
         Ok(label) => label,
         Err(denial) => return problem(format!("refused: {denial}")),
     };
@@ -4379,7 +4437,13 @@ fn run<S: Sink, C: Confirmer>(
             Ok(running) => {
                 // The directory is carried over only once pre-flight checks and launch succeed.
                 *tools.run_directory = plan.directory.clone();
-                let name = tools.jobs.keep(running, displayed.clone(), label);
+                let name = tools.jobs.keep(
+                    running,
+                    displayed.clone(),
+                    label,
+                    authority.clone(),
+                    started_revision,
+                );
                 Produced::new(
                     // Nothing has been printed yet, and the label is the one the kernel fixed
                     // before anything started: leaving it running does not make it trustworthier.
@@ -4394,16 +4458,6 @@ fn run<S: Sink, C: Confirmer>(
         };
     }
 
-    // A redirection is a write, so the map has to say what its destination holds once the line
-    // has run: untrusted bytes landing in a vouched-for tree must mark that path untrusted, or a
-    // later read hands them back to the planner as trusted.
-    //
-    // What the run reports opening, never the plan's write set. The set names every branch, so a
-    // destination a line decided against is in it, and a rule about a file nothing wrote would
-    // quarantine a file the planner can read today. Spelled the way a read of the file is
-    // spelled, because a name is reduced to the open directory it lands in before the map sees it
-    // and a rule written under an unreduced name decides nothing.
-    let mut opened: Vec<std::path::PathBuf> = Vec::new();
     // Unwrapped here and nowhere earlier: the endorsement has been consumed, so the line about to
     // read these bytes is one a person approved. The witness is what licenses the unwrapping, and
     // what it licenses is carrying them to a descriptor: no branch below reads them, and exec
@@ -4412,19 +4466,59 @@ fn run<S: Sink, C: Confirmer>(
         let proof = policy.authorise_program_input("run", &slot, content.label());
         (content.declassify(&proof), read)
     });
-    let ran = crate::exec::run_plan(
+    // A redirection is a write, so the destination is reserved and marked untrusted before the
+    // line may open it, and what it holds afterwards is decided when the line has stopped. Entered
+    // from what the run is about to open, never from the plan's write set: the set names every
+    // branch, so a destination a line decided against is in it, and a rule about a file nothing
+    // wrote would quarantine a file the planner can read today.
+    //
+    // Keyed the way the authority keys it, so the two spellings of one destination in
+    // `> out 2> ./out` are one effect rather than a second entry refused by the first.
+    let mut effects = std::collections::BTreeMap::new();
+    let ran = crate::exec::run_plan_observed(
         &plan,
         tools.cancel,
         limit,
-        &mut opened,
         tools.workspace.scratch(),
         supplied.as_ref().map(|(bytes, _)| bytes.as_str()),
+        &mut |path| {
+            let key = authority.key(&tools.workspace.trust_key(&path.to_string_lossy()));
+            if effects.contains_key(&key) {
+                return Ok(());
+            }
+            policy.capture_files(|policy, capture| {
+                let prior = if !policy.read_is_quarantined(&key) {
+                    bravebot_core::label::Integrity::Trusted
+                } else {
+                    bravebot_core::label::Integrity::Untrusted
+                };
+                let effect = capture.begin(&key).ok_or_else(|| {
+                    crate::exec::ExecError::Io(
+                        "another file effect is still writing this destination".to_string(),
+                    )
+                })?;
+                effects.insert(key, (effect, prior));
+                Ok(())
+            })
+        },
     );
-    let written: Vec<String> = opened
-        .iter()
-        .map(|path| tools.workspace.relative_display(path))
-        .collect();
-    policy.reconcile_after_run(&written, label);
+    // A proof about inputs before execution cannot label output captured beside a write.
+    // Our own effect entries each advance the revision once and are accounted for separately.
+    let label = if authority.is_current(started_revision.wrapping_add(effects.len() as u64)) {
+        label
+    } else {
+        Label::new(
+            bravebot_core::label::Integrity::Untrusted,
+            label.confidentiality,
+        )
+    };
+    if ran.as_ref().is_ok_and(|ran| {
+        ran.ended_well && ran.stopped.is_none() && ran.codes.iter().all(|code| *code == Some(0))
+    }) {
+        for (_, (effect, prior)) in effects {
+            effect.complete(prior.meet(label.integrity));
+        }
+    }
 
     match ran {
         Ok(ran) => {
@@ -4434,8 +4528,7 @@ fn run<S: Sink, C: Confirmer>(
             // line somewhere nobody chose.
             *tools.run_directory = plan.directory.clone();
 
-            // Both streams carry the same label: the kernel fixed it before anything ran and
-            // nothing about what was printed changes it.
+            // Both streams carry the revalidated plan label; their bytes decide nothing.
             let text = crate::exec::both_streams(&ran.stdout, &ran.stderr);
 
             // Capped only where the planner may read it. Output it may not read is quarantined
@@ -4678,7 +4771,7 @@ fn job_output<S: Sink>(
 
     let ran_for = job.running.ran_for();
     let line = job.line.clone();
-    let label = job.label;
+    let label = job.label_now();
 
     // Said from the clock and the exit codes, which are structure: nothing here reads a byte of
     // what the pipeline printed. Worked out before the kill below, so a job that had already ended
@@ -5775,6 +5868,48 @@ mod tests {
                     sink.events()
                 )
             })
+    }
+
+    /// A command proof cannot authorize output captured after shared file authority changes.
+    #[test]
+    fn an_ended_job_revalidates_its_file_proof_before_releasing_output() {
+        use bravebot_core::TrustStore;
+        use bravebot_core::file_authority::FileAuthority;
+        use std::time::{Duration, Instant};
+        for changed in [false, true] {
+            let root = std::env::current_dir().unwrap();
+            let plan = crate::cmdline::compile("printf JOB_PROOF_SENTINEL", &root, None).unwrap();
+            let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
+                panic!("one pipeline");
+            };
+            let mut running = crate::exec::start_steps(steps, &root, None).unwrap();
+            let until = Instant::now() + Duration::from_secs(5);
+            while !running.ended() {
+                assert!(Instant::now() < until, "job did not end");
+                std::thread::yield_now();
+            }
+            let authority = FileAuthority::new(TrustStore::new(&root));
+            let mut jobs = Jobs::new();
+            jobs.keep(
+                running,
+                plan.display(),
+                Label::trusted_public(),
+                authority.clone(),
+                0,
+            );
+            if changed {
+                // Even a same-label effect invalidates the earlier proof. No output is inspected.
+                let effect = authority.capture().begin("independent.txt").unwrap();
+                drop(effect);
+            }
+            let ended = jobs.ended();
+            assert_eq!(ended.len(), 1);
+            let printed = ended[0]
+                .printed
+                .as_ref()
+                .expect("the actual process printed");
+            assert_eq!(printed.label().is_trusted(), !changed);
+        }
     }
 
     /// A glob the matcher cannot read selects no files, and a search over no files reports no

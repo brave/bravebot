@@ -473,7 +473,7 @@ fn discover_workspace<S: Sink>(
     // content. A directory name is content too: a skill directory in a project nobody vouched
     // for could be named to read like an instruction, and it would reach the user's screen in a
     // notice even if it never reached the prompt.
-    if !policy.trust().is_trusted(WORKSPACE_SKILLS) {
+    if !policy.trusts_path(WORKSPACE_SKILLS) {
         let (count, verb) = counted(names.len());
         notices.push(Notice::new(format!(
             "{count} in {WORKSPACE_SKILLS} {verb} not loaded: this directory is not trusted"

@@ -10038,6 +10038,7 @@ mod tests {
     /// What a path held before a turn wrote to it.
     fn held(path: &str, was: Before) -> Backup {
         Backup {
+            captured_trust: bravebot_core::label::Integrity::Trusted,
             path: std::path::PathBuf::from(path),
             was,
         }

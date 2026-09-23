@@ -201,14 +201,15 @@ decisions about their own machine, and the record of them belongs to the session
 whichever run happened to be going when they made it: a delegate told once that the build may run
 must not leave the next one asking again.
 
-What comes back is what moved. A delegate is seeded with a copy of the record and hands the whole
-of it back, and the entries differing from the copy it started with are the ones a person answered
-inside it. The rest are written back unchanged and settle nothing, so a delegate that was asked
-nothing takes nothing away.
+File decisions are shared while the delegates run. A completed effect or a person's answer is
+visible before collection, and collection never applies a child's file snapshot over the live
+record. Untouched siblings therefore erase nothing, and collection order cannot choose which
+write wins. [trust-map.md](trust-map.md) governs capture and effect ordering.
 
-**Why the difference and not the record.** A copy says what was true when it was taken. Writing
-one back whole makes the last delegate collected the author of the entire record, which erases
-whatever was settled after it was seeded, and puts back the rules those answers replaced.
+Exact command approvals still cross back as differences from the seeded command list. Neither
+one-use grants nor prompt history cross back, and no command grant is widened.
+
+`verified-by: bravebot_agent::turn::overlapping_delegate_writes_follow_effect_order_in_both_collection_orders`
 
 **Whether or not it finished.** A delegate that stopped on a failed model call has no report and
 no round count for the parent to take, and it hands the record back anyway. A person answered
@@ -285,9 +286,10 @@ Starting one does not stop the turn. The call answers as soon as the kernel has 
 delegate, the planner has its round back, and the work goes on behind it. A turn may have any
 number going at once, and what one is doing has no bearing on what another may do.
 
-Nothing is shared between two of them. Each holds its own conversation, its own quarantine and
-its own copy of what a person has vouched for, so two delegates cannot see each other's work any
-more than either can see the turn's.
+Each holds its own conversation, quarantine, capabilities, routing grants and prompt history.
+They share live file authority because their effects touch the same filesystem. A capture boundary
+spans one operation, so a large listing or search can delay other captures until it finishes.
+Reservations are per path, so writes to other paths proceed.
 
 **Why.** A turn that asked three questions waits on the slowest and not on the sum. Running them
 one at a time would also make the reading order the asking order, so a build would have to finish

@@ -695,15 +695,8 @@ fn line(text: &str, at: &std::path::Path) -> exec::Ran {
 /// of it instead of failing.
 fn line_fed(text: &str, at: &std::path::Path, stdin: &str, within: Duration) -> exec::Ran {
     let plan = fed_plan(text, at);
-    exec::run_plan(
-        &plan,
-        &Cancel::new(),
-        within,
-        &mut Vec::new(),
-        None,
-        Some(stdin),
-    )
-    .unwrap_or_else(|e| panic!("`{text}` should run: {e}"))
+    exec::run_plan(&plan, &Cancel::new(), within, None, Some(stdin))
+        .unwrap_or_else(|e| panic!("`{text}` should run: {e}"))
 }
 
 /// A compiled line whose standard input the policy layer supplies, labelled as a fetched page is.
@@ -721,15 +714,8 @@ fn fed_plan(text: &str, at: &std::path::Path) -> bravebot_core::command::Plan {
 fn line_given(text: &str, at: &std::path::Path, given: &std::path::Path) -> exec::Ran {
     let plan = bravebot_agent::cmdline::compile(text, at, None)
         .unwrap_or_else(|e| panic!("`{text}` should compile: {e}"));
-    exec::run_plan(
-        &plan,
-        &Cancel::new(),
-        exec::LIMIT,
-        &mut Vec::new(),
-        Some(given),
-        None,
-    )
-    .unwrap_or_else(|e| panic!("`{text}` should run: {e}"))
+    exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, Some(given), None)
+        .unwrap_or_else(|e| panic!("`{text}` should run: {e}"))
 }
 
 /// What a program's own `env` printed for `name`, and nothing where it printed no such line.
@@ -751,14 +737,39 @@ fn given_directory(at: &std::path::Path) -> PathBuf {
     path
 }
 
-/// The same, keeping the destinations the run opened for writing.
+/// The same, keeping the destinations the run entered an effect on.
+///
+/// Through the notification the tool uses, so what is collected is what the trust map is decided
+/// from: a list of files handed back once the line had finished could not have ordered a read
+/// against any of those writes, which is why there is no longer one.
 fn ran_and_opened(text: &str, at: &std::path::Path) -> (exec::Ran, Vec<std::path::PathBuf>) {
+    let (outcome, entered) = entering(text, at);
+    (
+        outcome.unwrap_or_else(|e| panic!("`{text}` should run: {e}")),
+        entered,
+    )
+}
+
+/// The destinations a line notified about, whatever became of the line.
+fn entering(
+    text: &str,
+    at: &std::path::Path,
+) -> (Result<exec::Ran, exec::ExecError>, Vec<std::path::PathBuf>) {
     let plan = bravebot_agent::cmdline::compile(text, at, None)
         .unwrap_or_else(|e| panic!("`{text}` should compile: {e}"));
-    let mut opened = Vec::new();
-    let ran = exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, &mut opened, None, None)
-        .unwrap_or_else(|e| panic!("`{text}` should run: {e}"));
-    (ran, opened)
+    let mut entered = Vec::new();
+    let outcome = exec::run_plan_observed(
+        &plan,
+        &Cancel::new(),
+        exec::LIMIT,
+        None,
+        None,
+        &mut |path| {
+            entered.push(path.to_path_buf());
+            Ok(())
+        },
+    );
+    (outcome, entered)
 }
 
 /// The plan is what executes. Nothing between the line and the process re-reads the text, so what
@@ -823,9 +834,9 @@ fn an_append_adds_rather_than_truncating() {
     );
 }
 
-/// What the caller records in the trust map is what the line opened, so the report has to be
-/// what happened rather than what the plan proposed: a step that failed had already truncated its
-/// destination, and a branch that was not taken opened nothing at all.
+/// What the caller decides the trust map from is what the line was about to open, so the
+/// notification has to follow what happened rather than what the plan proposed: a step that failed
+/// had already truncated its destination, and a branch that was not taken opened nothing at all.
 #[test]
 fn a_line_reports_the_destinations_it_opened_and_no_others() {
     let scratch = Scratch::new("line-opened");
@@ -848,19 +859,20 @@ fn a_line_reports_the_destinations_it_opened_and_no_others() {
     );
 }
 
-/// A destination nothing could open is a file this line did not write. Reporting it would record
-/// a rule about a file whose contents are exactly what they were.
+/// A destination the notification arrived for and the open then failed. Opening for writing
+/// truncates, so the notification cannot wait for the open to succeed: the caller is told first and
+/// is conservative about what it was told, which is what CMDLINE-7 says a failed attempt costs.
+///
+/// The failure is the assertion's other half. A notification after a successful open would report
+/// nothing here, and the caller would go on trusting a path it had been about to write.
 #[test]
-fn a_destination_that_cannot_be_opened_is_not_reported() {
+fn a_destination_that_cannot_be_opened_is_still_reported() {
     let scratch = Scratch::new("line-open-fails");
     std::fs::create_dir(scratch.path.join("a-directory")).expect("mkdir");
-    let plan = bravebot_agent::cmdline::compile("echo x > a-directory", &scratch.path, None)
-        .expect("a literal target compiles");
-    let mut opened = Vec::new();
-    let outcome = exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, &mut opened, None, None);
+    let (outcome, entered) = entering("echo x > a-directory", &scratch.path);
 
     assert!(outcome.is_err(), "a directory was opened for writing");
-    assert!(opened.is_empty(), "a target that never opened was reported");
+    assert_eq!(entered, [scratch.path.join("a-directory")]);
 }
 
 /// RUN-3's first sentence, at the layer that carries it: the planner named a reference, the policy
@@ -969,7 +981,6 @@ fn a_line_naming_a_file_for_standard_input_cannot_also_be_fed_bytes() {
         &plan,
         &Cancel::new(),
         Duration::from_secs(30),
-        &mut Vec::new(),
         None,
         Some("from the reference\n"),
     );

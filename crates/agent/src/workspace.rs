@@ -86,6 +86,8 @@ pub enum WorkspaceError {
     Io { path: String, detail: String },
     /// The file changed after it was read, so the approved change no longer applies.
     Stale { path: String },
+    /// Another effect already holds the path, so this write was refused rather than interleaved.
+    Contended { path: String },
     /// The file is not text, so there is nothing useful to return.
     Binary { path: String },
     /// The attachment is larger than a request should carry.
@@ -107,6 +109,10 @@ impl fmt::Display for WorkspaceError {
             Self::Stale { path } => write!(
                 f,
                 "'{path}' changed after it was read; read it again before editing"
+            ),
+            Self::Contended { path } => write!(
+                f,
+                "another write to '{path}' is still in progress, so nothing was written"
             ),
             Self::Binary { path } => {
                 write!(f, "'{path}' is a binary file, so it cannot be read as text")
@@ -153,6 +159,8 @@ enum Reach {
 /// never overlap: a relative path always means the project, whatever else is open.
 #[derive(Debug, Clone)]
 pub struct Workspace {
+    #[cfg(test)]
+    after_write: Arc<Mutex<Option<WriteInterruption>>>,
     root: PathBuf,
     /// Absolute directories the user named, each canonical.
     ///
@@ -188,6 +196,13 @@ pub struct Workspace {
     backups: Arc<Mutex<Vec<Backup>>>,
 }
 
+#[cfg(test)]
+#[derive(Debug)]
+struct WriteInterruption {
+    entered: std::sync::mpsc::Sender<()>,
+    resume: std::sync::mpsc::Receiver<bool>,
+}
+
 /// What a path held before a turn wrote to it.
 ///
 /// Carried, never read. The driver hands the bytes back to the path they came from and has no
@@ -198,6 +213,8 @@ pub struct Backup {
     pub path: PathBuf,
     /// What was there.
     pub was: Before,
+    /// Trust of these bytes when captured, never the pre-turn map.
+    pub captured_trust: bravebot_core::label::Integrity,
 }
 
 /// What a path held before a turn wrote to it.
@@ -326,6 +343,8 @@ impl Workspace {
             detail: e.to_string(),
         })?;
         Ok(Self {
+            #[cfg(test)]
+            after_write: Arc::new(Mutex::new(None)),
             root: canonical,
             added: Vec::new(),
             scratch: None,
@@ -720,6 +739,15 @@ impl Workspace {
         path: &Labelled<String>,
         reach: Reach,
     ) -> Result<Labelled<String>, WorkspaceError> {
+        policy.capture_files(|policy, _capture| self.read_text_captured(policy, path, reach))
+    }
+
+    fn read_text_captured<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        reach: Reach,
+    ) -> Result<Labelled<String>, WorkspaceError> {
         policy.before_capability(Capability::FileRead)?;
         policy.before_action("file_read", "path", Role::Routing, path)?;
 
@@ -824,41 +852,43 @@ impl Workspace {
         media: &str,
         reach: Reach,
     ) -> Result<Labelled<String>, WorkspaceError> {
-        policy.before_capability(Capability::FileRead)?;
-        policy.before_action("file_read", "path", Role::Routing, path)?;
+        policy.capture_files(|policy, _capture| {
+            policy.before_capability(Capability::FileRead)?;
+            policy.before_action("file_read", "path", Role::Routing, path)?;
 
-        // Safe to read: before_action just proved this is (T,pub).
-        let relative = path
-            .clone()
-            .into_trusted()
-            .map_err(|_| WorkspaceError::Invalid {
-                path: "<untrusted>".into(),
-                reason: "the path was not trusted",
+            // Safe to read: before_action just proved this is (T,pub).
+            let relative = path
+                .clone()
+                .into_trusted()
+                .map_err(|_| WorkspaceError::Invalid {
+                    path: "<untrusted>".into(),
+                    reason: "the path was not trusted",
+                })?;
+
+            // The reach is the caller's, from the shape of the gesture that produced the path, and
+            // never from anything the file holds.
+            let resolved = self.resolve_attachment(&relative, reach)?;
+            let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
+
+            let raw = std::fs::read(&resolved).map_err(|e| WorkspaceError::Io {
+                path: relative.clone(),
+                detail: e.to_string(),
             })?;
 
-        // The reach is the caller's, from the shape of the gesture that produced the path, and
-        // never from anything the file holds.
-        let resolved = self.resolve_attachment(&relative, reach)?;
-        let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
+            if raw.len() > MAX_ATTACHMENT_BYTES {
+                return Err(WorkspaceError::TooLarge {
+                    path: relative,
+                    limit: MAX_ATTACHMENT_BYTES,
+                });
+            }
 
-        let raw = std::fs::read(&resolved).map_err(|e| WorkspaceError::Io {
-            path: relative.clone(),
-            detail: e.to_string(),
-        })?;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
 
-        if raw.len() > MAX_ATTACHMENT_BYTES {
-            return Err(WorkspaceError::TooLarge {
-                path: relative,
-                limit: MAX_ATTACHMENT_BYTES,
-            });
-        }
-
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
-
-        Ok(Labelled::new(
-            format!("data:{media};base64,{encoded}"),
-            label,
-        ))
+            Ok(Labelled::new(
+                format!("data:{media};base64,{encoded}"),
+                label,
+            ))
+        })
     }
 
     /// Read a bounded window of a file's lines, for the model.
@@ -876,19 +906,21 @@ impl Workspace {
         offset: usize,
         limit: usize,
     ) -> Result<Labelled<Page>, WorkspaceError> {
-        policy.before_capability(Capability::FileRead)?;
-        policy.before_action("file_read", "path", Role::Routing, path)?;
+        policy.capture_files(|policy, _capture| {
+            policy.before_capability(Capability::FileRead)?;
+            policy.before_action("file_read", "path", Role::Routing, path)?;
 
-        let relative = path
-            .clone()
-            .into_trusted()
-            .map_err(|_| WorkspaceError::Invalid {
-                path: "<untrusted>".into(),
-                reason: "the path was not trusted",
-            })?;
+            let relative = path
+                .clone()
+                .into_trusted()
+                .map_err(|_| WorkspaceError::Invalid {
+                    path: "<untrusted>".into(),
+                    reason: "the path was not trusted",
+                })?;
 
-        let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
-        Ok(Labelled::new(self.page(&relative, offset, limit)?, label))
+            let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
+            Ok(Labelled::new(self.page(&relative, offset, limit)?, label))
+        })
     }
 
     /// One page of a file, with no gate of its own.
@@ -1097,12 +1129,16 @@ impl Workspace {
         // Checked before the write gates so a stale edit is reported as staleness rather than
         // consuming the single-use endorsement. Reading the path is itself gated, below.
         let relative = self.peek_relative(policy, path)?;
-        let current = self.peek_for_review(&relative).unwrap_or_default();
-        if current != expected {
-            return Err(WorkspaceError::Stale { path: relative });
-        }
-
-        self.write_endorsed(policy, path, contents)
+        let revision = policy.capture_files(|policy, capture| {
+            let promoted = policy.promote_confined_read("edit_file", "path", path)?;
+            let captured = self.read_text_captured(policy, &promoted, Reach::Confined)?;
+            let current = policy.read_trusted_content("edit_file", &captured)?;
+            if current != expected {
+                return Err(WorkspaceError::Stale { path: relative });
+            }
+            Ok(capture.revision_of(&self.trust_key(&relative)))
+        })?;
+        self.write_endorsed_at_revision(policy, path, contents, Some(revision))
     }
 
     /// The path as a plain string, for a check made on the user's behalf.
@@ -1138,6 +1174,16 @@ impl Workspace {
         path: &Labelled<String>,
         contents: &Labelled<String>,
     ) -> Result<PathBuf, WorkspaceError> {
+        self.write_endorsed_at_revision(policy, path, contents, None)
+    }
+
+    pub(crate) fn write_endorsed_at_revision<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        contents: &Labelled<String>,
+        expected_revision: Option<u64>,
+    ) -> Result<PathBuf, WorkspaceError> {
         policy.before_capability(Capability::FileWrite)?;
 
         // The path keeps the label it arrived with: the endorsement is the authority here, and
@@ -1146,25 +1192,7 @@ impl Workspace {
         let relative = policy.before_endorsed_destination("file_write", "path", path)?;
         policy.before_action("file_write", "contents", Role::Content, contents)?;
 
-        let resolved = self.resolve(&relative)?;
-        self.record_backup(&resolved);
-
-        let proof = policy.authorise_content_release("file_write", "contents");
-        let body = contents.clone().declassify(&proof);
-
-        if let Some(parent) = resolved.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| WorkspaceError::Io {
-                path: relative.clone(),
-                detail: e.to_string(),
-            })?;
-        }
-
-        std::fs::write(&resolved, body).map_err(|e| WorkspaceError::Io {
-            path: relative,
-            detail: e.to_string(),
-        })?;
-
-        Ok(resolved)
+        self.write_after_gates(policy, relative, contents, expected_revision)
     }
 
     /// Write a file. The path is routing; the contents are content.
@@ -1189,7 +1217,38 @@ impl Workspace {
                 reason: "the path was not trusted",
             })?;
 
+        self.write_after_gates(policy, relative, contents, None)
+    }
+
+    /// Reserve the path and capture its backup before releasing bytes to the filesystem.
+    fn write_after_gates<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        relative: String,
+        contents: &Labelled<String>,
+        expected_revision: Option<u64>,
+    ) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve(&relative)?;
+        let effect = policy.capture_files(|policy, capture| {
+            let key = self.trust_key(&relative);
+            if expected_revision.is_some_and(|revision| revision != capture.revision_of(&key)) {
+                return Err(WorkspaceError::Stale {
+                    path: relative.clone(),
+                });
+            }
+            let captured_trust = if policy.read_is_quarantined(&key) {
+                bravebot_core::label::Integrity::Untrusted
+            } else {
+                bravebot_core::label::Integrity::Trusted
+            };
+            let effect = capture
+                .begin(&key)
+                .ok_or_else(|| WorkspaceError::Contended {
+                    path: relative.clone(),
+                })?;
+            self.record_backup(&resolved, captured_trust);
+            Ok::<_, WorkspaceError>(effect)
+        })?;
 
         // Both gates have passed, so the bytes may be released to the write.
         let proof = policy.authorise_content_release("file_write", "contents");
@@ -1202,14 +1261,45 @@ impl Workspace {
             })?;
         }
 
-        self.record_backup(&resolved);
-
         std::fs::write(&resolved, body).map_err(|e| WorkspaceError::Io {
             path: relative,
             detail: e.to_string(),
         })?;
 
+        #[cfg(test)]
+        self.interrupt_after_write()?;
+        effect.complete(contents.label().integrity);
         Ok(resolved)
+    }
+
+    #[cfg(test)]
+    fn interrupt_after_write(&self) -> Result<(), WorkspaceError> {
+        let synchronization_failed = |detail: &str| WorkspaceError::Io {
+            path: "test write interruption".into(),
+            detail: detail.into(),
+        };
+        let interruption = self
+            .after_write
+            .lock()
+            .map_err(|_| synchronization_failed("interruption lock poisoned"))?
+            .take();
+        if let Some(interruption) = interruption {
+            interruption
+                .entered
+                .send(())
+                .map_err(|_| synchronization_failed("effect observer disconnected"))?;
+            if interruption
+                .resume
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|_| synchronization_failed("write was not released"))?
+            {
+                return Err(WorkspaceError::Io {
+                    path: "fixture".into(),
+                    detail: "failure after replacement".into(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Keep what a path holds before this turn overwrites it.
@@ -1223,7 +1313,7 @@ impl Workspace {
     /// ends, so there is nothing anybody would ask to have back. Keeping it would spend
     /// [`MAX_REWIND_BYTES`] on a file nobody wants rewound, and what that budget runs out on is
     /// the next file in the project the turn writes.
-    fn record_backup(&self, resolved: &Path) {
+    fn record_backup(&self, resolved: &Path, captured_trust: bravebot_core::label::Integrity) {
         if self.reaches_scratch(resolved) {
             return;
         }
@@ -1257,6 +1347,7 @@ impl Workspace {
         };
 
         backups.push(Backup {
+            captured_trust,
             path: resolved.to_path_buf(),
             was,
         });
@@ -1718,82 +1809,83 @@ impl Workspace {
         pattern: Option<&Labelled<String>>,
         depth: Option<usize>,
     ) -> Result<Labelled<Listing>, WorkspaceError> {
-        policy.before_capability(Capability::FileRead)?;
-        policy.before_action("file_list", "directory", Role::Routing, directory)?;
+        policy.capture_files(|policy, _capture| {
+            policy.before_capability(Capability::FileRead)?;
+            policy.before_action("file_list", "directory", Role::Routing, directory)?;
 
-        let relative = directory
-            .clone()
-            .into_trusted()
-            .map_err(|_| WorkspaceError::Invalid {
-                path: "<untrusted>".into(),
-                reason: "the directory was not trusted",
-            })?;
+            let relative =
+                directory
+                    .clone()
+                    .into_trusted()
+                    .map_err(|_| WorkspaceError::Invalid {
+                        path: "<untrusted>".into(),
+                        reason: "the directory was not trusted",
+                    })?;
 
-        let glob = match pattern {
-            Some(pattern) => {
-                policy.before_action("file_list", "pattern", Role::Routing, pattern)?;
-                Some(
-                    pattern
-                        .clone()
-                        .into_trusted()
-                        .map_err(|_| WorkspaceError::Invalid {
-                            path: "<untrusted>".into(),
-                            reason: "the pattern was not trusted",
-                        })?,
-                )
-            }
-            None => None,
-        };
+            let glob =
+                match pattern {
+                    Some(pattern) => {
+                        policy.before_action("file_list", "pattern", Role::Routing, pattern)?;
+                        Some(pattern.clone().into_trusted().map_err(|_| {
+                            WorkspaceError::Invalid {
+                                path: "<untrusted>".into(),
+                                reason: "the pattern was not trusted",
+                            }
+                        })?)
+                    }
+                    None => None,
+                };
 
-        let root = self.resolve(&relative)?;
+            let root = self.resolve(&relative)?;
 
-        let mut found = Vec::new();
-        let mut stopped_at = Vec::new();
-        // Ignored here: what a listing left out is the entry it drops below, which the count
-        // answers exactly.
-        let patterns = glob.as_deref().map(crate::glob::expand);
-        let denied = |path: &str| policy.read_is_denied(path);
-        let _ = self.walk_filtered(
-            &root,
-            patterns.as_deref(),
-            depth,
-            MAX_ENTRIES,
-            &denied,
-            &mut Collected {
-                files: &mut found,
-                stopped_at: &mut stopped_at,
-                withheld: false,
-            },
-        )?;
-        found.sort();
-        stopped_at.sort();
+            let mut found = Vec::new();
+            let mut stopped_at = Vec::new();
+            // Ignored here: what a listing left out is the entry it drops below, which the count
+            // answers exactly.
+            let patterns = glob.as_deref().map(crate::glob::expand);
+            let denied = |path: &str| policy.read_is_denied(path);
+            let _ = self.walk_filtered(
+                &root,
+                patterns.as_deref(),
+                depth,
+                MAX_ENTRIES,
+                &denied,
+                &mut Collected {
+                    files: &mut found,
+                    stopped_at: &mut stopped_at,
+                    withheld: false,
+                },
+            )?;
+            found.sort();
+            stopped_at.sort();
 
-        // Labelled after the walk, because which paths were visited is not known before it. A
-        // listing is trusted only if every path in it is. A directory name is a name out of the
-        // same tree, so it is observed with the files rather than beside them.
-        let label = policy.observe_paths(
-            Capability::FileRead,
-            found.iter().chain(stopped_at.iter()).map(String::as_str),
-        )?;
+            // Labelled after the walk, because which paths were visited is not known before it. A
+            // listing is trusted only if every path in it is. A directory name is a name out of the
+            // same tree, so it is observed with the files rather than beside them.
+            let label = policy.observe_paths(
+                Capability::FileRead,
+                found.iter().chain(stopped_at.iter()).map(String::as_str),
+            )?;
 
-        // `walk` collects one entry past the cap so reaching it is detectable. Which entries
-        // survive is down to traversal order, so a truncated listing is a sample of the tree
-        // rather than its alphabetical head, hence saying so matters. The order is at least
-        // the same order every time, which is the walk's doing rather than this sort's: what
-        // is sorted here is what a walk kept, and sorting after a cap cannot choose what it
-        // kept.
-        let truncated = found.len() + stopped_at.len() > MAX_ENTRIES;
-        found.truncate(MAX_ENTRIES);
-        stopped_at.truncate(MAX_ENTRIES.saturating_sub(found.len()));
+            // `walk` collects one entry past the cap so reaching it is detectable. Which entries
+            // survive is down to traversal order, so a truncated listing is a sample of the tree
+            // rather than its alphabetical head, hence saying so matters. The order is at least
+            // the same order every time, which is the walk's doing rather than this sort's: what
+            // is sorted here is what a walk kept, and sorting after a cap cannot choose what it
+            // kept.
+            let truncated = found.len() + stopped_at.len() > MAX_ENTRIES;
+            found.truncate(MAX_ENTRIES);
+            stopped_at.truncate(MAX_ENTRIES.saturating_sub(found.len()));
 
-        Ok(Labelled::new(
-            Listing {
-                files: found,
-                directories: stopped_at,
-                truncated,
-            },
-            label,
-        ))
+            Ok(Labelled::new(
+                Listing {
+                    files: found,
+                    directories: stopped_at,
+                    truncated,
+                },
+                label,
+            ))
+        })
     }
 
     /// Find lines matching any of `patterns` in files beneath `directory`.
@@ -1829,173 +1921,176 @@ impl Workspace {
         case_sensitive: bool,
         offset: usize,
     ) -> Result<Labelled<Matches>, WorkspaceError> {
-        policy.before_capability(Capability::FileRead)?;
-        for pattern in patterns {
-            policy.before_action("file_grep", "pattern", Role::Routing, pattern)?;
-        }
-        policy.before_action("file_grep", "directory", Role::Routing, directory)?;
+        policy.capture_files(|policy, _capture| {
+            policy.before_capability(Capability::FileRead)?;
+            for pattern in patterns {
+                policy.before_action("file_grep", "pattern", Role::Routing, pattern)?;
+            }
+            policy.before_action("file_grep", "directory", Role::Routing, directory)?;
 
-        let relative = directory
-            .clone()
-            .into_trusted()
-            .map_err(|_| WorkspaceError::Invalid {
-                path: "<untrusted>".into(),
-                reason: "the directory was not trusted",
-            })?;
+            let relative =
+                directory
+                    .clone()
+                    .into_trusted()
+                    .map_err(|_| WorkspaceError::Invalid {
+                        path: "<untrusted>".into(),
+                        reason: "the directory was not trusted",
+                    })?;
 
-        if patterns.is_empty() {
-            return Err(WorkspaceError::Invalid {
-                path: relative,
-                reason: "no search pattern was given",
-            });
-        }
-
-        // Compiled once for the whole walk rather than per line, and before any file is opened so
-        // that an unusable pattern is reported as itself instead of as an empty result.
-        //
-        // Case is folded by the engine rather than by lowercasing the pattern, which would turn
-        // `\D`, `\W` and `\S` into the classes they negate and invert what was asked for.
-        let mut expressions = Vec::with_capacity(patterns.len());
-        for pattern in patterns {
-            let needle = pattern
-                .clone()
-                .into_trusted()
-                .map_err(|_| WorkspaceError::Invalid {
-                    path: "<untrusted>".into(),
-                    reason: "the pattern was not trusted",
-                })?;
-            if needle.is_empty() {
+            if patterns.is_empty() {
                 return Err(WorkspaceError::Invalid {
                     path: relative,
-                    reason: "the search pattern was empty",
+                    reason: "no search pattern was given",
                 });
             }
-            let compiled = if case_sensitive {
-                crate::regex::Regex::compile(&needle)
-            } else {
-                crate::regex::Regex::compile_folded(&needle)
-            };
-            expressions.push(compiled.map_err(|e| WorkspaceError::Pattern {
-                detail: e.to_string(),
-            })?);
-        }
 
-        // Which files are searched is routing, exactly like the directory.
-        let glob = match include {
-            Some(include) => {
-                policy.before_action("file_grep", "include", Role::Routing, include)?;
-                Some(
-                    include
+            // Compiled once for the whole walk rather than per line, and before any file is opened so
+            // that an unusable pattern is reported as itself instead of as an empty result.
+            //
+            // Case is folded by the engine rather than by lowercasing the pattern, which would turn
+            // `\D`, `\W` and `\S` into the classes they negate and invert what was asked for.
+            let mut expressions = Vec::with_capacity(patterns.len());
+            for pattern in patterns {
+                let needle =
+                    pattern
                         .clone()
                         .into_trusted()
                         .map_err(|_| WorkspaceError::Invalid {
                             path: "<untrusted>".into(),
-                            reason: "the include pattern was not trusted",
-                        })?,
-                )
+                            reason: "the pattern was not trusted",
+                        })?;
+                if needle.is_empty() {
+                    return Err(WorkspaceError::Invalid {
+                        path: relative,
+                        reason: "the search pattern was empty",
+                    });
+                }
+                let compiled = if case_sensitive {
+                    crate::regex::Regex::compile(&needle)
+                } else {
+                    crate::regex::Regex::compile_folded(&needle)
+                };
+                expressions.push(compiled.map_err(|e| WorkspaceError::Pattern {
+                    detail: e.to_string(),
+                })?);
             }
-            None => None,
-        };
 
-        let root = self.resolve(&relative)?;
+            // Which files are searched is routing, exactly like the directory.
+            let glob =
+                match include {
+                    Some(include) => {
+                        policy.before_action("file_grep", "include", Role::Routing, include)?;
+                        Some(include.clone().into_trusted().map_err(|_| {
+                            WorkspaceError::Invalid {
+                                path: "<untrusted>".into(),
+                                reason: "the include pattern was not trusted",
+                            }
+                        })?)
+                    }
+                    None => None,
+                };
 
-        let mut paths = Vec::new();
-        // Whether every file was reached, which the count cannot answer: a tree of exactly the
-        // cap fills `paths` without a single file being left out.
-        let mut ignored = Vec::new();
-        // Expanded once for the whole walk, not once per path.
-        let expanded = glob.as_deref().map(crate::glob::expand);
-        let denied = |path: &str| policy.read_is_denied(path);
-        let mut collected = Collected {
-            files: &mut paths,
-            stopped_at: &mut ignored,
-            withheld: false,
-        };
-        let unvisited = self.walk_filtered(
-            &root,
-            expanded.as_deref(),
-            None,
-            self.search_files,
-            &denied,
-            &mut collected,
-        )?;
-        let withheld = collected.withheld;
-        paths.sort();
-        let considered = paths.len();
+            let root = self.resolve(&relative)?;
 
-        // Trusted only if every file the search reads is trusted.
-        let label = policy.observe_paths(Capability::FileRead, paths.iter().map(String::as_str))?;
-
-        // Collected one past the cap for the same reason as `walk`: reaching the limit has
-        // to be distinguishable from happening to have exactly that many matches.
-        let mut matches = Vec::new();
-        let mut searched = 0usize;
-        let mut timed_out = false;
-        // Counted rather than collected until the offset is reached, so asking for a later page
-        // costs the reading again but never the earlier pages' memory.
-        let skip = offset.saturating_sub(1);
-        let mut matched = 0usize;
-        let started = Instant::now();
-        for path in paths {
-            if matches.len() > MAX_MATCHES {
-                break;
-            }
-            // Checked per file rather than per line: the clock is here to bound a walk over a
-            // large tree, and a single file cannot be large enough to matter beside that.
-            if started.elapsed() >= self.search_time {
-                timed_out = true;
-                break;
-            }
-            let absolute = self.root.join(&path);
-            // Unreadable or non-UTF8 files are skipped rather than failing the search:
-            // a binary in the tree should not make grep unusable.
-            let Ok(contents) = std::fs::read_to_string(&absolute) else {
-                continue;
+            let mut paths = Vec::new();
+            // Whether every file was reached, which the count cannot answer: a tree of exactly the
+            // cap fills `paths` without a single file being left out.
+            let mut ignored = Vec::new();
+            // Expanded once for the whole walk, not once per path.
+            let expanded = glob.as_deref().map(crate::glob::expand);
+            let denied = |path: &str| policy.read_is_denied(path);
+            let mut collected = Collected {
+                files: &mut paths,
+                stopped_at: &mut ignored,
+                withheld: false,
             };
-            searched += 1;
-            for (index, line) in contents.lines().enumerate() {
+            let unvisited = self.walk_filtered(
+                &root,
+                expanded.as_deref(),
+                None,
+                self.search_files,
+                &denied,
+                &mut collected,
+            )?;
+            let withheld = collected.withheld;
+            paths.sort();
+            let considered = paths.len();
+
+            // Trusted only if every file the search reads is trusted.
+            let label =
+                policy.observe_paths(Capability::FileRead, paths.iter().map(String::as_str))?;
+
+            // Collected one past the cap for the same reason as `walk`: reaching the limit has
+            // to be distinguishable from happening to have exactly that many matches.
+            let mut matches = Vec::new();
+            let mut searched = 0usize;
+            let mut timed_out = false;
+            // Counted rather than collected until the offset is reached, so asking for a later page
+            // costs the reading again but never the earlier pages' memory.
+            let skip = offset.saturating_sub(1);
+            let mut matched = 0usize;
+            let started = Instant::now();
+            for path in paths {
                 if matches.len() > MAX_MATCHES {
                     break;
                 }
-                if expressions.iter().any(|pattern| pattern.matches(line)) {
-                    matched += 1;
-                    if matched <= skip {
-                        continue;
+                // Checked per file rather than per line: the clock is here to bound a walk over a
+                // large tree, and a single file cannot be large enough to matter beside that.
+                if started.elapsed() >= self.search_time {
+                    timed_out = true;
+                    break;
+                }
+                let absolute = self.root.join(&path);
+                // Unreadable or non-UTF8 files are skipped rather than failing the search:
+                // a binary in the tree should not make grep unusable.
+                let Ok(contents) = std::fs::read_to_string(&absolute) else {
+                    continue;
+                };
+                searched += 1;
+                for (index, line) in contents.lines().enumerate() {
+                    if matches.len() > MAX_MATCHES {
+                        break;
                     }
-                    let mut text = line.to_string();
-                    truncate_on_char_boundary(&mut text, MAX_MATCH_LINE);
-                    matches.push(Match {
-                        path: path.clone(),
-                        line: index + 1,
-                        text,
-                    });
+                    if expressions.iter().any(|pattern| pattern.matches(line)) {
+                        matched += 1;
+                        if matched <= skip {
+                            continue;
+                        }
+                        let mut text = line.to_string();
+                        truncate_on_char_boundary(&mut text, MAX_MATCH_LINE);
+                        matches.push(Match {
+                            path: path.clone(),
+                            line: index + 1,
+                            text,
+                        });
+                    }
                 }
             }
-        }
 
-        let truncated = matches.len() > MAX_MATCHES;
-        matches.truncate(MAX_MATCHES);
-        if truncated {
-            // The match collected one past the cap is what detects the cap rather than part of the
-            // answer, so it is no part of the tally either: what was counted is what was returned
-            // plus what an offset passed over.
-            matched -= 1;
-        }
+            let truncated = matches.len() > MAX_MATCHES;
+            matches.truncate(MAX_MATCHES);
+            if truncated {
+                // The match collected one past the cap is what detects the cap rather than part of the
+                // answer, so it is no part of the tally either: what was counted is what was returned
+                // plus what an offset passed over.
+                matched -= 1;
+            }
 
-        Ok(Labelled::new(
-            Matches {
-                matches,
-                truncated,
-                unvisited,
-                timed_out,
-                considered,
-                searched,
-                withheld,
-                first_match: skip + 1,
-                matched,
-            },
-            label,
-        ))
+            Ok(Labelled::new(
+                Matches {
+                    matches,
+                    truncated,
+                    unvisited,
+                    timed_out,
+                    considered,
+                    searched,
+                    withheld,
+                    first_match: skip + 1,
+                    matched,
+                },
+                label,
+            ))
+        })
     }
 
     /// Collect workspace-relative paths of regular files beneath `directory`.
@@ -2260,6 +2355,191 @@ fn written_below(named: &Path, opened: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reads during an entered effect cannot use the previous grant, and an error cannot promote it.
+    #[test]
+    fn reads_before_write_publication_and_failed_replacements_remain_untrusted() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        use std::sync::mpsc;
+        for fail in [false, true] {
+            let root = crate::testutil::scratch_dir(&format!("bravebot-write-publication-{fail}"));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).expect("create scratch");
+            std::fs::write(root.join("shared.txt"), "original trusted text").unwrap();
+            let workspace = Workspace::new(&root).unwrap();
+            let mut trust = TrustStore::new(workspace.root());
+            trust.trust(".");
+            let authority = FileAuthority::new(trust);
+            let (entered, observed) = mpsc::channel();
+            let (release, resume) = mpsc::channel();
+            *workspace.after_write.lock().unwrap() = Some(WriteInterruption { entered, resume });
+            let child_workspace = workspace.clone();
+            let child_authority = authority.clone();
+            let writer = std::thread::spawn(move || {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "write");
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                    &mut sink,
+                )
+                .unwrap()
+                .with_file_authority(child_authority);
+                child_workspace.write(
+                    &mut policy,
+                    &Labelled::trusted("shared.txt".to_string()),
+                    &Labelled::new(
+                        "PUBLICATION_SENTINEL".to_string(),
+                        if fail {
+                            Label::trusted_public()
+                        } else {
+                            Label::untrusted_public()
+                        },
+                    ),
+                )
+            });
+            observed
+                .recv_timeout(Duration::from_secs(5))
+                .expect("effect reached disk");
+            for _ in 0..2 {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "read beside writer");
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                    &mut sink,
+                )
+                .unwrap()
+                .with_file_authority(authority.clone());
+                policy.vouch_for_named_path("shared.txt");
+                let text = workspace
+                    .read(&mut policy, &Labelled::trusted("./shared.txt".to_string()))
+                    .unwrap();
+                assert!(
+                    !text.label().is_trusted(),
+                    "reader used the old grant during the effect"
+                );
+                assert!(policy.read_trusted_content("fixture", &text).is_err());
+                workspace
+                    .write(
+                        &mut policy,
+                        &Labelled::trusted("independent.txt".to_string()),
+                        &Labelled::trusted("independent".to_string()),
+                    )
+                    .unwrap();
+                assert!(policy.trust().is_trusted("independent.txt"));
+            }
+            release.send(fail).unwrap();
+            let result = writer.join().unwrap();
+            assert_eq!(
+                result.is_err(),
+                fail,
+                "the requested failure actually occurred"
+            );
+            if fail {
+                assert!(
+                    matches!(&result, Err(WorkspaceError::Io { path, detail })
+                        if path == "fixture" && detail == "failure after replacement"),
+                    "synchronization failed instead of injecting the write failure: {result:?}"
+                );
+            }
+            assert!(!authority.snapshot().is_trusted("shared.txt"));
+            assert_eq!(
+                std::fs::read_to_string(root.join("shared.txt")).unwrap(),
+                "PUBLICATION_SENTINEL"
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    /// A second write to a path an effect already holds is refused, in words about the reservation
+    /// rather than about a version.
+    ///
+    /// Two writers interleaved on one path leave one writer's bytes on disk under the other's
+    /// integrity, which is what the reservation exists to prevent. Reporting it as
+    /// [`WorkspaceError::Stale`] would say the version moved under this write and invite the caller
+    /// to read again and retry, which is advice for a write that lost a race. This one never
+    /// started, and the path is held by something still running.
+    #[test]
+    fn a_second_write_to_a_reserved_path_is_refused_as_contended() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        use std::sync::mpsc;
+        let root = crate::testutil::scratch_dir("bravebot-write-contended");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        std::fs::write(root.join("shared.txt"), "original text").unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let (entered, observed) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        *workspace.after_write.lock().unwrap() = Some(WriteInterruption { entered, resume });
+
+        fn writing(
+            authority: FileAuthority,
+            sink: &mut RecordingSink,
+        ) -> Policy<'_, RecordingSink> {
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "write");
+            Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                sink,
+            )
+            .unwrap()
+            .with_file_authority(authority)
+        }
+
+        let child_workspace = workspace.clone();
+        let child_authority = authority.clone();
+        let writer = std::thread::spawn(move || {
+            let mut sink = RecordingSink::new();
+            let mut policy = writing(child_authority, &mut sink);
+            child_workspace.write(
+                &mut policy,
+                &Labelled::trusted("shared.txt".to_string()),
+                &Labelled::trusted("FIRST_WRITER".to_string()),
+            )
+        });
+        observed
+            .recv_timeout(Duration::from_secs(5))
+            .expect("effect reached disk");
+
+        let mut sink = RecordingSink::new();
+        let mut policy = writing(authority.clone(), &mut sink);
+        let refused = workspace
+            .write(
+                &mut policy,
+                &Labelled::trusted("shared.txt".to_string()),
+                &Labelled::trusted("SECOND_WRITER".to_string()),
+            )
+            .expect_err("a path another effect holds was written anyway");
+        assert!(
+            matches!(&refused, WorkspaceError::Contended { path } if path == "shared.txt"),
+            "the wrong refusal, so a caller cannot tell contention from a stale version: {refused:?}"
+        );
+        assert_eq!(
+            refused.to_string(),
+            "another write to 'shared.txt' is still in progress, so nothing was written"
+        );
+
+        release.send(false).unwrap();
+        writer.join().unwrap().expect("the first write finished");
+        assert_eq!(
+            std::fs::read_to_string(root.join("shared.txt")).unwrap(),
+            "FIRST_WRITER",
+            "the refused write reached the file anyway"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// A door that opens a directory by name hands the trust map the name it resolved to, so a name
     /// the map cannot key a rule under is one no door may open: the rule would be keyed inside the

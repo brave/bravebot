@@ -611,10 +611,14 @@ that stood before its turn, what that turn was asked, and what its writes overwr
 `/rewind` after a resume reach the same turns they reached before the program was closed.
 
 What a path held is written base64 in the record, so the record carries the rewind budget as well
-as the conversation. Only for a path the map that stood before the turn vouched for: SESSION-2 is
-why one it did not vouch for is written down as a path whose contents this session did not keep,
+as the conversation. Only when the backup's capture provenance says its bytes were trusted: a
+map from before the turn cannot authorize bytes captured after a sibling replaced the file.
+SESSION-2 is why
+untrusted captured bytes are written down as a path whose contents this session did not keep,
 which the session itself still holds and can still put back. Paths inside the project are recorded
 relative to it and come back under the directory the resumed session works in, as trust rules do.
+
+`verified-by: bravebot_tui::sessions::backup_capture_trust_overrides_a_stale_pre_turn_grant`
 
 Only the points a rewind can still reach are written. A record holds what the session holds, so a
 point that ages out of the session's depth or budget, and every point given up when something
