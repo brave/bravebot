@@ -760,9 +760,14 @@ ran at this time rather than that a session ran in this project at this time.
   in-project version could not have, because every session's directory sits in one place any session
   can read: a lock file each session holds open for its life makes the sweep a matter of trying the
   lock on each directory found and removing the ones nothing holds, after checking each is this
-  account's own at the mode it should have. `flock` is reached through `rustix`, which is already a
-  dependency; the Windows equivalent is `LockFileEx` and nothing here offers it today, so the sweep
-  begins as Unix's and Windows leans on its own cleaner until it does.
+  account's own at the mode it should have. `flock` is reached through `rustix`, which
+  `crates/agent` declares for `uname(2)` alone, without the `fs` feature the call needs, so the
+  sweep starts with an edit to a dependency file. Nothing here catches the omission:
+  `crates/ui-files` declares `rustix` with `fs`, and one build unifies a feature across the packages
+  it selects, so `cargo build --all` and `make check` both compile a `rustix::fs` call in
+  `crates/agent` that `cargo build -p bravebot-agent` rejects. The Windows equivalent is
+  `LockFileEx` and nothing here offers it, so the sweep begins as Unix's and Windows leans on its
+  own cleaner until it does.
 
 ## A file helper a surface hands a directory to
 
