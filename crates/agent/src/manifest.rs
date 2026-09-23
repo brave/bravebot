@@ -1583,20 +1583,21 @@ fn write<S: Sink, C: Confirmer>(
     // The pre-image and the version it was read at, taken together, exactly as a turn's write
     // takes them: prior bytes a sibling effect left untrusted cannot answer for a credential in
     // this body, and the approval minted below is spent only on the version shown here.
-    let (existing, existing_trusted, approved_revision) =
+    let (existing, replaces, existing_trusted, approved_revision) =
         policy.capture_files(|policy, capture| {
             let key = workspace.trust_key(&path);
             (
-                workspace.peek_for_review(&path),
+                workspace.peek_labelled_for_review(&path),
+                workspace.names_a_file(&path),
                 !policy.read_is_quarantined(&key),
                 capture.revision_of(&key),
             )
         });
-    // Labelled from the one peek, as a turn's write does it, so the comparison below can be
-    // made inside the kernel on a value the driver never holds as a string.
-    let replaced = crate::workspace::peeked_for_review(existing.clone());
+    // Taken from the one peek, as a turn's write does it, so the comparison below can be made
+    // inside the kernel on a value the driver never holds as a string.
+    let replaced = crate::workspace::peeked_for_review(&existing, replaces);
     let replaced_age = workspace.age_of(&path);
-    let intent = if existing.is_some() {
+    let intent = if replaces {
         Intent::Overwrite
     } else {
         Intent::Create
@@ -1608,7 +1609,7 @@ fn write<S: Sink, C: Confirmer>(
     let scanned = policy.scan_a_write(
         "write_file",
         &path,
-        existing.as_deref().filter(|_| existing_trusted),
+        (replaces && existing_trusted).then_some(&existing),
         &body,
     );
     let refused = scanned.refused();
@@ -1641,9 +1642,15 @@ fn write<S: Sink, C: Confirmer>(
             let proof = policy.authorise_display_release("proposed write");
             body.clone().declassify(&proof)
         };
+        // The file this replaces, released for the same screen, exactly as a turn's write
+        // releases it.
+        let existing = replaces.then(|| {
+            let proof = policy.authorise_display_release("the file a write replaces");
+            existing.declassify(&proof)
+        });
         let request = WriteRequest {
             intent,
-            existing: existing.clone(),
+            existing,
             path: path.clone(),
             contents: shown,
             diff: reviewed.diff.clone(),

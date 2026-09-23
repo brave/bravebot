@@ -1037,10 +1037,14 @@ impl Workspace {
     /// The current contents of a workspace file, for showing a reviewer what a write
     /// would replace.
     ///
-    /// Deliberately outside the policy gates: this is read on the user's behalf to
-    /// populate a confirmation prompt, never handed to the model. `None` when the file
-    /// does not exist or cannot be read as text.
-    pub fn peek_for_review(&self, relative: &str) -> Option<String> {
+    /// Private, and the only caller is [`Workspace::peek_labelled_for_review`]. The bytes are
+    /// whatever is in a file nobody vouched for, so a caller outside this module holding them as
+    /// a bare `String` is the shape [LABEL-4](../../../docs/specs/labels.md#LABEL-4) exists to
+    /// stop: no label, no witness, and nothing in the trail saying the read happened. Everything
+    /// that needs this takes the labelled form and asks a gate for what it needs out of it.
+    ///
+    /// `None` when the file does not exist or cannot be read as text.
+    fn peek_for_review(&self, relative: &str) -> Option<String> {
         let resolved = self.resolve(relative).ok()?;
         std::fs::read_to_string(resolved).ok()
     }
@@ -1049,7 +1053,8 @@ impl Workspace {
     /// worth putting to a person at all.
     ///
     /// Answered from the path and from `stat`, never from a byte of what the file holds, so this
-    /// may gate a prompt where [`Workspace::peek_for_review`] may not. A directory and a path that
+    /// may gate a prompt, and settle whether a write creates a file or replaces one, where
+    /// [`Workspace::peek_labelled_for_review`] may not. A directory and a path that
     /// names nothing both come back false: a question titled with one file, answered yes, writes a
     /// rule covering everything beneath the name, and `.` names the whole workspace.
     pub fn names_a_file(&self, relative: &str) -> bool {
@@ -1073,9 +1078,12 @@ impl Workspace {
     /// path names a file at all is [`Workspace::names_a_file`], which is settled before this is
     /// reached.
     ///
-    /// The label is the one a read of a file nobody vouched for produces, which is the only kind
-    /// of file this is reached for. Taking it from [`read_label`] rather than from the map means
-    /// nothing here can raise it.
+    /// The label is the one a read of a file nobody vouched for produces, taken from
+    /// [`read_label`] rather than from the map so that nothing here can raise it. A file a person
+    /// did vouch for is therefore carried more pessimistically than the map would have it, which
+    /// costs nothing: no caller decides anything from this label. A write's pre-image is withheld
+    /// from the credential scan on the map's answer about the path, asked separately, and never
+    /// on what this label says.
     pub fn peek_labelled_for_review(&self, relative: &str) -> Labelled<String> {
         Labelled::new(
             self.peek_for_review(relative).unwrap_or_default(),
@@ -1086,9 +1094,9 @@ impl Workspace {
     /// How long ago a workspace file was last written, for telling a reviewer what they are
     /// about to lose.
     ///
-    /// Outside the gates for the same reason as [`Workspace::peek_for_review`]: it is read on
-    /// the user's behalf for something shown to them, and never handed to the model. `None` when
-    /// there is no such file, or when the filesystem will not say.
+    /// A `stat` and nothing else, so it reads no byte of the file and needs no gate: it is
+    /// answered on the user's behalf for something shown to them, and never handed to the model.
+    /// `None` when there is no such file, or when the filesystem will not say.
     pub fn age_of(&self, relative: &str) -> Option<std::time::Duration> {
         let resolved = self.resolve(relative).ok()?;
         let modified = std::fs::metadata(resolved).ok()?.modified().ok()?;
@@ -1412,28 +1420,24 @@ pub fn read_label() -> Label {
     Label::untrusted_private()
 }
 
-/// Put a peek's label on bytes already peeked.
+/// What a write is compared against: the peek it already took, where there is a file to replace.
 ///
-/// [`Workspace::peek_labelled_for_review`] reads and labels in one step, which suits a caller
-/// that wants nothing but the labelled value. A write wants both: the same bytes go to the
-/// credential scan and into the question, and they have to be the same bytes, so the read
-/// happens once and the result is labelled here. Two reads of a file something else may be
-/// writing can disagree, and then the diff somebody approves is of a version that never was.
-///
-/// A file that is there gets [`read_label`]'s label, for the reason it is there: taking one from
-/// the trust map would let this raise it. A peek at a path somebody vouched for therefore comes
-/// back understated rather than wrong, and understated is the direction that costs nothing,
-/// since the only things a labelled peek can be used for are a reshape inside the kernel and a
-/// release to a screen.
+/// A write peeks once, with [`Workspace::peek_labelled_for_review`], and the same bytes go to the
+/// credential scan, into the comparison and onto the screen. They have to be the same bytes, so
+/// they are passed here rather than read a second time. Two reads of a file something else may
+/// be writing can disagree, and then the diff somebody approves is of a version that never was.
 ///
 /// Nothing there is a different answer, not a quieter one. There is no content, so there is no
 /// provenance to be careful about and nothing for a taint to carry: a comparison against an
 /// absent file is a comparison against the empty string, and calling that untrusted would make
-/// every new file's change note read as though somebody else had written half of it.
-pub fn peeked_for_review(text: Option<String>) -> Labelled<String> {
-    match text {
-        Some(text) => Labelled::new(text, read_label()),
-        None => Labelled::trusted(String::new()),
+/// every new file's change note read as though somebody else had written half of it. Whether
+/// there is a file is `replaces`, from [`Workspace::names_a_file`], and never the peek: a peek
+/// reports a file it could not decode as text the same way it reports one that is not there.
+pub fn peeked_for_review(peeked: &Labelled<String>, replaces: bool) -> Labelled<String> {
+    if replaces {
+        peeked.clone()
+    } else {
+        Labelled::trusted(String::new())
     }
 }
 

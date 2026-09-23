@@ -3268,23 +3268,28 @@ fn write_file<S: Sink, C: Confirmer>(
     };
     let body_label = body.label();
 
-    let (existing, existing_trusted, approved_revision) =
+    // What the file holds now, carried rather than read: the bytes of a file nobody vouched for
+    // are untrusted content, and a driver holding them as a bare `String` is what LABEL-4 stops.
+    // Whether there is a file here at all is a separate question, answered from the path and
+    // `stat`, because the labelled peek cannot say: it reports a file it could not decode as
+    // text the same way it reports one that is not there.
+    let (existing, replaces, existing_trusted, approved_revision) =
         policy.capture_files(|policy, capture| {
             let key = workspace.trust_key(&proposed_path);
             (
-                workspace.peek_for_review(&proposed_path),
+                workspace.peek_labelled_for_review(&proposed_path),
+                workspace.names_a_file(&proposed_path),
                 !policy.read_is_quarantined(&key),
                 capture.revision_of(&key),
             )
         });
-    // The same bytes, with a label on, so the comparison below can be made inside the kernel.
-    // Labelled from the one peek rather than read a second time: two reads of a file somebody
-    // else may be writing can disagree, and then the diff a person approves is of a version
-    // that never existed.
-    let replaced = crate::workspace::peeked_for_review(existing.clone());
+    // The same bytes, so the comparison below can be made inside the kernel. Taken from the one
+    // peek rather than read a second time: two reads of a file somebody else may be writing can
+    // disagree, and then the diff a person approves is of a version that never existed.
+    let replaced = crate::workspace::peeked_for_review(&existing, replaces);
     // Read before the write, since afterwards the age is the age of this write.
     let replaced_age = workspace.age_of(&proposed_path);
-    let intent = if existing.is_some() {
+    let intent = if replaces {
         Intent::Overwrite
     } else {
         Intent::Create
@@ -3309,10 +3314,15 @@ fn write_file<S: Sink, C: Confirmer>(
     // deleted afterwards has still held the secret, and whatever was watching the directory has
     // still seen it. Asked before the approval prompt for a smaller reason: a person should not be
     // shown a diff to approve that is going to be refused whatever they answer.
+    //
+    // The pre-image goes to the scan still labelled, and the scan reads it: the policy layer is
+    // the only part of this program that may. Whether it goes at all is decided from the trust
+    // map and not from the label, which is pessimistic here by construction: prior bytes a
+    // sibling effect left untrusted must not excuse a credential in this body.
     let scanned = policy.scan_a_write(
         "write_file",
         &shown_path,
-        existing.as_deref().filter(|_| existing_trusted),
+        (replaces && existing_trusted).then_some(&existing),
         &body,
     );
     if !scanned.refused().is_empty() {
@@ -3340,9 +3350,21 @@ fn write_file<S: Sink, C: Confirmer>(
             let proof = policy.authorise_display_release("proposed write");
             body.clone().declassify(&proof)
         };
+        // The file this replaces, released for the same screen and for the same reason: the
+        // reviewer sees what they are about to lose, and nothing else reads it. Nothing is
+        // released where there is no file to replace.
+        //
+        // A file that is there but is not text is released too, empty, because whether the peek
+        // found anything is a question about the file's own bytes and this is the one place that
+        // may not ask it. What the reviewer is shown of such a file is as empty as what is
+        // released, so the trail and the screen say the same thing.
+        let existing = replaces.then(|| {
+            let proof = policy.authorise_display_release("the file a write replaces");
+            existing.declassify(&proof)
+        });
         let request = WriteRequest {
             intent,
-            existing: existing.clone(),
+            existing,
             path: proposed_path.clone(),
             contents: shown,
             diff: reviewed.diff.clone(),
@@ -3490,7 +3512,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     // an edit is a write of the file with a passage swapped, and a secret pasted into a passage
     // lands in the tree exactly as one written whole does. The pre-image here is the text the
     // passage was located in, which the edit already read.
-    let scanned = policy.scan_a_write("edit_file", &shown_path, Some(&current), &body);
+    let scanned = policy.scan_a_write("edit_file", &shown_path, Some(&source), &body);
     if !scanned.refused().is_empty() {
         return credential_refusal(&shown_path, &scanned);
     }
