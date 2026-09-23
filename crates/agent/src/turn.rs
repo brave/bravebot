@@ -823,12 +823,14 @@ impl Task {
         self
     }
 
-    /// Say that the agent composed this prompt, and what for.
+    /// Say that this prompt was composed rather than typed, and what for.
     ///
     /// Only a caller that composed the prompt itself may say so, which is why this is a builder on
-    /// the task rather than anything a request can carry: a front end able to set it would be able
-    /// to have a transcript draw the interface's own rows about a line a person typed.
-    pub fn composed_by_the_agent(mut self, composed: Composed) -> Self {
+    /// the task rather than anything a request can carry: a caller able to set an arbitrary tag
+    /// would be able to have a transcript draw the interface's own rows about a line a person
+    /// typed. A front end reaching this through the bridge may name its own tag and none of the
+    /// agent's.
+    pub fn composed_rather_than_typed(mut self, composed: Composed) -> Self {
         self.composed = Some(composed);
         self
     }

@@ -25,7 +25,6 @@ import type {
   VetRequest,
 } from '../shared/protocol'
 import type { ExportTurn } from '../shared/export'
-import { CONSOLIDATION_MARK } from '../shared/bots'
 
 export type Entry = (
   | { kind: 'turn-start'; id: string; number: number }
@@ -51,8 +50,11 @@ export type Entry = (
    * A turn this app sent on the bot's behalf, drawn as the house-keeping it is.
    *
    * It carries no text, because there is no version of showing the words that is an improvement:
-   * the prompt is boilerplate this file composed, the reply that follows says what came of it, and
-   * a bubble full of the app talking to itself would push the conversation off the screen.
+   * the prompt is boilerplate the main process composed, the reply that follows says what came of
+   * it, and a bubble full of the app talking to itself would push the conversation off the screen.
+   *
+   * Which turns those are comes from the `consolidation` tag on the record, written by the send
+   * that sent them. Nothing here reads a prompt's words to decide.
    */
   | { kind: 'consolidation'; id: string }
   /** A tool call. `landing` arrives after the call finishes, so it fills in late. */
@@ -114,37 +116,33 @@ const nextId = (): string => `e${++counter}`
 /**
  * What a stored session looked like, as entries.
  *
- * A message the agent composed arrives tagged, so no row here is chosen by reading a message's
- * prose. See `docs/phase-0-rpc-protocol.md` §7.1.
+ * A message somebody composed rather than typed arrives tagged, this app's own among them, so no
+ * row here is chosen by reading a message's prose.
  */
 export function fromSaid(said: Said[]): Entry[] {
   return said.map((entry) => {
     switch (entry.kind) {
-      case 'user': {
-        // This app composed the mark, so the prefix is exact by construction rather than a guess
-        // at somebody else's wording, and a consolidation drawn as a prompt would say a person
-        // asked for it when nobody did. The residual hazard is somebody typing the mark into the
-        // composer themselves, and what they get for it is their own prompt drawn as the
-        // house-keeping they were imitating: a row about this window, which this window wrote.
-        // Nothing the agent composed is read this way, because the record says which those are.
-        if (entry.text.startsWith(CONSOLIDATION_MARK)) {
-          return { kind: 'consolidation', id: nextId() } as const
-        }
+      // Untagged, so somebody typed it, whatever it says. A prompt whose first line reads like
+      // one of the rows below is still drawn with its words and its ordinal: the ordinal is what
+      // a fork cuts on, and a prompt drawn as one of the interface's own rows loses both.
+      case 'user':
         return { kind: 'user', id: nextId(), text: entry.text, prompt: entry.prompt } as const
-      }
       case 'assistant':
         return { kind: 'assistant', id: nextId(), text: entry.text } as const
       case 'tool':
         // The record does not store what came of a call, so this must not be drawn as
         // though it had an outcome. See docs/phase-0-rpc-protocol.md §7.1.
         return { kind: 'replayed-tool', id: nextId(), text: entry.text } as const
-      // The two the agent composed. Drawn from the fields rather than from any text, which is the
-      // whole point of the tags: the words of an attached message are the file's own, so a window
-      // that read them back to decide what row to draw would let whoever wrote the file pick.
+      // The two the agent composed, and the one this app composes. Drawn from the fields rather
+      // than from any text, which is the whole point of the tags: the words of an attached
+      // message are the file's own, so a window that read them back to decide what row to draw
+      // would let whoever wrote the file pick.
       case 'attached':
         return { kind: 'attached', id: nextId(), path: entry.path } as const
       case 'watch':
         return watchFired(entry.number, entry.path)
+      case 'consolidation':
+        return { kind: 'consolidation', id: nextId() } as const
       default: {
         // A tag from a newer agent than this window. Drawn as a plain message and never as one of
         // the interface's own rows: those rows assert something about the conversation that this

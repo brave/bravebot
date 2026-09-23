@@ -442,7 +442,7 @@ fn a_prompt_the_agent_composed_is_recorded_as_one() {
         &workspace,
         &mut conversation,
         trusting_the_workspace(),
-        Task::new(fired).composed_by_the_agent(watch.clone()),
+        Task::new(fired).composed_rather_than_typed(watch.clone()),
     )
     .expect("turn runs");
 

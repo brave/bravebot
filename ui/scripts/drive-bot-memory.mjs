@@ -83,13 +83,14 @@ putKey('bots', withoutMine())
 putKey('view', undefined)
 
 /**
- * The first line of a turn this app sends on a bot's behalf.
+ * A first line that reads like house-keeping this app sent itself.
  *
- * Copied rather than imported, because a driver launches the built app and cannot reach into its
- * modules. It must match `CONSOLIDATION_MARK` in `src/shared/bots.ts`, and the check below is what
- * says so out loud when it stops matching.
+ * A sentence anybody can type, and the whole point of typing it here is that it buys nothing:
+ * what makes a turn house-keeping is the `composed` tag the send carries, not anything in the
+ * prompt, so this is a prompt somebody typed and is drawn as one in both places below. A driver
+ * cannot reach the app's modules, so the sentence is written out.
  */
-const MARK = '[bravebot-ui] Keeping your memory current.'
+const LOOKALIKE = '[bravebot-ui] Keeping your memory current.'
 
 /** Wait for a turn to finish, or for the screen that says why it cannot. */
 async function settle(page, seconds = 90) {
@@ -179,11 +180,12 @@ putKey(
   ),
 )
 
-// The prompt is the one this app would have sent itself. Ordinary text as far as the composer is
-// concerned, which is the point: what makes it a consolidation is the mark it opens with, and the
-// reopened transcript below is where that is read back.
+// The prompt this app would compose, with a sentence in front of it that reads like the app
+// talking to itself. Ordinary text as far as everything downstream is concerned, which is the
+// point being driven: a person typed it, so a person typed it, and the reopened transcript below
+// is where that has to still be true.
 const prompt = [
-  MARK,
+  LOOKALIKE,
   '',
   `Look back over this conversation and bring \`.bravebot-ui/bots/${MINE}.md\` up to date: write`,
   'down the name of the file you just mentioned, and nothing else.',
@@ -206,14 +208,11 @@ console.log('  ..   sent the second turn; waiting…')
 const second = await settle(page)
 check(second === 'done', `the second turn finished (${second})`)
 
-// Drawn as a bubble live and as house-keeping once reopened, because this one *was* typed: the
-// live transcript draws what the composer sent, and only the record is matched on the mark. That
-// is the known cost of recognising a turn by its first line, and it is charged only to somebody
-// who types a bracketed sentence out of this app's source. A consolidation the app actually sent
-// never enters the composer, so it is drawn the same way in both places.
+// Drawn as a bubble, because somebody typed it. The reopened transcript below is the half that
+// used to differ.
 check(
-  (await page.locator('.bubble.user').last().textContent())?.includes(MARK) === true,
-  'typing the mark oneself still draws a bubble live — the record is what the match is for',
+  (await page.locator('.bubble.user').last().textContent())?.includes(LOOKALIKE) === true,
+  'a prompt that reads like house-keeping is drawn as the prompt it is',
 )
 await page.screenshot({ path: '/tmp/bravebot-ui/26-bot-memory-nudged.png' })
 
@@ -243,18 +242,26 @@ await page2
   .click()
 await page2.waitForTimeout(2500)
 
+// LAYER-6. Nothing in this session was composed by the app, so nothing in it is drawn as the row
+// the app writes about itself, however the prompts read. A build deciding this from a message's
+// first line draws that row here, with the words somebody typed left out of the transcript and
+// the ordinal a fork of them cuts on gone with them.
 check(
-  (await page2.locator('.consolidation').count()) === 1,
-  'a reopened transcript draws the consolidation as house-keeping, not as a prompt',
+  (await page2.locator('.consolidation').count()) === 0,
+  'a reopened transcript draws no house-keeping row for a turn the app did not send',
 )
 const bubbles = await page2.locator('.bubble.user').allTextContents()
 check(
-  !bubbles.some((text) => text.includes(MARK)),
-  'and draws no prompt bubble for it — nobody typed it, and saying they did is the lie this avoids',
+  bubbles.some((text) => text.includes(LOOKALIKE)),
+  'and draws the prompt that reads like one with the words somebody typed',
 )
 check(
   bubbles.some((text) => text.includes('Name one file')),
-  'while what somebody did type is still drawn as theirs',
+  'while what somebody else typed is still drawn as theirs',
+)
+check(
+  (await page2.locator('.bubble.user .fork-here').count()) === bubbles.length,
+  'every one of them offers the cut that is taken on its ordinal',
 )
 await page2.screenshot({ path: '/tmp/bravebot-ui/27-bot-memory-replayed.png' })
 

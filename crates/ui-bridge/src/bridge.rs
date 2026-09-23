@@ -519,15 +519,21 @@ impl Bridge {
     /// began, because a turn takes as long as a model does and a front-end that blocked
     /// on it would show nothing until it ended.
     fn send_turn(&mut self, request: &Request) -> Result<Value, Failure> {
-        self.start_turn(request, None)
+        // The one tag a request may claim, and every other word refused. A front end composes
+        // prompts of its own, so it has to be able to say which those are or its transcript is
+        // back to recognising them by their wording; what it may not do is claim one of the
+        // agent's, which is [`wire::composed`]'s whole job.
+        let composed = crate::wire::composed(request.params.get("composed"))?;
+        self.start_turn(request, composed)
     }
 
     /// The same, for a turn this crate asked for and knows what it composed.
     ///
-    /// The tag is a parameter here and not a field of the request, and that is the point: a front
-    /// end able to say a prompt was composed by the agent would be a front end able to have a
-    /// transcript draw the interface's own rows around a line a person typed, which is the thing
-    /// the tag exists to stop anyone doing.
+    /// The agent's own tags are a parameter here and not a field of the request, and that is the
+    /// point: a front end able to say the *agent* composed a prompt would be a front end able to
+    /// have a transcript draw a file's row, or a watch's, around a line a person typed, which is
+    /// the thing the tag exists to stop anyone doing. The tag for a prompt the front end composed
+    /// itself is a different claim, and [`wire::composed`] is where a request may make it.
     fn start_turn(
         &mut self,
         request: &Request,
@@ -1103,7 +1109,7 @@ struct Work {
     model: Option<String>,
     workspace: Workspace,
     prompt: String,
-    /// What the agent composed this prompt for, where nobody typed it.
+    /// What this prompt was composed for, where nobody typed it.
     composed: Option<bravebot_agent::conversation::Composed>,
     files: Vec<String>,
     dropped: Vec<String>,
@@ -1173,7 +1179,7 @@ fn work(work: Work) {
         .with_model(model)
         .with_attribution(attribution);
     if let Some(composed) = composed {
-        task = task.composed_by_the_agent(composed);
+        task = task.composed_rather_than_typed(composed);
     }
     for file in &files {
         task = task.with_file(file);

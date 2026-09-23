@@ -156,11 +156,12 @@ is meant to trust, an inch above them.
 <a id="LAYER-6"></a>
 ### LAYER-6: what a message is comes from the record, not from its words
 
-A conversation holds messages the agent composed rather than a person typing them: a file somebody
-named, put in front of the planner as a user-role message, and a watch that fired while no turn was
-running to notice it. Each is recorded with a tag saying which it is, the tag rides beside the
-message rather than inside it so that no part of it reaches a backend, and a surface drawing the
-conversation back decides what to draw from the tag. Reading the words to decide instead is a
+A conversation holds messages composed rather than typed: a file somebody named, put in front of
+the planner as a user-role message, a watch that fired while no turn was running to notice it, and
+a prompt a front end sent on its own account rather than on anybody's instruction. Each is recorded
+with a tag saying which it is, the tag rides beside the message rather than inside it so that no
+part of it reaches a backend, and a surface drawing the conversation back decides what to draw from
+the tag. Reading the words to decide instead is a
 violation, even where those words are the agent's own. A surface whose transcript has no row of its
 own for a tag draws the message plainly, which is why the record reports the words beside the tag;
 what crosses to a surface in another process is the tag alone, since a client offered both is offered
@@ -176,6 +177,11 @@ wrong place or refuses a cut that was asked for. A tag the composer writes leave
 composer, which is the discipline [labels.md](labels.md)'s transport already follows everywhere else:
 what crosses is the discriminant, never prose for a reader to parse.
 
+The tags the agent writes are its account of what a turn did, so a front end may name the tag for
+a prompt it composed itself and may name none of the agent's: one that could would be choosing the
+row a line a person typed is drawn as, by another route. A request naming a tag it may not have is
+refused rather than sent untagged, since an untagged prompt is drawn as one somebody typed.
+
 A record written before the tag existed holds a bare message where this holds a message and a tag,
 and reads as a message nobody composed, which is what it was. A tag a surface draws no row of its own
 for, because the build does not recognise it or because that transcript has no such row, is drawn as
@@ -190,10 +196,12 @@ turn it is the context that turn worked from.
 `verified-by: bravebot_agent::conversation::the_tag_is_not_part_of_what_the_planner_is_sent`
 `verified-by: bravebot_agent::conversation::a_record_written_before_the_tag_still_reads`
 `verified-by: bravebot_ui_bridge::wire::a_message_the_agent_composed_crosses_as_a_tag_and_no_prose`
+`verified-by: bravebot_ui_bridge::wire::a_prompt_a_front_end_composed_crosses_as_a_tag_and_no_prose`
+`verified-by: bravebot_ui_bridge::wire::a_front_end_may_name_its_own_tag_and_none_of_the_agents`
 `verified-by: bravebot_tui::state::a_replayed_composed_message_is_drawn_as_the_message_it_was`
 `verified-by: bravebot_ui_bridge::fork::a_file_the_agent_put_in_front_of_the_planner_is_not_a_prompt`
 `verified-by: bravebot_ui_bridge::fork::a_prompt_that_reads_like_a_composed_message_is_still_where_the_cut_lands`
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which loads the real transcript module and asserts that a tagged message is drawn from its fields, that a typed prompt imitating one is drawn as the prompt somebody typed, that a tag the build does not know is quoted rather than dropped, and that the two places counting prompts count the same list; make check-ui and the Front end CI job both run it, while the governs list above holds the file's existence to make check-spec)`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which loads the real transcript module and asserts that a tagged message is drawn from its fields, that a typed prompt imitating one, the app's own house-keeping included, is drawn as the prompt somebody typed and keeps the ordinal a fork of it cuts on, that a tag the build does not know is quoted rather than dropped, and that the two places counting prompts count the same list; make check-ui and the Front end CI job both run it, while the governs list above holds the file's existence to make check-spec)`
 
 ## Open questions
 

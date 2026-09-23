@@ -255,6 +255,67 @@ fn a_message_the_agent_composed_crosses_as_a_tag_and_no_prose() {
     assert_eq!(keys, vec!["kind", "number", "path"]);
 }
 
+/// LAYER-6: the tag this app writes for a prompt it composed itself crosses the same way, and the
+/// prompt is not one of the places a fork may be taken.
+///
+/// The prose is withheld for the same reason as above and a second one: what that prompt says is
+/// wording this app chose, so a client offered it could match on the wording instead of the tag,
+/// which is the thing being removed. Its ordinal is withheld because a consolidation is not a
+/// prompt somebody typed, and numbering it would put every later prompt one out of step with
+/// `fork::cut`, which skips it from the record.
+#[test]
+fn a_prompt_a_front_end_composed_crosses_as_a_tag_and_no_prose() {
+    let said = wire::recounted(&[
+        Said::User("first".into()),
+        Said::Composed {
+            why: Composed::Consolidation,
+            text: "Look back over this conversation and bring the memory up to date".into(),
+        },
+        Said::User("second".into()),
+    ]);
+    assert_eq!(said[1]["kind"], json!("consolidation"));
+    let keys: Vec<&String> = said[1].as_object().expect("an object").keys().collect();
+    assert_eq!(keys, vec!["kind"], "no prose and no ordinal to read back");
+    assert_eq!(said[0]["prompt"], json!(0));
+    assert_eq!(
+        said[2]["prompt"],
+        json!(1),
+        "the consolidation is not one of the places a fork may be taken, so it shifts nothing",
+    );
+}
+
+/// LAYER-6: a request may say the front end composed its own prompt, and may not say the agent
+/// composed one.
+///
+/// `attached` and `watch` are the agent's account of what a turn did. A front end able to name
+/// either could have a transcript draw a file's row, or a watch's, around a line a person typed,
+/// which is the escape the tags close one level up from chrome. Refused rather than ignored: a
+/// turn that quietly went out untagged is one drawn as a prompt nobody typed.
+#[test]
+fn a_front_end_may_name_its_own_tag_and_none_of_the_agents() {
+    assert_eq!(wire::composed(None).expect("absent is allowed"), None);
+    assert_eq!(
+        wire::composed(Some(&Value::Null)).expect("null is allowed"),
+        None
+    );
+    assert_eq!(
+        wire::composed(Some(&json!("consolidation"))).expect("the one word a request may say"),
+        Some(Composed::Consolidation)
+    );
+    for refused in [
+        json!("attached"),
+        json!("watch"),
+        json!("user"),
+        json!(true),
+        json!({"kind": "attached", "path": "readme.md"}),
+    ] {
+        assert!(
+            wire::composed(Some(&refused)).is_err(),
+            "a front end may not claim {refused}",
+        );
+    }
+}
+
 #[test]
 fn a_todo_row_sends_its_status_not_its_glyph() {
     let value = wire::row(&Row {
