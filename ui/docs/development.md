@@ -104,8 +104,8 @@ than wait out its launch timeout.
 
 Every macOS bundle carries the bundle id `com.brave.bravebot` and the icon `build/icon.icns`. macOS
 keys privacy grants and keychain items on the bundle id, so it does not change between releases.
-The icon is the About mascot on a macOS tile, drawn in `build/icon.svg`; after changing the
-drawing, remake the icon from it:
+The icon is the About mascot in Brave orange on a macOS tile, drawn in `build/icon.svg`; after
+changing the drawing, remake the icon from it:
 
 ```bash
 inkscape build/icon.svg -w 1024 -h 1024 -o /tmp/icon-1024.png
