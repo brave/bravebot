@@ -3708,13 +3708,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     fn plan_lines(&self, plan: &crate::command::Plan) -> Vec<String> {
         plan.steps()
             .iter()
-            .map(|step| {
-                std::iter::once(step.program.as_str())
-                    .chain(step.args.iter().map(String::as_str))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
+            .map(|step| rule_line(&step.program, &step.args))
             .collect()
+    }
+
+    /// Refuse one step's command line a `deny` rule covers, before its program is looked for.
+    ///
+    /// Called by the compiler with a step's name and argv as soon as it has both and before it
+    /// asks `$PATH` what the name means, which is the position PERM-7 puts the rules in: the
+    /// refusal comes before the program is looked for. A denied line is then refused by the rule
+    /// whether or not the program is installed, rather than being reported as a name nothing on
+    /// `$PATH` matches, which is an answer about this machine's software in place of the one the
+    /// person wrote down, and one carrying none of the "do not retry" the clause owes the planner.
+    ///
+    /// The name and the argv rather than a line, so that the rendering a rule is matched against
+    /// is built in one place and a caller cannot arrive with a different spelling of the same
+    /// step.
+    pub fn before_command_rules(&mut self, program: &str, args: &[String]) -> Gated<()> {
+        let line = rule_line(program, args);
+        let decision = self.permissions.for_command(&line);
+        self.refuse_if_denied("run", decision, &line)
     }
 
     /// Refuse a plan a `deny` rule covers, before anything is started.
@@ -3725,6 +3738,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// A redirection is a write and takes the rules a write takes, and a `<` is a read and takes
     /// the rules a read takes. A rule restricting a path is a statement about the path, so it
     /// cannot depend on which tool reached it.
+    ///
+    /// The command lines have already been through [`Policy::before_command_rules`] where the
+    /// plan came from the compiler, which is the only place one is built from a planner's line.
+    /// They are consulted again here, because a plan reaching this gate by any other route has to
+    /// be ruled on too, and the second answer is the same one: the rules are a function of the
+    /// line and nothing between the two calls can change it.
     pub fn before_plan_rules(&mut self, plan: &crate::command::Plan) -> Gated<()> {
         for line in &self.plan_lines(plan) {
             let decision = self.permissions.for_command(line);
@@ -4719,6 +4738,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn finish(self) -> bool {
         self.denials == 0
     }
+}
+
+/// One step as the line a rule is matched against.
+///
+/// The one place that rendering is built, so the answer cannot depend on which gate asked:
+/// [`Policy::before_command_rules`] has the name and the argv before a step exists, and
+/// `plan_lines` has a compiled plan, and a rule means the same thing at both.
+fn rule_line(program: &str, args: &[String]) -> String {
+    std::iter::once(program)
+        .chain(args.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Whether a program was written as a path rather than as a name to look up.
