@@ -479,6 +479,60 @@ fn a_picture_pasted_into_the_task_reaches_the_planner() {
     }
 }
 
+/// A screenshot of the thing to be built is the task whichever gesture put it there, so a dropped
+/// one reaches the planner beside a pasted one. Both calls carry it, for the reason a pasted one is
+/// carried by both: the plan comes out of the second.
+///
+/// What keeps this from being observed context is not that nothing was read. It is where the read
+/// happened: before the planner's policy existed, from a path a person's gesture fixed, so the plan
+/// is still fixed before anything the plan could look at. A read done inside that policy would be a
+/// planner that reads, which is what the mode exists to rule out.
+#[test]
+fn a_picture_dropped_onto_the_task_reaches_the_planner() {
+    let scratch = Scratch::new("dropped-task");
+    std::fs::write(scratch.path.join("a.md"), "the colours").unwrap();
+    std::fs::write(scratch.path.join("shot.png"), [0x89u8, 0x50]).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+            {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let task = Task::new("make the screen in [Image #1] use the colours in a.md")
+        .with_attachment("shot.png", "image/png");
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        skipping_permissions!(),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new(&scratch.path),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+
+    let shaping = received.recv().expect("the shape request");
+    let planning = received.recv().expect("the fit request");
+    for body in [&shaping, &planning] {
+        assert!(
+            body.contains("make the screen in [Image #1] use the colours in a.md"),
+            "the task was lost: {body}"
+        );
+        assert!(
+            body.contains("data:image/png;base64,iVA="),
+            "the dropped picture did not reach the planner: {body}"
+        );
+    }
+}
+
 /// A picture is an input, and the record says what arrived however it arrived. A plan is the one
 /// place a picture is read by something that cannot be asked about it afterwards, so the trail is
 /// the only account of what the plan was made from.

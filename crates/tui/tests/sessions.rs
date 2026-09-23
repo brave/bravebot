@@ -3578,7 +3578,7 @@ mod preserved_history {
         session.complete("done", vec![], 0);
         let before = session.history.entries().to_vec();
         let prompt = session
-            .start_loop(loop_request("1m check again"), Vec::new())
+            .start_loop(loop_request("1m check again"), Vec::new(), Vec::new())
             .unwrap();
         session.stopped(Some(0));
         session.restore(prompt);
@@ -3599,7 +3599,7 @@ mod preserved_history {
             None,
         ));
         let prompt = session
-            .start_loop(loop_request("1m check again"), Vec::new())
+            .start_loop(loop_request("1m check again"), Vec::new(), Vec::new())
             .unwrap();
         session.stopped(Some(0));
         session.restore(prompt);
