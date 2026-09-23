@@ -840,7 +840,7 @@ mod tests {
                 .map(|tool| tool.function.name.clone())
                 .collect();
 
-            if granted.contains(Capability::LanguageServer) {
+            if granted.contains(&Capability::LanguageServer) {
                 assert!(
                     offered.iter().any(|tool| tool == "lsp"),
                     "{name} holds the capability and must be offered the tool"

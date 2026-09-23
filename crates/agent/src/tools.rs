@@ -946,7 +946,7 @@ pub fn for_delegate(
         if NEVER_DELEGATED.contains(&name) {
             return false;
         }
-        if !gating_capability(name).is_some_and(|needs| capabilities.contains(needs)) {
+        if !gating_capability(name).is_some_and(|needs| capabilities.contains(&needs)) {
             return false;
         }
         // Applied after the capability rather than instead of it. A definition subtracts from
@@ -6234,7 +6234,7 @@ mod tests {
             let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
             let capabilities = kind.capabilities();
             assert!(
-                capabilities.contains(bravebot_core::capability::Capability::WebFetch),
+                capabilities.contains(&bravebot_core::capability::Capability::WebFetch),
                 "a {name} could not have made its own requests"
             );
             let offered: Vec<String> = for_delegate(&capabilities, None)

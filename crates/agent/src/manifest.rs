@@ -1271,9 +1271,9 @@ fn run_step<S: Sink, C: Confirmer>(
     step: &Step,
     entry: &'static Advertised,
 ) -> Result<Done, String> {
-    if let Some(capability) = entry.gate {
+    if let Some(capability) = &entry.gate {
         policy
-            .before_capability(capability)
+            .before_capability(capability.clone())
             .map_err(|d| d.to_string())?;
     }
 

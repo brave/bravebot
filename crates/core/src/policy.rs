@@ -18,7 +18,7 @@
 //! drifts as untrusted content accumulates.
 
 use crate::ask::{self, Answer};
-use crate::capability::{Capability, CapabilitySet};
+use crate::capability::{Capability, CapabilitySet, ServerAlias};
 use crate::credentials::Scanned;
 use crate::event::{Event, Principle, Role, Sink};
 use crate::label::{Integrity, Label};
@@ -428,7 +428,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Check that a capability was granted before it is exercised.
     pub fn before_capability(&mut self, capability: Capability) -> Gated<()> {
-        if !self.capabilities.contains(capability) {
+        if !self.capabilities.contains(&capability) {
             return Err(self.deny(
                 "capability",
                 Principle::Capability,
@@ -437,6 +437,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
         self.allow("capability", format!("{capability} granted"));
         Ok(())
+    }
+
+    /// Withdraw the grant to call tools on one MCP server, for the rest of this run.
+    ///
+    /// Takes effect at the next call rather than at the next session, because a grant is
+    /// the thing [`Policy::before_capability`] asks about and not a property the session
+    /// recorded when it started. Nothing here grants: the only direction this moves is
+    /// narrower, so a run still cannot acquire a capability partway through.
+    ///
+    /// Says whether a grant was there to withdraw, which is how a caller tells an alias
+    /// nobody had granted anything about from one it has just dropped.
+    pub fn revoke_mcp_call(&mut self, alias: &ServerAlias) -> bool {
+        let withdrawn = self.capabilities.revoke_mcp_call(alias);
+        if withdrawn {
+            self.allow(
+                "capability",
+                format!("mcp_call:{alias} withdrawn, from the next call"),
+            );
+        }
+        withdrawn
     }
 
     /// Check a network egress before it happens. Called for the initial URL *and* for
@@ -2416,12 +2436,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let wanted = selected.capabilities();
         let held: CapabilitySet = wanted
             .iter()
-            .filter(|capability| self.capabilities.contains(*capability))
+            .filter(|capability| self.capabilities.contains(capability))
             .collect();
         let dropped: Vec<&str> = wanted
             .iter()
-            .filter(|capability| !self.capabilities.contains(*capability))
-            .map(Capability::as_str)
+            .filter(|capability| !self.capabilities.contains(capability))
+            .map(|capability| capability.as_str())
             .collect();
         if !dropped.is_empty() {
             self.allow(
@@ -5869,7 +5889,7 @@ five
             &mut sink,
         )
         .unwrap();
-        for capability in Capability::ALL {
+        for capability in Capability::all() {
             // Written out rather than read from the capability: a match that asked the code under
             // test what to expect would assert nothing.
             let expected = match capability {
@@ -5878,20 +5898,27 @@ five
                 Capability::ShellExec => Some(Label::untrusted_private()),
                 Capability::LanguageServer => Some(Label::untrusted_private()),
                 Capability::WebFetch => Some(Label::untrusted_public()),
-                Capability::McpCall => Some(Label::untrusted_public()),
+                // Whichever server: what a call to one produces is a property of the
+                // protocol, and the alias decides who may make the call rather than what
+                // the answer is labelled.
+                Capability::McpCall(_) => Some(Label::untrusted_public()),
                 Capability::FileWrite => None,
                 Capability::GitWrite => None,
             };
             match expected {
                 Some(label) => {
-                    assert_eq!(policy.observe(capability).ok(), Some(label), "{capability}");
+                    assert_eq!(
+                        policy.observe(capability.clone()).ok(),
+                        Some(label),
+                        "{capability}"
+                    );
                 }
                 // An effect observes nothing, so there is no label to hand back. The refusal has to
                 // say that, since a refusal for any other reason would leave this passing while the
                 // question went unanswered.
                 None => {
                     let denial = policy
-                        .observe(capability)
+                        .observe(capability.clone())
                         .expect_err("an effect has no observation to label");
                     assert_eq!(denial.principle, Principle::Capability, "{capability}");
                     assert!(
@@ -11083,7 +11110,7 @@ five
             assert_eq!(spec.kind(), Kind::Reader);
             assert_eq!(spec.rounds(), Kind::Reader.rounds());
             assert_eq!(spec.prompt(), "read the diff");
-            assert!(!spec.capabilities().contains(Capability::FileWrite));
+            assert!(!spec.capabilities().contains(&Capability::FileWrite));
         }
 
         /// A definition may name fewer tools than its kind reaches and never more. The narrowing
@@ -11117,8 +11144,8 @@ five
                 .expect("a resolved definition may be selected");
 
             assert_eq!(spec.tools(), Some(["read_file".to_string()].as_slice()));
-            assert!(!spec.capabilities().contains(Capability::FileWrite));
-            assert!(!spec.capabilities().contains(Capability::ShellExec));
+            assert!(!spec.capabilities().contains(&Capability::FileWrite));
+            assert!(!spec.capabilities().contains(&Capability::ShellExec));
             assert!(
                 sink.events().iter().any(|event| matches!(
                     event,
@@ -11161,13 +11188,13 @@ five
                 .before_delegate(DelegateId::nth(1), &argument("fixer"), &argument("fix it"))
                 .expect("a narrow run may still delegate");
 
-            assert!(spec.capabilities().contains(Capability::FileRead));
+            assert!(spec.capabilities().contains(&Capability::FileRead));
             assert!(
-                !spec.capabilities().contains(Capability::FileWrite),
+                !spec.capabilities().contains(&Capability::FileWrite),
                 "a definition handed writing to a run that could not write"
             );
             assert!(
-                !spec.capabilities().contains(Capability::ShellExec),
+                !spec.capabilities().contains(&Capability::ShellExec),
                 "a definition handed running to a run that could not run"
             );
         }
@@ -11190,13 +11217,13 @@ five
                 .before_delegate(DelegateId::nth(1), &argument("worker"), &argument("fix it"))
                 .expect("a narrow run may still delegate");
 
-            assert!(spec.capabilities().contains(Capability::FileRead));
+            assert!(spec.capabilities().contains(&Capability::FileRead));
             assert!(
-                !spec.capabilities().contains(Capability::FileWrite),
+                !spec.capabilities().contains(&Capability::FileWrite),
                 "a delegate was handed writing by a run that could not write"
             );
             assert!(
-                !spec.capabilities().contains(Capability::ShellExec),
+                !spec.capabilities().contains(&Capability::ShellExec),
                 "a delegate was handed running by a run that could not run"
             );
         }

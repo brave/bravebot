@@ -24,8 +24,13 @@ surface that spec has none of.
 
 ## What exists today
 
-Nothing in this spec is built. `crates/mcp/` is a finished client under nine normative clauses, and
-no crate depends on it: `mcp.md` records the gap in its own front matter, `documented-by: none
+Almost nothing in this spec is built, and what there is amounts to half of one clause.
+[SERVERS-9](#SERVERS-9)'s capability names the server it is about, so the gate `crates/mcp/`
+already runs on every call asks about one declared server rather than about the protocol, and a
+grant can be withdrawn while the run is going. What would *put* a grant there is still missing, so
+a caller writing the set out itself is the only thing that grants a call today.
+
+`crates/mcp/` is a finished client under nine normative clauses, and no crate depends on it: `mcp.md` records the gap in its own front matter, `documented-by: none
 (internal: no settings key wires up a server yet, so there is nothing a reader can configure)`.
 Issue #83 is where that was written down, and it names the four things wiring needs decided first:
 where a server is declared, what a name and an argv is trusted for, how the untrusted label
@@ -33,8 +38,8 @@ where a server is declared, what a name and an argv is trusted for, how the untr
 below answers one of them.
 
 Read every clause here as a requirement on work nobody has started, not as a description of this
-program. The `verified-by: none` on each one is the honest form of that, and is what keeps a reader
-from taking the present tense as a claim about the current build.
+program. The `verified-by: none` on each one but [SERVERS-9](#SERVERS-9) is the honest form of
+that, and is what keeps a reader from taking the present tense as a claim about the current build.
 
 ## The parity target
 
@@ -408,9 +413,17 @@ thing being asked about and not a property the session recorded.
 server a widening of what the first may be asked to do, which is the opposite of what adding a
 server should mean.
 
-**Unbuilt, so nothing pins this.** McpCall is not reachable, and the capability names no alias.
+**Half built.** The capability names the alias, both transports gate on the one naming the server
+in front of them, and a grant can be withdrawn while the run is going. What is not built is
+anything that would put a grant there: no declaration exists for an alias to resolve against
+([SERVERS-1](#SERVERS-1)) and nobody is asked ([SERVERS-4](#SERVERS-4)), so a caller writing the
+set out itself is the only thing that grants a call today.
 
-`verified-by: none`
+`verified-by: bravebot_core::capability::a_grant_for_one_server_is_not_a_grant_for_another`
+`verified-by: bravebot_core::capability::withdrawing_one_grant_leaves_the_others`
+`verified-by: bravebot_mcp::stdio::a_grant_for_one_server_does_not_reach_another`
+`verified-by: bravebot_mcp::http::a_grant_for_one_server_does_not_reach_another`
+`verified-by: bravebot_mcp::stdio::a_grant_withdrawn_stops_the_next_call`
 
 <a id="SERVERS-10"></a>
 ### SERVERS-10: a variable a server needs is named in the declaration, and reaches that server alone

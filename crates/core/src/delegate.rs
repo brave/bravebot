@@ -308,7 +308,7 @@ impl Definition {
                 HELD_WHATEVER_IT_NAMED.contains(capability)
                     || tools
                         .iter()
-                        .any(|tool| reachable_by(tool) == Some(*capability))
+                        .any(|tool| reachable_by(tool).as_ref() == Some(capability))
             })
             .collect()
     }
@@ -327,7 +327,7 @@ impl Definition {
         };
         tools
             .iter()
-            .filter(|tool| !reachable_by(tool).is_some_and(|needs| held.contains(needs)))
+            .filter(|tool| !reachable_by(tool).is_some_and(|needs| held.contains(&needs)))
             .map(String::as_str)
             .collect()
     }
@@ -492,7 +492,7 @@ impl DelegateSpec {
             named
                 .iter()
                 .filter(|tool| {
-                    reachable_by(tool).is_some_and(|needs| kind.capabilities().contains(needs))
+                    reachable_by(tool).is_some_and(|needs| kind.capabilities().contains(&needs))
                 })
                 .cloned()
                 .collect()
@@ -568,7 +568,7 @@ impl DelegateSpec {
     /// The delegate as the audit trail describes it: what it is and what it holds, never the
     /// task, which can be long.
     pub fn describe(&self) -> String {
-        let held: Vec<&str> = self.capabilities.iter().map(Capability::as_str).collect();
+        let held: Vec<&str> = self.capabilities.iter().map(|c| c.as_str()).collect();
         let held = if held.is_empty() {
             "nothing".to_string()
         } else {
@@ -631,14 +631,14 @@ mod tests {
         let worker = Kind::Worker.capabilities();
 
         for capability in reader.iter() {
-            assert!(checker.contains(capability), "checker lost {capability}");
+            assert!(checker.contains(&capability), "checker lost {capability}");
         }
         for capability in checker.iter() {
-            assert!(worker.contains(capability), "worker lost {capability}");
+            assert!(worker.contains(&capability), "worker lost {capability}");
         }
-        assert!(!reader.contains(Capability::FileWrite));
-        assert!(!reader.contains(Capability::ShellExec));
-        assert!(!checker.contains(Capability::FileWrite));
+        assert!(!reader.contains(&Capability::FileWrite));
+        assert!(!reader.contains(&Capability::ShellExec));
+        assert!(!checker.contains(&Capability::FileWrite));
     }
 
     /// A planner is a model call, so every kind can reach the endpoint and no kind can reach
@@ -650,11 +650,18 @@ mod tests {
             let kind = Kind::from_name(name).expect("advertised");
             let held = kind.capabilities();
             assert!(
-                held.contains(Capability::WebFetch),
+                held.contains(&Capability::WebFetch),
                 "a {name} could not have made its own requests"
             );
-            assert!(!held.contains(Capability::McpCall), "{name}");
-            assert!(!held.contains(Capability::GitWrite), "{name}");
+            // No server, rather than no particular one: a grant names the server it is
+            // about, so asking about a single alias would leave every other one unasked.
+            assert!(
+                !held
+                    .iter()
+                    .any(|capability| matches!(capability, Capability::McpCall(_))),
+                "{name}"
+            );
+            assert!(!held.contains(&Capability::GitWrite), "{name}");
         }
     }
 
@@ -690,7 +697,7 @@ mod tests {
 
             for capability in asking_for_everything.capabilities().iter() {
                 assert!(
-                    kind.capabilities().contains(capability),
+                    kind.capabilities().contains(&capability),
                     "a {name} definition gained {capability}"
                 );
             }
@@ -712,13 +719,13 @@ mod tests {
         );
 
         let held = reading.capabilities();
-        assert!(held.contains(Capability::FileRead));
+        assert!(held.contains(&Capability::FileRead));
         assert!(
-            !held.contains(Capability::FileWrite),
+            !held.contains(&Capability::FileWrite),
             "a definition that names no write tool still held file_write"
         );
         assert!(
-            !held.contains(Capability::ShellExec),
+            !held.contains(&Capability::ShellExec),
             "a definition that names no program still held shell_exec"
         );
     }
@@ -737,7 +744,7 @@ mod tests {
         );
 
         assert!(
-            narrow.capabilities().contains(Capability::WebFetch),
+            narrow.capabilities().contains(&Capability::WebFetch),
             "a narrowed definition could not have made its own requests"
         );
     }
@@ -910,12 +917,12 @@ mod tests {
         );
 
         let held = writing.capabilities();
-        assert!(held.contains(Capability::FileWrite));
+        assert!(held.contains(&Capability::FileWrite));
         assert!(
-            held.contains(Capability::FileRead),
+            held.contains(&Capability::FileRead),
             "a definition naming a write tool could not read the file it edits"
         );
-        assert!(!held.contains(Capability::ShellExec));
+        assert!(!held.contains(&Capability::ShellExec));
     }
 
     /// The three kinds keep their names whatever anybody writes down. A file free to claim one
