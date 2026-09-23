@@ -18,16 +18,19 @@ Commit subjects are imperative; the body explains why, never what.
 
 Instructions tell the planner how work is done here. To run a command of your own when something
 happens, rather than to ask the planner for it, see [Hooks](hooks.md). For a whole procedure the
-planner loads only when the task calls for it, see [Skills](skills.md).
+planner loads only when the task calls for it, see [Skills](skills.md). For a kind of delegate the
+planner can hand a sub-task to, see [Delegate definitions](agents.md).
 
-## The four sources
+## The six sources
 
 | File | Applies to |
 |---|---|
 | `~/.bravebot/AGENTS.md` | every project |
 | `~/.bravebot/skills/<name>/SKILL.md` | every project |
+| `~/.bravebot/agents/<name>.md` | every project |
 | `<workspace>/AGENTS.md`, else `CLAUDE.md`, else `.claude/CLAUDE.md` | this project |
 | `<workspace>/.bravebot/skills/<name>/SKILL.md` | this project |
+| `<workspace>/.bravebot/agents/<name>.md` | this project |
 
 And no others. There is **no search of parent directories** and no nested instructions file. A rule
 that walked upwards would pick up instructions from whatever happened to be above a project on this
@@ -48,8 +51,10 @@ the first of the two that is set wins: that is the platform stating where the pr
 thing `HOME` does on Unix, rather than a guess past an answer. See
 [Configuration](configuration.md) for the rest of what lives in that directory.
 
-Note the two roots are spelled differently. Your own skills sit directly beneath `~/.bravebot`; a
-project's sit under a dotted `.bravebot` directory rather than at the root where `AGENTS.md` sits.
+Note the two roots are spelled differently. Your own skills and delegate definitions sit directly
+beneath `~/.bravebot`; a project's sit under a dotted `.bravebot` directory rather than at the root
+where `AGENTS.md` sits. A skill is a directory because it has other material to keep beside its
+instructions; a delegate definition is one file, so `agents/` is flat.
 
 ### A file that only names another is followed
 
@@ -186,6 +191,7 @@ directory and is left out when you did not:
 ```
 AGENTS.md was not loaded: this directory is not trusted
 2 skills in .bravebot/skills were not loaded: this directory is not trusted
+1 delegate definition in .bravebot/agents was not loaded: this directory is not trusted
 ```
 
 A source that fails the trusted-content gate is **dropped entirely, never quarantined**. A reference

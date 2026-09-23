@@ -75,8 +75,9 @@ pub enum Speaker {
 pub struct Delegate {
     /// Which one it is, as the driver numbered it.
     pub id: bravebot_agent::report::DelegateId,
-    /// Which kind it is, in the driver's own word.
-    pub kind: &'static str,
+    /// Which definition it is: the driver's own word where nothing was defined, and otherwise
+    /// the name a vouched file gave the kind of delegate this is.
+    pub kind: String,
     /// What it was asked to do, as the planner wrote it.
     pub task: String,
     /// What it has done, oldest first, back as far as is kept.
@@ -6720,7 +6721,7 @@ mod tests {
             let id = DelegateId::nth(session.delegates().len() as u32 + 1);
             session.delegate_started(bravebot_agent::report::Delegation {
                 id,
-                kind,
+                kind: kind.to_string(),
                 task: task.to_string(),
             });
             session.reporting_for(Some(id));
@@ -6741,7 +6742,9 @@ mod tests {
                 "there was a delegate and the key did nothing"
             );
             assert_eq!(
-                session.watched_delegate().map(|delegate| delegate.kind),
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
                 Some("checker"),
                 "the view opened on a delegate that had already finished"
             );
@@ -6898,7 +6901,9 @@ mod tests {
                 "stepping back past the first delegate left the delegates"
             );
             assert_eq!(
-                session.watched_delegate().map(|delegate| delegate.kind),
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
                 Some("reader"),
                 "the view stopped being on a delegate"
             );
@@ -6920,7 +6925,9 @@ mod tests {
                 "coming back from a delegate landed on the session"
             );
             assert_eq!(
-                session.watched_delegate().map(|delegate| delegate.kind),
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
                 Some("checker")
             );
         }
@@ -6935,7 +6942,9 @@ mod tests {
 
             session.delegate_finished(id, "found it in state.rs".to_string(), false, None);
             assert_eq!(
-                session.watched_delegate().map(|delegate| delegate.kind),
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
                 Some("reader"),
                 "a delegate finishing took the screen away from it"
             );
@@ -6954,7 +6963,9 @@ mod tests {
 
             spawn(&mut session, "worker", "write it down");
             assert_eq!(
-                session.watched_delegate().map(|delegate| delegate.kind),
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
                 Some("reader"),
                 "a delegate starting took the screen from the one being read"
             );

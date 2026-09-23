@@ -15438,6 +15438,89 @@ fn what_a_delegate_reported_reaches_the_person_watching() {
     );
 }
 
+/// The whole wiring in one run: a definition on disk reaches the kernel, the kernel builds the
+/// delegate the definition names, the delegate's own prompt carries the definition's body, and
+/// the line the person watching reads names the definition rather than its kind. Each of those is
+/// pinned on its own elsewhere; what only a turn can show is that they are connected.
+#[test]
+fn a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for() {
+    let scratch = Scratch::new("delegate-definition");
+    let home = Scratch::new("delegate-definition-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("rule-reviewer.md"),
+        "---\nname: rule-reviewer\ndescription: Checks a diff. Use before a review.\nkind: \
+         reader\ntools: read_file, list_files\n---\n\nREAD-THE-DIFF-AND-SAY-WHICH-SHAPE\n",
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-SOMETHING",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"rule-reviewer","task":"CHECK-THE-DIFF"}"#,
+                ),
+                reply_with("nothing to add while it works"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("CHECK-THE-DIFF", vec![reply_with("no violation")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-SOMETHING").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let delegate = requests
+        .iter()
+        .find(|body| body.contains("CHECK-THE-DIFF"))
+        .expect("the delegate never ran, so the definition never selected one");
+
+    assert!(
+        delegate.contains("READ-THE-DIFF-AND-SAY-WHICH-SHAPE"),
+        "the definition's body did not reach the delegate it defines"
+    );
+    assert!(
+        delegate.contains("You cannot write a file"),
+        "the definition's body displaced what its kind cannot do"
+    );
+    let offered: Vec<&str> = ["read_file", "list_files", "search", "run", "write_file"]
+        .into_iter()
+        .filter(|tool| delegate.contains(&format!(r#""name":"{tool}""#)))
+        .collect();
+    assert_eq!(
+        offered,
+        ["read_file", "list_files"],
+        "the delegate was not confined to the tools the definition named"
+    );
+
+    let (_, note, _) = reporter
+        .delegates_finished
+        .first()
+        .expect("no delegate was reported as finishing");
+    assert!(
+        note.contains("rule-reviewer"),
+        "the person watching was not told which definition answered: {note}"
+    );
+}
+
 /// Records what it was told, and whose work the driver said each report was.
 ///
 /// Both halves are the property: a report says what happened and never which run it happened in,

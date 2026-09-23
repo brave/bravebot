@@ -286,6 +286,14 @@ pub struct Policy<'sink, S: Sink> {
     /// Consulted at the gates that ask, and nowhere else. Empty is the state a session with no
     /// settings file is in, and means every gate behaves as it did before rules existed.
     permissions: crate::permissions::Permissions,
+    /// The kinds of delegate a name may select this turn.
+    ///
+    /// Resolved before the turn from the program's own three and whatever definition files a
+    /// person vouched for, and never added to while it runs. What a planner names is compared
+    /// against this, so the set itself has to be something nothing untrusted reached: the
+    /// comparison decides nothing an attacker steers only because the enumeration does not
+    /// either.
+    delegates: crate::delegate::Definitions,
     /// Paths this turn has already offered to the user to vouch for.
     ///
     /// Turn-scoped, and deliberately not recorded anywhere longer-lived. A yes goes into the trust
@@ -389,6 +397,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             asked: crate::programs::AskedAbout::new(),
             remembered: crate::remembered::Remembered::new(),
             permissions: crate::permissions::Permissions::new(),
+            // The three the program wrote. A caller that found definition files installs the
+            // resolved set with `with_delegates`; one that found none is in exactly the state
+            // every session was in before there were files to find.
+            delegates: crate::delegate::Definitions::default(),
             vouch_asked: std::collections::BTreeSet::new(),
             fetching: None,
             context: Integrity::Trusted,
@@ -737,6 +749,25 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The rules in force.
     pub fn permissions(&self) -> &crate::permissions::Permissions {
         &self.permissions
+    }
+
+    /// Install the kinds of delegate a name may select this turn.
+    ///
+    /// The caller resolves them from files before the turn starts, through the same trusted-read
+    /// gate a skill passes, so what arrives here is the program's own three plus whatever a
+    /// person vouched for. Nothing widens it afterwards: a definition may narrow what its kind
+    /// holds and there is no spelling of one that adds a capability, so installing a set is
+    /// offering fewer delegates rather than more authority.
+    /// Taken by reference because the set is resolved from files, and resolving them takes this
+    /// policy: the read of each one passes the same gates every other read does, so there is no
+    /// point before the policy exists at which the caller could hand a set to a constructor.
+    pub fn install_delegates(&mut self, delegates: crate::delegate::Definitions) {
+        self.delegates = delegates;
+    }
+
+    /// The kinds of delegate a name may select.
+    pub fn delegates(&self) -> &crate::delegate::Definitions {
+        &self.delegates
     }
 
     /// Refuse an action a `deny` rule covers, before anything is opened or started.
@@ -2323,16 +2354,34 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         // this run has met nothing an attacker wrote.
         let proof = Declassification::authorise("a delegate kind the planner named");
         let name = kind.clone().declassify(&proof);
-        let Some(selected) = crate::delegate::Kind::from_name(&name) else {
+        let Some(selected) = self.delegates.get(&name).cloned() else {
             return Err(self.deny(
                 "delegate",
                 Principle::Capability,
                 format!(
                     "{id}: there is no kind of delegate called '{name}'; the kinds are {}",
-                    crate::delegate::Kind::NAMES.join(", ")
+                    self.delegates.names().join(", ")
                 ),
             ));
         };
+
+        // The definition's tools are the second term and the parent's set is the third, so the
+        // intersection still only ever narrows. Taken here rather than where the file was read,
+        // because which capabilities a delegate holds is a decision and decisions are the
+        // kernel's; a loader that did this would have moved one out of it.
+        let beyond = selected.tools_beyond_its_kind();
+        if !beyond.is_empty() {
+            self.allow(
+                "delegate",
+                format!(
+                    "{id}: {} names {} which a {} does not reach, so it is delegated without \
+                     them",
+                    selected.name(),
+                    beyond.join(", "),
+                    selected.kind()
+                ),
+            );
+        }
 
         let wanted = selected.capabilities();
         let held: CapabilitySet = wanted
@@ -2348,8 +2397,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             self.allow(
                 "delegate",
                 format!(
-                    "{id}: a {selected} asks for {} which this run does not hold, so it is \
+                    "{id}: a {} asks for {} which this run does not hold, so it is \
                      delegated without them",
+                    selected.name(),
                     dropped.join(", ")
                 ),
             );
@@ -2357,7 +2407,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         let proof = Declassification::authorise("a delegate's prompt, carried not read");
         let task = task.clone().declassify(&proof);
-        let spec = crate::delegate::DelegateSpec::new(id, selected, task, held, selected.rounds());
+        let rounds = selected.kind().rounds();
+        let spec = crate::delegate::DelegateSpec::new(id, &selected, task, held, rounds);
 
         self.allow(
             "delegate",
@@ -10969,6 +11020,153 @@ five
                 assert_eq!(err.principle, Principle::Capability, "for '{name}'");
                 assert!(!policy.finish());
             }
+        }
+
+        /// What a name is compared against is the set the driver resolved, so the refusal names
+        /// the definitions a person actually has rather than the three the program shipped.
+        /// A planner told `reader, checker, worker` in a session with definitions in it would
+        /// never name one.
+        #[test]
+        fn a_refusal_names_the_definitions_this_session_resolved() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let mut definitions = crate::delegate::Definitions::default();
+            definitions.insert(crate::delegate::Definition::from_file(
+                "rule-reviewer",
+                "checks a diff",
+                Kind::Reader,
+                None,
+                "",
+                ".bravebot/agents/rule-reviewer.md",
+            ));
+            policy.install_delegates(definitions);
+
+            let err = policy
+                .before_delegate(DelegateId::nth(1), &argument("auditor"), &argument("do it"))
+                .expect_err("a name nobody resolved must reach no capability set");
+            assert!(
+                err.to_string().contains("rule-reviewer"),
+                "the refusal did not name what this session can select: {err}"
+            );
+        }
+
+        /// A definition selects a kind, and what it is is that kind's: the bound, the prompt
+        /// bracketing and the capabilities all come from the enumerated set rather than from the
+        /// file. A file that could say either would be a checked-in file authoring authority.
+        #[test]
+        fn a_definition_is_delegated_as_the_kind_it_names() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let mut definitions = crate::delegate::Definitions::default();
+            definitions.insert(crate::delegate::Definition::from_file(
+                "rule-reviewer",
+                "checks a diff",
+                Kind::Reader,
+                None,
+                "read the diff",
+                ".bravebot/agents/rule-reviewer.md",
+            ));
+            policy.install_delegates(definitions);
+
+            let spec = policy
+                .before_delegate(
+                    DelegateId::nth(1),
+                    &argument("rule-reviewer"),
+                    &argument("check it"),
+                )
+                .expect("a resolved definition may be selected");
+
+            assert_eq!(spec.definition(), "rule-reviewer");
+            assert_eq!(spec.kind(), Kind::Reader);
+            assert_eq!(spec.rounds(), Kind::Reader.rounds());
+            assert_eq!(spec.prompt(), "read the diff");
+            assert!(!spec.capabilities().contains(Capability::FileWrite));
+        }
+
+        /// A definition may name fewer tools than its kind reaches and never more. The narrowing
+        /// is taken here rather than where the file was read, so what a delegate holds is a
+        /// decision the kernel took, and the trail says what was dropped.
+        #[test]
+        fn a_definition_naming_a_tool_its_kind_lacks_is_delegated_without_it() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let mut definitions = crate::delegate::Definitions::default();
+            definitions.insert(crate::delegate::Definition::from_file(
+                "rule-reviewer",
+                "checks a diff",
+                Kind::Reader,
+                Some(
+                    ["read_file", "write_file", "run"]
+                        .map(str::to_string)
+                        .to_vec(),
+                ),
+                "",
+                ".bravebot/agents/rule-reviewer.md",
+            ));
+            policy.install_delegates(definitions);
+
+            let spec = policy
+                .before_delegate(
+                    DelegateId::nth(1),
+                    &argument("rule-reviewer"),
+                    &argument("check it"),
+                )
+                .expect("a resolved definition may be selected");
+
+            assert_eq!(spec.tools(), Some(["read_file".to_string()].as_slice()));
+            assert!(!spec.capabilities().contains(Capability::FileWrite));
+            assert!(!spec.capabilities().contains(Capability::ShellExec));
+            assert!(
+                sink.events().iter().any(|event| matches!(
+                    event,
+                    Event::GatePassed { detail, .. }
+                        if detail.contains("write_file") && detail.contains("does not reach")
+                )),
+                "the trail did not say what the definition asked for and did not get"
+            );
+        }
+
+        /// A definition is not a way around the parent's own set. Both narrowings apply and they
+        /// apply in the same direction, so a `worker` definition spawned from a run that cannot
+        /// write is a delegate that cannot write.
+        #[test]
+        fn a_definition_cannot_widen_past_the_run_that_spawned_it() {
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing_with("task", "look into it"),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .unwrap();
+            let mut definitions = crate::delegate::Definitions::default();
+            definitions.insert(crate::delegate::Definition::from_file(
+                "fixer",
+                "finishes a sub-task",
+                Kind::Worker,
+                Some(
+                    ["read_file", "write_file", "run"]
+                        .map(str::to_string)
+                        .to_vec(),
+                ),
+                "",
+                ".bravebot/agents/fixer.md",
+            ));
+            policy.install_delegates(definitions);
+
+            let spec = policy
+                .before_delegate(DelegateId::nth(1), &argument("fixer"), &argument("fix it"))
+                .expect("a narrow run may still delegate");
+
+            assert!(spec.capabilities().contains(Capability::FileRead));
+            assert!(
+                !spec.capabilities().contains(Capability::FileWrite),
+                "a definition handed writing to a run that could not write"
+            );
+            assert!(
+                !spec.capabilities().contains(Capability::ShellExec),
+                "a definition handed running to a run that could not run"
+            );
         }
 
         /// Delegation redistributes authority and never creates it. A worker asks for writing and

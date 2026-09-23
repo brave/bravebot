@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 4
 title: Configuration
 description: What is baked into the binary, what lives in ~/.bravebot and beside your work, and the environment variables that override either.
 ---

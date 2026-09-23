@@ -461,8 +461,9 @@ pub use bravebot_core::delegate::DelegateId;
 pub struct Delegation {
     /// Which delegate this is, for everything that follows from it.
     pub id: DelegateId,
-    /// Which kind it is, from [`bravebot_core::delegate::Kind`].
-    pub kind: &'static str,
+    /// Which definition it is: the name the planner selected, which is its kind's own name
+    /// where nothing was defined.
+    pub kind: String,
     /// What it was asked to do.
     pub task: String,
 }

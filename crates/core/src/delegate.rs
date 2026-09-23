@@ -138,6 +138,288 @@ impl std::fmt::Display for Kind {
     }
 }
 
+/// The tools no delegate is ever offered, whatever it holds.
+///
+/// Named rather than derived, because each is left out for a reason of its own rather than for
+/// want of a capability: `spawn_agent` because a delegate cannot delegate, `fetch_url` because
+/// every kind holds the capability for reaching the network so the driver can make its model
+/// call, and the rest because their audience is the person watching the turn. The list is here
+/// rather than beside the tool table so that a definition naming one of them is answered by the
+/// same set the tool list is built from.
+pub const NEVER_DELEGATED: [&str; 6] = [
+    "spawn_agent",
+    "ask_user",
+    "todo_write",
+    "schedule_next",
+    "fetch_url",
+    "vet_content",
+];
+
+/// The capability a delegate needs before it is offered this tool, or `None` where the name is
+/// not a tool a delegate is ever offered.
+///
+/// The rule the delegate tool list is built from, kept here so the kernel can apply it to the
+/// tools a definition named without the tool table being in scope. The two are held to each
+/// other by a test rather than by a comment, in both directions: a tool missing from this match
+/// and a name here that is no longer a tool both fail it.
+///
+/// **A name this does not recognise selects nothing**, rather than falling to the weakest
+/// capability any tool asks for. A definition written for another agent names that agent's tools,
+/// and a fallback would start a delegate holding something for a list of names none of which is
+/// a tool it gets. Answering `None` is what lets the caller say so.
+pub fn gating_capability(tool: &str) -> Option<Capability> {
+    match tool {
+        "write_file" | "edit_file" => Some(Capability::FileWrite),
+        "run" | "read_output" | "job_output" => Some(Capability::ShellExec),
+        // LSP-9: asking a server is its own grant, so a delegate holding file reads has not
+        // thereby been given one.
+        "lsp" => Some(Capability::LanguageServer),
+        "read_file" | "list_files" | "search" | "spawn_processor" | "load_skill" => {
+            Some(Capability::FileRead)
+        }
+        _ => None,
+    }
+}
+
+/// What a definition holds whatever it named, and for the same reason in both cases.
+///
+/// Reaching the network, because a planner is a model call and one that cannot make a request
+/// cannot think. And reading, because a write is a read of the file followed by a write of it, so
+/// a definition naming `write_file` alone and holding no read would be a delegate whose one tool
+/// is refused on every call. Neither is a widening: every kind holds both already, and no tool a
+/// delegate is offered reaches the first, so what a definition narrows is what remains.
+const HELD_WHATEVER_IT_NAMED: [Capability; 2] = [Capability::WebFetch, Capability::FileRead];
+
+/// What a tool a definition named reaches for a delegate, or nothing.
+///
+/// A name no delegate is ever offered reaches nothing here whatever capability it would otherwise
+/// need, because the tool is left out by name rather than for want of one. So is a name that is
+/// not a tool. Both are reported by [`Definition::tools_beyond_its_kind`].
+fn reachable_by(tool: &str) -> Option<Capability> {
+    if NEVER_DELEGATED.contains(&tool) {
+        return None;
+    }
+    gating_capability(tool)
+}
+
+/// One kind of delegate as the driver resolved it for this turn.
+///
+/// A definition is what a name selects. Three of them are this program's own and correspond one
+/// to one with a [`Kind`]; the rest came from a file somebody vouched for, and each of those
+/// names a kind rather than describing one. That is the whole of the difference between this and
+/// a configuration file that hands out authority: a definition may narrow what its kind holds and
+/// there is no spelling of it that widens anything, so a checked-in file can choose what a
+/// delegate is for and can never choose what it may do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Definition {
+    name: String,
+    description: String,
+    kind: Kind,
+    /// The tools the definition asked for, where it asked for any.
+    ///
+    /// `None` is the kind's own set. `Some` is a narrowing and only a narrowing: what it selects
+    /// is intersected with the kind's, so a name the kind does not reach is a name this
+    /// definition loaded without.
+    tools: Option<Vec<String>>,
+    /// The standing part of what a delegate of this name is told about itself.
+    ///
+    /// Empty where the file had no body. Carried rather than read: the kernel never branches on
+    /// it, and what makes it admissible in a planner's context at all is that it arrived through
+    /// the trusted-content gate.
+    prompt: String,
+    /// Where it came from, for the audit trail. The driver's own words for the built-in ones.
+    origin: String,
+}
+
+impl Definition {
+    /// The definition a kind is, with no file behind it.
+    pub fn of_kind(kind: Kind) -> Self {
+        Self {
+            name: kind.as_str().to_string(),
+            description: kind.purpose().to_string(),
+            kind,
+            tools: None,
+            prompt: String::new(),
+            origin: "built-in".to_string(),
+        }
+    }
+
+    /// A definition read out of a file, after the gate that decided the file could be read.
+    pub fn from_file(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        kind: Kind,
+        tools: Option<Vec<String>>,
+        prompt: impl Into<String>,
+        origin: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            kind,
+            tools,
+            prompt: prompt.into(),
+            origin: origin.into(),
+        }
+    }
+
+    /// What the planner names to select it.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// What the planner decides from: when to use this rather than another.
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    /// The enumerated kind it names. Never one it describes.
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// The tools it asked for, before the kind's own set narrows them.
+    pub fn tools(&self) -> Option<&[String]> {
+        self.tools.as_deref()
+    }
+
+    /// The standing instruction, empty where the file had no body.
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
+    /// What this definition asks to hold, before the parent's own set narrows it.
+    ///
+    /// The kind's, and where the definition named tools, only those of the kind's that one of
+    /// those tools reaches. Reaching the network survives every narrowing, because a planner is a
+    /// model call and a delegate that cannot make one cannot think; no tool reaches it, so
+    /// keeping it grants nothing a tool list could spend.
+    pub fn capabilities(&self) -> CapabilitySet {
+        let held = self.kind.capabilities();
+        let Some(tools) = self.tools.as_deref() else {
+            return held;
+        };
+        held.iter()
+            .filter(|capability| {
+                HELD_WHATEVER_IT_NAMED.contains(capability)
+                    || tools
+                        .iter()
+                        .any(|tool| reachable_by(tool) == Some(*capability))
+            })
+            .collect()
+    }
+
+    /// The tools it named that a delegate of its kind does not get, for the trail to say what
+    /// was dropped.
+    ///
+    /// Three ways a name lands here, and the notice matters most for the third: a name that is
+    /// not a tool at all. A definition written for another agent names that agent's vocabulary,
+    /// and without this it would start a delegate with no tools and nothing said anywhere about
+    /// why.
+    pub fn tools_beyond_its_kind(&self) -> Vec<&str> {
+        let held = self.kind.capabilities();
+        let Some(tools) = self.tools.as_deref() else {
+            return Vec::new();
+        };
+        tools
+            .iter()
+            .filter(|tool| !reachable_by(tool).is_some_and(|needs| held.contains(needs)))
+            .map(String::as_str)
+            .collect()
+    }
+}
+
+/// The kinds of delegate this turn can select from.
+///
+/// Fixed before the turn and never added to while it runs. The three the program wrote are always
+/// here; anything else arrived from a file that passed the trusted-content gate, so nothing an
+/// attacker wrote is in the set a planner's name is compared against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Definitions {
+    entries: Vec<Definition>,
+}
+
+impl Default for Definitions {
+    /// The three kinds and nothing else, which is what a turn that found no definition files has.
+    fn default() -> Self {
+        Self {
+            entries: Kind::NAMES
+                .iter()
+                .map(|name| Definition::of_kind(Kind::from_name(name).expect("enumerated")))
+                .collect(),
+        }
+    }
+}
+
+impl Definitions {
+    /// Add one, replacing any of the same name.
+    ///
+    /// Later wins, and discovery visits the built-in kinds, then the user's own directory, then
+    /// the project, so the project has the last word. That is [INSTR-4]'s rule and the same one
+    /// the skill catalogue follows.
+    ///
+    /// [INSTR-4]: https://github.com/brave/bravebot/blob/main/docs/specs/instructions.md
+    /// A name one of the three kinds already goes by is **refused**, so the three the program
+    /// wrote are in every set and a `reader` is a reader wherever a session runs. A file free to
+    /// claim one would be a file renaming the narrowest kind to the widest, and a planner
+    /// choosing the narrowest thing that can do the job would be choosing from a list whose order
+    /// had stopped being true.
+    pub fn insert(&mut self, definition: Definition) -> bool {
+        if !Self::may_be_named(&definition.name) {
+            return false;
+        }
+        match self
+            .entries
+            .iter_mut()
+            .find(|existing| existing.name == definition.name)
+        {
+            Some(existing) => *existing = definition,
+            None => self.entries.push(definition),
+        }
+        true
+    }
+
+    /// Whether a definition may go by this name, which is any name but a kind's own.
+    ///
+    /// Asked by the loader before the kernel is, so a file claiming one is reported to whoever
+    /// wrote it rather than dropped in silence.
+    pub fn may_be_named(name: &str) -> bool {
+        !Kind::NAMES.contains(&name)
+    }
+
+    /// The definition that name selects, or nothing.
+    ///
+    /// A selection out of a set the driver resolved, not a lookup of anything a model wrote into
+    /// a path or a table key, so a name naming a traversal or a capability matches nothing.
+    pub fn get(&self, name: &str) -> Option<&Definition> {
+        self.entries.iter().find(|entry| entry.name == name)
+    }
+
+    /// Every name, in the order the planner is told about them.
+    pub fn names(&self) -> Vec<&str> {
+        self.entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Definition> {
+        self.entries.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 /// Which delegate a record is about.
 ///
 /// Minted by the driver, one per delegate, counting from one in the order they were spawned. It
@@ -182,6 +464,16 @@ impl std::fmt::Display for DelegateId {
 pub struct DelegateSpec {
     id: DelegateId,
     kind: Kind,
+    /// The name the definition it came from goes by, which is the name the planner selected.
+    ///
+    /// The kind's own name where nothing was defined, so a session with no definition files
+    /// describes its delegates exactly as it did before there were any.
+    definition: String,
+    /// The tools its definition named, where it named any, already without the ones its kind
+    /// does not reach.
+    tools: Option<Vec<String>>,
+    /// The standing part of what it is told about itself, from the definition that selected it.
+    prompt: String,
     task: String,
     capabilities: CapabilitySet,
     rounds: usize,
@@ -190,18 +482,56 @@ pub struct DelegateSpec {
 impl DelegateSpec {
     pub(crate) fn new(
         id: DelegateId,
-        kind: Kind,
+        definition: &Definition,
         task: impl Into<String>,
         capabilities: CapabilitySet,
         rounds: usize,
     ) -> Self {
+        let kind = definition.kind();
+        let tools = definition.tools().map(|named| {
+            named
+                .iter()
+                .filter(|tool| {
+                    reachable_by(tool).is_some_and(|needs| kind.capabilities().contains(needs))
+                })
+                .cloned()
+                .collect()
+        });
         Self {
             id,
             kind,
+            definition: definition.name().to_string(),
+            tools,
+            prompt: definition.prompt().to_string(),
             task: task.into(),
             capabilities,
             rounds,
         }
+    }
+
+    /// What the planner named to get this, and what the person watching is shown.
+    ///
+    /// Content from a vouched file where a definition supplied it, which is the one reason it may
+    /// be printed at all: a name nobody vouched for never entered the set this was selected from.
+    pub fn definition(&self) -> &str {
+        &self.definition
+    }
+
+    /// The tools its definition confined it to, where it named any, and `None` where it named
+    /// none and the kind's whole set stands.
+    ///
+    /// Already narrowed to the kind's own reach here rather than where the tool list is built, so
+    /// what a caller reads is a decision the kernel took.
+    pub fn tools(&self) -> Option<&[String]> {
+        self.tools.as_deref()
+    }
+
+    /// The standing instruction its definition carried, empty where there was none.
+    ///
+    /// Bracketed by the driver's own words rather than replacing them: what a delegate may not do
+    /// is said by its kind, and a file cannot tell one it may do what its kind cannot.
+    pub fn prompt(&self) -> &str {
+        &self.prompt
     }
 
     /// The delegate's name in the audit trail. Driver-minted, never derived from content.
@@ -244,9 +574,17 @@ impl DelegateSpec {
         } else {
             held.join(", ")
         };
+        // The definition's name rather than the kind's, because "a reader" stops being the
+        // useful word the moment three definitions are readers. Where nothing was defined the
+        // two are the same string and the sentence is the one it always was.
+        let what = if self.definition == self.kind.as_str() {
+            format!("a {} delegate", self.kind)
+        } else {
+            format!("a {} delegate ({})", self.definition, self.kind)
+        };
         format!(
-            "{} is a {} delegate holding {} for at most {} rounds",
-            self.id, self.kind, held, self.rounds
+            "{} is {what} holding {held} for at most {} rounds",
+            self.id, self.rounds
         )
     }
 }
@@ -330,11 +668,295 @@ mod tests {
         }
     }
 
+    /// A definition narrows its kind and there is no spelling of `tools:` that adds anything.
+    /// A file that could name a capability set would make a checked-in file the author of
+    /// authority, which is the one thing delegation may never do.
+    #[test]
+    fn a_definition_can_only_narrow_what_its_kind_holds() {
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("enumerated");
+            let asking_for_everything = Definition::from_file(
+                "greedy",
+                "asks for what it cannot have",
+                kind,
+                Some(
+                    ["read_file", "run", "write_file", "lsp", "spawn_agent"]
+                        .map(str::to_string)
+                        .to_vec(),
+                ),
+                "",
+                "test",
+            );
+
+            for capability in asking_for_everything.capabilities().iter() {
+                assert!(
+                    kind.capabilities().contains(capability),
+                    "a {name} definition gained {capability}"
+                );
+            }
+        }
+    }
+
+    /// A definition that names tools holds only what those tools reach, so a `worker` confined to
+    /// reading is a delegate the write gate refuses rather than one the tool list merely leaves
+    /// a write out of.
+    #[test]
+    fn naming_tools_drops_the_capabilities_no_named_tool_reaches() {
+        let reading = Definition::from_file(
+            "rule-reviewer",
+            "reads a diff",
+            Kind::Worker,
+            Some(["read_file", "list_files"].map(str::to_string).to_vec()),
+            "",
+            "test",
+        );
+
+        let held = reading.capabilities();
+        assert!(held.contains(Capability::FileRead));
+        assert!(
+            !held.contains(Capability::FileWrite),
+            "a definition that names no write tool still held file_write"
+        );
+        assert!(
+            !held.contains(Capability::ShellExec),
+            "a definition that names no program still held shell_exec"
+        );
+    }
+
+    /// A planner is a model call, so a definition narrowed to one read tool still has to be able
+    /// to make one. No tool reaches the network, so keeping it spends nothing.
+    #[test]
+    fn a_definition_narrowed_to_one_tool_can_still_reach_the_endpoint() {
+        let narrow = Definition::from_file(
+            "one-tool",
+            "reads one file",
+            Kind::Reader,
+            Some(vec!["read_file".to_string()]),
+            "",
+            "test",
+        );
+
+        assert!(
+            narrow.capabilities().contains(Capability::WebFetch),
+            "a narrowed definition could not have made its own requests"
+        );
+    }
+
+    /// A definition naming no tools is its kind, exactly as every delegate was before there were
+    /// definitions.
+    #[test]
+    fn a_definition_that_names_no_tools_holds_its_kinds_own_set() {
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("enumerated");
+            assert_eq!(
+                Definition::of_kind(kind).capabilities(),
+                kind.capabilities()
+            );
+            assert!(Definition::of_kind(kind).tools().is_none());
+        }
+    }
+
+    /// What the trail says was dropped. A tool no delegate ever gets counts as beyond the kind
+    /// too: `fetch_url` is left out by name rather than for want of a capability, so a definition
+    /// asking for it must not be told it has one.
+    #[test]
+    fn the_tools_a_kind_cannot_reach_are_the_ones_reported_dropped() {
+        let asking = Definition::from_file(
+            "greedy",
+            "asks for what it cannot have",
+            Kind::Reader,
+            Some(
+                ["read_file", "write_file", "run", "fetch_url"]
+                    .map(str::to_string)
+                    .to_vec(),
+            ),
+            "",
+            "test",
+        );
+
+        let mut beyond = asking.tools_beyond_its_kind();
+        beyond.sort_unstable();
+        assert_eq!(beyond, ["fetch_url", "run", "write_file"]);
+
+        // And a name reported as dropped selects nothing either, so a definition is never left
+        // holding a capability nothing it is offered can spend.
+        let only_fetch = Definition::from_file(
+            "fetcher",
+            "asks for the one no delegate gets",
+            Kind::Reader,
+            Some(vec!["fetch_url".to_string()]),
+            "",
+            "test",
+        );
+        assert_eq!(
+            only_fetch.capabilities(),
+            CapabilitySet::from_iter(HELD_WHATEVER_IT_NAMED),
+            "a definition naming only a tool no delegate gets held more than every one holds"
+        );
+    }
+
+    /// The three kinds are in every set, whatever anybody wrote down, so a session that found no
+    /// files selects exactly what it always did.
+    #[test]
+    fn the_three_kinds_are_in_every_set() {
+        let definitions = Definitions::default();
+        assert_eq!(definitions.names(), Kind::NAMES.to_vec());
+        for name in Kind::NAMES {
+            let found = definitions.get(name).expect("a kind is always selectable");
+            assert_eq!(found.kind().as_str(), name);
+            assert!(found.tools().is_none());
+            assert!(found.prompt().is_empty());
+        }
+    }
+
+    /// Most specific wins, as it does in the trust map and in the skill catalogue. A project that
+    /// ships its own version of a definition means it.
+    #[test]
+    fn a_later_definition_replaces_one_of_the_same_name() {
+        let mut definitions = Definitions::default();
+        definitions.insert(Definition::from_file(
+            "rule-reviewer",
+            "the global one",
+            Kind::Reader,
+            None,
+            "global",
+            "~/.bravebot/agents/rule-reviewer.md",
+        ));
+        definitions.insert(Definition::from_file(
+            "rule-reviewer",
+            "the project one",
+            Kind::Checker,
+            None,
+            "local",
+            ".bravebot/agents/rule-reviewer.md",
+        ));
+
+        assert_eq!(definitions.len(), Kind::NAMES.len() + 1);
+        let found = definitions.get("rule-reviewer").expect("selectable");
+        assert_eq!(found.prompt(), "local");
+        assert_eq!(found.kind(), Kind::Checker);
+    }
+
+    /// A name nothing in the set carries selects nothing, which is what keeps `kind` from being a
+    /// field a planner can write a capability set into.
+    #[test]
+    fn a_name_no_definition_carries_selects_nothing() {
+        let definitions = Definitions::default();
+        for name in ["", "Reader", "worker ", "../worker", "rule-reviewer"] {
+            assert!(
+                definitions.get(name).is_none(),
+                "{name} must select nothing"
+            );
+        }
+    }
+
+    /// A name that is not a tool selects nothing, rather than falling to the weakest capability
+    /// any tool asks for. A definition written for another agent names that agent's vocabulary,
+    /// and a fallback would leave a delegate holding something for a list of names none of which
+    /// is a tool it gets.
+    #[test]
+    fn a_name_that_is_not_a_tool_selects_no_capability() {
+        for name in ["Bash(git *)", "Read", "Grep", "*", "", "fetch_url"] {
+            assert_eq!(gating_capability(name), None, "'{name}' selected something");
+        }
+        assert_eq!(gating_capability("read_file"), Some(Capability::FileRead));
+        assert_eq!(gating_capability("write_file"), Some(Capability::FileWrite));
+        assert_eq!(gating_capability("run"), Some(Capability::ShellExec));
+        assert_eq!(gating_capability("lsp"), Some(Capability::LanguageServer));
+    }
+
+    /// A definition whose whole `tools:` line is another agent's vocabulary starts a delegate
+    /// with no tools, and every one of those names is reported, so the trail says why rather
+    /// than leaving somebody with a delegate that answers having done nothing.
+    #[test]
+    fn a_tools_line_written_for_another_agent_is_reported_name_by_name() {
+        let foreign = Definition::from_file(
+            "ported",
+            "written for something else",
+            Kind::Worker,
+            Some(
+                ["Read", "Grep", "Bash(git log)"]
+                    .map(str::to_string)
+                    .to_vec(),
+            ),
+            "",
+            "test",
+        );
+
+        assert_eq!(
+            foreign.tools_beyond_its_kind(),
+            ["Read", "Grep", "Bash(git log)"],
+            "a name that is not a tool was not reported as dropped"
+        );
+        assert_eq!(
+            foreign.capabilities(),
+            CapabilitySet::from_iter(HELD_WHATEVER_IT_NAMED),
+            "a list of names that are not tools still selected something"
+        );
+    }
+
+    /// A write is a read of the file followed by a write of it, so a definition naming only a
+    /// write tool has to keep reading or its one tool is refused on every call. Not a widening:
+    /// every kind holds reading already.
+    #[test]
+    fn a_definition_that_names_only_a_write_tool_can_still_read() {
+        let writing = Definition::from_file(
+            "fixer",
+            "writes one file",
+            Kind::Worker,
+            Some(vec!["edit_file".to_string()]),
+            "",
+            "test",
+        );
+
+        let held = writing.capabilities();
+        assert!(held.contains(Capability::FileWrite));
+        assert!(
+            held.contains(Capability::FileRead),
+            "a definition naming a write tool could not read the file it edits"
+        );
+        assert!(!held.contains(Capability::ShellExec));
+    }
+
+    /// The three kinds keep their names whatever anybody writes down. A file free to claim one
+    /// would be a file renaming the narrowest kind to the widest, and a planner picking the
+    /// narrowest thing that can do the job would be picking from a list whose order had stopped
+    /// being true.
+    #[test]
+    fn a_definition_cannot_take_a_kinds_own_name() {
+        let mut definitions = Definitions::default();
+        for name in Kind::NAMES {
+            assert!(!Definitions::may_be_named(name));
+            assert!(
+                !definitions.insert(Definition::from_file(
+                    name,
+                    "pretending to be a kind",
+                    Kind::Worker,
+                    None,
+                    "",
+                    ".bravebot/agents/escalate.md",
+                )),
+                "'{name}' was taken over by a definition"
+            );
+        }
+
+        assert_eq!(definitions.len(), Kind::NAMES.len());
+        assert_eq!(
+            definitions
+                .get("reader")
+                .expect("a kind is always there")
+                .kind(),
+            Kind::Reader,
+            "reader stopped being a reader"
+        );
+        assert!(Definitions::may_be_named("rule-reviewer"));
+    }
+
     #[test]
     fn a_description_names_what_it_holds_but_never_the_task() {
         let spec = DelegateSpec::new(
             DelegateId::nth(1),
-            Kind::Checker,
+            &Definition::of_kind(Kind::Checker),
             "find out whether the tests pass",
             Kind::Checker.capabilities(),
             80,
@@ -350,5 +972,62 @@ mod tests {
         assert!(described.contains("shell_exec"));
         assert!(described.contains("80"));
         assert!(!described.contains("whether the tests pass"));
+    }
+
+    /// "A reader" stops being the useful word the moment two definitions are readers, so the
+    /// trail names the definition and says what kind it is beside it.
+    #[test]
+    fn a_description_names_the_definition_and_the_kind_behind_it() {
+        let spec = DelegateSpec::new(
+            DelegateId::nth(2),
+            &Definition::from_file(
+                "rule-reviewer",
+                "checks a diff",
+                Kind::Reader,
+                None,
+                "",
+                ".bravebot/agents/rule-reviewer.md",
+            ),
+            "check the diff",
+            Kind::Reader.capabilities(),
+            60,
+        );
+
+        let described = spec.describe();
+        assert!(
+            described.contains("rule-reviewer"),
+            "the description does not say which definition it is: {described}"
+        );
+        assert!(
+            described.contains("reader"),
+            "the description does not say what kind it is: {described}"
+        );
+        assert!(!described.contains("check the diff"));
+    }
+
+    /// The spec carries the tools its definition named, already without the ones its kind cannot
+    /// reach, so nothing downstream has to know what a kind reaches to keep the narrowing.
+    #[test]
+    fn a_spec_carries_only_the_named_tools_its_kind_reaches() {
+        let spec = DelegateSpec::new(
+            DelegateId::nth(1),
+            &Definition::from_file(
+                "rule-reviewer",
+                "checks a diff",
+                Kind::Reader,
+                Some(
+                    ["read_file", "write_file", "fetch_url"]
+                        .map(str::to_string)
+                        .to_vec(),
+                ),
+                "",
+                ".bravebot/agents/rule-reviewer.md",
+            ),
+            "check the diff",
+            Kind::Reader.capabilities(),
+            60,
+        );
+
+        assert_eq!(spec.tools(), Some(["read_file".to_string()].as_slice()));
     }
 }

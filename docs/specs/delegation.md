@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/core/src/delegate.rs
   - crates/core/src/policy.rs
+  - crates/agent/src/agents.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/report.rs
   - crates/agent/src/timing.rs
@@ -77,15 +78,32 @@ describing something that had already failed.
 ## What is fixed before it runs
 
 <a id="DELEGATE-3"></a>
-### DELEGATE-3: a kind is selected from a set the driver enumerated
+### DELEGATE-3: a kind is selected from a set the driver resolved
 
-The planner names a kind and cannot describe one. A name is compared against a fixed list and
-matches or does not; a name matching nothing is refused, and there is no spelling of it that
-reaches a capability set nobody wrote down.
+The planner names a kind and cannot describe one. A name is compared against a set the driver
+fixed before the turn and matches or does not; a name matching nothing is refused, and there is no
+spelling of it that reaches a capability set nobody wrote down.
+
+The set holds the three kinds, which are this program's own, and whatever definitions
+[DELEGATE-19](#DELEGATE-19) resolved from files. It is fixed before the turn and never added to
+while one runs, and the refusal names what it holds, so a planner is told what it may actually
+select rather than the three that were compiled in.
+
+**What comparing a name decides, and why that is sound.** A name has to be compared against the
+set to select anything at all, and comparing it decides nothing an attacker steers because this
+run has met nothing an attacker wrote ([DELEGATE-2](#DELEGATE-2)). That covers the name the planner
+said. The *set* it is compared against is covered by [DELEGATE-20](#DELEGATE-20): once the
+enumeration can come from a file, the enumeration is the thing an attacker would want to write, so
+[LABEL-5](labels.md#LABEL-5)'s rule that a decision may be taken only from trusted content applies
+to it and not only to the selection.
 
 `verified-by: bravebot_core::delegate::a_kind_is_selected_from_the_enumerated_set_and_nothing_else`
 `verified-by: bravebot_core::delegate::every_advertised_name_resolves_to_the_kind_it_names`
+`verified-by: bravebot_core::delegate::a_name_no_definition_carries_selects_nothing`
+`verified-by: bravebot_core::delegate::the_three_kinds_are_in_every_set`
 `verified-by: bravebot_core::policy::a_kind_nobody_enumerated_is_refused`
+`verified-by: bravebot_core::policy::a_refusal_names_the_definitions_this_session_resolved`
+`verified-by: bravebot_agent::tools::the_kinds_the_planner_is_offered_are_the_ones_this_session_resolved`
 
 <a id="DELEGATE-4"></a>
 ### DELEGATE-4: a delegate holds its kind's capabilities, narrowed by its parent's
@@ -118,14 +136,33 @@ tool list is written out a second time as a refusal.
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_reach_the_network`
 
 <a id="DELEGATE-5"></a>
-### DELEGATE-5: the prompt belongs to the kind, and the planner writes no word of it
+### DELEGATE-5: the prompt belongs to the definition, and the planner writes no word of it
 
-What a delegate is told about itself is a constant chosen by its kind. The planner supplies the
-task and nothing else, so there is no sentence it can write that changes what a delegate is
-rather than what it is doing.
+What a delegate is told about itself is a constant. The planner supplies the task and nothing
+else, so there is no sentence it can write that changes what a delegate is rather than what it is
+doing.
+
+The constant may come from a definition rather than from this program, and that is the whole of
+what a definition's body is. It is admissible for one reason: a definition is trusted
+configuration or it does not load ([DELEGATE-20](#DELEGATE-20)). The clause that stops a *planner*
+authoring a delegate's self-description is untouched.
+
+The driver's own words bracket the body and are never replaceable by it: the guidance every
+planner here gets comes before it, and what the delegate cannot do comes after. A body that could
+displace the second would be a checked-in file telling a delegate it may do what its kind cannot,
+which is [DELEGATE-4](#DELEGATE-4)'s sentence read backwards.
+
+**What it cannot do is chosen from what it holds, not from its kind.** The two stopped agreeing
+the moment either could be narrowed: a `worker` spawned by a run that cannot write, or one whose
+definition named only read tools, holds no write. Told its kind's paragraph it would plan around
+a write it is not offered and could not make, which is the opposite of what saying this is for.
 
 `verified-by: bravebot_agent::delegate::each_kind_is_told_what_it_cannot_do`
 `verified-by: bravebot_agent::delegate::every_kind_is_told_the_guidance_the_planner_is_told`
+`verified-by: bravebot_agent::delegate::a_body_cannot_displace_what_a_kind_cannot_do`
+`verified-by: bravebot_agent::delegate::a_definition_with_no_body_leaves_the_prompt_as_it_was`
+`verified-by: bravebot_agent::delegate::a_narrowed_delegate_is_told_what_it_holds_rather_than_what_its_kind_holds`
+`verified-by: bravebot_agent::turn::a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for`
 
 <a id="DELEGATE-6"></a>
 ### DELEGATE-6: a delegate is bounded, and the bound is its kind's
@@ -270,6 +307,11 @@ A number rather than a position in the sequence. Reports arrive in the order the
 which is not the order it was asked for, and two delegates of the same kind produce lines that
 read identically.
 
+The line beside the number names the definition rather than its kind, since "a reader" stops
+telling anybody anything the moment two definitions are readers. That name is content from a file
+somebody vouched for, which is the one reason it may be printed: a name nobody vouched for never
+entered the set it was selected from ([DELEGATE-20](#DELEGATE-20)).
+
 **Why the driver says it.** A report is prose a model had a hand in. An interface reading one to
 decide which run it belonged to would be taking that decision from model output, which is the
 thing this repository refuses everywhere else. Whose work a line is is a fact the driver already
@@ -277,6 +319,8 @@ holds.
 
 `verified-by: bravebot_agent::turn::each_delegate_a_turn_spawns_is_numbered_and_its_work_reported_under_that_number`
 `verified-by: bravebot_agent::turn::a_delegates_work_is_bracketed_by_the_announcements_the_interface_reads`
+`verified-by: bravebot_agent::turn::a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for`
+`verified-by: bravebot_core::delegate::a_description_names_the_definition_and_the_kind_behind_it`
 
 <a id="DELEGATE-15"></a>
 ### DELEGATE-15: delegates run alongside the turn and alongside each other
@@ -364,7 +408,143 @@ again.
 `verified-by: bravebot_agent::turn::stopped_parents_collect_outstanding_delegate_usage_once`
 `verified-by: bravebot_agent::turn::delegate_processor_compaction_and_vetting_requests_cover_parent_waits`
 
+## Definitions
+
+<a id="DELEGATE-19"></a>
+### DELEGATE-19: a definition names a kind, and never describes one
+
+A definition is a file saying what a kind of delegate is *for*. `kind:` is required and resolves
+through the enumerated three, so what a file chooses is which of them this delegate is. A file
+naming a kind that resolves to nothing is not a definition and does not load.
+
+A definition may not take a kind's own name. `reader`, `checker` and `worker` are in every set
+and mean what they have always meant, because a file free to claim one could rename the narrowest
+kind to the widest, and the planner picking the narrowest thing that can do the job would be
+picking from a list whose order had stopped being true.
+
+A definition may then name `tools:`, and that is a narrowing and only a narrowing. What it selects
+is intersected with its kind's reach and with the parent's own set, so the intersection
+[DELEGATE-4](#DELEGATE-4) takes gains a third term and keeps its direction: a definition naming a
+tool its kind does not reach is a definition loaded without it, and the trail says what was
+dropped.
+
+A name that is not a tool selects **nothing**, and is reported dropped like any other. `*` is such
+a name rather than a way to ask for all of them, and so is every name in another agent's
+vocabulary. A definition ported from one, whose whole list is names nothing here has, starts a
+delegate with no tools and the trail says which names it was: a fallback to the weakest capability
+would instead leave it holding something for a list of names none of which is a tool it gets, and
+silence would leave somebody with a delegate that answered having done nothing.
+
+Two things survive every narrowing. Reaching the network, because a planner is a model call and
+one that cannot make a request cannot think, and no tool a delegate is offered reaches it. And
+reading, because a write is a read of the file followed by a write of it, so a definition naming
+`edit_file` alone and holding no read would be a delegate whose one tool is refused on every call.
+Neither is a widening: every kind holds both already.
+
+The narrowing is taken in the kernel rather than where the file was read. Which capabilities a
+delegate holds is a decision, and a loader that took it would have moved one out of the kernel,
+which [layering.md](layering.md) forbids.
+
+**Why a file may not name the capability set.** Comparable tools let one: a definition's `tools:`
+*is* what the agent holds, and a file is free to assert a shell where nothing granted one. That
+cannot be had here. [DELEGATE-4](#DELEGATE-4) says delegation redistributes authority and never
+creates it, and a checked-in file granting a capability would make the file the author of
+authority rather than the person who vouched for it.
+
+Keys other than the ones this reads are ignored rather than refused, per
+[SKILL-1](skills.md#SKILL-1), so a definition written for another agent loads here. That is a
+deliberate divergence from the strict schemas those tools use, and it is what lets one checked-in
+directory serve several of them.
+
+`verified-by: bravebot_agent::agents::a_definition_carries_a_name_a_description_a_kind_and_a_body`
+`verified-by: bravebot_agent::agents::a_kind_nobody_enumerated_is_not_a_definition`
+`verified-by: bravebot_agent::agents::a_definition_needs_a_kind_and_a_description`
+`verified-by: bravebot_agent::agents::an_asterisk_is_a_name_and_never_the_whole_list`
+`verified-by: bravebot_agent::agents::a_key_nothing_here_reads_is_ignored_rather_than_refused`
+`verified-by: bravebot_core::delegate::a_definition_can_only_narrow_what_its_kind_holds`
+`verified-by: bravebot_core::delegate::naming_tools_drops_the_capabilities_no_named_tool_reaches`
+`verified-by: bravebot_core::delegate::a_definition_narrowed_to_one_tool_can_still_reach_the_endpoint`
+`verified-by: bravebot_core::delegate::a_definition_that_names_no_tools_holds_its_kinds_own_set`
+`verified-by: bravebot_core::delegate::a_name_that_is_not_a_tool_selects_no_capability`
+`verified-by: bravebot_core::delegate::a_tools_line_written_for_another_agent_is_reported_name_by_name`
+`verified-by: bravebot_core::delegate::a_definition_that_names_only_a_write_tool_can_still_read`
+`verified-by: bravebot_core::delegate::a_definition_cannot_take_a_kinds_own_name`
+`verified-by: bravebot_agent::agents::a_definition_cannot_take_a_kinds_own_name`
+`verified-by: bravebot_core::policy::a_definition_is_delegated_as_the_kind_it_names`
+`verified-by: bravebot_core::policy::a_definition_naming_a_tool_its_kind_lacks_is_delegated_without_it`
+`verified-by: bravebot_core::policy::a_definition_cannot_widen_past_the_run_that_spawned_it`
+`verified-by: bravebot_agent::tools::a_definition_confines_a_delegate_to_the_tools_it_named`
+`verified-by: bravebot_agent::tools::the_capability_that_gates_a_tool_here_is_the_one_the_kernel_reads`
+
+<a id="DELEGATE-20"></a>
+### DELEGATE-20: a definition is resolved from trusted sources before the turn, or it is dropped
+
+Two roots, resolved afresh every turn where skills are, least specific first so the project has
+the last word ([INSTR-1](instructions.md#INSTR-1), [INSTR-4](instructions.md#INSTR-4)):
+`~/.bravebot/agents/<name>.md`, trusted by provenance, and
+`<workspace>/.bravebot/agents/<name>.md`, trusted only if the trust map says so.
+
+This is [SKILL-3](skills.md#SKILL-3) through [SKILL-6](skills.md#SKILL-6) and it transfers whole,
+because a definition is the same shape as a skill and a larger version of the same cost: a skill's
+body is guidance a turn may follow, and a definition's body is the whole of what a second planner
+is told it is.
+
+- The workspace directory is checked for trust **before it is enumerated at all**, because a file
+  name is content too.
+- A source that fails `read_trusted_content` is **dropped entirely, never quarantined**. A
+  reference in place of an instruction is no use to anybody: an instruction is either followed or
+  absent.
+- What was skipped is **counted, never named**, because a file in an untrusted project can be
+  named to read like an instruction and a notice would put that on the person's screen.
+- A file with no `name` is not a definition and is skipped in silence, so a note kept beside the
+  definitions is not an error. A file *with* a name that fails to be a definition is reported, and
+  its origin is named, because by then the source it came from was one somebody vouched for.
+
+Two files in one directory resolve by file name, so which of them is live is the same on every
+machine.
+
+`verified-by: bravebot_agent::agents::a_definition_nobody_vouched_for_is_counted_and_never_named`
+`verified-by: bravebot_agent::agents::a_definition_in_a_vouched_for_project_is_selectable`
+`verified-by: bravebot_agent::agents::a_definition_in_the_users_own_directory_is_selectable`
+`verified-by: bravebot_agent::agents::the_three_kinds_are_selectable_wherever_a_session_runs`
+`verified-by: bravebot_agent::agents::a_workspace_definition_shadows_a_home_one_of_the_same_name`
+`verified-by: bravebot_agent::agents::two_definitions_in_one_directory_resolve_by_file_name`
+`verified-by: bravebot_agent::agents::a_file_that_claims_to_be_a_definition_and_is_not_says_so`
+`verified-by: bravebot_core::delegate::a_later_definition_replaces_one_of_the_same_name`
+
+<a id="DELEGATE-21"></a>
+### DELEGATE-21: a definition's name may not open with `-` or carry a colon
+
+A name opening with `-` reads as a command-line switch wherever it is printed beside other words.
+A colon separates a namespace from a name everywhere one is written, so it is reserved even though
+nothing here namespaces anything yet, and it is reserved against the characters that normalise to
+one as well: a fullwidth colon folds to `:`, and a name that could be spelled two ways is a name
+two definitions can claim.
+
+A file whose name fails this is a definition that does not load, and the notice says which file
+it was, exactly as [DELEGATE-20](#DELEGATE-20) says for any other file that claims to be a
+definition and is not: by then the source it came from is one somebody vouched for, and what is
+named is its path rather than the name it asked for. A file from a directory nobody vouched for is
+never reached at all, and is counted with the rest.
+
+There is no length limit and no character class. A name is compared, never resolved against
+anything, so what it may hold is [SKILL-8](skills.md#SKILL-8)'s question and not this one.
+
+`verified-by: bravebot_agent::agents::a_name_that_is_or_folds_to_a_colon_is_refused`
+
 ## Known costs
+
+- **A definition is trusted exactly as far as a configuration file somebody pasted is.** That is
+  the cost [SKILL-1](skills.md#SKILL-1) already records for skills, and it is larger here: a
+  skill's body is guidance the turn may follow, while a definition's body is the whole of what a
+  second planner is told it is. Read one before installing it. What a definition can never do is
+  hold a capability, which is what keeps the cost to what a person told a delegate rather than
+  what one may reach.
+
+- **The set of characters that fold to a colon is written down rather than derived.** There are
+  four, and normalising a name to find them would be a dependency for four code points. A
+  character Unicode adds to that set later is one [DELEGATE-21](#DELEGATE-21) would not catch
+  until the list is extended.
 
 - **A reference cannot be handed to a delegate.** A parent working in a directory nobody vouched
   for holds references and no filenames, and there is no argument for passing one on: quarantines
@@ -375,7 +555,9 @@ again.
 
 - **A person approving a write cannot see which delegate asked.** The confirmation shows the path
   and the diff, and does not say which of the runs in flight is asking. A person reading only the
-  prompt is approving a change whose reason is one of several tasks they did not read.
+  prompt is approving a change whose reason is one of several tasks they did not read. Definitions
+  make this bite harder: three `reader`s with different definitions are three different jobs where
+  they used to be three of the same.
 
 - **A delegate's task is a guess about what it will need.** It cannot come back for more and it
   cannot ask, so a task missing a detail is a delegate that reports having been unable to finish,
