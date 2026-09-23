@@ -431,6 +431,13 @@ fn a_turn_may_name_files_or_none_and_none_is_the_default() {
         "a turn naming nothing is still a turn"
     );
 
+    // A file that is really there, because DROP-10 has the bridge refuse a dropped path that is
+    // not: a literal under `/tmp` would pass here on a machine that happened to have one and fail
+    // on every other, which is a fixture that decides nothing.
+    let held = tempfile::tempdir().expect("a directory");
+    let briefing = held.path().join("briefing.md");
+    std::fs::write(&briefing, "you are a bot\n").expect("written");
+
     let named = call(
         &mut bridge,
         "turn.send",
@@ -438,7 +445,7 @@ fn a_turn_may_name_files_or_none_and_none_is_the_default() {
             "session": &handle,
             "prompt": "hello",
             "files": ["README.md"],
-            "dropped": ["/tmp/briefing.md"],
+            "dropped": [briefing.display().to_string()],
         }),
     );
     assert_ne!(
@@ -446,6 +453,97 @@ fn a_turn_may_name_files_or_none_and_none_is_the_default() {
         Err(ErrorCode::BadRequest),
         "naming paths is not a refusal"
     );
+}
+
+/// DROP-10: a path in `dropped` that names nothing is refused, rather than the turn running on.
+///
+/// The grant a dropped path gets is the reason: an unconfined read and a rule in the session's
+/// trust map, minted from a string a separate process chose. The gesture behind it is not visible
+/// from here, so what the bridge holds the caller to is the half a string can be held to, and a
+/// path pointing at nothing is a caller that has not got one. Refused rather than left out, for
+/// the reason the front end refuses a turn whose briefing it could not write: a turn that lost the
+/// file it was sent with reports success for work it could not do.
+#[test]
+fn a_dropped_path_that_names_no_file_is_refused() {
+    let (mut bridge, _) = harness();
+    let held = tempfile::tempdir().expect("a directory");
+    let handle = a_trusting_session(&mut bridge);
+
+    let missing = held.path().join("never-written.md");
+    assert_eq!(
+        call(
+            &mut bridge,
+            "turn.send",
+            json!({
+                "session": &handle,
+                "prompt": "hello",
+                "dropped": [missing.display().to_string()],
+            })
+        ),
+        Err(ErrorCode::BadRequest),
+        "nothing is at that path, so nobody dropped it",
+    );
+
+    // DROP-5: dropping a directory attaches nothing, so naming one is a caller's slip rather than
+    // a turn that carries a directory.
+    assert_eq!(
+        call(
+            &mut bridge,
+            "turn.send",
+            json!({
+                "session": &handle,
+                "prompt": "hello",
+                "dropped": [held.path().display().to_string()],
+            })
+        ),
+        Err(ErrorCode::BadRequest),
+        "a directory is not a file anybody dropped",
+    );
+}
+
+/// DROP-10: a relative path is refused, because `files` is the list for one inside the project.
+///
+/// The two lists differ in nothing a caller can see except the reach they grant, and a relative
+/// entry in `dropped` resolves against the workspace root exactly as an entry in `files` does. So
+/// admitting one would mean the unconfined grant being minted for a path the caller meant as an
+/// ordinary project file, told apart from a real drop by nothing at all. An operating system
+/// reports a drop as an absolute path, so requiring one costs a front end nothing.
+#[test]
+fn a_relative_dropped_path_is_refused() {
+    let (mut bridge, _) = harness();
+    let handle = a_trusting_session(&mut bridge);
+
+    assert_eq!(
+        call(
+            &mut bridge,
+            "turn.send",
+            json!({
+                "session": &handle,
+                "prompt": "hello",
+                "dropped": ["Cargo.toml"],
+            })
+        ),
+        Err(ErrorCode::BadRequest),
+        "a path inside the project belongs in `files`",
+    );
+}
+
+/// A session past the trust gate, for the tests whose subject is what comes after it.
+fn a_trusting_session(bridge: &mut Bridge) -> String {
+    let opened = call(
+        bridge,
+        "session.new",
+        json!({ "directory": std::env::temp_dir().display().to_string() }),
+    )
+    .expect("opens");
+    let handle = opened["session"].as_str().expect("a handle").to_string();
+    call(
+        bridge,
+        "trust.reply",
+        json!({ "session": &handle, "trusted": false }),
+    )
+    .expect("answered");
+    handle
 }
 
 /// A `dropped` that is not a list of strings is ignored rather than fatal.

@@ -554,23 +554,7 @@ impl Bridge {
                     .collect()
             })
             .unwrap_or_default();
-        // The same shape as `files`, and a different promise. A named file is workspace-relative
-        // and the agent reads it inside the project; a dropped one may sit anywhere, because the
-        // path came from a gesture rather than from anything a model said. That is what carries a
-        // bot's briefing, which lives beside this app's own settings and deliberately not inside
-        // the checkout the planner may write to.
-        let dropped: Vec<String> = request
-            .params
-            .get("dropped")
-            .and_then(Value::as_array)
-            .map(|entries| {
-                entries
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let dropped = dropped_paths(request)?;
         // Whether this prompt is one a person will want back when they press up.
         //
         // `~/.bravebot/history` is recall, shared with the terminal front-end, and what belongs in
@@ -1076,6 +1060,56 @@ impl Bridge {
         self.open.insert(handle.clone(), session);
         handle
     }
+}
+
+/// The files a turn is told a person dropped, each one accounted for as far as a string can be.
+///
+/// The same shape as `files`, and a different promise. A named file is workspace-relative and the
+/// agent reads it inside the project; a dropped one may sit anywhere, because the path came from a
+/// gesture rather than from anything a model said. That is what carries a bot's briefing, which
+/// lives beside this app's own settings and deliberately not inside the checkout the planner may
+/// write to.
+///
+/// DROP-1 puts the justification for that reach at the call site, and this is the second one: the
+/// terminal's drop handling is the other. A front end is a separate process, so the gesture is not
+/// visible from here and DROP-10 says what its caller owes. What this decides is the half of a
+/// drop that leaves a trace on the disk: the path names a file that is there, and names it
+/// absolutely, because an operating system reports a drop that way and because `files` beside it
+/// is the parameter for a path inside the project.
+///
+/// A turn naming anything else is refused rather than run without it, for the reason the front end
+/// refuses one whose briefing it could not write: a turn that lost the file it was sent with is
+/// not a smaller turn, it is one that reports success for work it could not do.
+///
+/// An entry that is not a string, and a `dropped` that is not a list at all, are left out rather
+/// than refused. Those are a front end built against a different version of this protocol, which
+/// is the case the leniency exists for.
+fn dropped_paths(request: &Request) -> Result<Vec<String>, Failure> {
+    let Some(entries) = request.params.get("dropped").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut paths = Vec::new();
+    for named in entries.iter().filter_map(Value::as_str) {
+        let path = std::path::Path::new(named);
+        if !path.is_absolute() {
+            return Err(Failure::bad_request(format!(
+                "a dropped file is named by an absolute path, and {named} is not one; \
+                 a path inside the project belongs in `files`"
+            )));
+        }
+        if path.is_dir() {
+            return Err(Failure::bad_request(format!(
+                "{named} is a directory, and dropping one attaches nothing"
+            )));
+        }
+        if !path.is_file() {
+            return Err(Failure::bad_request(format!(
+                "{named} names no file to drop"
+            )));
+        }
+        paths.push(named.to_string());
+    }
+    Ok(paths)
 }
 
 /// The workspace one turn runs on, under the caps the settings in force put a search under.
