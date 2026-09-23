@@ -8,6 +8,19 @@ pub fn layers(project: Option<&Path>, selected: Option<&Path>) -> Settings {
     Settings::layered(bravebot_agent::home::directory(), project, selected)
 }
 
+/// Whether a safe verdict releases quarantined content with nobody asked, resolved as the terminal does.
+pub fn auto_vetting(settings: &Settings) -> bool {
+    resolve_vetting(settings, bravebot_session::store::load_vetting())
+}
+
+fn resolve_vetting(settings: &Settings, chosen: Option<bool>) -> bool {
+    bravebot_core::vetting::auto(
+        bravebot_core::vetting::asked_for(),
+        chosen,
+        settings.auto_vetting(),
+    )
+}
+
 pub fn config(project: Option<&Path>, selected: Option<&Path>) -> Result<Config, Failure> {
     if let Some(path) = selected {
         validate(path)?;
@@ -97,6 +110,58 @@ mod tests {
             validate(&file).is_err(),
             "do not accept a file the agent silently ignores"
         );
+    }
+
+    fn vetting_layers(
+        home_text: Option<&str>,
+        project_text: Option<&str>,
+    ) -> (tempfile::TempDir, Settings) {
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("bravebot-settings-vetting-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let directory = builder.tempdir().unwrap();
+        let home = directory.path().join("home");
+        let project = directory.path().join("project");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(project.join(".bravebot")).unwrap();
+        if let Some(text) = home_text {
+            std::fs::write(home.join("settings.json"), text).unwrap();
+        }
+        if let Some(text) = project_text {
+            std::fs::write(project.join(".bravebot/settings.json"), text).unwrap();
+        }
+        let settings = Settings::layered(Some(home), Some(&project), None);
+        (directory, settings)
+    }
+
+    #[test]
+    fn auto_vetting_is_off_until_somebody_turns_it_on() {
+        let (_dir, settings) = vetting_layers(None, None);
+        assert!(!resolve_vetting(&settings, None));
+    }
+
+    #[test]
+    fn the_home_settings_file_turns_auto_vetting_on() {
+        let (_dir, settings) = vetting_layers(Some(r#"{"vetting": {"auto": true}}"#), None);
+        assert!(resolve_vetting(&settings, None));
+    }
+
+    #[test]
+    fn a_checkout_cannot_turn_auto_vetting_on() {
+        let (_dir, settings) = vetting_layers(None, Some(r#"{"vetting": {"auto": true}}"#));
+        assert!(!resolve_vetting(&settings, None));
+    }
+
+    #[test]
+    fn a_recorded_choice_outranks_the_home_settings_file() {
+        let (_dir, settings) = vetting_layers(Some(r#"{"vetting": {"auto": true}}"#), None);
+        assert!(!resolve_vetting(&settings, Some(false)));
+        let (_dir, settings) = vetting_layers(Some(r#"{"vetting": {"auto": false}}"#), None);
+        assert!(resolve_vetting(&settings, Some(true)));
     }
 
     #[test]

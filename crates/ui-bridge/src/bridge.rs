@@ -597,6 +597,7 @@ impl Bridge {
         // the caps a search this turn makes runs under (SEARCH-9).
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
         let attribution = settings.attribution().clone();
+        let auto_vetting = crate::settings::auto_vetting(&settings);
         let mut workspace = turn_workspace(open.project.clone(), &settings)
             .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
 
@@ -659,6 +660,7 @@ impl Bridge {
                 state,
                 config,
                 attribution,
+                auto_vetting,
                 workspace,
                 prompt,
                 composed,
@@ -1139,6 +1141,8 @@ struct Work {
     config: Config,
     /// What the settings say a commit message and a pull request this turn writes may carry.
     attribution: bravebot_config::Attribution,
+    /// Settled when the turn was asked for, so a prompt already on screen is not answered under a different rule.
+    auto_vetting: bool,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
     model: Option<String>,
     workspace: Workspace,
@@ -1184,6 +1188,7 @@ fn work(work: Work) {
         state,
         config,
         attribution,
+        auto_vetting,
         watches,
         model,
         workspace,
@@ -1211,7 +1216,8 @@ fn work(work: Work) {
     let mut task = Task::new(&prompt)
         .with_home(bravebot_agent::home::directory())
         .with_model(model)
-        .with_attribution(attribution);
+        .with_attribution(attribution)
+        .with_auto_vetting(auto_vetting);
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
