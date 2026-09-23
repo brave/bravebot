@@ -1468,11 +1468,14 @@ them in, which is nothing a person could predict from what they wrote, so neithe
 **A mode reads the chord that opened it.** Inside the search over prompts, the chord that puts a line
 away narrows the scope and the one that opened the search closes it (INPUT-19, INPUT-31); inside the
 view of what a delegate is doing, the chord that opened the view leaves it. Ctrl-C keeps its own
-meaning in both, and the chord an action was moved off of does nothing.
+meaning in both, and the chord an action was moved off of does nothing. In the view so does every
+other key held with a modifier but Shift, the chord an action was moved onto among them, save the
+scroller's Ctrl-U, Ctrl-D and Ctrl-B ([SCROLL-3](scroller.md#SCROLL-3)), which the view borrows.
 
 **Why.** Every character narrows the prompt search and bare letters walk the delegate list, so a
 chord these modes did not ask the bindings about is not merely unanswered: it is read as the letter
 it carries, and the search a person moved a chord to open narrows itself to prompts holding an `s`.
+Shift is spared because Shift-Tab arrives carrying it.
 
 **A configured chord takes precedence over line editing.** When a chord is moved onto one of the
 readline editing keys (such as `ctrl-u` or `alt-b`), the action answers rather than the line
@@ -1520,6 +1523,10 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::render::a_picture_on_the_clipboard_says_which_key_carries_it`
 `verified-by: bravebot_tui::app::a_moved_chord_is_read_inside_the_search_it_opened`
 `verified-by: bravebot_tui::app::a_moved_chord_leaves_the_view_it_opened`
+`verified-by: bravebot_tui::app::the_chord_an_action_was_moved_off_does_nothing_inside_the_view`
+`verified-by: bravebot_tui::app::a_chord_moved_onto_a_key_the_view_reads_is_not_that_key`
+`verified-by: bravebot_tui::app::a_letter_held_with_any_other_modifier_is_not_that_letter`
+`verified-by: bravebot_tui::app::the_keys_the_view_reads_with_a_modifier_held_still_answer`
 `verified-by: bravebot_tui::app::custom_keybindings_route_actions_and_old_chords_are_ignored`
 `verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`
 `verified-by: bravebot_tui::app::vi_mode_search_prompts_uses_configured_history_chord`

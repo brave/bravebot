@@ -827,10 +827,11 @@ fn history_search_key(session: &mut Session, key: KeyEvent) -> Action {
 /// otherwise go into a box they cannot see, to be sent to a turn they are not looking at.
 ///
 /// Two levels, and the key that leaves is read against the nearer one: from a delegate it goes
-/// back to the list, and from the list it closes. Ctrl-L and Ctrl-C leave the mode outright from
-/// either, because a person who wants out of a mode wants out of the mode.
+/// back to the list, and from the list it closes. The chord that opened it and Ctrl-C leave the
+/// mode outright from either, because a person who wants out of a mode wants out of the mode.
 fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    // Ctrl alone: a settings file can give Ctrl-Alt-U to an action, and that is not the view's key.
+    let ctrl = key.modifiers == KeyModifiers::CONTROL;
     let listing = session.listing_delegates();
 
     match key.code {
@@ -839,8 +840,8 @@ fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
         // delegate was doing is not asking for the turn to end when they come back out.
         //
         // The chord that opened the view is read off the bindings, and before every other arm: the
-        // keys that walk the list are bare letters matched whatever is held with them, so one moved
-        // onto `j` would walk the list instead of leaving.
+        // arm below refuses every chord but the view's own, so one moved onto `alt-j` would do
+        // nothing instead of leaving.
         _ if session.bindings().is_watch(&key) => {
             session.stop_watching();
             Action::Redraw
@@ -849,6 +850,27 @@ fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
             session.stop_watching();
             Action::Redraw
         }
+
+        // Half a screen, and a whole one back, in the scroller's chords (SCROLL-3). They are the
+        // view's own, so they are read before the arm that refuses every other chord.
+        KeyCode::Char('u') if ctrl => {
+            session.scroll_up(session.half_screen());
+            Action::Redraw
+        }
+        KeyCode::Char('d') if ctrl => {
+            session.scroll_down(session.half_screen());
+            Action::Redraw
+        }
+        KeyCode::Char('b') if ctrl => {
+            session.scroll_up(session.whole_screen());
+            Action::Redraw
+        }
+
+        // Every other chord does nothing. The arms below match the key and not what is held with
+        // it, and a chord read as the key it carries is a key nobody gave the view: the Ctrl-L an
+        // action was moved off of would still open the delegate the list is on. Shift is let
+        // through, since it is how a terminal spells Shift-Tab.
+        _ if !key.modifiers.difference(KeyModifiers::SHIFT).is_empty() => Action::None,
 
         // Back one level, or out where there is no level to go back to.
         KeyCode::Char('q') | KeyCode::Esc => {
@@ -898,14 +920,6 @@ fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
         }
         KeyCode::Down | KeyCode::Char('j') => {
             session.scroll_down(1);
-            Action::Redraw
-        }
-        KeyCode::Char('u') if ctrl => {
-            session.scroll_up(session.half_screen());
-            Action::Redraw
-        }
-        KeyCode::Char('d') if ctrl => {
-            session.scroll_down(session.half_screen());
             Action::Redraw
         }
         KeyCode::PageUp | KeyCode::Char('b') => {
@@ -6729,8 +6743,8 @@ mod tests {
         }
 
         /// The chord that opened the view leaves it, wherever it has been moved to. Bound onto `j`
-        /// on purpose: the keys that walk the list are bare letters matched whatever is held with
-        /// them, so a chord read after them would walk the list instead of leaving.
+        /// on purpose: `j` walks the list and every chord but the view's own is refused, so a chord
+        /// read after either would walk the list or do nothing instead of leaving.
         #[test]
         fn a_moved_chord_leaves_the_view_it_opened() {
             let mut session = Session::new("kernel-enforced");
@@ -6756,6 +6770,195 @@ mod tests {
             assert!(
                 session.watching().is_none(),
                 "the old chord still opened it"
+            );
+        }
+
+        /// A turn with two delegates and the actions on `moved`, standing at each of the view's
+        /// three places: the list on a delegate, the list on the session, and one delegate's lines.
+        fn at_every_place_in_the_view(moved: &[(&str, &str)]) -> Vec<(&'static str, Session)> {
+            let bindings: std::collections::BTreeMap<String, String> = moved
+                .iter()
+                .map(|(action, chord)| (action.to_string(), chord.to_string()))
+                .collect();
+            let opened = || {
+                let mut session = Session::new("kernel-enforced");
+                session.status = Status::Working;
+                session.adopt_keybindings(&bindings);
+                spawn(&mut session, "reader", "find the parser");
+                spawn(&mut session, "checker", "run the build");
+                assert!(session.watch(), "there was nothing to watch");
+                session
+            };
+
+            let on_a_delegate = opened();
+            assert!(on_a_delegate.listing_delegates() && !on_a_delegate.listing_on_the_session());
+
+            let mut on_the_session = opened();
+            on_the_session.watch_previous();
+            on_the_session.watch_previous();
+            assert!(on_the_session.listing_on_the_session());
+
+            let mut inside_one = opened();
+            inside_one.open_watched();
+            assert!(inside_one.watching_a_delegate());
+
+            vec![
+                ("on the list", on_a_delegate),
+                ("on the session row", on_the_session),
+                ("inside a delegate", inside_one),
+            ]
+        }
+
+        /// Somebody who moved Watch off Ctrl-L presses it from habit, and the view walks the list
+        /// with bare letters: read as the `l` it carries, the chord opened the delegate the list
+        /// was on, or closed the view from the session row. Every default is vacated, so a letter
+        /// the view comes to read is held to this too.
+        #[test]
+        fn the_chord_an_action_was_moved_off_does_nothing_inside_the_view() {
+            let moved = [
+                ("editor", "alt-e"),
+                ("history", "alt-r"),
+                ("paste", "alt-v"),
+                ("scroller", "alt-o"),
+                ("stash", "alt-s"),
+                ("trail", "alt-t"),
+                ("watch", "alt-w"),
+            ];
+            let handlers: [fn(&mut Session, KeyEvent) -> Action; 2] =
+                [handle_key, handle_key_while_working];
+            for handler in handlers {
+                for (place, mut session) in at_every_place_in_the_view(&moved) {
+                    for vacated in ['g', 'l', 'o', 'r', 's', 't', 'v'].map(ctrl) {
+                        assert!(
+                            !session.bindings().claims(&vacated),
+                            "{vacated:?} was not vacated"
+                        );
+                        let before = (session.watching(), session.scroll);
+
+                        let action = handler(&mut session, vacated);
+
+                        assert_eq!(action, Action::None, "{vacated:?} answered {place}");
+                        assert_eq!(
+                            (session.watching(), session.scroll),
+                            before,
+                            "{vacated:?} moved the view {place}"
+                        );
+                    }
+                }
+            }
+        }
+
+        /// The view asks the bindings about Watch alone, so the other six chords are nobody's in
+        /// here. Moved onto the keys the view walks with, one read as its key would open, close or
+        /// move the view on a chord the person gave to something else. The second set is the
+        /// view's own chords with Alt added, and keys that are not letters.
+        #[test]
+        fn a_chord_moved_onto_a_key_the_view_reads_is_not_that_key() {
+            let onto_letters = [
+                ("editor", "alt-l"),
+                ("history", "alt-q"),
+                ("paste", "alt-j"),
+                ("scroller", "alt-k"),
+                ("stash", "alt-n"),
+                ("trail", "alt-p"),
+                ("watch", "alt-w"),
+            ];
+            let onto_the_rest = [
+                ("editor", "ctrl-alt-u"),
+                ("history", "ctrl-alt-d"),
+                ("paste", "ctrl-alt-c"),
+                ("scroller", "alt-b"),
+                ("stash", "ctrl-down"),
+                ("trail", "alt-esc"),
+                ("watch", "alt-w"),
+            ];
+            for moved in [onto_letters, onto_the_rest] {
+                for (place, mut session) in at_every_place_in_the_view(&moved) {
+                    for (action, spelling) in moved.iter().filter(|(action, _)| *action != "watch")
+                    {
+                        let chord = crate::keybindings::KeyChord::parse(spelling)
+                            .expect("the spelling should parse");
+                        let chord = KeyEvent::new(chord.code, chord.modifiers);
+                        assert!(
+                            session.bindings().claims(&chord),
+                            "{action} did not take {spelling}"
+                        );
+                        let before = (session.watching(), session.scroll);
+
+                        let answer = handle_key_while_working(&mut session, chord);
+
+                        assert_eq!(answer, Action::None, "{spelling} answered {place}");
+                        assert_eq!(
+                            (session.watching(), session.scroll),
+                            before,
+                            "{spelling} was read as the key it carries {place}"
+                        );
+                    }
+                }
+            }
+        }
+
+        /// A terminal speaking the keyboard protocol this client asks for reports Super, Hyper and
+        /// Meta as well. No action can be moved onto them, and a letter held with one is still not
+        /// the letter: Super-L opened the delegate the list was on.
+        #[test]
+        fn a_letter_held_with_any_other_modifier_is_not_that_letter() {
+            for held in [KeyModifiers::SUPER, KeyModifiers::HYPER, KeyModifiers::META] {
+                for (place, mut session) in at_every_place_in_the_view(&[]) {
+                    for letter in ['l', 'q', 'j', 'k', 'n', 'p', 'b'] {
+                        let chord = KeyEvent::new(KeyCode::Char(letter), held);
+                        let before = (session.watching(), session.scroll);
+
+                        let answer = handle_key_while_working(&mut session, chord);
+
+                        assert_eq!(answer, Action::None, "{chord:?} answered {place}");
+                        assert_eq!(
+                            (session.watching(), session.scroll),
+                            before,
+                            "{chord:?} was read as {letter:?} {place}"
+                        );
+                    }
+                }
+            }
+        }
+
+        /// Refusing chords stops at the ones the view answers itself: Ctrl-U and Ctrl-D move a
+        /// delegate's lines half a screen and Ctrl-B a whole one, as they move the scroller's, and
+        /// a terminal reports Shift-Tab as BackTab with Shift held.
+        #[test]
+        fn the_keys_the_view_reads_with_a_modifier_held_still_answer() {
+            let mut session = Session::new("kernel-enforced");
+            session.status = Status::Working;
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+            assert!(session.watch(), "there was nothing to watch");
+            session.open_watched();
+            session.note_layout(crate::state::Laid {
+                width: 80,
+                height: 10,
+                rows: 100,
+                prompts: Vec::new(),
+                matches: Vec::new(),
+            });
+
+            handle_key_while_working(&mut session, ctrl('u'));
+            assert_eq!(session.scroll, 5, "ctrl-u did not move half a screen back");
+            handle_key_while_working(&mut session, ctrl('d'));
+            assert_eq!(session.scroll, 0, "ctrl-d did not move half a screen on");
+            handle_key_while_working(&mut session, ctrl('b'));
+            assert_eq!(
+                session.scroll, 10,
+                "ctrl-b did not move a whole screen back"
+            );
+
+            let shift_tab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+            handle_key_while_working(&mut session, shift_tab);
+            assert_eq!(
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
+                Some("reader"),
+                "shift-tab did not step back a delegate"
             );
         }
 
