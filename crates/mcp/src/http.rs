@@ -2,11 +2,15 @@
 //!
 //! A remote server at a user-configured URL. Unlike stdio there is no process to confine,
 //! so the protections are different: every request goes through the egress chokepoint, so
-//! the policy gate sees it and each redirect hop is revalidated.
+//! the policy gate sees it, and a redirect off the declared destination is not followed
+//! without the person who declared the server approving where it went.
 //!
 //! That matters more here than for the model endpoint. MCP servers are arbitrary URLs a
 //! user adds, not one hardcoded host, so a server that redirects elsewhere is a realistic
-//! way to reach an unintended destination.
+//! way to reach an unintended destination. It is a question rather than a rule because a
+//! server that has moved writes the same header as one redirecting a call away, and only
+//! the person who wrote the declaration can tell those apart. There is nowhere to ask yet:
+//! see [`bravebot_core::policy::Policy::before_server_request`] and issue #83.
 
 use crate::protocol::{
     RpcRequest, RpcResponse, ToolDescriptor, ToolList, ToolResult, call_params, initialize_params,
@@ -77,17 +81,24 @@ impl HttpServer {
             request = request.header("mcp-session-id", session);
         }
 
+        // The declaration names one destination, so the gate holds the hops to it rather than
+        // following wherever a reply points: the body going out is this server's call, with its
+        // arguments and its session id, and a redirect is somewhere nobody declared yet.
+        policy.before_server_request(&self.url);
         // Untrusted-public: a remote server's reply is third-party content.
-        let response = egress
-            .fetch(
-                policy,
-                request,
-                bravebot_core::label::Label::untrusted_public(),
-            )
-            .map_err(|e| match e {
-                bravebot_net::EgressError::Denied(d) => McpError::Denied(d),
-                other => McpError::Transport(other.to_string()),
-            })?;
+        let sent = egress.fetch(
+            policy,
+            request,
+            bravebot_core::label::Label::untrusted_public(),
+        );
+        // Before anything returns, so a failed request does not leave the rest of the turn's
+        // egress confined to this server's host.
+        policy.server_request_finished();
+
+        let response = sent.map_err(|e| match e {
+            bravebot_net::EgressError::Denied(d) => McpError::Denied(d),
+            other => McpError::Transport(other.to_string()),
+        })?;
 
         // Decoding the envelope needs the bytes; the label is reapplied to extracted
         // content by the caller.

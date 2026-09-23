@@ -23,15 +23,45 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// The Landlock ABI this backend targets. ABI v2 is the first carrying the right that
-/// governs moving a file between two directories, and a ruleset that does not handle
-/// that right denies the operation wherever it appears, so targeting v1 confines a
-/// program to less than its grants name. What v2 costs is the kernels between 5.13 and
-/// 5.19, which have Landlock without that right.
-const TARGET_ABI: ABI = ABI::V2;
+/// The right set the ruleset handles, which is every right this crate knows of.
+///
+/// A right left out of a ruleset's handled set is not restricted at all: the kernel's hooks
+/// for it check nothing for that domain, which is Landlock's compatibility contract. So the
+/// handled set is what decides how much of the filesystem a confinement covers, and naming
+/// the oldest ABI here leaves every right added after it outside the boundary altogether. A
+/// confined process then empties any file the account owns, by path, anywhere outside its
+/// grants, while the policy reads as applied.
+///
+/// This is not the kernel floor, which is [`MINIMUM_ABI_VERSION`]. `CompatLevel::BestEffort`
+/// narrows the handled set to the rights the running kernel carries, so naming the newest
+/// ABI here costs an older kernel nothing: it is confined under every right it has rather
+/// than under only the rights the oldest ABI had. The rules the grants are built from widen
+/// with it, or a right becomes handled and granted nowhere and an ordinary write inside a
+/// granted directory starts failing.
+///
+/// Every right this widens by is one Landlock counts as a write, so a write grant carries
+/// it and a read grant does not. That is the grant a caller has to name for a program to
+/// empty a file it may rewrite, to drive a device rather than only read it, and, on a
+/// kernel carrying the ninth version, to reach a socket by its path. The alternative is a
+/// read grant that carries a write, which is a policy's two lists saying one thing, and
+/// leaving the rights unhandled is the third: every ioctl on every device a grant can open,
+/// and every such socket on the machine, reachable from inside the boundary.
+///
+/// The newest ABI this crate knows rather than one this backend has been tested against,
+/// because the cost of the second is a right that restricts nothing at all. Landlock's own
+/// advice is to request rights that have been tried on a kernel carrying them and on one
+/// that does not, and what makes that possible here is that an upgrade of the `landlock`
+/// crate teaching it a newer ABI fails a test naming this constant: widening it is then a
+/// line somebody writes with the new rights in front of them.
+const HANDLED_ABI: ABI = ABI::V9;
 
-/// The Landlock ABI version [`TARGET_ABI`] needs from the kernel.
-const TARGET_ABI_VERSION: libc::c_long = 2;
+/// The Landlock ABI version this backend refuses a kernel below.
+///
+/// ABI v2 is the first carrying the right that governs moving a file between two
+/// directories, and a ruleset that cannot restrict that right denies the operation wherever
+/// it appears, so a kernel below it confines a program to less than its grants name. What
+/// v2 costs is the kernels between 5.13 and 5.19, which have Landlock without that right.
+const MINIMUM_ABI_VERSION: libc::c_long = 2;
 
 /// `landlock_create_ruleset`, stable since Linux 5.13.
 const SYS_LANDLOCK_CREATE_RULESET: libc::c_long = 444;
@@ -56,22 +86,22 @@ fn landlock_abi_version() -> libc::c_long {
     }
 }
 
-/// Whether a kernel reporting `version` can enforce [`TARGET_ABI`].
+/// Whether a kernel reporting `version` carries [`MINIMUM_ABI_VERSION`].
 ///
 /// A version rather than the syscall, so every answer is decided by something a test can
 /// call: the kernel a suite runs on reports one of them and no test can make it report
 /// another.
 ///
-/// A kernel too old for the target ABI is refused rather than confined under the rights
-/// it does carry. `BestEffort` compatibility is what lets a grant for a regular file drop
-/// the rights only a directory can hold, and it drops the whole target ABI just as
-/// quietly on a kernel that is merely old, which is silent degradation rather than a
+/// A kernel below the floor is refused rather than confined under the rights it does
+/// carry. `BestEffort` compatibility is what lets a grant for a regular file drop the
+/// rights only a directory can hold, and it would drop the right that governs a move just
+/// as quietly on a kernel that is merely old, which is silent degradation rather than a
 /// platform difference a caller can work with.
 ///
 /// The two refusals are separate because the answer to them differs: a kernel with no
 /// Landlock at all is a machine to enable the LSM on, and an old one is a machine to
 /// upgrade.
-fn abi_supports_target(version: libc::c_long) -> Result<(), SandboxError> {
+fn abi_meets_minimum(version: libc::c_long) -> Result<(), SandboxError> {
     if version < 1 {
         return Err(SandboxError::Unavailable {
             platform: "linux",
@@ -80,14 +110,14 @@ fn abi_supports_target(version: libc::c_long) -> Result<(), SandboxError> {
                 .into(),
         });
     }
-    if version < TARGET_ABI_VERSION {
+    if version < MINIMUM_ABI_VERSION {
         return Err(SandboxError::Unavailable {
             platform: "linux",
             detail: format!(
                 "this kernel implements landlock abi {version}, which has no right governing \
                  the move of a file between two directories, so a ruleset built on it denies \
                  every such move inside the paths a policy grants; refusing rather than \
-                 confining to less than a policy asks for (needs abi {TARGET_ABI_VERSION}, \
+                 confining to less than a policy asks for (needs abi {MINIMUM_ABI_VERSION}, \
                  kernel 5.19+)"
             ),
         });
@@ -140,14 +170,14 @@ impl LandlockSandbox {
     ///
     /// So the ABI is queried directly. `ENOSYS` means the syscall does not exist:
     /// the case on Docker Desktop's linuxkit kernel, which does not enable the LSM.
-    /// A kernel that has it but reports less than [`TARGET_ABI_VERSION`] is refused for
+    /// A kernel that has it but reports less than [`MINIMUM_ABI_VERSION`] is refused for
     /// the same reason, since `BestEffort` would run it under the rights it does carry.
     pub fn new() -> Result<Self, SandboxError> {
-        abi_supports_target(landlock_abi_version())?;
+        abi_meets_minimum(landlock_abi_version())?;
 
         landlock::Ruleset::default()
             .set_compatibility(CompatLevel::BestEffort)
-            .handle_access(AccessFs::from_all(TARGET_ABI))
+            .handle_access(AccessFs::from_all(HANDLED_ABI))
             .and_then(|r| r.create())
             .map_err(|e| SandboxError::Unavailable {
                 platform: "linux",
@@ -245,7 +275,7 @@ impl Sandbox for LandlockSandbox {
 
                 let mut ruleset = landlock::Ruleset::default()
                     .set_compatibility(CompatLevel::BestEffort)
-                    .handle_access(AccessFs::from_all(TARGET_ABI))
+                    .handle_access(AccessFs::from_all(HANDLED_ABI))
                     .and_then(|r| r.create())
                     .map_err(|e| Error::other(format!("landlock: {e}")))?;
 
@@ -253,7 +283,7 @@ impl Sandbox for LandlockSandbox {
                     ruleset = ruleset
                         .add_rules(rules_for_every_path(
                             &readable,
-                            AccessFs::from_read(TARGET_ABI),
+                            AccessFs::from_read(HANDLED_ABI),
                         )?)
                         .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
                 }
@@ -262,7 +292,7 @@ impl Sandbox for LandlockSandbox {
                     ruleset = ruleset
                         .add_rules(rules_for_every_path(
                             &writable,
-                            AccessFs::from_all(TARGET_ABI),
+                            AccessFs::from_all(HANDLED_ABI),
                         )?)
                         .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
                 }
@@ -303,6 +333,41 @@ mod tests {
     /// touch reporting that the write it was asked for failed. Any other code means it
     /// stopped before the write, which says nothing about a write grant.
     const TOUCH_FAILED: i32 = 1;
+
+    /// python reporting that the call it was asked to make raised. Any other code means it
+    /// stopped before the call, which says nothing about a grant.
+    const PYTHON_FAILED: i32 = 1;
+
+    /// The Landlock ABI version carrying the right that governs emptying a file, and the
+    /// version carrying the one that governs an ioctl on a device. Both are above the floor
+    /// this backend refuses a kernel below.
+    const TRUNCATE_ABI_VERSION: libc::c_long = 3;
+    const IOCTL_ABI_VERSION: libc::c_long = 5;
+
+    /// What a file a test reads back is filled with, so that an emptied one is a length
+    /// rather than an absence.
+    const CONTENTS: &[u8] = b"contents";
+
+    /// Whether this kernel carries a right that arrived above the floor, announcing the
+    /// skip where it does not.
+    ///
+    /// Such a kernel is one this backend still confines a process on
+    /// ([`MINIMUM_ABI_VERSION`]) and one where no ruleset can hold that process to the
+    /// right in question, so a test asserting that denial says it did not run rather than
+    /// failing over the kernel or passing while asserting nothing.
+    fn kernel_governs(operation: &str, arrived_in: libc::c_long, kernel: &str) -> bool {
+        let version = landlock_abi_version();
+        if version < arrived_in {
+            // Straight at the descriptor, for the reason the missing-landlock skip is.
+            let _ = writeln!(
+                std::io::stderr(),
+                "SKIPPED: landlock abi {version} carries no right governing {operation} \
+                 (needs abi {arrived_in}, kernel {kernel})"
+            );
+            return false;
+        }
+        true
+    }
 
     /// The narrowest policy a process can actually start under. The loader reads the
     /// binary and the libraries it links, and Landlock has no exemption for that, while
@@ -356,6 +421,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A right this crate knows and the ruleset does not handle is a right nothing
+    /// restricts, so the boundary is only as wide as the newest ABI named here. Without
+    /// this, an upgrade of the `landlock` crate is a widening nobody performs: the rights
+    /// the version it learned governs sit outside the confinement, unrestricted on every
+    /// kernel that carries them, and every other test here passes.
+    ///
+    /// `ABI::from` clamps to the greatest version the crate knows, and the enumeration is
+    /// `non_exhaustive`, so this is the only way to ask it what that version is.
+    #[test]
+    fn the_ruleset_handles_every_right_this_crate_knows_of() {
+        assert_eq!(
+            HANDLED_ABI,
+            ABI::from(i32::MAX),
+            "the landlock crate knows a newer abi than this ruleset handles, so the rights \
+             it added restrict nothing; widen HANDLED_ABI to it, having read what those \
+             rights govern and what granting them inside a policy's paths means"
+        );
+        assert!(
+            AccessFs::from_all(HANDLED_ABI).contains(AccessFs::Truncate),
+            "the right that governs emptying a file has to be one the ruleset handles"
+        );
     }
 
     #[test]
@@ -587,7 +675,7 @@ mod tests {
     fn a_ruleset_is_not_built_with_a_path_missing_from_it() {
         let err = rules_for_every_path(
             &[PathBuf::from("/bravebot-no-such-path")],
-            AccessFs::from_read(TARGET_ABI),
+            AccessFs::from_read(HANDLED_ABI),
         )
         .expect_err("must refuse to build a ruleset short of a path");
         assert!(
@@ -748,7 +836,7 @@ mod tests {
     #[test]
     fn a_kernel_that_cannot_govern_a_move_is_refused_rather_than_confining_without_it() {
         let absent =
-            abi_supports_target(-1).expect_err("a kernel with no landlock cannot confine anything");
+            abi_meets_minimum(-1).expect_err("a kernel with no landlock cannot confine anything");
         match absent {
             SandboxError::Unavailable { platform, detail } => {
                 assert_eq!(platform, "linux");
@@ -760,7 +848,7 @@ mod tests {
             other => panic!("expected Unavailable for an absent syscall, got: {other:?}"),
         }
 
-        let old = abi_supports_target(TARGET_ABI_VERSION - 1)
+        let old = abi_meets_minimum(MINIMUM_ABI_VERSION - 1)
             .expect_err("an abi without the move right has to be refused");
         match old {
             SandboxError::Unavailable { platform, detail } => {
@@ -773,7 +861,7 @@ mod tests {
             other => panic!("expected Unavailable for an old abi, got: {other:?}"),
         }
 
-        abi_supports_target(TARGET_ABI_VERSION).expect("the abi this backend targets is enough");
+        abi_meets_minimum(MINIMUM_ABI_VERSION).expect("the abi this backend needs is enough");
     }
 
     /// Writing a temporary file and renaming it into place is how a compiler, a package
@@ -824,6 +912,197 @@ mod tests {
                 .ino(),
             inode,
             "the file was copied and unlinked rather than moved, so the move was denied"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The right that governs emptying a file arrived after the ones that govern writing
+    /// to it, so a ruleset handling only the older set leaves `truncate(2)` checked
+    /// against nothing at all: that syscall names a path and opens no descriptor, so the
+    /// write grant the ruleset does handle is never consulted, and a confined process
+    /// empties a file no grant names while the record says the policy was applied. A
+    /// private key, a shell profile and a database are each destroyed by an emptying as
+    /// thoroughly as by a write.
+    ///
+    /// The refused half is granted the directory for reading, which is the narrower claim
+    /// and the one worth making: emptying a file is a write, so a read grant carries no
+    /// more right to it than no grant at all, and the paths every confined process here is
+    /// granted for reading hold the loader and the system libraries. The half inside the
+    /// write grant is the other end of the same right, and without it a ruleset that
+    /// handles truncation and grants it nowhere reads as a confinement rather than as an
+    /// ordinary write refused inside the paths a policy named.
+    ///
+    /// The witness is python because nothing else on the machine truncates by path:
+    /// `truncate(1)` opens the file `O_WRONLY` and calls `ftruncate`, which the write
+    /// grant already denies, so a test built on it passes against the gap it is written
+    /// to catch. Its environment is empty, so a `PYTHON` variable a machine running this
+    /// holds cannot send the interpreter to a path no grant names and fail it for a reason
+    /// of its own.
+    #[test]
+    fn a_confined_process_cannot_truncate_a_file_outside_its_grants() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        if !kernel_governs("the emptying of a file", TRUNCATE_ABI_VERSION, "6.2+") {
+            return;
+        }
+
+        let dir = crate::testutil::scratch_dir("bravebot-landlock-denied-truncate");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let target = dir.join("kept");
+
+        // Refilled before each half, so the second half reads the file the first left
+        // rather than one it emptied.
+        let emptied_by = |policy: &SandboxPolicy| {
+            std::fs::write(&target, CONTENTS).expect("the file is writable");
+            let mut child = sandbox
+                .spawn(
+                    "/usr/bin/python3",
+                    &[
+                        "-c".to_owned(),
+                        "import os, sys; os.truncate(sys.argv[1], 0)".to_owned(),
+                        target.display().to_string(),
+                    ],
+                    policy,
+                    nothing_attached(),
+                    Environment::Empty,
+                )
+                .expect("python is the one program here that truncates a path");
+            child.wait().expect("should wait")
+        };
+
+        let granted = emptied_by(&loadable_policy().allow_write(&dir));
+        assert_eq!(
+            granted.code(),
+            Some(0),
+            "emptying a file inside a granted directory failed, so nothing below means \
+             anything"
+        );
+        assert_eq!(
+            std::fs::metadata(&target).expect("the file is there").len(),
+            0,
+            "the granted truncation reported success and emptied nothing"
+        );
+
+        let refused = emptied_by(&loadable_policy().allow_read(&dir));
+        assert_eq!(
+            std::fs::metadata(&target).expect("the file is there").len(),
+            CONTENTS.len() as u64,
+            "a file granted for reading and not for writing was emptied despite confinement"
+        );
+        // python's own refusal, rather than any failure at all: a process that died before
+        // it reached the call exits with some other code, which says nothing about a grant.
+        assert_eq!(
+            refused.code(),
+            Some(PYTHON_FAILED),
+            "the truncation was not what failed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The ruleset handles the right that governs an ioctl on a device, and Landlock counts
+    /// that right as a write, so a device a policy named for reading can be opened and read
+    /// and not driven. A caller that means a program to drive one names it for writing.
+    ///
+    /// This is the decision worth pinning rather than the denial alone: a policy's two
+    /// lists are all a caller has to say what a program may do, so which list carries an
+    /// ioctl is a fact a caller reads the grant against, and a diff moving it either way is
+    /// a diff moving what every read grant over a device permits. Leaving the right
+    /// unhandled is the third answer, and it permits every ioctl on every device a grant
+    /// can open.
+    ///
+    /// Both halves run the same request against the same device, because an interpreter
+    /// that failed for reasons of its own reports no result at all. The request is
+    /// `RNDGETENTCNT`, which succeeds on a readable `/dev/urandom` and is not one of the
+    /// commands the kernel permits a confined process whatever the ruleset says.
+    #[test]
+    fn a_confined_process_cannot_drive_a_device_it_was_granted_for_reading() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        if !kernel_governs("an ioctl on a device", IOCTL_ABI_VERSION, "6.10+") {
+            return;
+        }
+
+        // _IOR('R', 0x00, int), spelled out because the value of a request is the
+        // architecture's encoding of it rather than a number to take on trust.
+        let request = "import array, fcntl, os\n\
+                       RNDGETENTCNT = (2 << 30) | (4 << 16) | (ord('R') << 8) | 0x00\n\
+                       entropy = array.array('i', [0])\n\
+                       fcntl.ioctl(os.open('/dev/urandom', os.O_RDONLY), RNDGETENTCNT, entropy, True)\n";
+        let driven_under = |policy: &SandboxPolicy| {
+            sandbox
+                .spawn(
+                    "/usr/bin/python3",
+                    &["-c".to_owned(), request.to_owned()],
+                    policy,
+                    nothing_attached(),
+                    Environment::Empty,
+                )
+                .expect("python is what issues an ioctl here")
+                .wait()
+                .expect("should wait")
+                .code()
+        };
+
+        assert_eq!(
+            driven_under(&loadable_policy().allow_write("/dev/urandom")),
+            Some(0),
+            "driving a device granted for writing failed, so nothing below means anything"
+        );
+        assert_eq!(
+            driven_under(&loadable_policy().allow_read("/dev/urandom")),
+            Some(PYTHON_FAILED),
+            "a device granted for reading was driven, so the right that governs an ioctl \
+             is granted by a read or handled by nothing"
+        );
+    }
+
+    /// Emptying a file and writing it again is what every `>` redirect, every
+    /// `std::fs::write` over an existing file and every editor saving one does, and the
+    /// kernel checks that against the same right as a truncation by path but through a
+    /// different hook: the descriptor is already open, so a ruleset that handles the
+    /// right without granting it holds an ordinary write inside a granted directory to
+    /// creating a file and never rewriting it.
+    ///
+    /// `truncate(1)` rather than python, because this half is the one every program on the
+    /// machine reaches through the file it has already opened.
+    #[test]
+    fn a_confined_process_can_truncate_a_file_inside_its_grants() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+
+        let dir = crate::testutil::scratch_dir("bravebot-landlock-granted-truncate");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let target = dir.join("emptied");
+        std::fs::write(&target, CONTENTS).expect("the file is writable");
+
+        let mut child = sandbox
+            .spawn(
+                "/usr/bin/truncate",
+                &[
+                    "-s".to_owned(),
+                    "0".to_owned(),
+                    target.display().to_string(),
+                ],
+                &loadable_policy().allow_write(&dir),
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn");
+        assert!(
+            child.wait().expect("should wait").success(),
+            "emptying a file inside a granted directory was denied"
+        );
+        assert_eq!(
+            std::fs::metadata(&target).expect("the file is there").len(),
+            0,
+            "the write succeeded and emptied nothing"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

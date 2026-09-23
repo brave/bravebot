@@ -704,7 +704,7 @@ fn line_fed(text: &str, at: &std::path::Path, stdin: &str, within: Duration) -> 
 /// The label is what the plan carries and the bytes are what exec is given, which is the split the
 /// route rests on: the plan a person endorses says where the input came from and never what it is.
 fn fed_plan(text: &str, at: &std::path::Path) -> bravebot_core::command::Plan {
-    let mut plan = bravebot_agent::cmdline::compile(text, at, None)
+    let mut plan = bravebot_agent::cmdline::compile(text, at, None, &mut |_, _| Ok(()))
         .unwrap_or_else(|e| panic!("`{text}` should compile: {e}"));
     plan.stdin = Some(bravebot_core::label::Label::untrusted_public());
     plan
@@ -712,7 +712,7 @@ fn fed_plan(text: &str, at: &std::path::Path) -> bravebot_core::command::Plan {
 
 /// The same, for a session that has a directory of its own.
 fn line_given(text: &str, at: &std::path::Path, given: &std::path::Path) -> exec::Ran {
-    let plan = bravebot_agent::cmdline::compile(text, at, None)
+    let plan = bravebot_agent::cmdline::compile(text, at, None, &mut |_, _| Ok(()))
         .unwrap_or_else(|e| panic!("`{text}` should compile: {e}"));
     exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, Some(given), None)
         .unwrap_or_else(|e| panic!("`{text}` should run: {e}"))
@@ -755,7 +755,7 @@ fn entering(
     text: &str,
     at: &std::path::Path,
 ) -> (Result<exec::Ran, exec::ExecError>, Vec<std::path::PathBuf>) {
-    let plan = bravebot_agent::cmdline::compile(text, at, None)
+    let plan = bravebot_agent::cmdline::compile(text, at, None, &mut |_, _| Ok(()))
         .unwrap_or_else(|e| panic!("`{text}` should compile: {e}"));
     let mut entered = Vec::new();
     let outcome = exec::run_plan_observed(

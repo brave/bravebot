@@ -32,6 +32,27 @@ that cannot be applied in full ([SANDBOX-7](#SANDBOX-7)). What that costs is the
 5.13 and 5.19, which a long-term distribution release still ships, and on which nothing runs
 confined at all.
 
+That version is the floor a kernel is refused below and not the set of rights the confinement
+covers. What a Landlock ruleset restricts is the rights it handles, and a right it does not handle
+is checked nowhere: the kernel passes every caller in that domain. So the confinement handles every
+right this version of Landlock knows of, narrowed to the rights the kernel in front of it carries.
+Handling only the rights the floor requires would leave each right Landlock has gained since
+outside the boundary, unrestricted and unnameable by any policy, which is how a process confined to
+a few directories empties a file anywhere the account can reach.
+
+Each right above the floor is one Landlock counts as a write, so a grant for reading does not
+carry it: emptying a file, driving a device rather than reading it, and reaching a socket by its
+path are what naming a path for writing permits. A read grant that carried any of them would be a
+policy's two lists saying one thing.
+
+**A right younger than the kernel restricts nothing there.** The narrowing is the kernel's and
+cannot be argued with: the right that governs emptying a file arrived in Landlock's third version,
+so on a kernel carrying only the second (5.19 up to 6.2) a confined process can empty a file
+outside its grants, without reading it or opening it for writing. Refusing every kernel below the
+newest right would refuse every kernel, since each version adds one, so the floor is where a
+*missing* right would deny operations *inside* the grants and the rights above it are enforced
+wherever the kernel has them. The gap that leaves is a kernel to upgrade.
+
 On Windows the boundary is an AppContainer: a lowbox token is denied every securable object whose
 access-control list does not name the container, so a grant is an entry written onto the directory
 the policy names, and egress is a capability the token either carries or does not. A grant is
@@ -86,6 +107,10 @@ into one that is not in force.
 `verified-by: bravebot_sandbox::linux::a_confined_process_can_write_inside_its_grants`
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_write_outside_its_grants`
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_read_outside_its_grants`
+`verified-by: bravebot_sandbox::linux::a_confined_process_cannot_truncate_a_file_outside_its_grants`
+`verified-by: bravebot_sandbox::linux::a_confined_process_can_truncate_a_file_inside_its_grants`
+`verified-by: bravebot_sandbox::linux::a_confined_process_cannot_drive_a_device_it_was_granted_for_reading`
+`verified-by: bravebot_sandbox::linux::the_ruleset_handles_every_right_this_crate_knows_of`
 `verified-by: bravebot_sandbox::windows::a_policy_that_did_not_ask_for_the_network_asks_for_no_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_that_asked_for_the_network_asks_for_the_internet_client_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_withholding_the_network_is_applied_rather_than_refused`

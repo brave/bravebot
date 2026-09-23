@@ -1378,7 +1378,7 @@ fn draw_scroller(frame: &mut Frame, session: &Session) -> Laid {
 ///
 /// The way out is last and is never the row that did not fit: a list that scrolled its own exit
 /// off the screen would be a mode nobody could leave.
-fn scroller_keys() -> [(&'static str, &'static str); 9] {
+fn scroller_keys() -> [(&'static str, &'static str); 10] {
     [
         ("up/down, j/k", t!(scroller_key_line)),
         ("ctrl-u / ctrl-d", t!(scroller_key_half_page)),
@@ -1386,6 +1386,11 @@ fn scroller_keys() -> [(&'static str, &'static str); 9] {
         ("g / G", t!(scroller_key_ends)),
         ("{ / }", t!(scroller_key_prompts)),
         ("/ then n/N", t!(scroller_key_search)),
+        // The keys the search itself answers get a row of their own rather than a parenthesis on
+        // the row above: the second spellings carried that way are the same key by another name,
+        // and these two are neither, so a list that folded them in would be naming keys it had
+        // not told anybody about.
+        ("enter / backspace", t!(scroller_key_search_run)),
         ("v", t!(scroller_key_editor)),
         ("?", t!(scroller_key_this_list)),
         ("any key", t!(scroller_key_close_list)),
@@ -4251,6 +4256,42 @@ mod tests {
             (drawn, marked)
         }
 
+        /// The rows of the `?` list as it draws them, inside its border and nothing else.
+        ///
+        /// Read from inside the border rather than off the whole screen, so a key spelled with
+        /// one letter is looked for where it is a key rather than wherever that letter happens to
+        /// land.
+        fn help_rows(session: &Session) -> Vec<String> {
+            let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+            terminal
+                .draw(|frame| {
+                    draw(frame, session);
+                })
+                .expect("draw succeeds");
+            let buffer = terminal.backend().buffer().clone();
+
+            // The box the scroller took away is not on the screen, so the one rounded corner
+            // there is belongs to the list.
+            let (left, top) = (0..buffer.area.height)
+                .flat_map(|row| (0..buffer.area.width).map(move |column| (column, row)))
+                .find(|at| buffer[*at].symbol() == "\u{256d}")
+                .expect("the list is drawn inside a border");
+            let right = (left + 1..buffer.area.width)
+                .find(|column| buffer[(*column, top)].symbol() == "\u{256e}")
+                .expect("the border closes across");
+            let bottom = (top + 1..buffer.area.height)
+                .find(|row| buffer[(left, *row)].symbol() == "\u{2570}")
+                .expect("the border closes down");
+
+            (top + 1..bottom)
+                .map(|row| {
+                    (left + 1..right)
+                        .map(|column| buffer[(column, row)].symbol())
+                        .collect()
+                })
+                .collect()
+        }
+
         /// A session reading back over a quarantined block whose one preview line is `preview`,
         /// with the scroller open over it.
         fn reading_a_block(preview: &str) -> Session {
@@ -4864,6 +4905,64 @@ mod tests {
                 drawn.contains(t!(scroller_key_close_list)),
                 "nothing said the press closes the list: {drawn}"
             );
+        }
+
+        /// The list is the one place every key is written down. A key the specification names and
+        /// the list does not is a key nobody can find, and the two the search takes were named
+        /// only in the search's own footer, which is not on the screen while the list is.
+        ///
+        /// What is asked for here is every key docs/specs/scroller.md names, which is what the
+        /// clause holds the list to. A key answered by the code and named in neither is a
+        /// different fault, against the clause saying an unnamed key does nothing.
+        #[test]
+        fn the_help_names_every_key_the_scroller_spec_names() {
+            let mut session = reading();
+            session.toggle_scroller_help();
+
+            let rows = help_rows(&session);
+            // The key column is ` {key:<18}`, so the first nineteen columns of a row are the
+            // keys it is about and the rest is what they do.
+            let keys: Vec<String> = rows
+                .iter()
+                .map(|row| row.chars().take(19).collect::<String>().trim().to_string())
+                .collect();
+
+            // Every key docs/specs/scroller.md names, in the spelling the list gives it. The
+            // wheel is the one thing in that file which is not a key.
+            for spelling in [
+                "up/down, j/k",
+                "ctrl-u / ctrl-d",
+                "space / b",
+                "g / G",
+                "{ / }",
+                "/ then n/N",
+                "enter / backspace",
+                "v",
+                "?",
+                "any key",
+            ] {
+                assert!(
+                    keys.iter().any(|key| key == spelling),
+                    "the list named no key {spelling:?}: {keys:?}"
+                );
+            }
+
+            // The way out carries whichever chord opened the scroller, so what is asked of it is
+            // the part that does not move.
+            assert!(
+                keys.iter().any(|key| key.starts_with("q / esc / ")),
+                "the list never named the way out: {keys:?}"
+            );
+
+            // A key that is a second spelling of one already listed rides on the description of
+            // the row it shares, which is where ctrl-f, home and ctrl-c are.
+            let list = rows.join("\n");
+            for alternate in ["ctrl-f / ctrl-b", "home / end", "ctrl-c"] {
+                assert!(
+                    list.contains(alternate),
+                    "the list named no key {alternate:?}: {list}"
+                );
+            }
         }
 
         /// The list is the one place the keys are written down, so a key that closes the mode and

@@ -790,6 +790,60 @@ fn doctor_names_an_allow_rule_a_checkout_wrote() {
     );
 }
 
+/// PERM-14's exclusion, from the same process: a checkout's `allow` entry that is not a rule is
+/// named for what is wrong with it, under PERM-11, and not as a grant that was withheld.
+///
+/// One file with both kinds of entry, because the failure is a report that cannot tell them apart:
+/// a build that offers every dropped entry calls the typo a rule to grant, which sends whoever
+/// wrote it to a question that will never make it decide anything, and a build that offers none
+/// calls the rule a typo. Running the binary rather than calling the crate, because which of the
+/// two lines a `doctor` run prints is the whole of what a person sees, and the split is made in one
+/// crate and worded in another.
+#[test]
+fn doctor_names_a_checkouts_unreadable_allow_entry_rather_than_offering_it() {
+    let scratch = Scratch::new("cli-running-checkout-allow-unreadable");
+    let cwd = scratch.path.join("checkout");
+    let project = cwd.join(".bravebot");
+    std::fs::create_dir_all(&project).expect("create the project directory");
+    std::fs::write(
+        project.join("settings.json"),
+        r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)", "Nonsense"]}}"#,
+    )
+    .expect("write the project layer");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, _) = said(&output);
+    assert!(
+        stdout.contains("'Nonsense' names no family of tools"),
+        "the entry that is not a rule was not named for what is wrong with it: {stdout}"
+    );
+    assert!(
+        !stdout.contains("the allow rule Nonsense"),
+        "a line nothing can act on was reported as a grant that was withheld: {stdout}"
+    );
+    // And the readable entry in the same file still is one, so the split is on readability rather
+    // than on the whole list having stopped being offered.
+    assert!(
+        stdout.contains("the allow rule Bash(bash scripts/check.sh)"),
+        "the entry that is a rule was not offered as a grant: {stdout}"
+    );
+    // An unreadable rule is a fault `doctor` reports on, exactly as one in the home layer is.
+    assert!(
+        !output.status.success(),
+        "a rule this build cannot act on was reported and the run still passed: {stdout}"
+    );
+}
+
 /// PERM-15: the other answer for the same rule. One the person granted for this directory is in
 /// force, and `doctor` says so and counts it, because a report calling it "not granted" one line
 /// above a session that honours it would send somebody looking for a fault that is not there.
@@ -957,12 +1011,36 @@ fn a_session_in_lines_is_refused_where_its_input_is_not_a_terminal() {
 /// child's status differently, and the job that runs this suite is Linux.
 #[cfg(target_os = "linux")]
 fn in_a_terminal(home: &Path, environment: &[(&str, &str)], arguments: &[&str]) -> Output {
+    in_a_terminal_run(home, None, environment, arguments)
+}
+
+/// The same, started in a directory of the test's choosing, for [`bravebot_started_in`]'s reason:
+/// a checkout's `.bravebot` is found from the working directory, and a test about what one of
+/// those layers does has to put it somewhere no other test is reading.
+#[cfg(target_os = "linux")]
+fn in_a_terminal_started_in(
+    home: &Path,
+    cwd: &Path,
+    environment: &[(&str, &str)],
+    arguments: &[&str],
+) -> Output {
+    in_a_terminal_run(home, Some(cwd), environment, arguments)
+}
+
+#[cfg(target_os = "linux")]
+fn in_a_terminal_run(
+    home: &Path,
+    cwd: Option<&Path>,
+    environment: &[(&str, &str)],
+    arguments: &[&str],
+) -> Output {
     let quoted = format!("'{}'", env!("CARGO_BIN_EXE_bravebot"));
     let command = std::iter::once(quoted)
         .chain(arguments.iter().map(|argument| argument.to_string()))
         .collect::<Vec<_>>()
         .join(" ");
-    Command::new("script")
+    let mut terminal = Command::new("script");
+    terminal
         .env_clear()
         .env("HOME", home)
         .env("BRAVEBOT_LOCALE", "en-US")
@@ -971,7 +1049,11 @@ fn in_a_terminal(home: &Path, environment: &[(&str, &str)], arguments: &[&str]) 
         // reports the status the binary exited with rather than script's own, and the transcript
         // file is not wanted: what is read here is what script copies to its own stdout.
         .args(["-qec", &command, "/dev/null"])
-        .stdin(Stdio::null())
+        .stdin(Stdio::null());
+    if let Some(cwd) = cwd {
+        terminal.current_dir(cwd);
+    }
+    terminal
         .output()
         .expect("script runs the built binary in a terminal")
 }
@@ -1083,6 +1165,86 @@ fn a_session_in_lines_with_a_configured_gateway_opens() {
     assert!(
         !transcript.contains('\x1b'),
         "something was asked of the terminal: {transcript:?}"
+    );
+}
+
+/// PERM-14 on the third surface that reads the file: a session in lines names the `allow` entry a
+/// checkout wrote and the file it was written in, and names an entry that is not a rule under
+/// PERM-11 instead.
+///
+/// The surface a report is easiest to leave out of, because it is the one that draws nothing. This
+/// session grants none of these entries, since it puts no question and so has nowhere an answer
+/// could have come from (PERM-15), and it said nothing about them either, which leaves whoever
+/// wrote one reading it as a rule in force while the prompt it was meant to answer keeps appearing.
+///
+/// Running the binary in a terminal because that is the only way to reach the decision: a session in
+/// lines refuses a pipe before it reads a settings file, so nothing downstream of that refusal is
+/// observable from an ordinary child process. Both kinds of entry from one file, for the reason the
+/// `doctor` test above gives.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_names_an_allow_rule_a_checkout_wrote() {
+    let scratch = Scratch::new("cli-running-plain-checkout-allow").with_settings(
+        // A configured gateway, for the reason the test above gives: a session in lines refuses
+        // before it opens on a machine with no service to serve a turn, and nothing is ever asked
+        // of this one. The session ends at the startup question, which comes after the report.
+        r#"{
+            "provider": {
+                "openrouter": {
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            },
+            "model": "openrouter/z-ai/glm-4.6"
+        }"#,
+    );
+    let cwd = scratch.path.join("checkout");
+    let project = cwd.join(".bravebot");
+    std::fs::create_dir_all(&project).expect("create the project directory");
+    std::fs::write(
+        project.join("settings.json"),
+        r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)", "Nonsense"]}}"#,
+    )
+    .expect("write the project layer");
+
+    let output = in_a_terminal_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+            ("OPENROUTER_API_KEY", "a-token"),
+        ],
+        &["--plain"],
+    );
+
+    let (transcript, _) = said(&output);
+    assert!(
+        transcript.contains("not granting the allow rule Bash(bash scripts/check.sh)"),
+        "the dropped rule was not named: {transcript}"
+    );
+    assert!(
+        transcript.contains(&project.join("settings.json").display().to_string()),
+        "the file the dropped rule was written in was not named: {transcript}"
+    );
+    assert!(
+        transcript.contains("'Nonsense' names no family of tools"),
+        "the entry that is not a rule was not named for what is wrong with it: {transcript}"
+    );
+    assert!(
+        !transcript.contains("the allow rule Nonsense"),
+        "a line nothing can act on was reported as a grant that was withheld: {transcript}"
+    );
+    // Said before the startup question, which is the first thing a person is asked to answer: a
+    // report printed after it would be one they read having already decided.
+    let (report, question) = transcript
+        .split_once("trust this directory?")
+        .unwrap_or_else(|| panic!("the session never reached the startup question: {transcript}"));
+    assert!(
+        report.contains("not granting the allow rule"),
+        "the report came after the first question: {question}"
     );
 }
 
