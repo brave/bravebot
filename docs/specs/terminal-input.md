@@ -1118,6 +1118,7 @@ names a character a marker is spelled with, and it did exactly that before it wa
 `verified-by: bravebot_tui::state::the_repeat_keys_do_the_last_jump_again_and_then_the_other_way`
 `verified-by: bravebot_tui::state::a_repeat_with_nothing_to_repeat_does_nothing`
 `verified-by: bravebot_tui::state::a_motion_crosses_a_marker_whole`
+`verified-by: bravebot_tui::state::typing_after_the_word_end_motion_leaves_the_picture_attached`
 `verified-by: bravebot_tui::state::no_motion_comes_to_rest_past_the_end_of_its_line`
 `verified-by: bravebot_tui::state::a_pair_that_means_nothing_ends_the_wait_rather_than_holding_it`
 
@@ -1340,6 +1341,7 @@ Block-wise selection is a known cost rather than a clause.
 `verified-by: bravebot_tui::state::the_selection_is_read_off_the_line_as_it_stands`
 `verified-by: bravebot_tui::render::an_edit_under_a_selection_still_draws`
 `verified-by: bravebot_tui::state::replacing_a_selection_holding_a_marker_leaves_it_alone`
+`verified-by: bravebot_tui::state::a_selection_naming_a_marker_keeps_its_ends_on_it_and_draws_the_whole_of_it`
 `verified-by: bravebot_tui::render::the_selection_is_drawn_over_the_whole_stretch`
 `verified-by: bravebot_tui::render::a_selection_across_rows_is_drawn_on_all_of_them`
 `verified-by: bravebot_tui::render::the_ordinary_box_draws_no_selection`
