@@ -4369,6 +4369,204 @@ fn refused_by_a_rule(denial: &bravebot_core::policy::Denial) -> Produced {
     ))
 }
 
+/// What a line is refused with before it runs, because the line itself carries a credential.
+///
+/// Both halves are the driver's own words. The planner's half says the line did not run and why
+/// in the terms it can act on, which is to put the value somewhere an authority holds it and
+/// name that instead; it carries no finding. The person's half is the findings, each said as a
+/// kind, a location, a fingerprint and a masked preview.
+fn credential_refusal_in_a_line(scanned: &Scanned) -> Produced {
+    let found = describe_all(&scanned.refused());
+    refused_with_a_note(
+        "refused: the command line carries a credential, so none of it ran. A command line is \
+         read by every account on this machine while the program lives, and it is put on a \
+         screen and into the record of this session. Do not run it again with the value in it: \
+         tell the user which secret has to be set and where, and name it rather than writing it.",
+        format!(
+            "refused, the command line carried a credential: {}",
+            found.join("; ")
+        ),
+    )
+}
+
+/// How much of a destination a line wrote is kept and read back for the credential scan.
+///
+/// Two files' worth of memory per destination, so the figure is a fraction of what a rewind
+/// budgets across a whole turn. Past it nothing is kept and nothing is scanned: a value could
+/// not be put back out of a file whose prior contents are not here, and a scan whose finding
+/// cannot be acted on would refuse a line and leave the credential where it landed.
+const MAX_SCANNED_BYTES: usize = 8 * 1024 * 1024;
+
+/// A destination a line is about to open, as it stood before the line opened it.
+///
+/// Read in the notification [`crate::exec::run_plan_observed`] makes before each file may be
+/// opened, which is the last moment any of this can be asked. `held` is carried and never read
+/// here: the bytes go back to the path they came from, and the driver has no business looking at
+/// them on the way.
+struct Standing {
+    /// The name the file authority and the trust map hold this destination under.
+    key: String,
+    /// The name a person and a finding see, which is the name relative to the workspace root.
+    shown: String,
+    /// Where the file is, for reading what the line left and for putting back what it held.
+    resolved: std::path::PathBuf,
+    /// What the path held before the line opened it.
+    held: crate::workspace::Before,
+    /// What the trust map said about the path at that same moment.
+    prior: bravebot_core::label::Integrity,
+}
+
+/// What a line left at the destinations it opened.
+struct Left<'a> {
+    /// Every finding across every destination, so one note names them all and one test of it
+    /// decides the line.
+    scanned: Scanned,
+    /// The destinations a value that declared itself a credential landed in, which are the ones
+    /// to be put back.
+    refused_at: Vec<&'a Standing>,
+}
+
+/// Scan what a line left at each destination it opened, once the line has stopped.
+///
+/// This is the question a write tool asks before it writes, asked in the one place it cannot be
+/// asked first: the program opens the file itself, so there is no moment in which the driver
+/// holds the bytes and the file does not. What a finding buys here is therefore the value being
+/// put back out of the tree rather than never reaching it.
+///
+/// The label handed to the scan is the one the destination's own effect is completed under: the
+/// line's revalidated label met with what the map already said about the path. So a line that
+/// read something nobody vouched for is not scanned, and neither is a destination that was
+/// already quarantined. That is the same rule a write tool's body goes through, for the same
+/// reason: examining bytes nobody vouched for to decide whether to refuse would be a decision
+/// taken from untrusted content.
+///
+/// A destination whose prior contents were not kept is passed over rather than scanned. A
+/// finding there could not be acted on, and a refusal that leaves the value in the file is worse
+/// than saying nothing: it stops the line and protects nothing.
+fn what_the_line_left<'a, S: Sink>(
+    policy: &mut Policy<'_, S>,
+    destinations: &'a [Standing],
+    label: Label,
+) -> Left<'a> {
+    let mut left = Left {
+        scanned: Scanned::default(),
+        refused_at: Vec::new(),
+    };
+    for destination in destinations {
+        let held = match &destination.held {
+            crate::workspace::Before::NotKept => continue,
+            held => held,
+        };
+        let Some(text) = crate::workspace::left_at(&destination.resolved, MAX_SCANNED_BYTES) else {
+            continue;
+        };
+        // What the path holds now, at the integrity the kernel already fixed for this line's
+        // output and is about to record on this destination. Not a claim about the file: it is
+        // handed in rather than worked out from what was read.
+        let after = Labelled::new(
+            text,
+            Label::new(
+                destination.prior.meet(label.integrity),
+                label.confidentiality,
+            ),
+        );
+        // The pre-image places a value the file already held, and is withheld where the map had
+        // not vouched for the path: prior bytes something else left untrusted must not excuse a
+        // credential this line wrote beside them.
+        let before = match (&destination.prior, held) {
+            (bravebot_core::label::Integrity::Trusted, crate::workspace::Before::Bytes(bytes)) => {
+                Some(Labelled::new(
+                    String::from_utf8_lossy(bytes).into_owned(),
+                    crate::workspace::read_label(),
+                ))
+            }
+            _ => None,
+        };
+        let scanned = policy.scan_a_write("run", &destination.shown, before.as_ref(), &after);
+        if !scanned.refused().is_empty() {
+            left.refused_at.push(destination);
+            // Carried from the destinations being refused for and no others, since it decides
+            // what the planner is told to do instead, and a second destination holding an
+            // ordinary document has nothing to say about a first one that is the value.
+            left.scanned.only_the_value |= scanned.only_the_value;
+        }
+        left.scanned.authored.extend(scanned.authored);
+        left.scanned.carried.extend(scanned.carried);
+    }
+    left
+}
+
+/// What the person watching is told about a value a line left that only looks like a secret.
+///
+/// A write tool puts this on the approval it is already asking for, and a person answering the
+/// question is the whole of what the inferred layer is for: the rule that catches a generated
+/// framework key also catches a development password and a test fixture. A line has no such
+/// prompt, so the choice here is between telling the person once the line has stopped and
+/// telling nobody. Afterwards is late and is not a decision, which is the cost the credential
+/// spec records; saying nothing would leave a generated key in the tree with nothing said about
+/// it at all.
+///
+/// Nothing is said about a value in the line itself. The line is drawn on the approval prompt
+/// in full, so the person has already read it.
+fn inferred_note(note: String, scanned: &Scanned) -> String {
+    let found = describe_all(&scanned.to_approve());
+    if found.is_empty() {
+        return note;
+    }
+    format!(
+        "{note}; wrote something that looks like a credential: {}",
+        found.join("; ")
+    )
+}
+
+/// What a line is refused with once it has stopped and what it left holds a credential.
+///
+/// Both halves are the driver's own words. The planner's half names the line and the paths and
+/// says a credential landed in them and was taken back out, which is what it needs to stop
+/// running the same line and write a reference instead; it carries no finding, so nothing about
+/// what was found reaches a model's context. The person's half is the findings, each said as a
+/// kind, a location, a fingerprint and a masked preview, which is the whole of what a finding
+/// may hold.
+///
+/// A path that would not go back is named to both. The planner is told because the value is
+/// still there and the next thing it does must not assume otherwise, and the person is told
+/// because they are the only one who can do anything about it.
+fn credential_refusal_after_a_line(displayed: &str, left: &Left<'_>, stuck: &[String]) -> Produced {
+    let paths: Vec<&str> = left
+        .refused_at
+        .iter()
+        .map(|destination| destination.shown.as_str())
+        .collect();
+    let instead = do_this_instead(left.scanned.only_the_value);
+    let text = match stuck.is_empty() {
+        true => format!(
+            "refused: `{displayed}` put a credential in {}, so what it wrote there was taken \
+             back out. Do not run it again. {instead}",
+            paths.join(", ")
+        ),
+        false => format!(
+            "refused: `{displayed}` put a credential in {}, and {} could not be put back, so the \
+             value is still there. Do not run it again, and tell the user which file to clear \
+             out. {instead}",
+            paths.join(", "),
+            stuck.join(", ")
+        ),
+    };
+    let found = describe_all(&left.scanned.refused());
+    let note = match stuck.is_empty() {
+        true => format!(
+            "refused, a credential landed here and was taken back out: {}",
+            found.join("; ")
+        ),
+        false => format!(
+            "refused, a credential landed here and {} could not be put back: {}",
+            stuck.join(", "),
+            found.join("; ")
+        ),
+    };
+    refused_with_a_note(text, note)
+}
+
 /// Run a program, after a person approves the exact arguments.
 ///
 /// The order is the whole of the safety argument, and it is the same order a write goes through:
@@ -4449,6 +4647,27 @@ fn run<S: Sink, C: Confirmer>(
         Ok(line) => line,
         Err(denial) => return problem(format!("refused: {denial}")),
     };
+
+    // A value that declared itself a credential, in the line itself. Refused here, before the
+    // line is compiled, before anybody is shown it and before any of it runs: a line is the one
+    // thing a turn writes that reaches all of what the clause names at once, since it goes into
+    // the file a redirection opens, onto the prompt the person reads, onto the terminal the
+    // program echoes it to, and into whatever the program is being asked to do with it.
+    //
+    // Only the declared half, and nobody is asked. A guess would need the run prompt to carry a
+    // finding, which it does not, and a prompt that can be answered "run it anyway" is a prompt
+    // a turn eventually gets past.
+    let carried_in_the_line = policy.scan_a_command_line("run", &line);
+    // Written down before the refusal below, for the reason a write tool writes one down before
+    // its own: a finding is a record of where a secret went, and what was refused is as much a
+    // thing the person's own machine saw as what went ahead (CRED-19). The line is not a file, so
+    // the entry names it as the place rather than a path in the tree.
+    tools
+        .recording()
+        .record(tools.workspace.root(), &carried_in_the_line.all());
+    if !carried_in_the_line.refused().is_empty() {
+        return credential_refusal_in_a_line(&carried_in_the_line);
+    }
 
     // Present but not a string is refused rather than dropped. A field the driver quietly ignored
     // would run the line wherever the last call left off, which is the one place a planner that
@@ -4764,6 +4983,10 @@ fn run<S: Sink, C: Confirmer>(
     // Keyed the way the authority keys it, so the two spellings of one destination in
     // `> out 2> ./out` are one effect rather than a second entry refused by the first.
     let mut effects = std::collections::BTreeMap::new();
+    // What each of those destinations held before the line opened it, taken at the same moment
+    // and for the credential scan below: there is no later moment to ask, because afterwards
+    // every answer is the line's own.
+    let mut standing: Vec<Standing> = Vec::new();
     let ran = crate::exec::run_plan_observed(
         &plan,
         tools.cancel,
@@ -4786,6 +5009,25 @@ fn run<S: Sink, C: Confirmer>(
                         "another file effect is still writing this destination".to_string(),
                     )
                 })?;
+                // Kept only where the scan below could reach this destination, which is where
+                // what the line leaves in it will be at an integrity the driver may read.
+                // Reading a destination a line nobody vouched for is about to truncate buys
+                // nothing and costs the file twice over, and the label here can only fall
+                // further when the line has stopped, so a destination ruled out now stays ruled
+                // out. Why it was is in the trail already, beside the line's own label.
+                let held = match prior.meet(label.integrity) {
+                    bravebot_core::label::Integrity::Trusted => {
+                        crate::workspace::kept(path, MAX_SCANNED_BYTES)
+                    }
+                    bravebot_core::label::Integrity::Untrusted => crate::workspace::Before::NotKept,
+                };
+                standing.push(Standing {
+                    key: key.clone(),
+                    shown: tools.workspace.relative_display(path),
+                    held,
+                    resolved: path.to_path_buf(),
+                    prior,
+                });
                 effects.insert(key, (effect, prior));
                 Ok(())
             })
@@ -4801,12 +5043,45 @@ fn run<S: Sink, C: Confirmer>(
             label.confidentiality,
         )
     };
+    // Before the effects are completed, so every destination is still reserved while it is read
+    // and while a refused one is put back: the reservation is what stops anything else reading a
+    // file in the state the line left it in. Asked whether or not the line ended well, since a
+    // line that failed halfway has still opened and written whatever it got to.
+    let left = what_the_line_left(policy, &standing, label);
+    // And written down, wherever the line put it. A destination put back below held the value
+    // while the line ran, so it is a thing the person's tree has had in it whatever the refusal
+    // then did about it, and a line drawn while nobody was looking is gone when the turn ends
+    // (CRED-19).
+    tools
+        .recording()
+        .record(tools.workspace.root(), &left.scanned.all());
+    let mut stuck: Vec<String> = Vec::new();
+    for destination in &left.refused_at {
+        if crate::workspace::put_back(&destination.resolved, &destination.held).is_err() {
+            stuck.push(destination.shown.clone());
+        }
+    }
     if ran.as_ref().is_ok_and(|ran| {
         ran.ended_well && ran.stopped.is_none() && ran.codes.iter().all(|code| *code == Some(0))
     }) {
-        for (_, (effect, prior)) in effects {
-            effect.complete(prior.meet(label.integrity));
+        let refused: std::collections::BTreeSet<&str> = left
+            .refused_at
+            .iter()
+            .map(|destination| destination.key.as_str())
+            .collect();
+        for (key, (effect, prior)) in effects {
+            // A destination put back holds what it held before the line ran, so what the map
+            // records about it is what it recorded before the line ran. Taking the meet there
+            // would quarantine a file on the strength of a write that is no longer in it.
+            let integrity = match refused.contains(key.as_str()) {
+                true => prior,
+                false => prior.meet(label.integrity),
+            };
+            effect.complete(integrity);
         }
+    }
+    if !left.scanned.refused().is_empty() {
+        return credential_refusal_after_a_line(&displayed, &left, &stuck);
     }
 
     match ran {
@@ -4861,6 +5136,11 @@ fn run<S: Sink, C: Confirmer>(
             if let Some((_, read)) = supplied.as_ref().filter(|(_, read)| !read.is_empty()) {
                 note.push_str(&format!(", fed by reading {}", read.join(", ")));
             }
+            // A value the destination already held is reported and not refused, exactly as it is
+            // for a write tool: a line that reformats or moves a file holding a key carries it
+            // without having written it, and the person is the one who can decide what to do
+            // about a secret that was in their tree before this session started.
+            let note = inferred_note(carried_note(note, &left.scanned), &left.scanned);
 
             let mut produced = Produced::new(
                 Labelled::new(text, label),

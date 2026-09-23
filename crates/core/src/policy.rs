@@ -3634,11 +3634,59 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         needed
     }
 
+    /// What a command line the planner wrote carries that would authenticate somewhere.
+    ///
+    /// The same question [`Policy::scan_a_write`] asks, about the one thing a turn writes that
+    /// is a place as well as an instruction. A line is not a body and there is nothing to
+    /// compare it against, so everything found is the turn's own: the planner composed the line
+    /// in this round, out of nothing that was there before.
+    ///
+    /// `line` is what [`Policy::read_planner_argument`] handed back for this same field, which
+    /// is the whole of what makes reading it here allowed: the planner's own words, out of a
+    /// context that has met nothing untrusted, are the one kind of content the driver may take a
+    /// decision from. What a *program* prints or leaves is not, which is why the scan of what a
+    /// line left at a destination goes through the write gate and is answered there.
+    ///
+    /// A value found here has already been in more places than a refusal can take it out of:
+    /// the planner composed it, so it is in that context and in the record of this round. What
+    /// the refusal stops is the rest, which is every place the clause names: the file the line
+    /// would have opened, the approval prompt the line would have been drawn on, the terminal
+    /// the program would have echoed it to, and whatever the program would have done with it.
+    pub fn scan_a_command_line(&mut self, tool: &str, line: &str) -> Scanned {
+        let scanned = Scanned {
+            authored: crate::credentials::scan(
+                "the command line",
+                line,
+                crate::credentials::run_salt(),
+            ),
+            carried: Vec::new(),
+            // A line is a program and its arguments, so it is never the one thing that answer is
+            // about, which is a file whose whole contents is the value. What the planner is told
+            // to do instead is therefore always the one for a value written into something else.
+            only_the_value: false,
+        };
+        self.allow(
+            "credential-scan",
+            format!(
+                "{tool}: the command line scanned, {} found in it",
+                scanned.authored.len()
+            ),
+        );
+        scanned
+    }
+
     /// What a write would leave in the tree, scanned before the change is recorded as complete.
     ///
     /// The scan runs before the bytes reach the file rather than over the file afterwards, so a
     /// value a turn is refused for never lands anywhere: deleting it after the write would leave
     /// it in whatever the filesystem did with those blocks, and in any watcher that saw them.
+    ///
+    /// **A redirection is the one destination that cannot be true of.** The program opens the
+    /// file itself, so there is no moment in which the driver holds the bytes and the file does
+    /// not, and the caller asks this over what the line left once it has stopped. Everything
+    /// below reads the same for that caller, and only the remedy differs: what a finding buys
+    /// there is the value being put back out of the tree rather than never reaching it, which is
+    /// weaker and is written down as such in the credential spec.
     ///
     /// Two answers come back, and the difference between them is authorship rather than severity.
     /// A value already in the file at this path is *carried*: a turn that reformats or moves a

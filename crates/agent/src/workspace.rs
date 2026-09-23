@@ -1357,23 +1357,10 @@ impl Workspace {
             .sum();
         let room = MAX_REWIND_BYTES.saturating_sub(held);
 
-        // Asked of the filesystem before reading, so a file past the budget costs nothing to
-        // find out about. A path that will not answer is read anyway and falls to the same test.
-        let was = match std::fs::metadata(resolved) {
-            // The write is creating the file, so rewinding means removing it again.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Before::Nothing,
-            Err(_) => Before::NotKept,
-            Ok(found) if found.len() as usize > room => Before::NotKept,
-            Ok(_) => match std::fs::read(resolved) {
-                Ok(bytes) if bytes.len() <= room => Before::Bytes(bytes),
-                _ => Before::NotKept,
-            },
-        };
-
         backups.push(Backup {
             captured_trust,
             path: resolved.to_path_buf(),
-            was,
+            was: kept(resolved, room),
         });
     }
 
@@ -1398,20 +1385,66 @@ impl Workspace {
     pub fn restore_backups(&self, backups: Vec<Backup>) -> Vec<PathBuf> {
         let mut refused = Vec::new();
         for backup in backups {
-            let put_back = match backup.was {
-                Before::Bytes(bytes) => std::fs::write(&backup.path, bytes),
-                Before::Nothing => match std::fs::remove_file(&backup.path) {
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                    other => other,
-                },
-                Before::NotKept => Err(std::io::Error::other("what it held was not kept")),
-            };
-            if put_back.is_err() {
+            if put_back(&backup.path, &backup.was).is_err() {
                 refused.push(backup.path);
             }
         }
         refused
     }
+}
+
+/// What a path holds before something is about to write over it, up to `room` bytes.
+///
+/// Carried, never read here. Two callers want the same three answers about a destination and
+/// want them taken at the same moment, before the write: a rewind, which puts the path back
+/// where a person asks for the turn undone, and the credential scan of what a run's redirection
+/// left, which puts it back where what landed there declared itself a secret. Neither can ask
+/// afterwards, because afterwards every answer is the write's own.
+pub(crate) fn kept(resolved: &Path, room: usize) -> Before {
+    // Asked of the filesystem before reading, so a file past the budget costs nothing to
+    // find out about. A path that will not answer is read anyway and falls to the same test.
+    match std::fs::metadata(resolved) {
+        // The write is creating the file, so putting it back means removing it again.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Before::Nothing,
+        Err(_) => Before::NotKept,
+        Ok(found) if found.len() as usize > room => Before::NotKept,
+        Ok(_) => match std::fs::read(resolved) {
+            Ok(bytes) if bytes.len() <= room => Before::Bytes(bytes),
+            _ => Before::NotKept,
+        },
+    }
+}
+
+/// Put one path back as it stood, or say it could not be.
+///
+/// A path whose file did not exist is removed again, and one already gone counts as removed: the
+/// state asked for is the state that is there. A path whose contents were not kept is refused
+/// without being touched, since what it held is not here to write.
+pub(crate) fn put_back(path: &Path, was: &Before) -> std::io::Result<()> {
+    match was {
+        Before::Bytes(bytes) => std::fs::write(path, bytes),
+        Before::Nothing => match std::fs::remove_file(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        },
+        Before::NotKept => Err(std::io::Error::other("what it held was not kept")),
+    }
+}
+
+/// What a line left at a destination it opened, as text, up to `room` bytes.
+///
+/// `None` where the path names no file any more, where what is there is past the budget, or
+/// where the filesystem will not say: each of those is a destination this scan cannot account
+/// for, and they are one answer because no caller may tell them apart from what the file holds.
+/// Bytes that are not text are decoded lossily rather than refused, since a file that is mostly
+/// text with one bad byte in it is a file a credential can sit in.
+pub(crate) fn left_at(resolved: &Path, room: usize) -> Option<String> {
+    let found = std::fs::metadata(resolved).ok()?;
+    if found.len() as usize > room {
+        return None;
+    }
+    let bytes = std::fs::read(resolved).ok()?;
+    (bytes.len() <= room).then(|| String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// The label a workspace read produces, exposed for callers that need to reason about

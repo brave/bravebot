@@ -12,7 +12,7 @@ guards:
     sites:
       - crates/agent/src/lsp.rs: 4
       - crates/agent/src/manifest.rs: 3
-      - crates/agent/src/tools.rs: 20
+      - crates/agent/src/tools.rs: 22
       - crates/agent/src/workspace.rs: 7
       - crates/agent/tests/workspace.rs: 28
       - crates/aichat/src/lib.rs: 4

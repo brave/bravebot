@@ -393,7 +393,19 @@ causes. Everything after it follows on its own: a secret in a file is read back 
 reaches the planner once the tree is vouched for, survives in a backup nobody deletes, and is pushed
 like any other change.
 
-`verified-by: none`
+**A line a turn runs is one of the ways it writes.** The check does not belong to the write tools:
+a command line reaches a file through a redirection, and the line itself is a place, since it is
+drawn on a screen, kept in the record of the round and readable by every account on the machine
+while the program lives. So the line is scanned as the turn's own words before anything is
+compiled or shown, and what the line left at each destination it opened is scanned once it has
+stopped, at the label that destination's own effect is recorded under. The second of those two
+cannot refuse before the fact, because the program opens the file itself: what it buys is the
+value being taken back out of the tree rather than never reaching it, and the costs below say
+what that is worth and where it stops.
+
+`verified-by: bravebot_agent::turn::a_credential_the_line_itself_carries_stops_the_line`
+`verified-by: bravebot_agent::turn::a_credential_a_run_line_redirects_into_the_tree_does_not_stay_there`
+`verified-by: bravebot_agent::turn::a_credential_the_destination_already_held_does_not_refuse_the_line_carrying_it`
 
 <a id="CRED-12"></a>
 ### CRED-12: withdrawn, replaced by CRED-13
@@ -592,6 +604,8 @@ session left.
 `verified-by: bravebot_agent::findings::a_scan_that_found_nothing_leaves_no_record`
 `verified-by: bravebot_agent::findings::a_turn_with_no_session_to_name_still_records_what_it_found`
 `verified-by: bravebot_agent::turn::a_finding_is_written_outside_the_tree_and_outlives_the_turn`
+`verified-by: bravebot_agent::turn::a_credential_a_line_left_at_a_destination_is_written_to_the_record`
+`verified-by: bravebot_agent::turn::a_credential_in_the_line_itself_is_written_to_the_record`
 `verified-by: bravebot_agent::turn::what_the_scan_found_is_told_to_the_person_and_not_to_the_planner`
 `verified-by: bravebot_agent::incognito::no_credential_finding_is_written_down`
 `verified-by: bravebot_agent::incognito::a_finding_an_earlier_session_recorded_is_still_read`
@@ -850,12 +864,14 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   refused with nobody asked, as any declared value is. What would close the gap is an authority to
   create into, which is the entry above.
 
-- **A value a command generates is not scanned at all.** CRED-16 reads what a turn wrote in its own
-  words, and a redirection is a file a program the turn started opened for itself: `openssl rand
-  -hex 32 > config/master.key` puts the value in the tree without a byte of it passing through a
-  layer here. Reading it back to decide whether to refuse would be a decision taken from bytes
-  nobody vouched for, which [labels.md](labels.md) admits nowhere. This is the same gap as the
-  reference case below rather than a second one, and it closes the same way.
+- **A value a command generates gets less than one a write tool creates.** CRED-16 reads what a
+  turn wrote in its own words, and a redirection is a file a program the turn started opened for
+  itself: `openssl rand -hex 32 > config/master.key` puts the value in the tree without a byte of
+  it passing through a layer on the way. What the line left at that destination is read back
+  afterwards, under the two bounds the entries below record: nothing is read where the line's own
+  output is content nobody vouched for, and a value only the third layer recognises has no prompt
+  to go to at this tool. So a generated key written this way is reported to the person where it is
+  seen at all, and a person deciding about it is what is missing.
 
 - **Gate 2 is usually failed by the counterparty.** Most SaaS keys, most package registries and most
   webhook secrets have no derived form to ask for. The tier is honest about it and cannot fix it.
@@ -869,6 +885,35 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   taken from untrusted content, which [labels.md](labels.md) admits nowhere. So a value copied out
   of a file nobody vouched for reaches the tree through a reference. What would close it is a scan
   whose finding nothing here has to branch on.
+
+- **What a line left is scanned only where somebody vouched for the line.** The same cost as the
+  entry above, reached by the other route. A program may print anything, so what a line prints is
+  content nobody vouched for unless every step of it was vouched for in this tree or is an audited
+  call over paths the person opened; below that, the destination is carried to the filesystem and
+  not read. So a turn copying `.env` to `.env.bak` before editing it is refused in a tree where
+  the person has vouched for the line and not in one where they have not. Closing it needs the
+  same thing the entry above does.
+
+- **A path a program writes without the line naming it is not scanned at all.** The destinations
+  a line opens are the ones a redirection names, which is the set the driver reserves as file
+  effects before anything runs. `cp .env .env.bak`, `tee`, `git commit` and an installer writing
+  its own config are outside it: the path is the program's business and the driver never learns
+  it. What would close this is a scan of the whole tree diff a turn produced, which needs the
+  record of what was there before it, which is CRED-15's scan and CRED-22's baseline.
+
+- **A destination past the scan's budget is passed over.** What a line left is read back for the
+  scan, and what it held beforehand is kept so a refused destination can be put back; both are
+  bounded, and past the bound neither is done. A finding that could not be acted on would stop a
+  line and leave the value where it landed, which is worse than saying nothing, so nothing is
+  said. A turn that wanted to get past this would arrange for the destination to be large first.
+
+- **A line gets the refusal and not the question.** A value that declared itself is refused at the
+  run tool as it is at a write tool, but the inferred layer's finding has nowhere to be put to
+  anybody: the run approval carries no finding, and by the time the destination can be read the
+  line has already run. So a name that sounds like a secret beside a value that looks rare is
+  reported to the person afterwards rather than decided by them beforehand, which is a notice and
+  not a judgement. Building the other half means the run prompt carrying what a write prompt
+  already carries, and it can only cover a value the line itself holds.
 
 - **A file a turn creates is attributed to it whole.** A carried value is told from an authored one
   by what the file at that path already held, and a file that did not exist held nothing. So a turn
@@ -900,8 +945,9 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   redaction rests on the type it is held in; neither is pinned by a test that scans a record or a
   screen for every secret the process holds, which is what the clause says is owed.
 
-- **Most of this is not implemented.** What runs is the scan of what a turn writes, and one
-  performer: a credential a vault obtained itself, and a mail send carried out against it so that
-  the asking agent never holds the token, and the record CRED-19 writes each finding to. There is no
-  scan of the tree before it is vouched for, no baseline over that record, and no authority at the
-  tier these clauses describe. The rest of every clause here is a target.
+- **Most of this is not implemented.** What runs is the scan of what a turn writes, at the three
+  write tools and at the two places a `run` line writes, and one performer: a credential a vault
+  obtained itself, and a mail send carried out against it so that the asking agent never holds the
+  token, and the record CRED-19 writes each finding to. There is no scan of the tree before it is
+  vouched for, no baseline over that record, and no authority at the tier these clauses describe.
+  The rest of every clause here is a target.
