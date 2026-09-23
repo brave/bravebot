@@ -105,10 +105,22 @@ With `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1` for Cargo commands:
 - `npm ci --ignore-scripts --no-audit --no-fund` and `npm run typecheck` in `ui`: passed.
 - `git diff --check`: passed.
 
-Windows checking was selected because paths and process tests differ by platform. `make
-check-windows` could not start: Docker is not installed. Linux and MSRV container checks were not
-run for the same reason. No Windows runtime tests, desktop interaction smoke test or independent
-review was run. `make check` is a before-push gate; no push was requested or performed.
+Rerun on the tree that was pushed, which is this branch merged with main at
+`d8a7e3629bb38261b02883d1368a50420958e7fe`:
+
+- `make check`: passed. That is `cargo fmt --all -- --check`, `cargo clippy --all-targets
+  --all-features -- -D warnings`, `cargo test --all --locked`, and the version and toolchain
+  checks.
+- `make check-spec`: passed, 0 errors and the same 34 existing unverified-clause warnings. The
+  `Labelled::trusted` site count for `crates/agent/src/workspace.rs` went from 4 to 8, which is
+  the four uses the contended-write fixture makes.
+- `make check-security`: passed, 0 mechanical findings.
+- `make check-windows`: passed. Paths and process tests differ by platform, which is why this one
+  was selected; the earlier run of this document could not start it because Docker was not
+  installed then.
+
+Linux and MSRV container checks were not run. No Windows runtime tests, desktop interaction smoke
+test or independent review was run.
 
 ## Limits and later work
 
