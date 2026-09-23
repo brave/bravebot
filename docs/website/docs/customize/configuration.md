@@ -964,7 +964,10 @@ token in a settings file is a token in a file people paste into issues.
 It is read at the point a request needs it rather than once at startup, so exporting a new one takes
 effect in a session already open. A block that names somewhere for a credential to live and finds
 nothing there is a stale or missing token, and its requests are refused with the remedy named rather
-than sent. `bravebot doctor` says whether a credential was found, and never what it was.
+than sent. `bravebot doctor` says whether a credential was found, and never what it was. It
+prints an `ends` line for the block too, naming the host the token is presented to: that host
+is the only surface that revokes it, and deleting the value from this file, or unsetting the
+variable, ends this machine's custody and leaves the token live there.
 
 **A block naming no credential at all is a different statement, and a supported one.** No `env` and no
 `options.apiKey` is you saying this gateway wants none: its requests carry no `authorization` header

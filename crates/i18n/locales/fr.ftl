@@ -172,6 +172,8 @@ doctor-ends-aws-access-key =
     une clé d'accès permanente : émise par AWS IAM à l'utilisateur nommé par le profil ; supprimée avec `aws iam delete-access-key`
 doctor-ends-aws-session =
     une identification de session : émise par AWS STS pour le profil et prend fin à sa propre expiration ; on ne peut y mettre fin plus tôt qu'auprès de son émetteur, car `aws sso logout` efface la copie de cette machine et non la session elle-même
+doctor-ends-gateway-token =
+    un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages ou effacer la variable met fin à la garde de cette machine et laisse le jeton actif là-bas
 doctor-outlives = survit
 doctor-outlives-aws-access-key =
     une identification de session déjà émise par STS sous cette clé d'accès, qui court jusqu'à sa propre expiration : la suppression de la clé ne l'atteint pas

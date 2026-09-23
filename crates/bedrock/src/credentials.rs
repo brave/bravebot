@@ -108,7 +108,10 @@ impl Credentials {
     /// would report an unreadable session credential as a key in a file and answer a leak of one
     /// with `aws iam delete-access-key`, for a key that does not exist. A session token is present
     /// only for a credential STS issued, which is exactly the distinction being drawn.
-    pub fn held(&self) -> Held {
+    ///
+    /// `'static` because neither arm names a host: the lifetime on [`Held`] is for the gateway
+    /// arrangement, whose record borrows the endpoint the block stated.
+    pub fn held(&self) -> Held<'static> {
         match self.session_token {
             Some(_) => Held::AwsSession,
             None => Held::AwsAccessKey,
