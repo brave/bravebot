@@ -13,11 +13,11 @@ guards:
       - crates/agent/src/lsp.rs: 4
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/tools.rs: 20
-      - crates/agent/src/workspace.rs: 7
+      - crates/agent/src/workspace.rs: 8
       - crates/agent/tests/workspace.rs: 28
       - crates/aichat/src/lib.rs: 4
       - crates/bedrock/src/lib.rs: 5
-      - crates/core/src/policy.rs: 85
+      - crates/core/src/policy.rs: 86
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
@@ -29,14 +29,14 @@ guards:
       - crates/agent/src/aside.rs: 2
       - crates/agent/src/manifest.rs: 4
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 27
+      - crates/agent/src/tools.rs: 28
       - crates/agent/src/turn.rs: 4
       - crates/agent/src/vet.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 41
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 1
-      - crates/core/src/policy.rs: 48
+      - crates/core/src/policy.rs: 50
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 1
       - crates/mcp/tests/stdio.rs: 2
@@ -50,7 +50,7 @@ guards:
       - crates/agent/src/skills.rs: 3
       - crates/agent/src/tools.rs: 13
       - crates/agent/src/turn.rs: 3
-      - crates/agent/src/workspace.rs: 8
+      - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/workspace.rs: 158
       - crates/core/src/policy.rs: 23
@@ -63,7 +63,7 @@ guards:
       - crates/core/src/value.rs: 4
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 46
+      - crates/core/src/policy.rs: 47
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -301,6 +301,13 @@ destination, and it is a read a driver may not do for itself.
 
 `verified-by: bravebot_agent::tools::a_call_line_names_its_reference_inside_the_kernel`
 `verified-by: bravebot_agent::tools::a_task_list_is_named_inside_the_reshape_that_builds_it`
+`verified-by: bravebot_agent::turn::what_a_write_changed_is_diffed_inside_the_kernel_before_it_is_released`
+`verified-by: bravebot_agent::turn::a_writes_reshape_is_labelled_by_the_file_it_replaces_and_not_by_the_body_alone`
+`verified-by: bravebot_agent::turn::what_an_edit_changed_is_diffed_inside_the_kernel_before_it_is_released`
+`verified-by: bravebot_agent::manifest::what_a_planned_write_changed_is_diffed_inside_the_kernel_before_it_is_released`
+`verified-by: bravebot_agent::turn::the_lines_an_output_prompt_states_are_counted_inside_the_kernel`
+`verified-by: bravebot_agent::turn::the_lines_a_vetting_prompt_states_are_counted_inside_the_kernel`
+`verified-by: bravebot_agent::confirm::a_prompt_line_states_the_comparison_it_was_given_and_not_the_bytes`
 `verified-by: bravebot_agent::turn::a_proposed_url_is_read_through_the_argument_gate`
 `verified-by: bravebot_agent::turn::a_job_name_is_read_through_the_argument_gate`
 `verified-by: bravebot_agent::turn::a_command_line_and_its_directory_are_read_through_the_argument_gate`

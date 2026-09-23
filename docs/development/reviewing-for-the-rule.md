@@ -33,7 +33,9 @@ a message to the model *is* the planner's context.
 records that bytes moved somewhere they were already allowed to go: a filesystem write, an HTTP
 body, or a person's screen. Each of those has a gate of its own, `Policy::present`,
 `Policy::render_in_place` and `Policy::read_trusted_content`, and the planner's own arguments
-have `Policy::read_planner_argument`. A `declassify` anywhere else is almost certainly a
+have `Policy::read_planner_argument`. A reshape that reads two pieces of content at once, which
+a diff is, goes through `Policy::render_pair_in_place`: the same gate, taking the taint of both
+rather than one side's label. A `declassify` anywhere else is almost certainly a
 violation, and it can only be written inside the policy layer: `Declassification::authorise` is
 `pub(in crate::policy)`, so no other module and no other crate can mint one at all. Every file
 that declassifies is pinned with a count in [specs/labels.md](../specs/labels.md), so

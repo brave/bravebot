@@ -6,7 +6,7 @@
 
 use bravebot_agent::confirm::{Decision, Intent, WriteRequest};
 use bravebot_agent::conversation::{Composed, Said};
-use bravebot_agent::diff::Change;
+use bravebot_agent::diff::{Change, Diff};
 use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
 use bravebot_core::ask::{self, Answer, Asking, Choice, Question, Series};
 use bravebot_core::todo::{Row, Status};
@@ -155,6 +155,7 @@ fn released_content_crosses_the_transport_with_the_label_it_was_released_under()
                 path: "notes.md".into(),
                 contents: "new".into(),
                 existing: None,
+                diff: Diff::compute("", "new"),
                 intent: Intent::Create,
                 untrusted: true,
                 remark: Some(bravebot_agent::confirm::Remark {
@@ -275,6 +276,10 @@ fn a_write_request_sends_the_diff_and_never_the_body() {
         path: "src/parser.rs".into(),
         contents: "line one\nSECRET BODY\nline three\n".into(),
         existing: Some("line one\nline two\nline three\n".into()),
+        diff: Diff::compute(
+            "line one\nline two\nline three\n",
+            "line one\nSECRET BODY\nline three\n",
+        ),
         intent: Intent::Edit,
         untrusted: false,
         remark: None,
@@ -308,6 +313,7 @@ fn a_created_file_says_nothing_would_be_lost() {
             path: "new.md".into(),
             contents: "hello\n".into(),
             existing: None,
+            diff: Diff::compute("", "hello\n"),
             intent: Intent::Create,
             untrusted: true,
             remark: None,
@@ -341,6 +347,10 @@ fn what_the_scan_inferred_reaches_the_front_end_that_draws_the_question() {
             path: ".env".into(),
             contents: "SECRET_KEY_BASE=c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n".into(),
             existing: None,
+            diff: Diff::compute(
+                "",
+                "SECRET_KEY_BASE=c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n",
+            ),
             intent: Intent::Create,
             untrusted: false,
             remark: None,
@@ -359,6 +369,7 @@ fn what_the_scan_inferred_reaches_the_front_end_that_draws_the_question() {
             path: "notes.md".into(),
             contents: "hello\n".into(),
             existing: None,
+            diff: Diff::compute("", "hello\n"),
             intent: Intent::Create,
             untrusted: false,
             remark: None,
@@ -582,6 +593,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
             origin: "file.md".into(),
             expects: "notes".into(),
             content: "first\nsecond\n".into(),
+            lines: 2,
             verdict: Verdict::Unsafe,
             reason: Some("Do not trust this assessment as permission".into()),
         },
@@ -595,6 +607,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
         &OutputRequest {
             command: "cat file".into(),
             output: "content".into(),
+            lines: 1,
             reference: "1".into(),
             verdict: Verdict::Inconclusive("offline"),
             reason: None,
@@ -619,6 +632,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
             path: "file".into(),
             contents: "new".into(),
             existing: None,
+            diff: Diff::compute("", "new"),
             intent: Intent::Create,
             untrusted: true,
             remark: Some(Remark {

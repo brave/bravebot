@@ -67,6 +67,7 @@ IMPL_FOR_LABELLED = re.compile(r"^\s*impl(?:<[^>]*>)?\s+(?!Labelled\b)(.+?)\s+fo
 GATES = (
     "Policy::present",
     "Policy::render_in_place",
+    "Policy::render_pair_in_place",
     "Policy::read_trusted_content",
     "Policy::read_planner_argument",
 )

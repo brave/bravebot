@@ -1455,6 +1455,43 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Labelled::new(shape(content.clone().declassify(&proof)), label)
     }
 
+    /// The same gate, over two pieces of content at once.
+    ///
+    /// [`Policy::render_in_place`] shapes one value, which is enough for a truncation notice or
+    /// a glyph. A diff is not: what changed is in neither side alone, so a caller with only the
+    /// one-input form has to release one side in order to hold it while the gate shapes the
+    /// other, and it is then inspecting bytes under a witness minted to put them on a screen.
+    /// That is the read `docs/specs/labels.md` LABEL-6 refuses, so the two go in together.
+    ///
+    /// The rules are the one-input form's, and the closure is under the same prohibition: it may
+    /// decide how the pair looks and nothing else.
+    ///
+    /// What comes out is labelled by taint over both, which is the only honest answer when the
+    /// result holds lines from each. A diff of a trusted body against a file nobody vouched for
+    /// shows that file's lines as the removed ones, and labelling the result by the body alone
+    /// would launder them.
+    pub fn render_pair_in_place<A: Clone, B: Clone, R>(
+        &mut self,
+        tool: &str,
+        first: &Labelled<A>,
+        second: &Labelled<B>,
+        shape: impl FnOnce(A, B) -> R,
+    ) -> Labelled<R> {
+        let label = crate::label::taint_all([first.label(), second.label()]);
+        self.allow(
+            "render",
+            format!("{tool}: two pieces of content reshaped together without being read, {label}"),
+        );
+        let proof = Declassification::authorise("reshaped without being exposed");
+        Labelled::new(
+            shape(
+                first.clone().declassify(&proof),
+                second.clone().declassify(&proof),
+            ),
+            label,
+        )
+    }
+
     /// Refuse to hand untrusted content anywhere it could be read.
     ///
     /// The rule in CLAUDE.md is that neither the driver nor the planner may have untrusted

@@ -1861,3 +1861,64 @@ fn the_shape_call_is_told_an_agent_will_read_the_workspace() {
         "the shape call may still ask the user to paste code"
     );
 }
+
+/// A manifest step's change note is built inside the kernel too.
+///
+/// `FILE_WRITE` reports what it changed off the same comparison a turn's write does, so it is
+/// the same read LABEL-6 governs and it is a third call site that shared code does not speak
+/// for. The order is what says which happened: the reshape is recorded before the bytes are
+/// released, rather than the driver diffing what it had been handed for a screen.
+#[test]
+fn what_a_planned_write_changed_is_diffed_inside_the_kernel_before_it_is_released() {
+    let scratch = Scratch::new("write-reshape");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+        ])),
+        processor_reply("RAW TEXT"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let outcome = run(&config, &workspace, "shout in.md", &mut sink).expect("runs");
+    assert!(outcome.clean);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("in.md")).unwrap(),
+        "RAW TEXT"
+    );
+
+    let at = |gate: &str, detail: &str| {
+        sink.events()
+            .iter()
+            .position(|event| match event {
+                Event::GatePassed {
+                    gate: passed,
+                    detail: said,
+                } => *passed == gate && said.contains(detail),
+                _ => false,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "no {gate} gate saying {detail:?} in the trail: {:?}",
+                    sink.events()
+                )
+            })
+    };
+    let reshaped = at(
+        "render",
+        "write_file: two pieces of content reshaped together",
+    );
+    let released = at("display", "what a write would change");
+    assert!(
+        reshaped < released,
+        "the change was released before it was built, so the driver diffed bytes it had been \
+         handed for a screen: {:?}",
+        sink.events()
+    );
+}

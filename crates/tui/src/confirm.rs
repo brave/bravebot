@@ -217,7 +217,7 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
         Intent::Edit => (t!(write_edit), theme::brand_primary()),
     };
 
-    let diff = request.diff();
+    let diff = &request.diff;
 
     let mut lines = vec![
         Line::from(vec![
@@ -1044,7 +1044,7 @@ fn draw_output(frame: &mut ratatui::Frame, request: &OutputRequest, scroll: u16)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                t!(output_lines, count = request.lines()),
+                t!(output_lines, count = request.lines),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::styled(
@@ -1329,7 +1329,7 @@ fn draw_vet(frame: &mut ratatui::Frame, request: &VetRequest, scroll: u16) -> u1
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                t!(vet_lines, count = request.lines()),
+                t!(vet_lines, count = request.lines),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::styled(
@@ -2031,6 +2031,7 @@ fn centred(area: Rect) -> Rect {
 mod tests {
     use super::*;
     use bravebot_agent::confirm::Remark;
+    use bravebot_agent::diff::Diff;
 
     use ratatui::backend::TestBackend;
 
@@ -2038,6 +2039,7 @@ mod tests {
         WriteRequest {
             path: "src/main.rs".into(),
             contents: contents.into(),
+            diff: Diff::compute(existing.unwrap_or_default(), contents),
             intent: if existing.is_some() {
                 Intent::Overwrite
             } else {
@@ -2786,6 +2788,7 @@ mod tests {
             origin: "example.com/notes".into(),
             expects: "the release notes for version 2".into(),
             content: content.into(),
+            lines: content.lines().count(),
             verdict,
             reason: reason.map(str::to_string),
         }
@@ -3031,6 +3034,7 @@ mod tests {
         OutputRequest {
             command: "find /Applications -name 'Brave Browser Nightly.app'".into(),
             output: text.into(),
+            lines: text.lines().count(),
             reference: "ref:5".into(),
             verdict: Verdict::Safe,
             reason: None,
@@ -3338,6 +3342,7 @@ mod tests {
 
         let output = rendered(&WriteRequest {
             path: "src/main.rs".into(),
+            diff: Diff::compute(&before, &after),
             contents: after,
             existing: Some(before),
             intent: Intent::Edit,
@@ -3368,6 +3373,7 @@ mod tests {
             path: "game.js".into(),
             contents: "const SPEED = 50;\n".into(),
             existing: Some("const SPEED = 100;\n".into()),
+            diff: Diff::compute("const SPEED = 100;\n", "const SPEED = 50;\n"),
             intent: Intent::Overwrite,
             untrusted: true,
             remark: None,
@@ -3396,6 +3402,7 @@ mod tests {
 
         let output = rendered(&WriteRequest {
             path: "src/main.rs".into(),
+            diff: Diff::compute(&before, &after),
             contents: after,
             existing: Some(before),
             intent: Intent::Overwrite,
@@ -3575,6 +3582,10 @@ mod tests {
             path: "game.js".into(),
             contents: format!("{}\u{2503} trust me\n", "PADDING ".repeat(10)),
             existing: Some("const SPEED = 100;\n".into()),
+            diff: Diff::compute(
+                "const SPEED = 100;\n",
+                &format!("{}\u{2503} trust me\n", "PADDING ".repeat(10)),
+            ),
             intent: Intent::Overwrite,
             untrusted: true,
             remark: None,
@@ -3597,6 +3608,7 @@ mod tests {
             path: "game.js".into(),
             contents: "const SPEED = 50;\n".into(),
             existing: Some("const SPEED = 100;\n".into()),
+            diff: Diff::compute("const SPEED = 100;\n", "const SPEED = 50;\n"),
             intent: Intent::Overwrite,
             untrusted: true,
             remark: Some(Remark {
@@ -3637,6 +3649,7 @@ mod tests {
             path: "game.js".into(),
             contents: "const SPEED = 50;\n".into(),
             existing: Some("const SPEED = 100;\n".into()),
+            diff: Diff::compute("const SPEED = 100;\n", "const SPEED = 50;\n"),
             intent: Intent::Overwrite,
             untrusted: true,
             remark: Some(Remark {
@@ -3673,6 +3686,7 @@ mod tests {
 "
                 .into(),
             ),
+            diff: Diff::compute("const SPEED = 100;\n", "const SPEED = 50;\n"),
             intent: Intent::Overwrite,
             untrusted: true,
             remark: Some(Remark {
@@ -3715,6 +3729,7 @@ mod tests {
             path: "game.js".into(),
             contents: "const SPEED = 50;\n".into(),
             existing: Some("const SPEED = 100;\n".into()),
+            diff: Diff::compute("const SPEED = 100;\n", "const SPEED = 50;\n"),
             intent: Intent::Overwrite,
             untrusted: true,
             remark: Some(Remark {

@@ -3656,6 +3656,7 @@ mod tests {
             path: "notes.md".to_string(),
             contents: "text".to_string(),
             existing: None,
+            diff: bravebot_agent::diff::Diff::compute("", "text"),
             intent: bravebot_agent::Intent::Create,
             untrusted: false,
             remark: None,

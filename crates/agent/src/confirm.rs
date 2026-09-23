@@ -53,6 +53,15 @@ pub struct WriteRequest {
     /// The current contents, when the file already exists, so a reviewer can see what
     /// would be lost.
     pub existing: Option<String>,
+    /// The comparison of the two, made before either was released.
+    ///
+    /// Carried rather than computed here. This is the driver, and a diff is a search of the
+    /// bytes on both sides: counting them, comparing them line by line and grouping what it
+    /// finds. Doing that from `contents` and `existing` would be reading content released for a
+    /// screen, which is the read `docs/specs/labels.md` LABEL-6 refuses. So the comparison is
+    /// made in the policy layer while both sides are still labelled, recorded where it happens,
+    /// and arrives here already done.
+    pub diff: Diff,
     pub intent: Intent,
     /// Whether the body came from somewhere nobody vouched for.
     ///
@@ -107,12 +116,11 @@ impl WriteRequest {
         self.existing.is_some()
     }
 
-    /// The change this would make, for display.
-    pub fn diff(&self) -> Diff {
-        Diff::compute(self.existing.as_deref().unwrap_or(""), &self.contents)
-    }
-
     /// A short description for a prompt line.
+    ///
+    /// Formats the counts the comparison already carries. It reads no content: a create has
+    /// every one of its lines added, so the count a new file is described by is the same
+    /// number, taken from the same place.
     pub fn summary(&self) -> String {
         let verb = match self.intent {
             Intent::Create => "create",
@@ -121,18 +129,15 @@ impl WriteRequest {
         };
         match self.intent {
             Intent::Create => {
-                let lines = self.contents.lines().count();
+                let lines = self.diff.added();
                 format!("create {} ({lines} lines)", self.path)
             }
-            _ => {
-                let diff = self.diff();
-                format!(
-                    "{verb} {} (+{} -{})",
-                    self.path,
-                    diff.added(),
-                    diff.removed()
-                )
-            }
+            _ => format!(
+                "{verb} {} (+{} -{})",
+                self.path,
+                self.diff.added(),
+                self.diff.removed()
+            ),
         }
     }
 }
@@ -323,6 +328,13 @@ pub struct OutputRequest {
     pub command: String,
     /// What it printed, in full.
     pub output: String,
+    /// How many lines that is, counted before the bytes were released.
+    ///
+    /// Carried rather than counted here, for the reason [`WriteRequest::diff`] is carried: this
+    /// is the driver, and counting bytes released for a screen is the read LABEL-6 refuses. The
+    /// count is made in the policy layer, on the still-labelled content, in the same reshape
+    /// that produced the rows above.
+    pub lines: usize,
     /// The reference the planner named, for the account given afterwards.
     pub reference: String,
     /// What a check said about the same bytes, or that it did not complete.
@@ -334,15 +346,11 @@ pub struct OutputRequest {
 }
 
 impl OutputRequest {
-    pub fn lines(&self) -> usize {
-        self.output.lines().count()
-    }
-
     /// A short description for a prompt line.
     pub fn summary(&self) -> String {
         format!(
             "let the model read {} of output from {}",
-            tally(self.lines(), "line", "lines"),
+            tally(self.lines, "line", "lines"),
             self.command
         )
     }
@@ -370,6 +378,9 @@ pub struct VetRequest {
     pub expects: String,
     /// The content, in full.
     pub content: String,
+    /// How many lines that is, counted before the bytes were released, as
+    /// [`OutputRequest::lines`] is.
+    pub lines: usize,
     /// What the check said, or that it did not complete.
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
@@ -377,15 +388,11 @@ pub struct VetRequest {
 }
 
 impl VetRequest {
-    pub fn lines(&self) -> usize {
-        self.content.lines().count()
-    }
-
     /// A short description for a prompt line.
     pub fn summary(&self) -> String {
         format!(
             "let the model read {} from {}",
-            tally(self.lines(), "line", "lines"),
+            tally(self.lines, "line", "lines"),
             self.origin
         )
     }
@@ -1301,6 +1308,7 @@ mod tests {
             path: "src/main.rs".to_string(),
             contents: "fn main() {}\n".to_string(),
             existing: None,
+            diff: Diff::compute("", "fn main() {}\n"),
             intent: Intent::Overwrite,
             untrusted: false,
             remark: None,
@@ -1312,6 +1320,7 @@ mod tests {
         OutputRequest {
             command: "git log".to_string(),
             output: "one line\n".to_string(),
+            lines: 1,
             reference: "output_1".to_string(),
             verdict: Verdict::Safe,
             reason: None,
@@ -1592,6 +1601,7 @@ mod tests {
             path: "notes.md".into(),
             contents: "one\ntwo\n".into(),
             existing: None,
+            diff: Diff::compute("", "one\ntwo\n"),
             intent: Intent::Create,
             untrusted: false,
             remark: None,
@@ -1611,6 +1621,7 @@ mod tests {
     fn an_existing_file_is_described_as_an_overwrite() {
         let r = WriteRequest {
             existing: Some("old".into()),
+            diff: Diff::compute("old", "one\ntwo\n"),
             intent: Intent::Overwrite,
             ..request()
         };
@@ -1625,6 +1636,7 @@ mod tests {
         let r = WriteRequest {
             contents: "one\ntwo\n".into(),
             existing: Some("a\nb\nc\n".into()),
+            diff: Diff::compute("a\nb\nc\n", "one\ntwo\n"),
             intent: Intent::Overwrite,
             ..request()
         };
@@ -1638,32 +1650,35 @@ mod tests {
         let r = WriteRequest {
             contents: "one\nTWO\n".into(),
             existing: Some("one\ntwo\n".into()),
+            diff: Diff::compute("one\ntwo\n", "one\nTWO\n"),
             intent: Intent::Edit,
             ..request()
         };
         assert_eq!(r.summary(), "edit notes.md (+1 -1)");
     }
 
-    /// The diff is against what is on disk, so an unchanged region is not reported as a
-    /// change.
+    /// The counts on a prompt line come off the comparison the policy layer made, never off the
+    /// bytes carried beside it. This is the driver, and counting content released for a screen
+    /// is the read LABEL-6 refuses, so a request whose body and pre-image disagree with its
+    /// comparison is still described by the comparison. An implementation that went back to the
+    /// bytes would report the body's own shape here instead.
     #[test]
-    fn the_diff_compares_against_the_existing_file() {
-        let r = WriteRequest {
-            contents: "keep\nnew\n".into(),
-            existing: Some("keep\nold\n".into()),
-            intent: Intent::Edit,
+    fn a_prompt_line_states_the_comparison_it_was_given_and_not_the_bytes() {
+        let overwrite = WriteRequest {
+            contents: "one\ntwo\nthree\nfour\n".into(),
+            existing: Some("a\n".into()),
+            diff: Diff::compute("a\nb\nc\n", "one\ntwo\n"),
+            intent: Intent::Overwrite,
             ..request()
         };
-        let diff = r.diff();
-        assert_eq!((diff.added(), diff.removed()), (1, 1));
-    }
+        assert_eq!(overwrite.summary(), "overwrite notes.md (+2 -3)");
 
-    /// A creation has nothing to compare against, so every line is an addition.
-    #[test]
-    fn a_creation_diffs_against_nothing() {
-        let diff = request().diff();
-        assert_eq!(diff.added(), 2);
-        assert_eq!(diff.removed(), 0);
+        let create = WriteRequest {
+            contents: "one\ntwo\nthree\nfour\n".into(),
+            diff: Diff::compute("", "one\ntwo\n"),
+            ..request()
+        };
+        assert_eq!(create.summary(), "create notes.md (2 lines)");
     }
 
     /// The default where nobody can be asked must be refusal.

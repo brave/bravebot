@@ -348,6 +348,7 @@ mod tests {
             path: "src/main.rs".to_string(),
             contents: "fn main() {}\n".to_string(),
             existing: None,
+            diff: crate::diff::Diff::compute("", "fn main() {}\n"),
             intent: Intent::Create,
             untrusted: false,
             remark: None,
@@ -381,6 +382,7 @@ mod tests {
         OutputRequest {
             command: "cat notes.txt".to_string(),
             output: "a line".to_string(),
+            lines: 1,
             reference: "ref:1".to_string(),
             verdict,
             reason: None,
@@ -392,6 +394,7 @@ mod tests {
             origin: "https://example.test/page".to_string(),
             expects: "the release notes".to_string(),
             content: "a line".to_string(),
+            lines: 1,
             verdict,
             reason: None,
         }

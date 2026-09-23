@@ -47,7 +47,8 @@ plainly. Do not soften a drop into a warning.
 **2. Is this already inside a gate, or already a recorded exception?**
 
 The four gates are `Policy::present`, `Policy::render_in_place`, `Policy::read_trusted_content` and
-`Policy::read_planner_argument`. The exceptions are the entries under `## Known costs` in
+`Policy::read_planner_argument`. The reshape gate has a second entry point,
+`Policy::render_pair_in_place`, for a reshape of two pieces of content at once, such as a diff. The exceptions are the entries under `## Known costs` in
 `docs/specs/labels.md`, each with the attacker's whole gain enumerated beside it. A candidate that
 describes one of those, without naming something missing from its list, is `DROPPED`.
 

@@ -1412,6 +1412,31 @@ pub fn read_label() -> Label {
     Label::untrusted_private()
 }
 
+/// Put a peek's label on bytes already peeked.
+///
+/// [`Workspace::peek_labelled_for_review`] reads and labels in one step, which suits a caller
+/// that wants nothing but the labelled value. A write wants both: the same bytes go to the
+/// credential scan and into the question, and they have to be the same bytes, so the read
+/// happens once and the result is labelled here. Two reads of a file something else may be
+/// writing can disagree, and then the diff somebody approves is of a version that never was.
+///
+/// A file that is there gets [`read_label`]'s label, for the reason it is there: taking one from
+/// the trust map would let this raise it. A peek at a path somebody vouched for therefore comes
+/// back understated rather than wrong, and understated is the direction that costs nothing,
+/// since the only things a labelled peek can be used for are a reshape inside the kernel and a
+/// release to a screen.
+///
+/// Nothing there is a different answer, not a quieter one. There is no content, so there is no
+/// provenance to be careful about and nothing for a taint to carry: a comparison against an
+/// absent file is a comparison against the empty string, and calling that untrusted would make
+/// every new file's change note read as though somebody else had written half of it.
+pub fn peeked_for_review(text: Option<String>) -> Labelled<String> {
+    match text {
+        Some(text) => Labelled::new(text, read_label()),
+        None => Labelled::trusted(String::new()),
+    }
+}
+
 /// Caps on directory walks, so a large tree cannot stall a turn or flood the model's
 /// context. Truncation is size hygiene, not filtering: nothing is inspected to decide
 /// what to drop.
