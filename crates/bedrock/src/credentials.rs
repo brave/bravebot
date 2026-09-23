@@ -814,9 +814,9 @@ mod tests {
         // CRED-10: the session credential is the one whose bound is a window, so it is the one
         // the record owes a detection figure for. A resolver that called it a long-lived key
         // would take the obligation off it along with the expiry.
-        assert!(session.held().held_briefly());
+        assert_eq!(session.held().tier(), bravebot_config::Tier::HeldBriefly);
         assert!(session.held().noticed_within().is_some());
-        assert!(!long_lived.held().held_briefly());
+        assert_eq!(long_lived.held().tier(), bravebot_config::Tier::Held);
         assert!(long_lived.held().noticed_within().is_none());
     }
 

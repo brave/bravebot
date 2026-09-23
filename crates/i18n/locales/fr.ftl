@@ -174,6 +174,17 @@ doctor-ends-aws-session =
     une identification de session : émise par AWS STS pour le profil et prend fin à sa propre expiration ; on ne peut y mettre fin plus tôt qu'auprès de son émetteur, car `aws sso logout` efface la copie de cette machine et non la session elle-même
 doctor-ends-gateway-token =
     un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages ou effacer la variable met fin à la garde de cette machine et laisse le jeton actif là-bas
+doctor-ends-subscription-batch =
+    le lot d'identifiants d'un abonnement importé : émis par le service d'abonnement de Brave pour la commande sur laquelle cette installation s'est enregistrée comme appareil ; chaque identifiant est dépensé par une requête premium et le lot cesse de fonctionner à la fermeture de sa dernière fenêtre, et rien ne révoque un identifiant non dépensé, donc `bravebot import-leo-creds --forget` met fin à la garde de cette machine et laisse le lot dépensable par tout ce qui a copié le fichier
+doctor-tier = niveau
+doctor-tier-delegated =
+    délégué : rien n'est détenu ici, et quelque chose que ce programme ne peut usurper décide de chaque usage et peut le refuser
+doctor-tier-granted =
+    accordé : un vrai secret, borné avant son émission à ce que l'émetteur acceptera, et appliqué là où ce programme ne peut atteindre
+doctor-tier-held-briefly =
+    détenu brièvement : un vrai secret dont l'émetteur applique la durée de vie plutôt que la portée
+doctor-tier-held =
+    détenu : un secret permanent, borné par la surface qui le révoque et par rien d'autre
 doctor-noticed = détection
 doctor-noticed-aws-session =
     en { $minutes } minutes environ, et seulement si quelqu'un lit le journal du compte : un appel fait avec cette session y apparaît et non ici, rien sur cette machine ne guette un tel appel, et y mettre fin avant son expiration demande une requête auprès de son émetteur
@@ -205,6 +216,8 @@ doctor-dropped-gateway-token-no-bound-fixed-before-issue =
     porte { $gate }, { $answer } : aucune limite sur ce que le jeton peut faire n'est fixée avant son émission, car le bloc nomme un hôte et une variable et jamais un émetteur, donc rien ici ne peut en demander un plus étroit
 doctor-dropped-gateway-token-not-minted-for-one-step =
     porte { $gate }, { $answer } : il n'est pas émis pour une seule étape, car le jeton est ce que porte le fichier de réglages ou la variable, et il est gardé pendant toute l'exécution
+doctor-dropped-subscription-batch-nothing-decides-each-use =
+    porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus présente lui-même un identifiant du lot et rien n'est sollicité pour autoriser la requête
 doctor-backend = service
 doctor-backend-bedrock = AWS Bedrock
 doctor-backend-aichat = Brave Leo

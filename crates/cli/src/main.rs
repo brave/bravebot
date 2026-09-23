@@ -1916,13 +1916,18 @@ fn doctor() -> ExitCode {
                 report_gateway(provider);
             }
 
-            // What would end each credential this build holds for itself. Reported beside the
-            // backends rather than kept for a leak, because it can only be written down while the
-            // arrangement is still understood, and the person reading it after a key appears
-            // somewhere public needs the surface that revokes it rather than the expiry, which is
-            // all anything here kept before.
-            for held in config.held() {
+            // What would end each credential this build holds for itself, and which tier the gate
+            // walk left it on. Reported beside the backends rather than kept for a leak, because it
+            // can only be written down while the arrangement is still understood, and the person
+            // reading it after a key appears somewhere public needs the surface that revokes it
+            // rather than the expiry, which is all anything here kept before.
+            //
+            // The batch is asked for here rather than inside the record, because the record is
+            // configuration and the file the batch sits in is a fact about the machine.
+            let subscription = bravebot_skus::store::load().ok();
+            for held in config.held(subscription.is_some()) {
                 fact(t!(doctor_ends), what_would_end(held));
+                fact(t!(doctor_tier), what_tier_it_stands_at(held.tier()));
                 if let Some(noticed) = how_soon_a_leak_is_noticed(held) {
                     fact(t!(doctor_noticed), noticed);
                 }
@@ -1952,7 +1957,7 @@ fn doctor() -> ExitCode {
             // Only where a subscription means something. A Leo credential is what the premium half of
             // the Brave roster needs, and it means nothing to Bedrock.
             if config.serves_aichat() {
-                report_subscription();
+                report_subscription(subscription.as_ref());
             }
 
             // Last of the configuration section, and a failure, because a report that said
@@ -2236,6 +2241,30 @@ fn what_would_end(held: bravebot_config::Held<'_>) -> String {
         bravebot_config::Held::GatewayToken { host } => {
             t!(doctor_ends_gateway_token, gateway = host)
         }
+        bravebot_config::Held::SubscriptionBatch => t!(doctor_ends_subscription_batch).to_string(),
+    }
+}
+
+/// What `doctor` says about the tier a credential stands at, which CRED-2 asks every credential in
+/// use to carry and which the surface reading the record is the only place a person sees.
+///
+/// One sentence per tier rather than per credential, and the tier rather than the credential as the
+/// argument: the tier is what the gate walk answered, and two credentials that stopped at the same
+/// gate stand in the same position however differently they are issued. What is particular to each
+/// of them is the account beside this line. Taking the tier is also what lets every tier the record
+/// can express be held to a sentence, including the one no credential stands at.
+///
+/// Separate from the printing, and a `match` over [`bravebot_config::Tier`] rather than a field on
+/// it, for the reason the account above is: `bravebot-config` holds no words a person reads, so a
+/// tier added there does not compile until it has one here. Delegated has a sentence although no
+/// credential stands there, because the record can express it and a report that could not name it
+/// would answer the first credential to reach it with the tier below.
+fn what_tier_it_stands_at(tier: bravebot_config::Tier) -> &'static str {
+    match tier {
+        bravebot_config::Tier::Delegated => t!(doctor_tier_delegated),
+        bravebot_config::Tier::Granted => t!(doctor_tier_granted),
+        bravebot_config::Tier::HeldBriefly => t!(doctor_tier_held_briefly),
+        bravebot_config::Tier::Held => t!(doctor_tier_held),
     }
 }
 
@@ -2259,7 +2288,8 @@ fn how_soon_a_leak_is_noticed(held: bravebot_config::Held<'_>) -> Option<String>
         }
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsAccessKey
-        | bravebot_config::Held::GatewayToken { .. } => None,
+        | bravebot_config::Held::GatewayToken { .. }
+        | bravebot_config::Held::SubscriptionBatch => None,
     }
 }
 
@@ -2348,10 +2378,16 @@ fn why_it_dropped(
             gate = gate,
             answer = answer
         ),
+        (Held::SubscriptionBatch, Condition::NothingDecidesEachUse) => t!(
+            doctor_dropped_subscription_batch_nothing_decides_each_use,
+            gate = gate,
+            answer = answer
+        ),
         // The conditions each credential's walk does not hold. Gate 3 is passed by the session
-        // credential and by nothing else, since STS mints it for the profile and ends it at an
-        // expiry AWS enforces; the rest are the other conditions of the gates each credential
-        // does drop at, and a drop recorded on one of them is an account nobody has written.
+        // credential and gate 2 by the subscription batch, which is why neither has an account of
+        // the gates below the one it stopped at; the rest are the other conditions of the gates
+        // each credential does drop at, and a drop recorded on one of them is an account nobody
+        // has written.
         (
             Held::SigningKey | Held::AwsAccessKey | Held::GatewayToken { .. },
             Condition::NothingCanRefuseAUse
@@ -2363,6 +2399,16 @@ fn why_it_dropped(
         | (
             Held::AwsSession,
             Condition::NothingCanRefuseAUse
+            | Condition::BoundEnforcedWithinReach
+            | Condition::BoundWithNoEnd
+            | Condition::NotMintedForOneStep
+            | Condition::IssuerEndsNothing
+            | Condition::RenewableWithoutAuthority,
+        )
+        | (
+            Held::SubscriptionBatch,
+            Condition::NothingCanRefuseAUse
+            | Condition::NoBoundFixedBeforeIssue
             | Condition::BoundEnforcedWithinReach
             | Condition::BoundWithNoEnd
             | Condition::NotMintedForOneStep
@@ -2399,7 +2445,8 @@ fn what_outlives_revoking(held: bravebot_config::Held<'_>) -> Option<&'static st
         bravebot_config::Held::AwsAccessKey => Some(t!(doctor_outlives_aws_access_key)),
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsSession
-        | bravebot_config::Held::GatewayToken { .. } => None,
+        | bravebot_config::Held::GatewayToken { .. }
+        | bravebot_config::Held::SubscriptionBatch => None,
     }
 }
 
@@ -2474,8 +2521,12 @@ fn managed_layer(managed: &Managed) -> Vec<String> {
 /// Counts only: a credential is a bearer secret, so none of it is printed. The environment rather
 /// than the channel it came from, because that is what decides whether the batch can be spent
 /// against the endpoint this build talks to, and it is what the file records.
-fn report_subscription() {
-    if let Ok(stored) = bravebot_skus::store::load() {
+///
+/// The batch arrives rather than being loaded here, because the record of what would end each
+/// credential needs the same answer and a second load would let the two halves of one report
+/// disagree about whether a subscription is held.
+fn report_subscription(stored: Option<&bravebot_skus::StoredCredentials>) {
+    if let Some(stored) = stored {
         fact(
             t!(doctor_leo),
             t!(
@@ -3290,6 +3341,46 @@ mod tests {
                 "{held:?} is reported and recorded differently"
             );
         }
+    }
+
+    /// CRED-2: the tier a credential stands at reaches the person reading the record, and each tier
+    /// reads as itself. One arm copied to the next is the failure this catches, and it is the
+    /// failure that costs the most here: a permanent secret reported in the words of a bounded one
+    /// tells somebody the issuer will refuse a use nobody can refuse.
+    ///
+    /// Every tier the record can express rather than only the ones a credential stands at today,
+    /// because the sentence a tier is missing is the one nobody notices until a credential arrives
+    /// at it, and by then the report has answered it with a neighbouring tier.
+    #[test]
+    fn each_tier_a_credential_can_stand_at_is_reported_in_its_own_words() {
+        let sentences: Vec<&str> = bravebot_config::Tier::ALL
+            .iter()
+            .map(|tier| what_tier_it_stands_at(*tier))
+            .collect();
+
+        for (tier, sentence) in bravebot_config::Tier::ALL.iter().zip(&sentences) {
+            assert!(!sentence.is_empty(), "{tier:?} is reported with nothing");
+        }
+        for (at, sentence) in sentences.iter().enumerate() {
+            assert!(
+                !sentences[at + 1..].contains(sentence),
+                "two tiers share one sentence: {sentence}"
+            );
+        }
+
+        // The record is what decides which sentence a credential gets, so two credentials the
+        // record separates are separated in the report. Reported alike, the tier line would be
+        // decoration beside an account that already names the credential.
+        assert_ne!(
+            what_tier_it_stands_at(bravebot_config::Held::AwsSession.tier()),
+            what_tier_it_stands_at(bravebot_config::Held::SigningKey.tier()),
+            "a credential at Held briefly and one at Held are reported alike"
+        );
+        assert_ne!(
+            what_tier_it_stands_at(bravebot_config::Held::SubscriptionBatch.tier()),
+            what_tier_it_stands_at(bravebot_config::Held::SigningKey.tier()),
+            "a bounded credential and a permanent one are reported alike"
+        );
     }
 
     /// CRED-10: the figure for how quickly a leak would be noticed and acted on is reported for

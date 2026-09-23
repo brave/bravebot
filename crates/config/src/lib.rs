@@ -434,6 +434,49 @@ pub struct GateDrop {
     pub attempt: Attempt,
 }
 
+/// Where a credential's walk down the gates stopped, which is its tier.
+///
+/// CRED-2 asks that every credential in use carry one, and that it be arrived at by walking down
+/// from [`Tier::Delegated`] rather than asserted. The walk is what separates a credential somebody
+/// reasoned about from one that ended up wherever it ended up, so the default for custody with no
+/// recorded walk is [`Tier::Held`], the tier that assumes nothing: a tier that defaulted upward
+/// would let silence claim the strongest one.
+///
+/// Four tiers and three gates, and a drop is worth one tier: gate 1 asks whether something this
+/// program cannot impersonate decides each use, gate 2 whether the issuer mints a bounded
+/// derivative it enforces beyond this program's reach, and gate 3 whether the issuer mints on
+/// demand and ends the value without this program's help. Passing a gate stops the walk where it
+/// is, which is why [`Tier::Granted`] and [`Tier::HeldBriefly`] are both bounded and expiring
+/// arrangements: they differ in whether the bound or the lifetime is the thing the issuer enforces.
+///
+/// A credential with no custody and no refusal is on no tier at all, which CRED-5 covers and this
+/// type deliberately cannot express: an arrangement nobody can refuse would otherwise be recorded
+/// at the top of a scale it is not on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    /// Nothing is held here and something this program cannot impersonate decides each use.
+    Delegated,
+    /// A real secret, bounded before it was issued by an issuer that enforces the bound.
+    Granted,
+    /// A real secret whose lifetime, rather than its reach, is what its issuer enforces.
+    HeldBriefly,
+    /// A permanent secret, bounded by the surface that revokes it and by nothing else.
+    Held,
+}
+
+impl Tier {
+    /// Every tier a credential can stand at, so something reporting them cannot omit one.
+    ///
+    /// Written from the top down, in walk order, because that is the order the gates are asked in
+    /// and a reader checking a record against the walk reads them the same way.
+    pub const ALL: [Self; 4] = [
+        Self::Delegated,
+        Self::Granted,
+        Self::HeldBriefly,
+        Self::Held,
+    ];
+}
+
 /// A credential this program holds itself, and so owes an account of what would end it.
 ///
 /// CRED-25 asks three things about every credential at Held or Held briefly: who issued it, the
@@ -442,13 +485,19 @@ pub struct GateDrop {
 /// is recorded beside the value is which arrangement it is, and the three answers follow from that.
 /// The words a person reads are in the message catalog, since this crate holds none of its own.
 ///
-/// CRED-10 asks a fourth thing, of the credentials at Held briefly alone: how quickly a leak of one
+/// CRED-2 asks a fourth thing of every credential in the list, whatever its tier: the tier itself,
+/// arrived at by walking down from Delegated. [`Held::tier`] is that record, and it is the one fact
+/// here that is not a CRED-25 obligation, which is why the list reaches past the two tiers CRED-25
+/// asks an account of. A credential in use with no recorded tier is the outcome CRED-2 forbids, so
+/// the record naming the arrangements is where the tier belongs: the alternative is a second list
+/// that can be short by one.
+///
+/// CRED-10 asks a fifth thing, of the credentials at Held briefly alone: how quickly a leak of one
 /// would be noticed and acted on. That figure is a judgement about the deployment rather than a
 /// fact about the arrangement, and it establishes no tier and moves none, so it is recorded here
-/// beside the tier rather than derived from it: [`Held::held_briefly`] and
-/// [`Held::noticed_within`].
+/// beside the tier rather than derived from it: [`Held::tier`] and [`Held::noticed_within`].
 ///
-/// CRED-3 asks a fifth thing, of every credential here: how it reached the tier it stands at. Each
+/// CRED-3 asks a sixth thing, of every credential here: how it reached the tier it stands at. Each
 /// drop of the walk down from Delegated records which of the gate's conditions failed and whether
 /// the counterparty refused or nobody attempted it, which is [`Held::walk`]. A tier without that
 /// is an assertion, and the two answers matter separately: a gate the counterparty refused is a
@@ -465,6 +514,12 @@ pub struct GateDrop {
 /// path CRED governs, so the clause reaches it. That the block names no issuer is the answer to a
 /// different question: the host it names is the surface the token is presented to and the only one
 /// that revokes it, which is the address the clause asks be written down.
+///
+/// An imported subscription's credential batch is in it for the same reason and on a different
+/// tier. `skus/store.rs` is among the paths CRED governs, the batch sits in a file under the
+/// machine for the length of its validity window, and a request spends one credential from it, so
+/// it is a credential in use and owes a tier. That the tier is [`Tier::Granted`] rather than Held
+/// is what the walk answers, not what being in this list decides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Held<'a> {
     /// The HMAC signing key baked into this build, which signs every request to the Brave backend.
@@ -496,6 +551,20 @@ pub enum Held<'a> {
         /// The host the block's endpoint names, from [`provider::Provider::host`].
         host: &'a str,
     },
+    /// The single-use credential batch an imported Leo Premium subscription was minted as, kept in
+    /// `~/.bravebot/leo-premium.json` and spent one credential per premium request.
+    ///
+    /// Granted. Gate 1 fails, because the batch is presented by this program and nothing else
+    /// decides a use of it. Gate 2 passes: the batch is what Brave's subscription service minted
+    /// from the order, each credential is good for one presentation inside one window, and the
+    /// backend verifying it is what enforces both, so the bound was fixed before issue and sits
+    /// beyond this program's reach. The walk stops there, which is why nothing here sizes it
+    /// against detection: a window is not what bounds it.
+    ///
+    /// No parameter, unlike a gateway. There is one batch whatever channel it was imported from,
+    /// the issuer is Brave's own service, and the surface is the order rather than an address this
+    /// configuration could name differently on two machines.
+    SubscriptionBatch,
 }
 
 impl<'a> Held<'a> {
@@ -504,12 +573,13 @@ impl<'a> Held<'a> {
     /// The gateway arrangement is a credential plus the host that would end it, so a list of the
     /// kinds has to be given one: a caller walking this is asking which arrangements exist rather
     /// than which are configured, and the host it passes is what the gateway entry will name.
-    pub const fn all(gateway_host: &'a str) -> [Self; 4] {
+    pub const fn all(gateway_host: &'a str) -> [Self; 5] {
         [
             Self::SigningKey,
             Self::AwsAccessKey,
             Self::AwsSession,
             Self::GatewayToken { host: gateway_host },
+            Self::SubscriptionBatch,
         ]
     }
 
@@ -520,10 +590,10 @@ impl<'a> Held<'a> {
     /// attempted it. Recorded per credential rather than per tier, because two credentials at Held
     /// can have got there for opposite reasons and only one of them is worth revisiting.
     ///
-    /// The length is the tier: failing a gate drops exactly one tier and nothing skips one, so two
-    /// drops is Held briefly and three is Held. That is the same claim [`Held::held_briefly`]
-    /// makes, and the two are pinned against each other rather than derived from one another, so a
-    /// walk revised without the tier fails rather than quietly restating it.
+    /// The length is the tier: failing a gate drops exactly one tier and nothing skips one, so one
+    /// drop is Granted, two is Held briefly and three is Held. That is the same claim
+    /// [`Held::tier`] makes, and the two are pinned against each other rather than derived from one
+    /// another, so a walk revised without the tier fails rather than quietly restating it.
     ///
     /// Every drop here is one nobody attempted. Each of these credentials is handed over whole and
     /// used directly, and at each gate the counterparty either offers the stronger arrangement
@@ -599,31 +669,44 @@ impl<'a> Held<'a> {
                     attempt: Attempt::NotAttempted,
                 },
             ],
+            // One drop, because gate 2 passes: Brave's subscription service minted the batch from
+            // the order, each credential is good for one presentation inside one window, and the
+            // backend verifying it enforces both beyond this program's reach. Gate 1 fails because
+            // this program presents the credential itself and nothing decides a use of it, and
+            // nobody has asked that service for something that would.
+            Self::SubscriptionBatch => &[GateDrop {
+                condition: Condition::NothingDecidesEachUse,
+                attempt: Attempt::NotAttempted,
+            }],
         }
     }
 
-    /// Whether this credential stands at Held briefly rather than at Held.
+    /// Where this credential's walk down the gates stopped, which CRED-2 asks every credential in
+    /// use to carry.
     ///
-    /// The tier decides which obligations a credential carries, and CRED-10 asks a figure of the
-    /// credentials at Held briefly and of no others, so which tier a credential stands at has to
-    /// be a question the record answers rather than one a reader answers from the prose above
-    /// each variant.
+    /// A claim about the arrangement, so it moves only when the arrangement does: CRED-4. Nothing
+    /// a person could rewrite is in it, and no variant stands at [`Tier::Delegated`], because
+    /// every arrangement here hands material over and this program presents it itself.
     ///
-    /// A claim about the arrangement, so it moves only when the arrangement does: CRED-4. A
-    /// session credential is minted for an occasion by an issuer that ends it, and none of the
-    /// others has an issuer that ends anything on its own.
-    pub fn held_briefly(self) -> bool {
-        matches!(self, Self::AwsSession)
+    /// The reasoning for each answer is on the variant, where the arrangement it describes is, and
+    /// not repeated here: a second copy of it is a second thing to keep true.
+    pub fn tier(self) -> Tier {
+        match self {
+            Self::SubscriptionBatch => Tier::Granted,
+            Self::AwsSession => Tier::HeldBriefly,
+            Self::SigningKey | Self::AwsAccessKey | Self::GatewayToken { .. } => Tier::Held,
+        }
     }
 
     /// How quickly a leak of this credential would be noticed and acted on, which CRED-10 asks the
     /// record to say for every credential at Held briefly.
     ///
-    /// `None` for a credential at Held, where the figure would mean nothing: a permanent
-    /// credential is bounded by the surface that revokes it rather than by a window, and that
-    /// surface is what [`Held`] already records. The figure is owed exactly where the window is
-    /// the bound, so it is `Some` for exactly the credentials [`Held::held_briefly`] names, and
-    /// the two are pinned together rather than derived from one another.
+    /// `None` at every other tier, where the figure would mean nothing: a permanent credential is
+    /// bounded by the surface that revokes it rather than by a window, and that surface is what
+    /// [`Held`] already records, while one at Granted is bounded by what the issuer will accept it
+    /// for. The figure is owed exactly where the window is the bound, so it is `Some` for exactly
+    /// the credentials [`Held::tier`] puts at [`Tier::HeldBriefly`], and the two are pinned
+    /// together rather than derived from one another.
     ///
     /// It does not establish the tier and cannot move it. A rota that stopped watching would make
     /// this number larger and leave the session credential exactly where the gate walk left it.
@@ -638,7 +721,10 @@ impl<'a> Held<'a> {
     pub fn noticed_within(self) -> Option<Duration> {
         match self {
             Self::AwsSession => Some(Duration::from_secs(15 * 60)),
-            Self::SigningKey | Self::AwsAccessKey | Self::GatewayToken { .. } => None,
+            Self::SigningKey
+            | Self::AwsAccessKey
+            | Self::GatewayToken { .. }
+            | Self::SubscriptionBatch => None,
         }
     }
 
@@ -652,6 +738,11 @@ impl<'a> Held<'a> {
     /// False for a gateway token: the gateway that revokes it is the only place it is presented,
     /// and nothing here mints anything from it. A copy of the same token in a file or a shell
     /// profile is that credential rather than something derived from it, so revoking reaches it.
+    ///
+    /// False for a subscription batch on the other side of the same question: the batch is what
+    /// was minted, and nothing is minted from a credential in it. A re-import mints a further
+    /// batch from the order rather than from this one, so it is the order that has something under
+    /// it, and the order is not a credential this program holds.
     pub fn outlives_revocation(self) -> bool {
         matches!(self, Self::AwsAccessKey)
     }
@@ -1064,7 +1155,15 @@ impl Config {
     /// same footing, for the same reason. A block naming nowhere for a token has said none is
     /// needed and is left out, as is one reaching Bedrock, whose credentials are the AWS pair and
     /// would otherwise be counted twice.
-    pub fn held(&self) -> Vec<Held<'_>> {
+    ///
+    /// `subscription_imported` is asked of the caller because the batch lives in a file
+    /// `bravebot-skus` owns and nothing here depends on that crate. It is a fact about the machine
+    /// rather than about this configuration, which is why it arrives as an argument rather than
+    /// being read: the same configuration on a machine with no import holds one credential fewer.
+    /// A build that cannot reach the Brave backend is left out of it whatever the file holds,
+    /// because the batch buys the premium half of that backend's roster and nothing else reads it,
+    /// and CRED-2 gives a credential nothing reads no tier.
+    pub fn held(&self, subscription_imported: bool) -> Vec<Held<'_>> {
         let mut held = Vec::new();
         if self.serves_aichat() {
             held.push(Held::SigningKey);
@@ -1081,6 +1180,9 @@ impl Config {
                     host: provider.host(),
                 }),
         );
+        if subscription_imported && self.serves_aichat() {
+            held.push(Held::SubscriptionBatch);
+        }
         held
     }
 
@@ -1343,14 +1445,14 @@ mod tests {
         .expect("bedrock alone is a working configuration");
         assert!(!bedrock_only.serves_aichat());
         assert_eq!(
-            bedrock_only.held(),
+            bedrock_only.held(false),
             [Held::AwsAccessKey, Held::AwsSession],
             "a build with a blank signing key holds no signing key"
         );
 
         let brave_only = Config::from_lookup(complete_env).expect("configured");
         assert_eq!(
-            brave_only.held(),
+            brave_only.held(false),
             [Held::SigningKey],
             "a build with no AWS account has no AWS credential to account for"
         );
@@ -1369,7 +1471,7 @@ mod tests {
         })
         .expect("configured");
         assert_eq!(
-            config.held(),
+            config.held(false),
             [Held::SigningKey, Held::AwsAccessKey, Held::AwsSession]
         );
 
@@ -1411,7 +1513,7 @@ mod tests {
 
         // The gateways in the order the blocks are read, which is by id.
         assert_eq!(
-            config.held(),
+            config.held(false),
             [
                 Held::SigningKey,
                 Held::AwsAccessKey,
@@ -1460,9 +1562,11 @@ mod tests {
             );
             assert_eq!(
                 held.walk().len(),
-                match held.held_briefly() {
-                    true => 2,
-                    false => 3,
+                match held.tier() {
+                    Tier::Delegated => 0,
+                    Tier::Granted => 1,
+                    Tier::HeldBriefly => 2,
+                    Tier::Held => 3,
                 },
                 "{held:?} stands at one tier and records the walk of another"
             );
@@ -1475,9 +1579,10 @@ mod tests {
     /// available files a decision made here as a fact about the world, and the credential stops
     /// being worth looking at again.
     ///
-    /// True of all four: AWS mints a bounded session and ends it, this project's own backend
-    /// issues the signing key, and a gateway block names no issuer for anything to have asked.
-    /// None of those is a counterparty saying no.
+    /// True of all five: AWS mints a bounded session and ends it, this project's own backend
+    /// issues the signing key, a gateway block names no issuer for anything to have asked, and
+    /// Brave's subscription service mints a batch nobody has asked to gate use of. None of those
+    /// is a counterparty saying no.
     #[test]
     fn every_drop_this_configuration_records_is_one_nobody_attempted() {
         for held in Held::all("gateway.invalid") {
@@ -1490,6 +1595,100 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// CRED-2: every credential in the record stands at a tier the walk arrived at, and nothing
+    /// that handed material over is recorded at the top of the scale. The clause's Why is the
+    /// failure this catches: a record that answered every credential with one tier would let
+    /// silence claim the strongest, and the record would say nothing about any of them while
+    /// appearing to say something about all of them.
+    ///
+    /// Held against the whole of the record rather than against a variant, because the credential a
+    /// tier is missing from is the one nobody thought about, and against three distinct answers
+    /// because a constant is what a record with no walk behind it looks like from the outside.
+    #[test]
+    fn every_credential_in_the_record_stands_at_a_tier_the_walk_arrived_at() {
+        let every = Held::all("gateway.invalid");
+
+        for held in every {
+            assert_ne!(
+                held.tier(),
+                Tier::Delegated,
+                "{held:?} hands material over and is recorded as holding nothing"
+            );
+        }
+
+        let mut tiers: Vec<String> = every
+            .iter()
+            .map(|held| format!("{:?}", held.tier()))
+            .collect();
+        tiers.sort();
+        tiers.dedup();
+        assert_eq!(
+            tiers,
+            ["Granted", "Held", "HeldBriefly"],
+            "the record does not answer its credentials with the tiers their walks stopped at"
+        );
+
+        // Each answer is the gate the arrangement stops at, and the reasoning is on the variant.
+        assert_eq!(Held::SigningKey.tier(), Tier::Held);
+        assert_eq!(Held::AwsAccessKey.tier(), Tier::Held);
+        assert_eq!(Held::AwsSession.tier(), Tier::HeldBriefly);
+        assert_eq!(Held::SubscriptionBatch.tier(), Tier::Granted);
+
+        // CRED-4: the tier is a claim about the arrangement, and a gateway's address is not part of
+        // one. Two hosts answered differently would be a tier that moved without the arrangement
+        // moving, which is the shape of a tier that can be argued.
+        assert_eq!(
+            Held::GatewayToken {
+                host: "one.invalid"
+            }
+            .tier(),
+            Held::GatewayToken {
+                host: "two.invalid"
+            }
+            .tier(),
+            "a gateway's tier is read off its address"
+        );
+    }
+
+    /// CRED-2: an imported subscription's credential batch is a credential this machine holds and
+    /// spends, so it is in the record with a tier of its own. Left out, a batch sitting in a file
+    /// under the machine and spent by every premium request has no recorded tier at all, which is
+    /// the outcome the clause forbids.
+    ///
+    /// Both directions, because the record is what a report walks: a rule that pushed the entry
+    /// unconditionally would account for a subscription on every machine that has never imported
+    /// one, and send somebody to a batch that does not exist. A Bedrock-only build is held to the
+    /// absent case with a batch present, since nothing there reads it and CRED-2 gives a credential
+    /// nothing reads no tier.
+    #[test]
+    fn an_imported_subscription_is_a_credential_this_configuration_holds() {
+        let brave = Config::from_lookup(complete_env).expect("configured");
+        assert!(brave.serves_aichat());
+        assert_eq!(
+            brave.held(true),
+            [Held::SigningKey, Held::SubscriptionBatch],
+            "an imported batch is not in the record"
+        );
+        assert_eq!(
+            brave.held(false),
+            [Held::SigningKey],
+            "a machine that has imported nothing is accounted for a batch it does not hold"
+        );
+
+        let bedrock_only = Config::from_lookup(|k| match k {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            _ => None,
+        })
+        .expect("bedrock alone is a working configuration");
+        assert!(!bedrock_only.serves_aichat());
+        assert_eq!(
+            bedrock_only.held(true),
+            [Held::AwsAccessKey, Held::AwsSession],
+            "a build that cannot reach the Brave backend is accounted for a batch nothing there spends"
+        );
     }
 
     /// CRED-10: a credential the record stands at Held briefly is owed a figure for how quickly a
@@ -1508,15 +1707,16 @@ mod tests {
         for held in Held::all("gateway.invalid") {
             assert_eq!(
                 held.noticed_within().is_some(),
-                held.held_briefly(),
+                held.tier() == Tier::HeldBriefly,
                 "{held:?} stands at one tier and is sized for the other"
             );
         }
 
-        assert!(Held::AwsSession.held_briefly());
-        assert!(!Held::SigningKey.held_briefly());
-        assert!(!Held::AwsAccessKey.held_briefly());
-        assert!(!gateway.held_briefly());
+        assert_eq!(Held::AwsSession.tier(), Tier::HeldBriefly);
+        assert_ne!(Held::SigningKey.tier(), Tier::HeldBriefly);
+        assert_ne!(Held::AwsAccessKey.tier(), Tier::HeldBriefly);
+        assert_ne!(gateway.tier(), Tier::HeldBriefly);
+        assert_ne!(Held::SubscriptionBatch.tier(), Tier::HeldBriefly);
 
         let window = Held::AwsSession
             .noticed_within()
