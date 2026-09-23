@@ -612,9 +612,17 @@ the reply a registration decodes its signed tokens from, and the browser prefere
 reads an order id out of, which holds that install's own credentials. `bravebot-skus` has its own,
 because [LAYER-1](layering.md#LAYER-1) gives that crate no dependency on another crate here; what
 has to hold across the two is that the bytes are overwritten where they lie and that reading them is
-visible at the call site.
+visible at the call site. What a settings file's `env` block set is cleared too: the settings keep
+what each layer said so the configuration can be built out of it and `doctor` can report which file
+won a name, and a signing key written there is a credential in that map, so the map is overwritten
+when the settings go. Every value in it rather than the names a credential is known to arrive under,
+which is the reading a parsed document already gets and is here for the same reason: the same block
+carries a region and a model name, and what a person may put in it is anything. Nothing holds a
+`Settings` for the length of the run, which would be a map that never goes: the one place that used
+to, the list of variables a subprocess is not handed, keeps the names it read out of one rather than
+the settings themselves, and a name is not a credential.
 
-**What does not, and why.** Three things.
+**What does not, and why.** Two things.
 
 The pages are not kept off swap. Locking the buffers themselves needs the allocator that hands
 them out, which this program does not own, and the process-wide form, `mlockall` with
@@ -629,18 +637,13 @@ presentation a spend derives is an ordinary string: single-use, bound to one iss
 request header, and copied from there into the buffers the paragraph above says are not this
 program's either.
 
-What a settings file's `env` block sets is a plain string for the length of the run. `Settings` keeps
-what each layer said so that the configuration can be built out of it and `doctor` can report which
-file won a name, and a signing key set there is a credential in that map: the `Secret` the
-configuration builds out of it is cleared, and the map it was read out of has no `Drop` and is not.
-Giving that map one means deciding which names in it are credentials, since the same block carries a
-region and a model name, and the answer to what a person may put there is anything.
-
 `verified-by: bravebot_config::lib::scrubbing_overwrites_the_bytes_where_they_lie`
 `verified-by: bravebot_config::lib::scrubbing_counts_the_bytes_rather_than_the_characters`
 `verified-by: bravebot_config::lib::scrubbing_a_document_reaches_a_token_inside_the_blocks_it_was_written_in`
 `verified-by: bravebot_config::settings::the_text_a_layer_was_parsed_from_is_cleared`
 `verified-by: bravebot_config::settings::a_merge_keeps_the_entry_a_stronger_layer_displaced`
+`verified-by: bravebot_config::settings::what_the_env_block_was_set_to_is_overwritten_where_it_lies`
+`verified-by: bravebot_config::scrub::the_names_a_settings_file_added_are_what_is_kept_rather_than_the_settings`
 `verified-by: bravebot_skus::secret::scrubbing_overwrites_the_bytes_where_they_lie`
 `verified-by: bravebot_skus::secret::scrubbing_counts_the_bytes_rather_than_the_characters`
 `verified-by: bravebot_skus::secret::scrubbing_a_document_reaches_a_token_inside_the_blocks_it_was_written_in`
@@ -652,6 +655,7 @@ region and a model name, and the answer to what a person may put there is anythi
 `verified-by: by-construction (the text a subscription batch is read from, the document it is parsed into and the document it is written back as are each held in a guard for the whole of the call that makes one, so every way out clears it; each guard's drop body is one call to a scrub the tests above pin and does nothing else)`
 `verified-by: by-construction (both entry points that hold a credential, the terminal binary and the graphical front end's transport, call the core dump limit down as their first statement, before the argument vector is read and so before the signing key is unmasked)`
 `verified-by: by-construction (a parsed settings document clears itself when it goes, its drop being one call to each of the two scrubs the tests above pin and nothing else; the four readers of a settings file, the layered read, the single-file parse, the managed layer and the front end's check of a chosen file, each hold one of these and so clear what they parsed by going out of scope)`
+`verified-by: by-construction (the env block a Settings holds is unreachable once the Settings is gone, so what a test can run is the overwriting rather than the drop; the drop body is one call to the method the test above pins and does nothing else)`
 
 <a id="CRED-24"></a>
 ### CRED-24: a credential never travels as a command-line argument
