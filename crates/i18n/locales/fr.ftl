@@ -180,6 +180,31 @@ doctor-noticed-aws-session =
 doctor-outlives = survit
 doctor-outlives-aws-access-key =
     une identification de session déjà émise par STS sous cette clé d'accès, qui court jusqu'à sa propre expiration : la suppression de la clé ne l'atteint pas
+doctor-dropped = descente
+doctor-dropped-refused = la contrepartie a refusé
+doctor-dropped-not-attempted = personne ne l'a demandé
+doctor-dropped-signing-key-nothing-decides-each-use =
+    porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car la clé signe l'empreinte de la requête dans ce processus et rien d'autre n'est appelé à la signer
+doctor-dropped-signing-key-no-bound-fixed-before-issue =
+    porte { $gate }, { $answer } : aucune limite sur ce que la clé peut faire n'est fixée avant son émission, car le service dérive sa copie d'une graine maîtresse et de cet id de clé, et on ne lui en demande pas de plus étroite
+doctor-dropped-signing-key-not-minted-for-one-step =
+    porte { $gate }, { $answer } : elle n'est pas émise pour une seule étape, car elle est intégrée à la version et la clé d'une version est celle de toutes les installations
+doctor-dropped-aws-access-key-nothing-decides-each-use =
+    porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus signe chaque requête avec la clé elle-même
+doctor-dropped-aws-access-key-no-bound-fixed-before-issue =
+    porte { $gate }, { $answer } : aucune limite sur ce que la clé peut faire n'est fixée avant son émission, car STS émet une session bornée par une politique qu'AWS applique et que l'agent ne peut élargir, et rien ici ne la demande
+doctor-dropped-aws-access-key-not-minted-for-one-step =
+    porte { $gate }, { $answer } : elle n'est pas émise pour une seule étape, car la clé du profil est utilisée telle que l'interface AWS l'a résolue et IAM n'y met fin que lorsque quelqu'un la supprime
+doctor-dropped-aws-session-nothing-decides-each-use =
+    porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus signe chaque requête avec l'identification de session elle-même
+doctor-dropped-aws-session-no-bound-fixed-before-issue =
+    porte { $gate }, { $answer } : aucune limite sur ce que la session peut faire n'est fixée avant son émission, car elle porte tout ce que le rôle ou l'accès SSO du profil autorise et rien ici ne demande à STS de la restreindre à cette exécution
+doctor-dropped-gateway-token-nothing-decides-each-use =
+    porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car le jeton part dans un en-tête envoyé par ce processus et aucun mandataire n'existe pour la requête
+doctor-dropped-gateway-token-no-bound-fixed-before-issue =
+    porte { $gate }, { $answer } : aucune limite sur ce que le jeton peut faire n'est fixée avant son émission, car le bloc nomme un hôte et une variable et jamais un émetteur, donc rien ici ne peut en demander un plus étroit
+doctor-dropped-gateway-token-not-minted-for-one-step =
+    porte { $gate }, { $answer } : il n'est pas émis pour une seule étape, car le jeton est ce que porte le fichier de réglages ou la variable, et il est gardé pendant toute l'exécution
 doctor-backend = service
 doctor-backend-bedrock = AWS Bedrock
 doctor-backend-aichat = Brave Leo

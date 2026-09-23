@@ -282,7 +282,18 @@ nobody attempted it. Those are different answers and they end at the same tier.
 the world and a gate nobody attempted is a decision somebody made, and only the second is ours to
 revisit.
 
-`verified-by: none`
+**Where it is recorded.** Beside the tier, on the record [CRED-25](#CRED-25) uses and read by the
+same surface: a credential's walk is the drops it took, in the order the gates are asked, and
+`doctor` prints one line per drop under the account of what would end it. The number of drops is
+the tier, since failing a gate drops exactly one and nothing skips one, so a walk and a tier that
+disagree are a disagreement rather than a silence.
+
+`verified-by: bravebot_config::lib::a_credentials_walk_holds_one_drop_per_gate_it_failed_and_stops_at_its_tier`
+`verified-by: bravebot_config::lib::every_drop_this_configuration_records_is_one_nobody_attempted`
+`verified-by: bravebot_cli::main::a_reason_is_reported_for_exactly_the_drops_the_record_holds`
+`verified-by: bravebot_cli::main::a_drop_is_reported_with_the_gate_and_the_answer_the_record_holds`
+`verified-by: bravebot_cli::main::every_drop_has_its_own_account_of_the_condition_it_failed`
+`verified-by: bravebot_cli::running::doctor_accounts_for_every_drop_of_each_credentials_walk`
 
 <a id="CRED-4"></a>
 ### CRED-4: nothing climbs a tier without the arrangement changing

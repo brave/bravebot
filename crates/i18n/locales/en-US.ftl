@@ -194,6 +194,38 @@ doctor-noticed-aws-session =
 doctor-outlives = outlives
 doctor-outlives-aws-access-key =
     a session credential STS already issued under that access key, which runs to its own expiry: deleting the key does not reach it
+# How each credential reached the tier it stands at: one line per gate its walk failed, naming
+# the gate, whether the counterparty refused or nobody attempted it, and the condition that was
+# not met. A tier on its own says where a credential stands and nothing about whether it could
+# have stood anywhere else, and the two answers are what tells a fact about the world from a
+# decision made here. The gate number is passed from the record, so a line cannot name a gate the
+# walk did not fail. No line names a host: a walk is an account of an arrangement, and the address
+# somebody acts on is on the 'ends' line above it.
+doctor-dropped = dropped
+doctor-dropped-refused = the counterparty refused
+doctor-dropped-not-attempted = nobody attempted it
+doctor-dropped-signing-key-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since the key signs the request digest in this process and nothing else is asked to sign one
+doctor-dropped-signing-key-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the key may do is fixed before it is issued, since the backend derives its copy from a master seed and this key id and is asked for nothing narrower
+doctor-dropped-signing-key-not-minted-for-one-step =
+    gate { $gate }, { $answer }: it is not minted for one step, since it is baked into the build and one build's key is every install's
+doctor-dropped-aws-access-key-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process signs each request with the key itself
+doctor-dropped-aws-access-key-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the key may do is fixed before it is issued, since STS mints a session bounded by a policy AWS enforces and the agent cannot widen, and nothing here asks for one
+doctor-dropped-aws-access-key-not-minted-for-one-step =
+    gate { $gate }, { $answer }: it is not minted for one step, since the profile's key is used as the AWS CLI resolved it and IAM ends it only when somebody deletes it
+doctor-dropped-aws-session-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process signs each request with the session credential itself
+doctor-dropped-aws-session-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the session may do is fixed before it is issued, since it carries whatever the profile's role or SSO grant allows and nothing here asks STS to narrow it to this run
+doctor-dropped-gateway-token-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since the token goes in a header this process sends and no performer exists for the request
+doctor-dropped-gateway-token-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the token may do is fixed before it is issued, since the block names a host and a variable and never an issuer, so there is nothing here to ask for a narrower one
+doctor-dropped-gateway-token-not-minted-for-one-step =
+    gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries or the variable holds, and it is held for the whole run
 # Both are reported when both are reachable, so this names one of the two rather than the backend.
 doctor-backend = offers
 doctor-backend-bedrock = AWS Bedrock
