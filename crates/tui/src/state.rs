@@ -2691,10 +2691,17 @@ impl Session {
     }
 
     /// The position just past the character at `at`, or `at` itself at the end of the input.
+    ///
+    /// Past the whole of a marker where `at` is on one, since that is the one character it stands
+    /// for: an end half way through one would draw a stretch over a picture's opening bracket and
+    /// leave the rest of it outside, which is not a stretch anybody marked out.
     fn past(&self, at: usize) -> usize {
-        match self.input[at..].chars().next() {
-            Some(c) => at + c.len_utf8(),
-            None => at,
+        match self.marker_at(at) {
+            Some((_, end)) => end,
+            None => match self.input[at..].chars().next() {
+                Some(c) => at + c.len_utf8(),
+                None => at,
+            },
         }
     }
 
@@ -3454,12 +3461,16 @@ impl Session {
             Motion::Object(object) => {
                 if let Some((from, to)) = self.object_span(object) {
                     if self.anchor.is_some() {
-                        self.anchor = Some(from);
+                        // Onto the marker where the object's near end is inside one, for the reason
+                        // the stretch an operator measures is widened to whole markers: `o` puts the
+                        // caret on this end, and there is no position inside a marker for it.
+                        self.anchor = Some(self.marker_at(from).map_or(from, |(start, _)| start));
                     }
-                    self.caret = self.input[..to]
-                        .chars()
-                        .next_back()
-                        .map_or(to, |c| to - c.len_utf8());
+                    // Stepped back from the far end rather than measured off it, for the reason
+                    // the word motions step: the last character of an object that reaches a marker
+                    // is the whole marker, and the byte before that end is a position inside it.
+                    self.caret = to;
+                    self.move_left();
                 }
             }
         }
@@ -4599,8 +4610,13 @@ impl Session {
     ///
     /// A caret at the end of a marker is past it, and what lies ahead is the text after it.
     pub fn marker_at_caret(&self) -> Option<(usize, usize)> {
+        self.marker_at(self.caret)
+    }
+
+    /// The marker `at` is on, on the same terms: the start of one is on it and its end is past it.
+    fn marker_at(&self, at: usize) -> Option<(usize, usize)> {
         self.marker_spans()
-            .find(|&(start, end)| start <= self.caret && self.caret < end)
+            .find(|&(start, end)| start <= at && at < end)
     }
 
     /// Delete the character before the caret, or leave shell mode where there is nothing left to
@@ -13463,6 +13479,66 @@ mod tests {
             "the picture stopped being attached, the line reading {sent:?}"
         );
         assert_eq!(sent, "see x[Image #1]");
+    }
+
+    /// A text object is found by reading the line rather than by walking the caret's own positions, so
+    /// either of its ends can be a byte offset inside a marker. Neither may be one: the caret comes to
+    /// rest on the far end and `o` puts it on the near one, and a marker is what the next character
+    /// typed there would split.
+    ///
+    /// The stretch is checked with it, because these are one rule read from two sides. A marker stands
+    /// for one character, both ends of a selection cover the character they sit on, and an end half way
+    /// through one would draw a picture's opening bracket as chosen and the rest of it as not.
+    #[test]
+    fn a_selection_naming_a_marker_keeps_its_ends_on_it_and_draws_the_whole_of_it() {
+        for tail in [" and say", ""] {
+            // The objects that can name a marker, `v` for the marker the caret is already on, and `$`
+            // for the clamp that reaches one ending the input.
+            for (keys, at_the_marker) in [
+                ("v", true),
+                ("va[", true),
+                ("vi[", true),
+                ("viW", true),
+                ("vaW", true),
+                ("v$", false),
+            ] {
+                let mut s = vi();
+                for c in "look at ".chars() {
+                    s.type_char(c);
+                }
+                s.attach(picture(b"pixels"));
+                for c in tail.chars() {
+                    s.type_char(c);
+                }
+                let opens = s.input.find('[').expect("the marker is in the line");
+                let closes = s.input.find(']').expect("the marker is in the line") + 1;
+                s.enter_vi_normal();
+                s.caret = if at_the_marker { opens } else { 0 };
+                for c in keys.chars() {
+                    s.type_char(c);
+                }
+
+                // The press itself, and then `o`: the end the caret is not at is the anchor, and an
+                // anchor inside the marker is a caret inside it one press later.
+                for run in ["", "o"] {
+                    for c in run.chars() {
+                        s.type_char(c);
+                    }
+                    let (from, to) = s.vi_selection().expect("VISUAL mode is open");
+                    assert!(
+                        s.caret <= opens || s.caret >= closes,
+                        "{keys}{run} over a line ending {tail:?} left the caret at {} \
+                         inside the marker {opens}..{closes}",
+                        s.caret
+                    );
+                    assert!(
+                        to <= opens || from >= closes || (from <= opens && to >= closes),
+                        "{keys}{run} over a line ending {tail:?} drew {from}..{to}, \
+                         part of the marker {opens}..{closes}"
+                    );
+                }
+            }
+        }
     }
 
     /// `k` and `j` are Up and Down, and `/` is the chord that searches the prompts already sent. What
