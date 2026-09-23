@@ -3510,6 +3510,8 @@ fn bedrock_models(
             // that went on claiming otherwise would report a level as in force after the requests
             // carrying it had stopped.
             reads_effort: bravebot_agent::backend::bedrock_reads_effort(&entry.id),
+            // Bedrock has no listing, so nothing has described these models to us.
+            advertised: bravebot_aichat::models::Advertised::default(),
         })
         .collect()
 }
@@ -3552,6 +3554,8 @@ fn provider_models(
                 &provider.chat_completions_url(),
                 &model.id,
             ),
+            // A block names models and describes none of them, so there is nothing to carry.
+            advertised: bravebot_aichat::models::Advertised::default(),
         })
         .collect()
 }
@@ -6011,6 +6015,7 @@ mod tests {
             provider: None,
             conversation_tokens: window,
             reads_effort: true,
+            advertised: bravebot_aichat::models::Advertised::default(),
         }
     }
 
@@ -9664,6 +9669,7 @@ mod tests {
             provider: Some("OpenRouter".to_string()),
             conversation_tokens: None,
             reads_effort: false,
+            advertised: bravebot_aichat::models::Advertised::default(),
         }];
 
         assert!(reads_effort(&described, Some("openrouter/not-listed")));

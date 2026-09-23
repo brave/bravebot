@@ -245,7 +245,7 @@ impl Bridge {
         // `recounted` filters that note back out. Going around it would show a transcript
         // subtly unlike the one a resume produces.
         let conversation = bravebot_agent::Conversation::restored(record.conversation.clone());
-        let said: Vec<Value> = conversation.recounted().iter().map(wire::said).collect();
+        let said = wire::recounted(&conversation.recounted());
 
         let todos = todos_json(&record.todo_rows());
 
@@ -416,7 +416,7 @@ impl Bridge {
         // the front-end draws the fork from what the conversation says rather than from a slice
         // of what it happened to have on screen.
         let before = bravebot_agent::Conversation::restored(cut.before.clone()).recounted();
-        let recounted: Vec<Value> = before.iter().map(wire::said).collect();
+        let recounted = wire::recounted(&before);
         // The first thing said in the history the child keeps, which is what titles it. Without
         // this a fork would be named after the prompt that replaced the one it was cut at, and a
         // list of forks would say nothing about where any of them came from.
@@ -1101,6 +1101,21 @@ struct Work {
     finished: Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// Where the prompt a turn carried landed among the things the user said.
+///
+/// The coordinate `session.fork` cuts on, answered by the side that assigns it. A window cannot
+/// count it: a turn nudged for spending its tool budget adds a user message of its own, and no
+/// event tells a window about one. A window counting its own bubbles is short by one for each,
+/// and `session.fork` checks the text against the ordinal and refuses rather than cutting in the
+/// wrong place.
+///
+/// The last message carrying this text, because that is the one this turn has just added.
+fn prompt_ordinal(conversation: &bravebot_agent::Conversation, prompt: &str) -> Option<usize> {
+    crate::fork::prompts(&conversation.recounted())
+        .iter()
+        .rposition(|said| *said == prompt)
+}
+
 /// Run one turn to its end, whatever that end is.
 ///
 /// The worker owns the whole of it: the call, writing the record afterwards, and saying
@@ -1270,6 +1285,11 @@ fn work(work: Work) {
                     // inferred from the `compacting` phase, which is emitted before compaction is
                     // attempted and so also fires when there was nothing worth compacting.
                     "archived": archived,
+                    // Where this turn's prompt landed among the things the user said, which is
+                    // the coordinate `session.fork` cuts on. `null` where the conversation does
+                    // not hold it, which is a prompt that cannot be forked rather than one to
+                    // guess a place for.
+                    "prompt": prompt_ordinal(&state.conversation, &prompt),
                 }),
             ));
         }
@@ -1317,6 +1337,9 @@ fn work(work: Work) {
                     // turn that answered. There is no outcome here to take them from, and a hook
                     // that could not be started is the person's own to hear about (HOOK-7).
                     "notices": reporter.notices(),
+                    // As on `turn.done`. A turn that failed still said what it was asked, so the
+                    // prompt is in the conversation and is still a place a fork can be cut at.
+                    "prompt": prompt_ordinal(&state.conversation, &prompt),
                     "id": state.handle.as_ref().map(|handle| handle.id()) }),
             ));
         }

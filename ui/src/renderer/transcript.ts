@@ -29,7 +29,14 @@ import { CONSOLIDATION_MARK } from '../shared/bots'
 
 export type Entry = (
   | { kind: 'turn-start'; id: string; number: number }
-  | { kind: 'user'; id: string; text: string }
+  /**
+   * Something the person typed.
+   *
+   * `prompt` is the agent's own ordinal for it, which is what `session.fork` cuts on. Absent
+   * for a prompt this window has added and not yet heard back about: such a prompt is in the
+   * conversation but the window does not know where, and a fork is refused rather than guessed.
+   */
+  | { kind: 'user'; id: string; text: string; prompt?: number }
   | { kind: 'assistant'; id: string; text: string }
   | { kind: 'narration'; id: string; text: string }
   /**
@@ -123,7 +130,7 @@ export function fromSaid(said: Said[]): Entry[] {
         if (entry.text.startsWith(CONSOLIDATION_MARK)) {
           return { kind: 'consolidation', id: nextId() } as const
         }
-        return { kind: 'user', id: nextId(), text: entry.text } as const
+        return { kind: 'user', id: nextId(), text: entry.text, prompt: entry.prompt } as const
       }
       case 'assistant':
         return { kind: 'assistant', id: nextId(), text: entry.text } as const
@@ -149,21 +156,6 @@ export function fromSaid(said: Said[]): Entry[] {
     }
   })
 }
-
-/**
- * Whether a row stands for one of the prompts the conversation counts.
- *
- * A fork travels as an ordinal over `Said::User`, so this is the window's side of that list, and
- * both places that count go through here: one sends the ordinal and the other resolves it back to
- * a row, and a disagreement between them refuses the fork.
- *
- * A consolidation counts. This app composed that prompt and draws it as the house-keeping it is
- * rather than as a bubble, but it is still a message the conversation holds and the prompts after
- * it are numbered accordingly. A row for a message the *agent* composed does not count: those are
- * tagged in the record, and upstream does not report them as prompts either.
- */
-export const isPrompt = (entry: Entry): boolean =>
-  entry.kind === 'user' || entry.kind === 'consolidation'
 
 export const userSaid = (text: string): Entry => ({ kind: 'user', id: nextId(), text })
 export const consolidating = (): Entry => ({ kind: 'consolidation', id: nextId() })
@@ -211,6 +203,20 @@ export const askedQuestions = (request: AskRequest): Entry => ({
 })
 export const replied = (text: string, turn?: number): Entry => ({ kind: 'assistant', id: nextId(), text, turn })
 export const turnStarted = (number: number): Entry => ({ kind: 'turn-start', id: nextId(), number })
+
+/**
+ * The same entries, with `id`'s prompt numbered as the agent numbered it.
+ *
+ * The window draws a prompt the moment it is sent and learns where it landed when the turn ends,
+ * because the turn adds user messages of its own on the way. Nothing is numbered where the agent
+ * sent no ordinal: a fork of such a prompt is refused rather than cut in a guessed place.
+ */
+export function number(entries: Entry[], id: string, prompt: number | null | undefined): Entry[] {
+  if (typeof prompt !== 'number') return entries
+  return entries.map((entry) =>
+    entry.id === id && entry.kind === 'user' ? { ...entry, prompt } : entry,
+  )
+}
 
 /** Keep notices below the prompt even if a worker reports activity before turn.started. */
 export function beginTurn(entries: Entry[], number: number): Entry[] {

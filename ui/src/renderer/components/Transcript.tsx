@@ -2,7 +2,7 @@ import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
-import type { AskAnswer, AskPrompt, Phase, Shown, TodoRow } from '../../shared/protocol'
+import { isConfined, type AskAnswer, type AskPrompt, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
@@ -270,15 +270,11 @@ export function Transcript({
 
   const focused = useMemo(() => {
     if (!live || live.focus === null) return null
-    let seen = 0
-    for (const entry of live.entries) {
-      if (!t.isPrompt(entry)) continue
-      if (seen === live.focus) return entry.id
-      seen += 1
-    }
-    // A parent with fewer prompts than it had. The link still opened the right session, which
-    // is the honest half of what it promised.
-    return null
+    // Matched against the ordinal each prompt arrived with, not counted over the rows drawn: the
+    // ordinal was minted by the agent over its own messages, and a count here would be a second
+    // copy of that rule. A parent with fewer prompts than it had matches nothing, and the link
+    // still opened the right session, which is the honest half of what it promised.
+    return live.entries.find((entry) => entry.kind === 'user' && entry.prompt === live.focus)?.id ?? null
   }, [live])
 
   // Read inside the effect below rather than depended on, and that is the whole point: a
@@ -449,8 +445,10 @@ export function Transcript({
                 onAnswer={onAnswer}
                 onFork={onFork}
                 // Greyed rather than gone while a turn runs, the way the menu item is: a
-                // control that disappears is one the reader has to go looking for again.
-                forkable={!live.running}
+                // control that disappears is one the reader has to go looking for again. Greyed
+                // too for a prompt this window has sent and not yet been told the ordinal of:
+                // that prompt is in the conversation, but nothing here knows where.
+                forkable={!live.running && (run.entry.kind !== 'user' || run.entry.prompt !== undefined)}
               />}
               {(run.entry.kind === 'assistant' || (run.entry.kind === 'error' && run.entry.turn !== undefined)) &&
                 <TurnFooter details={run.entry.turn === undefined ? undefined : live.turns[run.entry.turn]} onDisclosure={onTurnDisclosure} onAudit={onAudit} />}
@@ -981,7 +979,7 @@ export function Row({
           ) : (
             <span className="note">{activity.note}</span>
           )}
-          {landing && landing !== 'context' && (
+          {landing && isConfined(landing) && (
             <span className="confined" title={landingHint(landing)}>
               {landing === 'quarantined' ? 'quarantined' : 'name only'}
             </span>

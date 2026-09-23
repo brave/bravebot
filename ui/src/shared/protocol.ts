@@ -55,7 +55,20 @@ export interface Shown {
  * it appears as. Rule 1 above, applied to the one message whose prose is not the agent's.
  */
 export type Said =
-  | { kind: 'user'; text: string }
+  | {
+      kind: 'user'
+      text: string
+      /**
+       * Which of the user's messages this is, counted by the agent.
+       *
+       * The coordinate `session.fork` cuts on. It is here rather than counted in the window
+       * because it is the agent's own numbering, and a window holding a second copy of the rule
+       * agrees with it only for as long as nobody adds a kind of user message: a turn nudged for
+       * spending its tool budget adds one, no event tells a window about it, and a fork of
+       * anything after it is refused.
+       */
+      prompt?: number
+    }
   | { kind: 'assistant'; text: string }
   | { kind: 'tool'; text: string }
   | { kind: 'attached'; path: string }
@@ -183,6 +196,15 @@ export interface ConfirmRequest {
 }
 
 export interface TurnDone {
+  /**
+   * Where this turn's prompt landed among the things the user said, or `null` where the
+   * conversation does not hold it.
+   *
+   * The same coordinate `Said.prompt` carries, for the one prompt a window has just added
+   * itself and so has no `Said` for. A turn adds a user message for every file named in the
+   * prompt, and another if it spends its tool budget, so this is the only honest source.
+   */
+  prompt?: number | null
   contextTokens?: number
   /** Added by the desktop main process while memory maintenance reserves this session. */
   consolidating?: boolean
@@ -209,6 +231,8 @@ export interface TurnDone {
 }
 
 export interface TurnError {
+  /** As on `TurnDone`. */
+  prompt?: number | null
   category?: string | null
   attempts?: number | null
   status?: number | null

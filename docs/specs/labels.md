@@ -116,7 +116,6 @@ guards:
       - crates/net/src/lib.rs: 1
       - crates/net/tests/egress.rs: 2
       - crates/tui/src/update.rs: 1
-      - crates/ui-bridge/src/models.rs: 1
 documented-by: docs/website/docs/how-it-works.md
 ---
 
