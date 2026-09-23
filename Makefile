@@ -478,13 +478,17 @@ app-release: app-bundles
 
 .PHONY: app-bundles
 app-bundles:
-	@set -e; for pair in $(APP_ARCHES); do \
-		arch=$${pair%%:*}; \
+	@missing=; builds=; for pair in $(APP_ARCHES); do \
+		arch=$${pair%%:*}; lacks=; \
 		for name in bravebot-rpc bravebot-ui-files; do \
-			test -f dist/$$name-darwin-$$arch || \
-				{ echo "no dist/$$name-darwin-$$arch: run \`make darwin-$$arch strip\` first" >&2; exit 1; }; \
+			test -f dist/$$name-darwin-$$arch || lacks="$$lacks $$name-darwin-$$arch"; \
 		done; \
-	done
+		if [ -n "$$lacks" ]; then missing="$$missing$$lacks"; builds="$$builds darwin-$$arch"; fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "missing from dist/:$$missing" >&2; \
+		echo "run \`make$$builds strip\` first" >&2; exit 1; \
+	fi
 	cd ui && npm ci && npm run typecheck && npm exec -- electron-vite build
 	@set -e; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
 	for pair in $(APP_ARCHES); do \
