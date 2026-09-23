@@ -24,3 +24,8 @@ branch. `--base` takes any ref, a sha or a tag included.
 
 The first run downloads opengrep, reviewdog and the rules into `~/.cache`; later runs re-use them
 and take about half a minute. No model is involved, so both are deterministic.
+
+A runner failure makes the check fail, including a scanner failure hidden by a later
+formatter in its pipeline. Runner stderr also fails the check so a partial scan cannot
+report a clean result. `make check-reviewdog` first runs isolated regression tests for
+empty scans, findings and scanner failures in both scan modes.

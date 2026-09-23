@@ -24,6 +24,23 @@ suspicious of.
 
 ## Before pushing
 
+`make check-all` runs the local pre-PR checks: `check`, specs, security rules, locales,
+versions, the documentation build, all three npm lockfile lints, dependency policy,
+minimum Rust, Windows Clippy, Linux checks, desktop UI checks and the PR security scan.
+It requires Docker for the platform checks. A missing prerequisite fails the target;
+it does not count as a pass. Use `make -k check-all` to continue independent checks
+when one fails.
+
+`make check-ui` installs the desktop dependencies, typechecks and builds the app,
+runs its Node tests, and drives the Electron walkthrough. On macOS it needs a logged-in
+desktop session. On Linux it needs `xvfb-run` and Electron's runtime libraries; CI
+installs `xvfb`, `libgtk-3-0`, `libnss3` and `libasound2t64`. CI uses the same build
+and walkthrough targets, with a separate timeout for the walkthrough.
+
+These are local checks, not a promise that every CI environment passes. Windows Clippy
+cross-compiles without running Windows tests. Docker Desktop cannot exercise Landlock;
+CI's native Linux tests cover that gap. Release cross-builds remain separate.
+
 `make check` runs the whole suite and takes minutes. It is what to run before pushing a branch and
 what CI runs, not what to run between two edits to the same file, and never twice to confirm the
 same thing. Reaching for it out of caution is not free: it is the difference between a review that

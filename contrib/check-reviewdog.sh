@@ -226,8 +226,20 @@ rm -f "$REPO_ROOT"/reviewdog.*.stderr.log
 
 FINDINGS="$(mktemp)"
 FAILURES="$(mktemp)"
-trap 'cleanup; rm -f "$FINDINGS" "$FAILURES"' EXIT
+CONFIG="$(mktemp)"
+trap 'cleanup; rm -f "$FINDINGS" "$FAILURES" "$CONFIG"' EXIT
 
+# A failed scanner at the start of a pipeline must fail the runner even when
+# its formatter exits successfully. Keep the upstream commands and rules.
+ruby -ryaml -rshellwords -e '
+    config = YAML.load_file(ARGV[0])
+    config.fetch("runner").each_value do |runner|
+        runner["cmd"] = "bash -o pipefail -c " + Shellwords.escape(runner.fetch("cmd"))
+    end
+    puts YAML.dump(config)
+' "$SCRIPTPATH/reviewdog/reviewdog.yml" > "$CONFIG" || die "cannot prepare runner configuration"
+
+scan_failed=0
 if [ "$MODE" = "full" ]; then
     # reviewdog.sh's own full-scan line.
     git ls-files | tr '\n' '\0' > "$SCRIPTPATH/all_changed_files.txt"
@@ -235,9 +247,9 @@ if [ "$MODE" = "full" ]; then
 
     reviewdog \
         -runners="$(printf '%s' "$RUNNERS" | tr ' ' ',')" \
-        -conf="$SCRIPTPATH/reviewdog/reviewdog.yml" \
+        -conf="$CONFIG" \
         -filter-mode=nofilter \
-        -reporter=local > "$FINDINGS" 2>>"$FAILURES"
+        -reporter=local > "$FINDINGS" 2>>"$FAILURES" || scan_failed=1
 else
     BASE_SHA="$(git rev-parse --verify --quiet "${BASE_REF}^{commit}")" \
         || die "no such ref: $BASE_REF (fetch it, or pass --base)"
@@ -245,7 +257,7 @@ else
     # is judged on what it changed rather than on everything main moved on to.
     MERGE_BASE="$(git merge-base HEAD "$BASE_SHA")" || die "no merge base with $BASE_REF"
 
-    if [ "$MERGE_BASE" = "$(git rev-parse HEAD)" ]; then
+    if [ "$MERGE_BASE" = "$(git rev-parse HEAD)" ] && git diff --quiet "$MERGE_BASE"; then
         say "HEAD is at the merge base with $BASE_REF; nothing on this branch to scan"
         say "(scan the whole tree with --full)"
         exit 0
@@ -263,9 +275,9 @@ else
         reviewdog \
             -reporter=local \
             -runners="$runner" \
-            -conf="$SCRIPTPATH/reviewdog/reviewdog.yml" \
+            -conf="$CONFIG" \
             -diff="git diff -U0 $MERGE_BASE" \
-            >> "$FINDINGS" 2>>"$FAILURES"
+            >> "$FINDINGS" 2>>"$FAILURES" || scan_failed=1
     done
 fi
 
@@ -278,14 +290,20 @@ for runner in $RUNNERS; do
     [ -s "$log" ] || continue
     printf '\033[0;31m%s could not run cleanly:\033[0m\n' "$runner" >&2
     sed 's/^/  /' "$log" >&2
+    scan_failed=1
 done
-grep -q 'failed with zero findings: The command itself failed' "$FAILURES" 2>/dev/null \
-    && sed 's/^/  /' "$FAILURES" >&2
+if [ -s "$FAILURES" ]; then
+    sed 's/^/  /' "$FAILURES" >&2
+fi
+if grep -q 'failed with zero findings: The command itself failed' "$FAILURES"; then
+    scan_failed=1
+fi
+if [ "$scan_failed" -ne 0 ]; then
+    cat "$FINDINGS"
+    die "security scan failed; findings are incomplete"
+fi
 
-count="$(grep -c '^[^ ]*:[0-9]*: \[' "$FINDINGS" 2>/dev/null)"
-count="${count:-0}"
-
-if [ "$count" -eq 0 ]; then
+if [ ! -s "$FINDINGS" ]; then
     say "no findings"
     exit 0
 fi
@@ -300,5 +318,5 @@ else
         -e 's|^([^ ]*:[0-9]+:) |\n\1\n    |' "$FINDINGS"
 fi
 
-printf '\n\033[0;31m%s finding(s)\033[0m\n' "$count" >&2
+printf '\n\033[0;31msecurity findings reported\033[0m\n' >&2
 exit 1

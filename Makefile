@@ -59,7 +59,8 @@ help:
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
-	@echo "  make check-all             Every check any CI enforces, including the security scan"
+	@echo "  make check-ui              Build, test and drive the desktop UI"
+	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
 	@echo "  make fmt                   Apply formatting"
@@ -211,6 +212,7 @@ write-untranslated:
 # No model is involved, so both are deterministic.
 .PHONY: check-reviewdog
 check-reviewdog:
+	python3 contrib/test-check-reviewdog.py
 	@contrib/check-reviewdog.sh
 
 .PHONY: check-reviewdog-full
@@ -225,6 +227,7 @@ check-reviewdog-full:
 check-npm:
 	npm ci --ignore-scripts
 	npm run lint:lockfile
+	npm run lint:lockfile:website
 	npm run lint:lockfile:ui
 
 # The dependency policy in deny.toml. CI runs this target rather than cargo-deny's action,
@@ -298,12 +301,29 @@ docs-changes:
 docs-updated-to-sha:
 	@python3 agents/skills/update-docs/docs-ref.py show
 
-# Everything any CI enforces, in one target: the jobs in ci.yml plus the security
-# scan the organization-level workflow runs. Slower than `check` by a lot -- two
-# container builds and a scan -- so `check` stays the inner loop and this is the
-# before-you-push pass.
+# All local checks before pushing, including the UI and Linux code paths.
+# Requires Docker and the desktop runtime dependencies described in checks.md.
 .PHONY: check-all
-check-all: check check-spec check-security check-locales check-versions check-docs check-npm check-deps check-msrv check-windows check-reviewdog
+check-all: check check-spec check-security check-locales check-versions check-docs check-npm check-deps check-msrv check-windows check-linux check-ui check-reviewdog
+
+# CI and local runs share the same desktop checks. Linux uses a virtual display;
+# macOS uses the logged-in desktop session.
+.PHONY: check-ui check-ui-build check-ui-walkthrough
+check-ui: check-ui-build
+	$(MAKE) check-ui-walkthrough
+
+check-ui-build:
+	npm --prefix ui ci
+	npm --prefix ui run typecheck
+	npm --prefix ui run build
+	cd ui && node --test scripts/*.test.mjs
+
+check-ui-walkthrough:
+	cd ui && if [ "$$(uname -s)" = Linux ]; then \
+		xvfb-run -a node scripts/drive-manual-walkthrough.mjs; \
+	else \
+		node scripts/drive-manual-walkthrough.mjs; \
+	fi
 
 # What each catalog has of the reference, and what it is missing. The build says so too, in a
 # warning, but a warning is only printed when the build script actually runs, so a translator
