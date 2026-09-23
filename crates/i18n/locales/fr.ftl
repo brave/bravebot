@@ -485,6 +485,12 @@ run-writes = il écrit ces fichiers :
 run-is-fed = le contenu de ceci lui est fourni :
 run-not-sandboxed =
     ceci n'est pas isolé : l'exécution a les mêmes accès que votre propre shell
+run-spends-authority =
+    elle dépense aussi des accès qui sont déjà les vôtres ailleurs, que personne ne redemande et que rien ici ne reprend :
+run-authority-container = { $named } : le démon de conteneurs, qui exécute n'importe quoi en root sur cette machine
+run-authority-logged-in = { $named } : déjà connecté, il agit donc en votre nom sans rien vous demander
+run-authority-agent = { $named } : votre agent ssh, qui signe avec des clés qu'il ne livre jamais
+run-authority-metadata = { $named } : le service de métadonnées de cette machine, qui délivre les identifiants du rôle sous lequel elle tourne
 run-releases-private =
     vos propres données lui sont aussi fournies, et elles partent d'ici avec elle
 run-always-explained = a : approuver cette commande exacte pour le reste de cette session
@@ -575,6 +581,9 @@ vet-always-covers =
 fetch-title = récupérer ceci ?
 fetch-verb = Récupérer
 fetch-host = communication avec { $host }
+fetch-authority-metadata =
+    il s'agit du service de métadonnées de cette machine : il ne demande rien à qui le
+    joint et répond avec les identifiants du rôle sous lequel elle tourne.
 fetch-explained =
     ce qui revient reste en quarantaine quelle que soit votre réponse : le modèle peut le
     confier à un processeur ou l'écrire dans un fichier, et ne peut ni le lire ni savoir

@@ -3,6 +3,7 @@ id: CRED
 title: Credential protection
 status: proposed
 governs:
+  - crates/core/src/ambient.rs
   - crates/config/src/lib.rs
   - crates/config/src/env_var.rs
   - crates/config/src/provider.rs
@@ -305,7 +306,12 @@ where the capability is granted and recorded when it is used.
 bound to enforce, so placing them on the scale would put unbounded authority at the top of it. The
 one thing available before confinement is that nobody grants it thinking they granted less.
 
-`verified-by: none`
+`verified-by: bravebot_core::ambient::a_line_that_reaches_a_container_daemon_names_it`
+`verified-by: bravebot_core::ambient::a_tool_that_spends_on_one_command_is_named_for_that_command_alone`
+`verified-by: bravebot_core::ambient::the_metadata_service_is_named_by_the_address_and_not_by_the_argument`
+`verified-by: bravebot_tui::confirm::a_run_prompt_names_the_ambient_authority_a_line_reaches`
+`verified-by: bravebot_tui::confirm::a_fetch_prompt_says_what_the_metadata_service_is`
+`verified-by: bravebot_agent::turn::spending_an_ambient_authority_is_recorded_in_the_trail_and_an_ordinary_line_is_not`
 
 <a id="CRED-6"></a>
 ### CRED-6: a handle the agent can redeem alone is not a handle
@@ -821,6 +827,12 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
 
 - **The off-scale case is visible, not bounded.** CRED-5 makes ambient authority declared. There is
   no credential to withhold and no environment to scrub, and confinement is the only fix.
+
+- **What names an ambient authority is a list, and a list has an end.** A container daemon, a
+  logged-in tool, the agent socket and a metadata address are recognised by the words a line
+  writes, so a client nobody listed is granted with only the blanket line about confinement said
+  of it. Nothing is refused on the list, so what a gap costs is a sentence rather than a boundary,
+  and the direction to be wrong in is naming something a line was not going to spend.
 
 - **The scan misses things, and silence proves nothing.** The rarity layer is advisory, history
   beyond the working tree is off by default, and a credential nobody has a pattern for is a

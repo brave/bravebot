@@ -10,7 +10,6 @@
 docs/specs/credential-protection.md:CRED-2: every credential carries a tier, and the tier is where its gate walk stopped
 docs/specs/credential-protection.md:CRED-3: a gate fails only for a stated reason, and dropping pays what the gate says it costs
 docs/specs/credential-protection.md:CRED-4: nothing climbs a tier without the arrangement changing
-docs/specs/credential-protection.md:CRED-5: authority with no custody and no refusal leaves the scale, and is declared where it is granted
 docs/specs/credential-protection.md:CRED-6: a handle the agent can redeem alone is not a handle
 docs/specs/credential-protection.md:CRED-7: a bound is decided before issue and enforced beyond the agent's reach
 docs/specs/credential-protection.md:CRED-8: a bound with no end does not pass gate 2

@@ -8020,6 +8020,80 @@ fn a_turn_that_wrote_and_ran_is_not_asked_about_it() {
     );
 }
 
+/// An authority nothing here holds is recorded where it is spent, and nowhere else.
+///
+/// The trail is the one record of a session that outlives the process, so a person accounting
+/// for what an agent did with their cloud role has nothing else to read. Two lines run: the
+/// first reaches nothing and the second names the metadata service, so a record made on every
+/// run and a record made on none are both distinguishable from the one record owed.
+///
+/// `echo` is the program in both, because it resolves on any machine and reaches nothing itself.
+/// What names the service is the address in the argument, which is how a line names it whichever
+/// client it uses, and what is recorded is that address rather than the argument holding it: the
+/// trail holds no content, and the path of that URL is content.
+#[test]
+fn spending_an_ambient_authority_is_recorded_in_the_trail_and_an_ordinary_line_is_not() {
+    let scratch = Scratch::new("ambient-trail");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"echo ordinary"}"#),
+        tool_request(
+            "run",
+            r#"{"command":"echo http://169.254.169.254/latest/meta-data/iam/"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("ask the instance who it is"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let recorded: Vec<&String> = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "ambient",
+                detail,
+            } => Some(detail),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "one of the two lines spends an ambient authority: {:?}",
+        sink.events()
+    );
+    assert!(
+        recorded[0].contains("metadata-service (169.254.169.254)"),
+        "the record does not say which authority was spent: {}",
+        recorded[0]
+    );
+    assert!(
+        !recorded[0].contains("meta-data"),
+        "the record kept the argument rather than the address in it: {}",
+        recorded[0]
+    );
+}
+
 /// A write the person refused leaves nothing to build, so neither party is told a change went out
 /// unbuilt.
 ///

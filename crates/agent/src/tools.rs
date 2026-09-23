@@ -4698,6 +4698,12 @@ fn run<S: Sink, C: Confirmer>(
         ),
     };
 
+    // What this line reaches that nothing here holds, which the person approving it was shown at
+    // the prompt. Worked out from the same plan the prompt drew, so the record and the grant
+    // cannot name different things, and recorded below at each point the line actually starts: a
+    // grant is a sentence somebody answered and a use is a thing that happened.
+    let spends = bravebot_core::ambient::spent_by(&plan);
+
     if in_the_background {
         // One pipeline, because that is the whole of what a long-lived program is. A line with
         // joins waits on its own parts to decide where to go next, and nothing waits here; a
@@ -4724,6 +4730,9 @@ fn run<S: Sink, C: Confirmer>(
 
         return match crate::exec::start_steps(steps, &plan.directory, tools.workspace.scratch()) {
             Ok(running) => {
+                // Spent at the moment the programs start, which for a background line is here:
+                // it outlives this call, and nothing later in the turn knows what it reached.
+                policy.record_ambient(&spends);
                 // The directory is carried over only once pre-flight checks and launch succeed.
                 *tools.run_directory = plan.directory.clone();
                 let name = tools.jobs.keep(
@@ -4811,6 +4820,10 @@ fn run<S: Sink, C: Confirmer>(
 
     match ran {
         Ok(ran) => {
+            // Spent, on the same reading of this arm that carries the directory over: the line
+            // ran. What it exited with does not enter into it, because a program that reached a
+            // daemon and then failed has still reached it.
+            policy.record_ambient(&spends);
             // Carried over only once the line has actually run, which is where the background
             // branch carries it too: a line whose stages never started moved nothing, and a turn
             // whose working directory had followed a run that did not happen would land the next
@@ -4948,6 +4961,13 @@ fn fetch_url<S: Sink, C: Confirmer>(
         Ok(label) => label,
         Err(denial) => return problem(format!("refused: {denial}")),
     };
+
+    // Recorded where the request goes out rather than where a response comes back. The metadata
+    // service hands out a role's credentials to whatever opens the socket, so the authority is
+    // spent by asking; whether the answer arrives is a fact about the network.
+    if let Some(spent) = bravebot_core::ambient::at_host(&host) {
+        policy.record_ambient(&[spent]);
+    }
 
     let request = bravebot_net::Request::get(&url);
     let fetched = tools
