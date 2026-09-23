@@ -50,6 +50,9 @@ dropped file is trusted even inside a directory marked untrusted.
 
 `verified-by: bravebot_agent::turn::attaching_a_file_vouches_for_it_the_way_naming_one_does`
 `verified-by: bravebot_agent::attached::a_dropped_picture_is_shown_even_from_a_directory_nobody_vouched_for`
+`verified-by: bravebot_agent::attached::a_drop_records_its_rule_in_the_callers_map`
+`verified-by: bravebot_agent::attached::a_drop_before_one_that_could_not_be_read_keeps_its_rule`
+`verified-by: bravebot_agent::manifest::a_dropped_picture_is_still_trusted_when_a_step_of_the_plan_reads_it`
 
 <a id="DROP-3"></a>
 ### DROP-3: a drop makes that file reachable, wherever on the disk it is

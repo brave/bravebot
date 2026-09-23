@@ -15403,7 +15403,7 @@ fn a_picture_dropped_onto_a_question_reaches_the_model_with_it() {
             path: "shot.png".to_string(),
             media: "image/png".to_string(),
         }],
-        bravebot_core::trust::TrustStore::new(&scratch.path),
+        &mut bravebot_core::trust::TrustStore::new(&scratch.path),
         &mut sink,
     )
     .expect("a dropped picture is read before the question is asked");

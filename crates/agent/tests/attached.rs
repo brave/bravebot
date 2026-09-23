@@ -56,7 +56,7 @@ fn a_dropped_picture_comes_back_as_the_bytes_a_request_can_hold() {
     let carried = attached::read(
         &workspace,
         &dropped("shot.png"),
-        TrustStore::new(&scratch.path),
+        &mut TrustStore::new(&scratch.path),
         &mut sink,
     )
     .expect("a dropped picture is read");
@@ -85,7 +85,7 @@ fn a_dropped_picture_is_shown_even_from_a_directory_nobody_vouched_for() {
     trust.distrust("");
     let mut sink = RecordingSink::new();
 
-    let carried = attached::read(&workspace, &dropped("shot.png"), trust, &mut sink)
+    let carried = attached::read(&workspace, &dropped("shot.png"), &mut trust, &mut sink)
         .expect("a dropped picture is read");
 
     assert!(
@@ -107,7 +107,7 @@ fn reading_a_dropped_picture_is_gated_and_named_in_the_trail() {
     attached::read(
         &workspace,
         &dropped("shot.png"),
-        TrustStore::new(&scratch.path),
+        &mut TrustStore::new(&scratch.path),
         &mut sink,
     )
     .expect("a dropped picture is read");
@@ -152,7 +152,7 @@ fn a_picture_dropped_from_outside_the_workspace_is_read_all_the_same() {
     let carried = attached::read(
         &workspace,
         &dropped(&outside),
-        TrustStore::new(&scratch.path),
+        &mut TrustStore::new(&scratch.path),
         &mut sink,
     )
     .expect("a dropped picture is carried wherever it came from");
@@ -174,7 +174,7 @@ fn a_picture_that_is_not_there_fails_rather_than_being_carried_as_nothing() {
     let error = attached::read(
         &workspace,
         &dropped("gone.png"),
-        TrustStore::new(&scratch.path),
+        &mut TrustStore::new(&scratch.path),
         &mut sink,
     )
     .expect_err("a file that is not there cannot be carried");
@@ -194,8 +194,13 @@ fn a_line_that_dropped_nothing_reads_nothing_and_asks_nobody() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let mut sink = RecordingSink::new();
 
-    let carried = attached::read(&workspace, &[], TrustStore::new(&scratch.path), &mut sink)
-        .expect("a line that dropped nothing is not a failure");
+    let carried = attached::read(
+        &workspace,
+        &[],
+        &mut TrustStore::new(&scratch.path),
+        &mut sink,
+    )
+    .expect("a line that dropped nothing is not a failure");
 
     assert!(carried.is_empty(), "something was carried: {carried:?}");
     assert!(
@@ -227,7 +232,7 @@ fn two_dropped_pictures_come_back_in_the_order_their_markers_number_them() {
                 media: "image/png".to_string(),
             },
         ],
-        TrustStore::new(&scratch.path),
+        &mut TrustStore::new(&scratch.path),
         &mut sink,
     )
     .expect("both are read");
@@ -239,4 +244,74 @@ fn two_dropped_pictures_come_back_in_the_order_their_markers_number_them() {
         })
         .collect();
     assert_eq!(paths, ["first.png", "second.png"]);
+}
+
+/// The rule the drop recorded comes back with the bytes, because it is the person's rule and not
+/// the request's: DROP-2 makes the file readable and editable for the rest of the session, and a
+/// rule left inside the policy that recorded it goes when that policy finishes. Asserted against a
+/// directory the person declined, so the rule can only have come from the drop, and the directory
+/// is checked as well: a drop that trusted the tree around the file would pass the first assertion
+/// while granting far more than the gesture did.
+#[test]
+fn a_drop_records_its_rule_in_the_callers_map() {
+    let scratch = Scratch::new("outlives");
+    std::fs::write(scratch.path.join("shot.png"), PIXELS).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut trust = TrustStore::new(&scratch.path);
+    trust.distrust("");
+    let mut sink = RecordingSink::new();
+
+    attached::read(&workspace, &dropped("shot.png"), &mut trust, &mut sink)
+        .expect("a dropped picture is read");
+
+    assert!(
+        trust.is_trusted("shot.png"),
+        "the rule the drop recorded did not outlive the read: {:?}",
+        trust.rules().collect::<Vec<_>>()
+    );
+    assert!(
+        !trust.is_trusted(""),
+        "the drop trusted the directory around the file: {:?}",
+        trust.rules().collect::<Vec<_>>()
+    );
+}
+
+/// A drop somewhere in the line that could not be read fails the request, and the rules the drops
+/// before it recorded stay. Each one is a separate gesture and a separate grant: taking the first
+/// back because a second file was moved between the drag and the Enter would leave the person
+/// dragging a file they already dropped. The order is what makes this checkable, so the failing
+/// drop is the second one.
+#[test]
+fn a_drop_before_one_that_could_not_be_read_keeps_its_rule() {
+    let scratch = Scratch::new("half-read");
+    std::fs::write(scratch.path.join("first.png"), PIXELS).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut trust = TrustStore::new(&scratch.path);
+    trust.distrust("");
+    let mut sink = RecordingSink::new();
+
+    attached::read(
+        &workspace,
+        &[
+            Attachment {
+                path: "first.png".to_string(),
+                media: "image/png".to_string(),
+            },
+            Attachment {
+                path: "gone.png".to_string(),
+                media: "image/png".to_string(),
+            },
+        ],
+        &mut trust,
+        &mut sink,
+    )
+    .expect_err("a file that is not there cannot be carried");
+
+    assert!(
+        trust.is_trusted("first.png"),
+        "the rule the first drop recorded went with the failure: {:?}",
+        trust.rules().collect::<Vec<_>>()
+    );
 }

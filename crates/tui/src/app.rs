@@ -2875,7 +2875,7 @@ fn event_loop(
                         &mut session,
                         config,
                         &conversation,
-                        &trust,
+                        &mut trust,
                         &question,
                         &pasted,
                         &attached,
@@ -2932,7 +2932,7 @@ fn event_loop(
                         &task,
                         &pasted,
                         &attached,
-                        &trust,
+                        &mut trust,
                         &permissions,
                         settings.attribution(),
                     )?;
@@ -4381,7 +4381,7 @@ fn aside_animated(
     session: &mut Session,
     config: &Config,
     conversation: &Conversation,
-    trust: &TrustStore,
+    trust: &mut TrustStore,
     question: &str,
     pasted: &[crate::state::AttachedImage],
     attached: &[crate::state::Attached],
@@ -4394,7 +4394,7 @@ fn aside_animated(
     let (to_main, from_worker) = mpsc::channel::<crate::remote_confirm::ToMain>();
 
     let worker_config = config.clone();
-    let worker_trust = trust.clone();
+    let mut worker_trust = trust.clone();
     let worker_workspace = workspace.clone();
     let model = session.model().map(str::to_string);
     // Taken here, before the worker starts, because that is what crosses to it: the request, not
@@ -4440,16 +4440,20 @@ fn aside_animated(
         // Before the question's own policy exists, which is the whole point: that one holds
         // `WebFetch` alone and reaches no workspace, so what reads a dropped file is a policy of its
         // own holding `FileRead` and nothing else. See `bravebot_agent::attached`.
+        // The map is lent to the read rather than copied for it, so the rule each drop records is
+        // in it afterwards: the question's own policy is built from it, and the main thread takes it
+        // as the session's below. A read that failed part way still recorded rules for the files it
+        // got to, so it travels back from here too.
         let asking = match bravebot_agent::attached::read(
             &worker_workspace,
             &dropped,
-            worker_trust.clone(),
+            &mut worker_trust,
             &mut sink,
         ) {
             Ok(carried) => asking.carrying(carried),
             // Reduced to a sentence here for the reason the answer is below: the error types are the
             // kernel's, and this thread is the only place they mean anything.
-            Err(error) => return (Err(error.to_string()), sink),
+            Err(error) => return (Err(error.to_string()), sink, Some(worker_trust)),
         };
         // Reduced to what a person can be told before it crosses back, since the error types are
         // the kernel's and this thread is the only place they mean anything.
@@ -4460,14 +4464,14 @@ fn aside_animated(
             model.as_deref(),
             &mut reporter,
             &mut sink,
-            worker_trust,
+            worker_trust.clone(),
             // Taken and dropped. An answer has to be released to be looked at, and the one place
             // this side could draw it as it arrives is the tail the turn's own half-written reply
             // fills, which is among the turn's own lines.
             |_written| {},
         )
         .map_err(|e| e.to_string());
-        (done, sink)
+        (done, sink, Some(worker_trust))
     });
 
     loop {
@@ -4507,9 +4511,22 @@ fn aside_animated(
         }
     }
 
-    let (done, sink) = worker
-        .join()
-        .unwrap_or_else(|_| (Err(t!(btw_ended_unexpectedly).to_string()), Trail::new()));
+    let (done, sink, vouched) = worker.join().unwrap_or_else(|_| {
+        (
+            Err(t!(btw_ended_unexpectedly).to_string()),
+            Trail::new(),
+            None,
+        )
+    });
+
+    // What the question read is not the question's to keep. Dropping a file is the grant and the
+    // grant lasts the rest of the session (`dropping.md` DROP-2), so the map the read recorded its
+    // rules in becomes the session's, exactly as a turn's does. Without this the read would happen
+    // against a clone nothing ever looks at again, and the next prompt naming the same picture would
+    // be handed a sentence about one.
+    if let Some(vouched) = vouched {
+        *trust = vouched;
+    }
 
     match done {
         Ok(answered) => aside_answered(session, asked, answered),
@@ -4591,7 +4608,7 @@ fn manifest_animated(
     task: &str,
     pasted: &[crate::state::AttachedImage],
     attached: &[crate::state::Attached],
-    trust: &TrustStore,
+    trust: &mut TrustStore,
     permissions: &Permissions,
     attribution: &Attribution,
 ) -> io::Result<Vec<Stamped>> {
@@ -4831,6 +4848,15 @@ fn manifest_animated(
     });
 
     let stopped_by_the_person = was_stopped(&outcome, &cancel);
+
+    // What the run decided about the tree is the session's, the way a turn's is. A file dropped on
+    // the line was vouched for by the gesture that put it there, and `dropping.md` DROP-2 has that
+    // rule hold for the rest of the session rather than for the run; the rules the run's own writes
+    // recorded belong to the same tree the next turn reads. Nothing here on a run that failed: an
+    // error carries what it produced and no map.
+    if let Ok(finished) = &outcome {
+        *trust = finished.trust.clone();
+    }
 
     // Only from a run that finished. A run that stopped comes back as an error carrying what it
     // produced (MANIFEST-3) and no figures, so the tokens it did spend are not recoverable here,

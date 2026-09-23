@@ -548,6 +548,66 @@ fn a_picture_dropped_onto_the_task_reaches_the_planner() {
     }
 }
 
+/// Dropping the file is the grant and the grant is the person's, so it holds for the rest of the
+/// run and not for the read that spent it (DROP-2). The step reads the same file the drop named,
+/// which is the case a rule recorded in a clone gets wrong: the picture reaches the planner and
+/// then the plan's own read of it is quarantined, so the answer is a sentence about a file instead
+/// of the file.
+///
+/// The map starts with a rule against that exact path, which is what a turn writing fetched bytes
+/// there leaves behind, because a file inside the session's own directory is read as trusted
+/// otherwise and the drop would not be what decided it. Its bytes are text so a step can read them
+/// back; nothing here looks at a picture's bytes, and the drop is what this is about.
+#[test]
+fn a_dropped_picture_is_still_trusted_when_a_step_of_the_plan_reads_it() {
+    let scratch = Scratch::new("dropped-task-trusted");
+    std::fs::write(scratch.path.join("shot.png"), "three stripes").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "shot.png", "out_slot": "doc"}},
+            {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let task = Task::new("what is in [Image #1]?").with_attachment("shot.png", "image/png");
+
+    let mut trust = TrustStore::new(&scratch.path);
+    trust.distrust("shot.png");
+
+    let outcome = manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        skipping_permissions!(),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+
+    assert!(
+        outcome.answer.label().is_trusted(),
+        "the plan's own read of the dropped file was quarantined: {:?}",
+        outcome.answer
+    );
+    assert!(
+        outcome.reply_for_display().contains("three stripes"),
+        "the file's own bytes are not what came back: {}",
+        outcome.reply_for_display()
+    );
+    assert!(
+        outcome.trust.is_trusted("shot.png"),
+        "the rule the drop recorded did not reach the run: {:?}",
+        outcome.trust.rules().collect::<Vec<_>>()
+    );
+}
+
 /// A picture is an input, and the record says what arrived however it arrived. A plan is the one
 /// place a picture is read by something that cannot be asked about it afterwards, so the trail is
 /// the only account of what the plan was made from.
