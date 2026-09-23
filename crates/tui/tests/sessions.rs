@@ -1814,6 +1814,7 @@ fn backup_capture_trust_overrides_a_stale_pre_turn_grant() {
         "cat source.txt > src/fetched.json",
         workspace.root(),
         None,
+        &mut |_, _| Ok(()),
     )
     .unwrap();
     let mut effects = Vec::new();

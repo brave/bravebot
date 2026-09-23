@@ -1,39 +1,34 @@
 //! Taking the host out of a URL, for the gates that decide about one.
 //!
 //! A rule and a prompt are both about who is being talked to, so both need the host and neither
-//! needs the rest. Parsing is deliberately the smallest thing that answers that question: no
-//! dependency, no percent-decoding, and no attempt to normalise anything a comparison does not
-//! depend on.
+//! needs the rest. A destination somebody wrote down in full is the other question, and its
+//! answer is the socket rather than the name, port included. Parsing is deliberately the smallest
+//! thing that answers either: no dependency, no percent-decoding, and no attempt to normalise
+//! anything a comparison does not depend on.
 //!
 //! The one property that matters is that this cannot report a host the request will not go to. A
 //! parser that read `https://example.com@evil.test/` as `example.com` would hand a person the
 //! wrong name to approve, so userinfo is dropped rather than mistaken for a host: everything
 //! before the last `@` in the authority belongs to whoever wrote the URL, not to the destination.
 
+/// The host and port in `url`, lowercased, or `None` where it names no host.
+///
+/// For a destination somebody wrote down in full, which is a socket rather than a name: two
+/// services on one machine differ by port alone, so a check that a request has not left the place
+/// it was addressed to has to compare both.
+pub fn authority_of(url: &str) -> Option<String> {
+    // The host decides whether there is an authority at all: one that is empty or all userinfo
+    // names nowhere, and a port on its own is not a destination.
+    host_of(url)?;
+    Some(host_and_port_of(url).to_ascii_lowercase())
+}
+
 /// The host in `url`, lowercased, or `None` where it names none.
 ///
 /// The port is left out. A rule naming a host means the host whichever port it answers on, and a
 /// person approving one is approving who they are talking to rather than a socket.
 pub fn host_of(url: &str) -> Option<String> {
-    let after_scheme = url
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(url)
-        .trim_start();
-
-    // The authority ends at the first of these. Whichever comes first wins, so a `/` before a `?`
-    // does not let a query string contribute to the host.
-    let authority = after_scheme
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(after_scheme);
-
-    // Userinfo is not the host. The last `@` rather than the first, since a password may hold one
-    // and the destination is what follows the final separator.
-    let host_and_port = match authority.rsplit_once('@') {
-        Some((_userinfo, host)) => host,
-        None => authority,
-    };
+    let host_and_port = host_and_port_of(url);
 
     let host = if let Some(rest) = host_and_port.strip_prefix('[') {
         // A bracketed IPv6 literal, whose colons are part of the address.
@@ -51,9 +46,69 @@ pub fn host_of(url: &str) -> Option<String> {
     Some(host.to_ascii_lowercase())
 }
 
+/// The authority in `url`, with any userinfo dropped and the port left on.
+fn host_and_port_of(url: &str) -> &str {
+    let after_scheme = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url)
+        .trim_start();
+
+    // The authority ends at the first of these. Whichever comes first wins, so a `/` before a `?`
+    // does not let a query string contribute to the host.
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+
+    // Userinfo is not the host. The last `@` rather than the first, since a password may hold one
+    // and the destination is what follows the final separator.
+    match authority.rsplit_once('@') {
+        Some((_userinfo, host)) => host,
+        None => authority,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two services on one machine differ by port alone, so a destination written down in full
+    /// keeps it: a check on where a request went that dropped it could not tell them apart.
+    #[test]
+    fn an_authority_keeps_the_port_the_host_drops() {
+        assert_eq!(
+            authority_of("http://127.0.0.1:8931/mcp"),
+            Some("127.0.0.1:8931".into())
+        );
+        assert_eq!(
+            host_of("http://127.0.0.1:8931/mcp"),
+            Some("127.0.0.1".into())
+        );
+        assert_eq!(
+            authority_of("https://mcp.example/api"),
+            Some("mcp.example".into())
+        );
+    }
+
+    /// Userinfo belongs to whoever wrote the URL, so an authority drops it for the same reason
+    /// the host does: everything before the last `@` is not where the request goes.
+    #[test]
+    fn an_authority_is_the_destination_and_not_what_was_written_before_it() {
+        assert_eq!(
+            authority_of("https://example.com@evil.test:8080/x"),
+            Some("evil.test:8080".into())
+        );
+        assert_eq!(
+            authority_of("HTTPS://Example.COM:8080/x"),
+            Some("example.com:8080".into())
+        );
+        assert_eq!(authority_of("http:///just/a/path"), None);
+        assert_eq!(
+            authority_of("https://[2001:db8::1]:8443/x"),
+            Some("[2001:db8::1]:8443".into())
+        );
+    }
 
     #[test]
     fn the_host_is_taken_from_an_ordinary_url() {

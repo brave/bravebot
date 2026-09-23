@@ -4144,16 +4144,32 @@ fn remembered_record(tools: &Tools<'_>) -> Option<crate::remembered::Store> {
     ))
 }
 
+/// What a `deny` rule covering a command line says back to the planner.
+///
+/// One wording for the two gates that raise it, the compiler's, which answers before the program
+/// is looked for, and the plan's, which also covers where a redirection would land. What the
+/// planner is being told is the same thing either way: a person decided this in advance, so there
+/// is nothing to rewrite and nothing to substitute.
+fn refused_by_a_rule(denial: &bravebot_core::policy::Denial) -> Produced {
+    problem(format!(
+        "refused: {denial}. Do not retry, and do not look for another program that would \
+         do the same thing: say in your reply what you needed it for."
+    ))
+}
+
 /// Run a program, after a person approves the exact arguments.
 ///
 /// The order is the whole of the safety argument, and it is the same order a write goes through:
 ///
 /// 1. The plan is compiled from the planner's command line, which is untrusted.
-/// 2. Every program name is resolved **once**, to an absolute path.
-/// 3. The person is shown that exact argv and that exact binary, and answers.
-/// 4. The approval mints an endorsement bound to that exact plan, which is the steps, the join
+/// 2. Each step's argv meets the rules a person wrote in advance, before its program name is
+///    looked for, so a denied line is refused by the rule and not by what `$PATH` had to say
+///    about it (PERM-7).
+/// 3. Every program name is resolved **once**, to an absolute path.
+/// 4. The person is shown that exact argv and that exact binary, and answers.
+/// 5. The approval mints an endorsement bound to that exact plan, which is the steps, the join
 ///    shape, the directory and the files it writes, not the argv alone.
-/// 5. `before_plan` consumes it, and only then does anything execute, by the resolved path.
+/// 6. `before_plan` consumes it, and only then does anything execute, by the resolved path.
 ///
 /// Nothing here branches on untrusted content. The argv is the planner's own words, read through
 /// the gate that says so and records it; what comes back from the program is never read by the
@@ -4265,11 +4281,20 @@ fn run<S: Sink, C: Confirmer>(
         }
         None => tools.run_directory.clone(),
     };
-    let mut plan = match crate::cmdline::compile(&line, &directory, tools.profile) {
+    // The rules are handed to the compiler rather than consulted on the plan it hands back,
+    // because a rule has to answer before the program is looked for (PERM-7): a denied line that
+    // names something this machine does not have would otherwise be refused for not being found,
+    // which is an answer about the machine in place of the person's own decision, and it arrives
+    // without the "do not retry" a rule's refusal owes the planner.
+    let mut rules = |program: &str, args: &[String]| policy.before_command_rules(program, args);
+    let mut plan = match crate::cmdline::compile(&line, &directory, tools.profile, &mut rules) {
         Ok(plan) => plan,
         // The refusal names the span that caused it, so the planner can rewrite that part rather
         // than guessing at the whole line. There is no degraded mode to fall back to.
-        Err(refused) => return problem(format!("error: {refused}")),
+        Err(crate::cmdline::Stopped::Compile(refused)) => {
+            return problem(format!("error: {refused}"));
+        }
+        Err(crate::cmdline::Stopped::Rule(denial)) => return refused_by_a_rule(&denial),
     };
 
     // A redirection names a file the run opens itself, so the confinement every other write goes
@@ -4283,10 +4308,7 @@ fn run<S: Sink, C: Confirmer>(
     // Before the person is asked. A rule refusing something is a statement that it does not run,
     // and there is nothing to show or approve once it has been made.
     if let Err(denial) = policy.before_plan_rules(&plan) {
-        return problem(format!(
-            "refused: {denial}. Do not retry, and do not look for another program that would \
-             do the same thing: say in your reply what you needed it for."
-        ));
+        return refused_by_a_rule(&denial);
     }
 
     // What the planner named for standard input, turned into bytes and a label before anybody is
@@ -5937,7 +5959,12 @@ mod tests {
         use std::time::{Duration, Instant};
         for changed in [false, true] {
             let root = std::env::current_dir().unwrap();
-            let plan = crate::cmdline::compile("printf JOB_PROOF_SENTINEL", &root, None).unwrap();
+            // No rules in play: the line is this test's own and no settings file is read.
+            let plan =
+                crate::cmdline::compile("printf JOB_PROOF_SENTINEL", &root, None, &mut |_, _| {
+                    Ok(())
+                })
+                .unwrap();
             let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
                 panic!("one pipeline");
             };
