@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// How long a request may wait for the index to settle before answering from what there is.
@@ -175,23 +176,36 @@ fn remove_misplaced_index(state: &Path) {
     }
 }
 
-/// Where a server keeps its index for a workspace.
+/// Where a server keeps an index that outlives the session.
 ///
 /// LSP-10: under the directory this process already owns, keyed by the workspace, never inside it.
 /// `state` is that directory itself, `~/.bravebot` and not the home it sits in, so nothing here
-/// appends the name a second time. `None` for a session that adds nothing to `~/.bravebot`, which is
-/// incognito: the server still runs and re-indexes, and says its answers are partial until it
-/// settles.
+/// appends the name a second time.
+///
+/// `None` for a session that adds nothing to `~/.bravebot`, which is incognito and a machine with
+/// no state directory. That is where the index is *not* kept, not a session without one: it goes
+/// to a [`SessionIndex`] instead, and the server re-indexes and says its answers are partial until
+/// it settles. Answering `None` and leaving the caller to drop the variable is what put the index
+/// in the workspace.
+pub fn cache_for(state: Option<&Path>, workspace: &Path, incognito: bool) -> Option<PathBuf> {
+    if incognito {
+        return None;
+    }
+    Some(cache_under(state?, workspace))
+}
+
+/// The index directory for one workspace, directly under a directory that holds one per workspace.
+///
+/// Split out from [`cache_for`] because the same layout is used twice: under the state directory
+/// for a session that keeps its index, and under [`SessionIndex`] for one that does not. Two
+/// layouts would mean two directories to create, narrow and reason about, for a difference that is
+/// only how long the parent lasts.
 ///
 /// The name is a digest of the canonical path rather than the path flattened into one, so two
 /// checkouts of the same project do not share an index and a directory that moved does not inherit
 /// one. Not a cryptographic requirement: this only has to be stable and collision-resistant enough
 /// that two workspaces on one machine differ.
-pub fn cache_for(state: Option<&Path>, workspace: &Path, incognito: bool) -> Option<PathBuf> {
-    if incognito {
-        return None;
-    }
-    let state = state?;
+fn cache_under(keep: &Path, workspace: &Path) -> PathBuf {
     let canonical = workspace
         .canonicalize()
         .unwrap_or_else(|_| workspace.to_path_buf());
@@ -203,8 +217,99 @@ pub fn cache_for(state: Option<&Path>, workspace: &Path, incognito: bool) -> Opt
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
 
-    Some(state.join(CACHE_ROOT).join(format!("{hash:016x}")))
+    keep.join(CACHE_ROOT).join(format!("{hash:016x}"))
 }
+
+/// Where an index goes when nothing about this session outlives it.
+///
+/// LSP-10 keeps an index under `~/.bravebot` so that the next session does not pay for it again. A
+/// session that adds nothing there has nowhere to keep one: incognito, and a machine
+/// [STATE-2](../../../docs/specs/state-directory.md) leaves without a state directory at all. What
+/// it must not do instead is drop the variable. An unset `CARGO_TARGET_DIR` resolves against the
+/// working directory, which is the workspace the question was about, so the index lands in the
+/// user's tree as a side effect of a read, the one outcome LSP-10 forbids outright.
+///
+/// So it goes where the platform keeps what does not outlive a process, and goes with the session.
+/// The cost is the one LSP-10's "why not a temporary directory" names, the index being built again
+/// next time, and it is the cost incognito already accepts.
+#[derive(Debug)]
+struct SessionIndex {
+    path: PathBuf,
+}
+
+impl SessionIndex {
+    /// Make one, under the directory the platform keeps temporary files in.
+    fn create() -> std::io::Result<Self> {
+        Self::created_at(reserved_name())
+    }
+
+    /// Where it is.
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// [`SessionIndex::create`], at a named path, so a test can hand it one twice.
+    ///
+    /// **Created, never adopted.** On Linux the temporary directory is ordinarily the
+    /// world-writable `/tmp`, where a name this program composes is one another account can take
+    /// first, or leave pointing at a directory of theirs. Adopting one would put an index derived
+    /// from every file in the workspace where they can read it. `DirBuilder::create` is not
+    /// recursive, so a name already there comes back as an error rather than as a directory, and
+    /// the mode keeps another account out of what lands inside. Windows has no mode to set, and
+    /// gives each user a temporary directory of their own.
+    fn created_at(path: PathBuf) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        let builder = {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut builder = std::fs::DirBuilder::new();
+            builder.mode(0o700);
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = std::fs::DirBuilder::new();
+        builder.create(&path)?;
+        // Resolved, because the platform's temporary directory is commonly reached through a link
+        // and this path is handed to a build tool that will report paths under it back. Owned
+        // before the name is resolved, so a name that will not resolve is still removed.
+        let mut made = Self { path };
+        made.path = made.path.canonicalize()?;
+        Ok(made)
+    }
+}
+
+impl Drop for SessionIndex {
+    /// Take the directory and everything in it, which is what keeps the trade honest: a session
+    /// that kept nothing under `~/.bravebot` has kept nothing anywhere else either.
+    ///
+    /// A failure is not reported: this runs as a session ends, where there is nobody left to tell
+    /// and nothing useful to do about it.
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// A name for a directory nothing has taken.
+///
+/// The pid separates processes, the stamp separates sessions within one, and the count separates
+/// two taken in the same moment: the clock behind the stamp holds a value for thousands of reads,
+/// so two names taken together are routinely the same name. Nothing in it says which workspace is
+/// being indexed, which is a name in a directory anybody on the machine can list.
+fn reserved_name() -> PathBuf {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_nanos())
+        .unwrap_or(0);
+    let nth = SESSION_INDEXES.fetch_add(1, Ordering::Relaxed);
+    // The standard library answers which directory that is, so a machine that puts temporary files
+    // somewhere unusual is honoured rather than guessed at. `created_at` above creates the name
+    // with mode 0700 and refuses one already taken, which is the secure creation this rule asks
+    // for.
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
+    std::env::temp_dir().join(format!("bravebot-lsp-{}-{stamp}-{nth}", std::process::id()))
+}
+
+/// What tells two names taken by one process apart.
+static SESSION_INDEXES: AtomicU64 = AtomicU64::new(0);
 
 /// Create a cache directory, and the directories between it and the state directory, reachable
 /// only by this user.
@@ -415,15 +520,18 @@ impl Server {
     /// RUN-8's reason, that `$PATH` and aliases decide what a name means and an approval must not
     /// follow a name onto a different binary.
     ///
-    /// `cache` is where it may keep its index, from [`cache_for`], or `None` for a session that keeps
-    /// nothing. A server given none re-indexes and answers partially until it settles.
+    /// `cache` is where it keeps its index, from [`Servers::index_dir`]: under the state directory
+    /// where this session keeps one between sessions, and under a directory that lasts the session
+    /// where it does not. Always somewhere, never `None`. A server told nowhere is a server run in
+    /// the workspace with no index location set, which writes the index into the workspace, so the
+    /// type is what rules that out rather than a comment asking the caller not to.
     ///
     /// LSP-6: a missing binary is reported as missing rather than as an empty answer.
     pub fn launch(
         language: Language,
         resolved: &Path,
         root: &Path,
-        cache: Option<&Path>,
+        cache: &Path,
         withheld: &[String],
     ) -> LspResult<Self> {
         let (program, args) = language.server();
@@ -451,31 +559,29 @@ impl Server {
         // every file in the workspace: STATE-1 undone by the one case where it matters. Not
         // starting says so, where dropping the variable would silently write the index into the
         // tree instead, which is what LSP-10 forbids.
-        if let Some(cache) = cache {
-            let private = |path: &Path, create: fn(&Path) -> std::io::Result<()>| {
-                create(path).map_err(|e| LspError::Start {
-                    language,
-                    detail: format!(
-                        "its index directory {} could not be created: {e}",
-                        path.display()
-                    ),
-                })
-            };
-            private(cache, create_cache)?;
-            match language {
-                Language::Rust => {
-                    command.env("CARGO_TARGET_DIR", cache);
-                }
-                Language::Go => {
-                    let build = cache.join("go-build");
-                    private(&build, create_private)?;
-                    command.env("GOCACHE", build);
-                }
-                Language::TypeScript | Language::Python => {
-                    // Neither reads a variable for this; both use the system temporary directory,
-                    // and pointing that at the cache keeps it out of the workspace.
-                    command.env("TMPDIR", cache);
-                }
+        let private = |path: &Path, create: fn(&Path) -> std::io::Result<()>| {
+            create(path).map_err(|e| LspError::Start {
+                language,
+                detail: format!(
+                    "its index directory {} could not be created: {e}",
+                    path.display()
+                ),
+            })
+        };
+        private(cache, create_cache)?;
+        match language {
+            Language::Rust => {
+                command.env("CARGO_TARGET_DIR", cache);
+            }
+            Language::Go => {
+                let build = cache.join("go-build");
+                private(&build, create_private)?;
+                command.env("GOCACHE", build);
+            }
+            Language::TypeScript | Language::Python => {
+                // Neither reads a variable for this; both use the system temporary directory,
+                // and pointing that at the cache keeps it out of the workspace.
+                command.env("TMPDIR", cache);
             }
         }
 
@@ -872,8 +978,15 @@ pub struct Servers {
     /// lookup in one place for the whole repository, so a name cannot mean one binary to `run` and
     /// another to this.
     resolve: fn(&str) -> Option<PathBuf>,
-    /// Whether this session keeps nothing under `~/.bravebot`, so no index is cached.
+    /// Whether this session keeps nothing under `~/.bravebot`, so no index is kept between
+    /// sessions.
     incognito: bool,
+    /// Where the index goes when there is nothing to keep one in.
+    ///
+    /// Made on the first launch that needs it rather than with this value, so a session that asks
+    /// nothing of a server leaves nothing behind at all, and held here because the lifetime it
+    /// wants is the session's: this is built once for one and carried by the turn.
+    session: Option<SessionIndex>,
     /// This agent's own credential names, withheld from every server. RUN-12's reason.
     withheld: Vec<String>,
 }
@@ -900,6 +1013,7 @@ impl Servers {
             state,
             resolve,
             incognito,
+            session: None,
             withheld,
         }
     }
@@ -966,14 +1080,8 @@ impl Servers {
                 return Err(LspError::Refused { language });
             }
 
-            let cache = cache_for(self.state.as_deref(), &self.root, self.incognito);
-            let server = Server::launch(
-                language,
-                &resolved,
-                &self.root,
-                cache.as_deref(),
-                &self.withheld,
-            )?;
+            let cache = self.index_dir(language)?;
+            let server = Server::launch(language, &resolved, &self.root, &cache, &self.withheld)?;
             self.running.insert(language, server);
         }
 
@@ -982,6 +1090,45 @@ impl Servers {
             .get_mut(&language)
             .expect("just inserted if absent");
         server.ask(question)
+    }
+
+    /// Where the server about to start keeps its index.
+    ///
+    /// LSP-10: under `~/.bravebot` where this session keeps anything there, and otherwise under a
+    /// directory that lasts the session. Never nothing, because the caller of a nothing is a
+    /// command spawned with the workspace as its working directory and no index location set,
+    /// which writes the index into the tree.
+    ///
+    /// A directory the platform will not give this session is reported as a server that did not
+    /// start, which is LSP-6 and the same answer the directories below it already give.
+    fn index_dir(&mut self, language: Language) -> LspResult<PathBuf> {
+        if let Some(kept) = cache_for(self.state.as_deref(), &self.root, self.incognito) {
+            return Ok(kept);
+        }
+        if self.session.is_none() {
+            self.session = Some(SessionIndex::create().map_err(|e| LspError::Start {
+                language,
+                detail: format!("an index directory for this session could not be created: {e}"),
+            })?);
+        }
+        let session = self.session.as_ref().expect("just made if absent");
+        Ok(cache_under(session.path(), &self.root))
+    }
+}
+
+/// The servers stop before the directory they are indexing into goes.
+///
+/// Field order would give this, since `running` is declared above `session`, but the order is the
+/// point rather than a consequence of where a field was written: a server still writing while its
+/// directory is removed leaves whatever it wrote next, and a removal that fails reports nothing.
+///
+/// What this stops is the server this process started. A server's own children (`cargo check`
+/// under rust-analyzer) are its business and outlive it by however long they take to notice, so
+/// this narrows the window rather than closing it, and what loses the race is a directory left
+/// behind rather than anything read.
+impl Drop for Servers {
+    fn drop(&mut self) {
+        self.running.clear();
     }
 }
 
@@ -1201,7 +1348,7 @@ mod tests {
             Language::Rust,
             Path::new("/nonexistent-binary"),
             &root(),
-            Some(&cache),
+            &cache,
             &[],
         )
         .expect_err("a server must not start without an index directory of its own");
@@ -1298,15 +1445,59 @@ mod tests {
         );
     }
 
-    /// LSP-10: incognito adds nothing to `~/.bravebot`, so it is given no cache at all.
+    /// LSP-10: incognito adds nothing to `~/.bravebot`, so no index is kept there for the next
+    /// session to read.
+    ///
+    /// What such a session is given instead is [`SessionIndex`], which is
+    /// [`a_session_that_keeps_nothing_still_indexes_outside_the_workspace`]: this answer is where
+    /// an index is *not* kept, and reading it as a session with no index directory at all is what
+    /// put one in the workspace.
     #[test]
-    fn an_incognito_session_is_given_no_cache() {
+    fn an_incognito_session_keeps_nothing_under_the_state_directory() {
         assert!(
             cache_for(Some(&state()), &root(), true).is_none(),
-            "an incognito session must write no index"
+            "an incognito session must leave no index under ~/.bravebot"
         );
         // And with nowhere to keep one, there is nothing to key.
         assert!(cache_for(None, &root(), false).is_none());
+    }
+
+    /// LSP-10 and TRUST-11's reasoning about the temporary directory: the directory an index goes
+    /// in when nothing is kept is created, never adopted.
+    ///
+    /// On Linux that directory is ordinarily the world-writable `/tmp`, so a name already there
+    /// may be another account's, or a link into one. Adopting it would hand a server an index
+    /// directory somebody else can read, which is the whole of what STATE-1's mode is for.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_index_directory_is_created_never_adopted() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let held = SessionIndex::create().expect("a directory of its own");
+        assert!(held.path().is_dir(), "{}", held.path().display());
+        let mode = std::fs::metadata(held.path())
+            .expect("exists")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "another account can read what a server indexes"
+        );
+
+        // A name already taken is an error rather than a directory to write into.
+        SessionIndex::created_at(held.path().to_path_buf())
+            .expect_err("a name already taken must not be adopted");
+
+        // And nothing of it outlives the value: the session is what it lasts for.
+        let path = held.path().to_path_buf();
+        std::fs::write(path.join("index"), "derived from the workspace").expect("write");
+        drop(held);
+        assert!(
+            !path.exists(),
+            "an index outlived the session that built it: {}",
+            path.display()
+        );
     }
 
     /// LSP-10: the cache is the server's, and this crate never opens it.
@@ -1746,7 +1937,7 @@ done
     /// Everything a question needs besides the question: the capability, and a yes to starting the
     /// server.
     #[cfg(unix)]
-    fn ask_of_the_rejecting_server(
+    fn ask_with_the_server_approved(
         servers: &mut Servers,
         question: &Question<'_>,
     ) -> LspResult<Answer> {
@@ -1797,7 +1988,7 @@ done
             Operation::References,
         ] {
             let named = operation.as_str();
-            let answer = ask_of_the_rejecting_server(
+            let answer = ask_with_the_server_approved(
                 &mut servers,
                 &Question {
                     operation,
@@ -1879,7 +2070,7 @@ done
                 None,
             ),
         ] {
-            let refused = ask_of_the_rejecting_server(
+            let refused = ask_with_the_server_approved(
                 &mut servers,
                 &Question {
                     operation,
@@ -1924,7 +2115,7 @@ done
             Vec::new(),
         );
 
-        let refused = ask_of_the_rejecting_server(
+        let refused = ask_with_the_server_approved(
             &mut servers,
             &Question {
                 operation: Operation::Implementation,
@@ -1957,6 +2148,274 @@ done
                 "{said} repeats the server's own words: {wrote}"
             );
         }
+    }
+
+    /// A language server that records where it was told to keep its index, then answers.
+    ///
+    /// The two lines it writes before reading anything are the whole of what these tests need:
+    /// the index location it was given, and the directory it was started in. A server given none
+    /// resolves the first against the second, which is how the index came to be written into the
+    /// workspace.
+    ///
+    /// It answers `initialize` and reports the index settled in the words rust-analyzer uses, so
+    /// nothing waits out LSP-7's bound, and it exits on `exit` rather than being killed after the
+    /// shutdown grace.
+    #[cfg(unix)]
+    const REPORTING_SERVER: &str = r#"#!/bin/sh
+here=$(dirname "$0")
+{
+  printf '%s\n' "${CARGO_TARGET_DIR-unset}"
+  pwd -P
+} >> "$here/reported"
+reply() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+while IFS= read -r header; do
+  case "$header" in
+    Content-Length:*) length=$(printf '%s' "$header" | tr -cd '0-9') ;;
+    *) continue ;;
+  esac
+  IFS= read -r _blank
+  body=$(dd bs=1 count="$length" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$body" in
+    *'"initialize"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
+      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"rustAnalyzer/cachePriming","value":{"kind":"end"}}}'
+      ;;
+    *'"textDocument/definition"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[]}"
+      ;;
+    *'"shutdown"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+      ;;
+    *'"exit"'*)
+      exit 0
+      ;;
+  esac
+done
+"#;
+
+    /// One scratch name per test, for [`REJECTS_A_POSITION`]'s reason: the fixture empties the
+    /// directory it is given, so a shared name is one test deleting the server another is about
+    /// to launch.
+    #[cfg(unix)]
+    const KEEPS_NOTHING: &str = "bravebot-lsp-keeps-nothing";
+
+    #[cfg(unix)]
+    const GOES_WITH_THE_SESSION: &str = "bravebot-lsp-goes-with-the-session";
+
+    #[cfg(unix)]
+    const UNDER_THE_STATE_DIRECTORY: &str = "bravebot-lsp-under-the-state-directory";
+
+    #[cfg(unix)]
+    fn the_server_that_reports_in_incognito(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(KEEPS_NOTHING).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_that_reports_with_no_state_directory(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(GOES_WITH_THE_SESSION).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_that_reports_with_a_state_directory(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(UNDER_THE_STATE_DIRECTORY).join("server"))
+    }
+
+    /// A workspace with the recording script above beside it rather than inside it, so what the
+    /// server reports is not itself a file written into the tree under test.
+    ///
+    /// [`LAUNCHING`] comes back with it for the reason [`a_workspace_a_server_rejects`] gives.
+    #[cfg(unix)]
+    fn a_workspace_with_a_reporting_server(
+        name: &str,
+    ) -> (
+        std::sync::MutexGuard<'static, ()>,
+        crate::testutil::Scratch,
+        PathBuf,
+        PathBuf,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
+        let scratch = crate::testutil::Scratch::new(name);
+        let workspace = scratch.join("workspace");
+        std::fs::create_dir_all(workspace.join("src")).expect("create the workspace");
+        let file = workspace.join("src").join("a.rs");
+        std::fs::write(&file, "pub struct Held;\n").expect("write the file");
+
+        let program = scratch.join("server");
+        std::fs::write(&program, REPORTING_SERVER).expect("write the server");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        (launching, scratch, workspace, file)
+    }
+
+    /// The index location the server was given, and the directory it was started in.
+    #[cfg(unix)]
+    fn what_the_server_reported(scratch: &Path) -> (PathBuf, PathBuf) {
+        let written = std::fs::read_to_string(scratch.join("reported"))
+            .expect("the server records where it indexes before it answers anything");
+        let mut lines = written.lines();
+        let index = lines.next().expect("an index location").to_string();
+        let started_in = lines.next().expect("a working directory").to_string();
+        assert_ne!(
+            index, "unset",
+            "the server was given no index location, so it writes its index into {started_in}"
+        );
+        (PathBuf::from(index), PathBuf::from(started_in))
+    }
+
+    /// The question that starts a Rust server, answered with no locations by the script above.
+    #[cfg(unix)]
+    fn a_definition_in(servers: &mut Servers, file: &Path) {
+        ask_with_the_server_approved(
+            servers,
+            &Question {
+                operation: Operation::Definition,
+                path: file.to_str().expect("a utf-8 scratch path"),
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("the server answers");
+    }
+
+    /// LSP-10: an incognito session keeps no index under `~/.bravebot`, and what it does instead
+    /// is index somewhere else, never inside the workspace.
+    ///
+    /// Driven against a process because the clause is about what the server is told. A server
+    /// handed no index location is started with the workspace as its working directory, which is
+    /// what an unset `CARGO_TARGET_DIR` resolves against, so the index lands in the tree the
+    /// question was about. Both halves are asserted here: the location it was given, and that it
+    /// was started in the workspace, which is why the location has to be set.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_that_keeps_nothing_still_indexes_outside_the_workspace() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_launching, scratch, workspace, file) =
+            a_workspace_with_a_reporting_server(KEEPS_NOTHING);
+        // A state directory is there and is refused all the same: incognito is what decides, not
+        // whether the machine has one.
+        let state = scratch.join("state");
+        let mut servers = Servers::new(
+            workspace.clone(),
+            Some(state.clone()),
+            the_server_that_reports_in_incognito,
+            true,
+            Vec::new(),
+        );
+
+        a_definition_in(&mut servers, &file);
+
+        let (index, started_in) = what_the_server_reported(&scratch);
+        let workspace = workspace.canonicalize().expect("the workspace");
+        assert_eq!(
+            started_in, workspace,
+            "the server runs in the workspace, so an index location it is not given is one in the tree"
+        );
+        assert!(
+            !index.starts_with(&workspace),
+            "{} is inside the workspace",
+            index.display()
+        );
+        assert!(
+            !index.starts_with(&state),
+            "an incognito session left an index under the state directory: {}",
+            index.display()
+        );
+        assert!(index.is_dir(), "{} was not created", index.display());
+        let mode = std::fs::metadata(&index)
+            .expect("exists")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "STATE-1's mode, wherever the index is kept");
+    }
+
+    /// LSP-10: the index a session keeps nothing of does not outlive it.
+    ///
+    /// The other arm of the same case, and the reason it is a separate test: a machine
+    /// [STATE-2](../../../docs/specs/state-directory.md) leaves without a state directory reaches
+    /// this through `None` rather than through the incognito flag, and a fix that read only the
+    /// flag would leave it writing into the tree.
+    #[cfg(unix)]
+    #[test]
+    fn an_index_a_session_keeps_nothing_of_goes_with_the_session() {
+        let (_launching, scratch, workspace, file) =
+            a_workspace_with_a_reporting_server(GOES_WITH_THE_SESSION);
+        let mut servers = Servers::new(
+            workspace.clone(),
+            None,
+            the_server_that_reports_with_no_state_directory,
+            false,
+            Vec::new(),
+        );
+
+        a_definition_in(&mut servers, &file);
+
+        let (index, _) = what_the_server_reported(&scratch);
+        assert!(
+            !index.starts_with(workspace.canonicalize().expect("the workspace")),
+            "{} is inside the workspace",
+            index.display()
+        );
+        // What a real server leaves there, so the removal is of a directory holding something.
+        std::fs::write(
+            index.join("index"),
+            "derived from every file in the workspace",
+        )
+        .expect("write");
+        let session = index
+            .parent()
+            .and_then(Path::parent)
+            .expect("the directory this session was given")
+            .to_path_buf();
+
+        drop(servers);
+
+        assert!(
+            !session.exists(),
+            "an index outlived the session that built it: {}",
+            session.display()
+        );
+    }
+
+    /// LSP-10: a session that may keep its index keeps it under the state directory, which is
+    /// what makes the second session fast.
+    ///
+    /// The other direction of the same decision. A fix that sent every session to a directory
+    /// that lasts one would keep the index out of the workspace and pay for the indexing every
+    /// time, which is the trade the clause's "why not a temporary directory" refuses.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_with_a_state_directory_indexes_under_it() {
+        let (_launching, scratch, workspace, file) =
+            a_workspace_with_a_reporting_server(UNDER_THE_STATE_DIRECTORY);
+        let state = scratch.join("state");
+        let mut servers = Servers::new(
+            workspace.clone(),
+            Some(state.clone()),
+            the_server_that_reports_with_a_state_directory,
+            false,
+            Vec::new(),
+        );
+
+        a_definition_in(&mut servers, &file);
+
+        let (index, _) = what_the_server_reported(&scratch);
+        assert_eq!(
+            index,
+            cache_for(Some(&state), &workspace, false).expect("a cache is given"),
+            "the index a session may keep must be the one the next session reads"
+        );
+
+        // And it is still there when the session is not, which is the whole point of keeping it.
+        drop(servers);
+        assert!(index.is_dir(), "{} did not survive", index.display());
     }
 
     #[test]
