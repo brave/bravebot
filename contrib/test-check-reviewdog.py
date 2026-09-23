@@ -4,7 +4,8 @@
 import os
 from pathlib import Path
 import shutil
-import subprocess
+# The fixture runs fixed local commands with argument lists, never shell input.
+import subprocess  # nosemgrep: gitlab.bandit.B404
 import tempfile
 import unittest
 
