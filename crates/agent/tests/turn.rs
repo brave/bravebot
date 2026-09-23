@@ -23904,7 +23904,25 @@ fn a_finding_is_written_outside_the_tree_and_outlives_the_turn() {
         "a write the person approved was not written down: {recorded:?}"
     );
     assert_eq!(recorded[0].kind, bravebot_core::credentials::Kind::Assigned);
-    let written = std::fs::read_to_string(store.path()).expect("the record");
+    // A salted hex fingerprint shares four digits with this hex value in about one run in 144,
+    // so it is held to the salt rather than searched: a piece of the value would not move with it.
+    let fingerprint = recorded[0].fingerprint.as_str();
+    let contents = format!("SECRET_KEY_BASE={GENERATED_SECRET}\n");
+    let under = |salt| {
+        bravebot_core::credentials::scan(".env", &contents, salt)
+            .into_iter()
+            .next()
+            .expect("a finding over the value")
+            .fingerprint
+    };
+    let salt = bravebot_core::credentials::run_salt();
+    assert!(
+        fingerprint == under(salt) && fingerprint != under(salt ^ 1),
+        "the record's fingerprint is not the salted one, so it may be the value: {recorded:?}"
+    );
+    let written = std::fs::read_to_string(store.path())
+        .expect("the record")
+        .replace(fingerprint, "");
     for run in GENERATED_SECRET.as_bytes().windows(4) {
         let piece = std::str::from_utf8(run).expect("the value is ASCII");
         assert!(
