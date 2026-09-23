@@ -94,9 +94,9 @@ impl std::fmt::Display for Verdict {
 
 /// Who said the planner may have one slot's bytes.
 ///
-/// Two ways in, and they are told apart so the audit trail says which happened rather than
-/// claiming a person read something nobody was shown. Both mint the same single-use endorsement
-/// and both produce the same label; what differs is who answered.
+/// Three ways in, and they are told apart so the audit trail says which happened rather than
+/// claiming a person read something nobody was shown. All three mint the same single-use
+/// endorsement and all three produce the same label; what differs is who answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Endorsed {
     /// A person was shown the bytes and said the planner may read them.
@@ -106,17 +106,28 @@ pub enum Endorsed {
     /// Reachable only where somebody turned the mode on, one of the three ways
     /// [`auto`] takes.
     ByASafeVerdict,
+    /// The run bypasses permissions and asked for no screening, so the mode answered: nobody was
+    /// shown the bytes and no check was made about them.
+    ///
+    /// A value of its own rather than either of the two above, because it is neither of them and
+    /// the trail must not read as though it were. The promotion itself is what the mode
+    /// authorises; what this names is the provenance recorded for it.
+    ByBypassing,
 }
 
 impl Endorsed {
     /// What the trail says about how the promotion came to be authorised.
     ///
-    /// The driver's own words either way. Nothing the check wrote reaches this.
+    /// The driver's own words whichever it was. Nothing the check wrote reaches this.
     pub fn describe(&self) -> &'static str {
         match self {
             Self::ByAPerson => "the user read it and vouched for it",
             Self::ByASafeVerdict => {
                 "auto-vetting is on and the check found nothing, so nobody was asked"
+            }
+            Self::ByBypassing => {
+                "permissions are being bypassed with no screening asked for, so nobody was shown \
+                 it and no check was made"
             }
         }
     }
@@ -676,13 +687,36 @@ mod tests {
     }
 
     /// A promotion nobody was asked about is described as such, so the trail does not credit a
-    /// person who was never shown the bytes.
+    /// person who was never shown the bytes. Both of the two that reach no person say so in their
+    /// own words, since "a check found nothing" and "nobody looked at all" are different facts
+    /// about different risks.
     #[test]
-    fn the_two_endorsements_are_described_differently() {
-        assert_ne!(
-            Endorsed::ByAPerson.describe(),
-            Endorsed::ByASafeVerdict.describe()
-        );
+    fn every_endorsement_is_described_differently() {
+        let all = [
+            Endorsed::ByAPerson,
+            Endorsed::ByASafeVerdict,
+            Endorsed::ByBypassing,
+        ];
+        for (at, by) in all.iter().enumerate() {
+            for other in all.iter().skip(at + 1) {
+                assert_ne!(
+                    by.describe(),
+                    other.describe(),
+                    "{by:?} and {other:?} read the same on the trail"
+                );
+            }
+        }
+        for unshown in [Endorsed::ByASafeVerdict, Endorsed::ByBypassing] {
+            assert!(
+                !unshown.describe().contains("the user read it"),
+                "{unshown:?} credits a person who was never shown the bytes"
+            );
+        }
         assert!(Endorsed::ByASafeVerdict.describe().contains("nobody"));
+        assert!(
+            Endorsed::ByBypassing
+                .describe()
+                .contains("no check was made")
+        );
     }
 }

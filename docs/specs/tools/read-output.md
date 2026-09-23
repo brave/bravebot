@@ -40,10 +40,14 @@ A person is shown the bytes themselves with the command that printed them, and d
 ```
 
 The slot keeps the label it was quarantined at. What the planner receives is a **new value** whose
-first label comes from the provenance the policy layer tracked: a person having read it, or, where
-somebody turned auto-vetting on, a check having found nothing ([CHECK-12](../vetting.md#CHECK-12)).
-Which of the two it was is named in the trail. Either way it covers one result, needs a single-use
-endorsement naming that slot, and the next run asks again.
+first label comes from the provenance the policy layer tracked: a person having read it; or, where
+somebody turned auto-vetting on, a check having found nothing ([CHECK-12](../vetting.md#CHECK-12));
+or, in a run bypassing permissions with no screening asked for, the mode itself, with nobody shown
+the bytes and no check made about them ([MODE-4](../permission-modes.md#MODE-4)). Which of the three
+it was is named in the trail, and a release the mode made is never recorded as one of the other two:
+an entry crediting a person who was never shown the bytes is the one a reader cannot check, and one
+crediting a check names a call that was never placed. Whichever it was it covers one result, needs a
+single-use endorsement naming that slot, and the next run asks again.
 
 Only output from `run` can be read this way. A file's worth is the trust map's answer, and a second
 route to it would be a way to disagree with the first.
@@ -58,7 +62,9 @@ stderr, and a planner that cannot see it will report that the command worked.
 `verified-by: bravebot_core::policy::vouching_for_output_does_not_relabel_the_slot`
 `verified-by: bravebot_core::policy::an_approval_to_read_output_cannot_be_replayed`
 `verified-by: bravebot_core::policy::output_released_by_a_safe_verdict_is_no_wider`
-`verified-by: bravebot_core::policy::the_trail_says_which_of_the_two_released_the_output`
+`verified-by: bravebot_core::policy::the_trail_says_which_of_the_three_released_the_output`
+`verified-by: bravebot_agent::permission_mode::an_unscreened_unattended_release_is_credited_to_the_mode`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_the_output`
 `verified-by: bravebot_agent::turn::output_a_person_reads_and_approves_reaches_the_planner`
 `verified-by: bravebot_agent::turn::output_a_person_refuses_stays_out_of_the_planner`
 

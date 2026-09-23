@@ -24,7 +24,7 @@ use crate::confirm::{
     Confirmer, Decision, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
     WriteRequest,
 };
-use bravebot_core::vetting::Verdict;
+use bravebot_core::vetting::{Endorsed, Verdict};
 
 /// How much this session asks before it acts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -91,6 +91,28 @@ impl PermissionMode {
     /// after all, and a word that objects is the only thing left that can keep the bytes back.
     pub fn checks_before_promoting(self, auto_vetting: bool) -> bool {
         self != Self::Bypass || auto_vetting
+    }
+
+    /// Who the trail is told released one slot's bytes, which is not always who the prompt would
+    /// have asked.
+    ///
+    /// Three answers because a promotion happens three ways, and a record naming the wrong one is
+    /// the one entry a reader cannot check. Bypassing with no screening asked for is the mode's
+    /// own release: [`Confining::screened`] answers the prompt yes without drawing it, so nobody
+    /// read the bytes, and [`PermissionMode::checks_before_promoting`] made no check, so nothing
+    /// read them either. Where screening was asked for, a safe verdict is what answered and every
+    /// other word refuses before a promotion is reached. Everywhere else the prompt is drawn, so
+    /// the answer is a person's.
+    ///
+    /// The verdict decides nothing here without auto-vetting: off, which is the default, the word
+    /// travels to the prompt and a person answers, so it is the person who is credited whatever
+    /// the check said.
+    pub fn released_by(self, auto_vetting: bool, verdict: Verdict) -> Endorsed {
+        match (self, auto_vetting) {
+            (Self::Bypass, false) => Endorsed::ByBypassing,
+            (_, true) if verdict.is_safe() => Endorsed::ByASafeVerdict,
+            _ => Endorsed::ByAPerson,
+        }
     }
 
     /// What the planner is told about the mode, or `None` where there is nothing to say.
@@ -594,6 +616,65 @@ mod tests {
         }
         assert!(PermissionMode::Bypass.checks_before_promoting(true));
         assert!(!PermissionMode::Bypass.checks_before_promoting(false));
+    }
+
+    /// The release nobody was asked about and no check was made about is the mode's own, and the
+    /// trail has to say so: crediting a person who was never shown the bytes is the one entry a
+    /// reader cannot check, and crediting a check names one that was never placed.
+    ///
+    /// Every mode is asked with both answers to screening and with all three verdicts, so an
+    /// implementation that answered the mode's own name everywhere, or that read the verdict where
+    /// nothing turned on it, is told apart from the required one rather than passing on the arm it
+    /// happens to be right about.
+    #[test]
+    fn an_unscreened_unattended_release_is_credited_to_the_mode() {
+        let verdicts = [
+            Verdict::Safe,
+            Verdict::Unsafe,
+            Verdict::Inconclusive("the check was not made"),
+        ];
+
+        for verdict in verdicts {
+            assert_eq!(
+                PermissionMode::Bypass.released_by(false, verdict),
+                Endorsed::ByBypassing,
+                "a release with nobody shown the bytes and no check made was credited elsewhere \
+                 on {verdict}"
+            );
+        }
+
+        // Screening asked for: the word answers in the absent person's place, so a safe one is
+        // what released the bytes. Every other word refuses before a promotion is reached, and
+        // the value there reaches no trail.
+        assert_eq!(
+            PermissionMode::Bypass.released_by(true, Verdict::Safe),
+            Endorsed::ByASafeVerdict
+        );
+
+        for asks in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+        ] {
+            for verdict in verdicts {
+                assert_eq!(
+                    asks.released_by(false, verdict),
+                    Endorsed::ByAPerson,
+                    "{asks:?} draws the prompt, so the person who answered it was not credited \
+                     on {verdict}"
+                );
+            }
+            assert_eq!(
+                asks.released_by(true, Verdict::Safe),
+                Endorsed::ByASafeVerdict,
+                "{asks:?} with auto-vetting on credited a person nobody asked"
+            );
+            assert_eq!(
+                asks.released_by(true, Verdict::Unsafe),
+                Endorsed::ByAPerson,
+                "{asks:?} credited a check that objected with the release"
+            );
+        }
     }
 
     /// Every mode but the one that answers everything puts a plan to a person. Accepting edits

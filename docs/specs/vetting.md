@@ -229,16 +229,22 @@ A single-use endorsement naming that exact slot is what authorises the promotion
 replayed, and an approval given to a different question is not one of these: an approval to read
 what a program printed promotes nothing.
 
-Two things mint one and nothing else does: a person answering the prompt, and, where auto-vetting
-is on, a safe verdict on either route [CHECK-12](#CHECK-12) names. Which of the two it was is
-recorded, on both routes, because a trail that credited a person who was never shown the bytes would
-be the one record a reader cannot check. Everything else about the endorsement is the same either
-way: one slot, once, and no other question answered.
+Three things mint one and nothing else does: a person answering the prompt; where auto-vetting is
+on, a safe verdict on either route [CHECK-12](#CHECK-12) names; and a run bypassing permissions with
+no screening asked for, where the mode answers both prompts without drawing either
+([MODE-4](permission-modes.md#MODE-4)). Which of the three it was is recorded, on both routes,
+because a trail that credited a person who was never shown the bytes would be the one record a
+reader cannot check, and one that credited a check nobody made would name a call that was never
+placed. Everything else about the endorsement is the same whichever it was: one slot, once, and no
+other question answered.
 
 `verified-by: bravebot_core::policy::content_cannot_be_promoted_without_an_endorsement`
 `verified-by: bravebot_core::policy::an_approval_to_vet_cannot_be_replayed`
 `verified-by: bravebot_core::policy::the_trail_says_when_nobody_was_asked`
-`verified-by: bravebot_core::policy::the_trail_says_which_of_the_two_released_the_output`
+`verified-by: bravebot_core::policy::the_trail_says_when_the_mode_promoted_a_slot_unshown`
+`verified-by: bravebot_core::policy::the_trail_says_which_of_the_three_released_the_output`
+`verified-by: bravebot_core::vetting::every_endorsement_is_described_differently`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_a_promoted_slot`
 `verified-by: bravebot_core::policy::a_promotion_nobody_was_asked_about_is_no_wider`
 `verified-by: bravebot_core::policy::an_approval_to_read_output_is_not_an_approval_to_vet`
 `verified-by: bravebot_tui::remote_confirm::an_approved_output_read_does_not_approve_a_vetted_read`
@@ -432,7 +438,7 @@ owns the content gains from this, which is the reason it is off by default.
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_no_check_could_be_made_about`
 `verified-by: bravebot_core::policy::a_promotion_nobody_was_asked_about_is_no_wider`
 `verified-by: bravebot_core::policy::output_released_by_a_safe_verdict_is_no_wider`
-`verified-by: bravebot_core::policy::the_trail_says_which_of_the_two_released_the_output`
+`verified-by: bravebot_core::policy::the_trail_says_which_of_the_three_released_the_output`
 
 <a id="CHECK-13"></a>
 ### CHECK-13: every surface a promotion prompt reaches is given the verdict, and none of them is given an answer
